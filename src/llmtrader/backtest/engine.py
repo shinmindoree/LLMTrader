@@ -41,8 +41,11 @@ class BacktestContext:
         self.slippage = slippage
         self.position = Position()
         self._current_price: float = 0.0
+        self._current_timestamp: int = 0
         self._price_history: list[float] = []
         self._indicators: dict[str, Any] = {}
+        self.trades: list[dict[str, Any]] = []  # 거래 내역
+        self._position_entry_time: int = 0  # 포지션 진입 시간
 
     @property
     def current_price(self) -> float:
@@ -76,8 +79,18 @@ class BacktestContext:
 
         # 포지션 업데이트
         if self.position.size < 0:
-            # 숏 포지션 청산 후 롱 진입
+            # 숏 포지션 청산
             realized_pnl = -self.position.size * (self.position.entry_price - exec_price)
+            self.trades.append({
+                "entry_time": self._position_entry_time,
+                "exit_time": self._current_timestamp,
+                "position_type": "SHORT",
+                "entry_price": self.position.entry_price,
+                "exit_price": exec_price,
+                "quantity": abs(self.position.size),
+                "pnl": realized_pnl,
+                "fee": fee,
+            })
             self.balance += realized_pnl
             self.position.size = 0
             self.position.entry_price = 0
@@ -85,6 +98,7 @@ class BacktestContext:
         new_size = self.position.size + quantity
         if self.position.size == 0:
             self.position.entry_price = exec_price
+            self._position_entry_time = self._current_timestamp
         else:
             # 평균 진입가 재계산
             total_cost = self.position.size * self.position.entry_price + cost
@@ -111,6 +125,16 @@ class BacktestContext:
             # 롱 포지션 청산
             if quantity >= self.position.size:
                 realized_pnl = self.position.size * (exec_price - self.position.entry_price)
+                self.trades.append({
+                    "entry_time": self._position_entry_time,
+                    "exit_time": self._current_timestamp,
+                    "position_type": "LONG",
+                    "entry_price": self.position.entry_price,
+                    "exit_price": exec_price,
+                    "quantity": self.position.size,
+                    "pnl": realized_pnl,
+                    "fee": fee,
+                })
                 self.balance += realized_pnl + self.position.size * exec_price - fee
                 remaining = quantity - self.position.size
                 self.position.size = 0
@@ -119,8 +143,10 @@ class BacktestContext:
                 if remaining > 0:
                     self.position.size = -remaining
                     self.position.entry_price = exec_price
+                    self._position_entry_time = self._current_timestamp
                     self.balance -= remaining * exec_price + fee
             else:
+                # 부분 청산
                 realized_pnl = quantity * (exec_price - self.position.entry_price)
                 self.balance += realized_pnl + proceeds - fee
                 self.position.size -= quantity
@@ -129,6 +155,7 @@ class BacktestContext:
             new_size = self.position.size - quantity
             if self.position.size == 0:
                 self.position.entry_price = exec_price
+                self._position_entry_time = self._current_timestamp
             else:
                 total_proceeds = -self.position.size * self.position.entry_price + proceeds
                 self.position.entry_price = total_proceeds / abs(new_size)
@@ -160,13 +187,15 @@ class BacktestContext:
             return sum(self._price_history[-period:]) / period
         return 0.0
 
-    def update_price(self, price: float) -> None:
+    def update_price(self, price: float, timestamp: int = 0) -> None:
         """현재 가격 업데이트 (내부용).
 
         Args:
             price: 새 가격
+            timestamp: 타임스탬프
         """
         self._current_price = price
+        self._current_timestamp = timestamp
         self._price_history.append(price)
         # 메모리 절약: 최대 1000개만 유지
         if len(self._price_history) > 1000:
@@ -209,12 +238,12 @@ class BacktestEngine:
         """
         # 전략 초기화
         if klines:
-            self.ctx.update_price(klines[0]["close"])
+            self.ctx.update_price(klines[0]["close"], klines[0]["timestamp"])
         self.strategy.initialize(self.ctx)
 
         # 시뮬레이션 루프
         for bar in klines:
-            self.ctx.update_price(bar["close"])
+            self.ctx.update_price(bar["close"], bar["timestamp"])
             self.strategy.on_bar(self.ctx, bar)
 
             # 에쿼티 커브 기록
@@ -231,6 +260,35 @@ class BacktestEngine:
 
         # 종료 시 포지션 청산
         if self.ctx.position_size != 0:
+            # 마지막 포지션 기록
+            if klines:
+                final_price = klines[-1]["close"]
+                if self.ctx.position_size > 0:
+                    # 롱 포지션 청산
+                    realized_pnl = self.ctx.position_size * (final_price - self.ctx.position.entry_price)
+                    self.ctx.trades.append({
+                        "entry_time": self.ctx._position_entry_time,
+                        "exit_time": klines[-1]["timestamp"],
+                        "position_type": "LONG",
+                        "entry_price": self.ctx.position.entry_price,
+                        "exit_price": final_price,
+                        "quantity": self.ctx.position_size,
+                        "pnl": realized_pnl,
+                        "fee": 0.0,
+                    })
+                else:
+                    # 숏 포지션 청산
+                    realized_pnl = -self.ctx.position_size * (self.ctx.position.entry_price - final_price)
+                    self.ctx.trades.append({
+                        "entry_time": self.ctx._position_entry_time,
+                        "exit_time": klines[-1]["timestamp"],
+                        "position_type": "SHORT",
+                        "entry_price": self.ctx.position.entry_price,
+                        "exit_price": final_price,
+                        "quantity": abs(self.ctx.position_size),
+                        "pnl": realized_pnl,
+                        "fee": 0.0,
+                    })
             self.ctx.close_position()
 
         # 전략 종료
@@ -238,7 +296,9 @@ class BacktestEngine:
 
         # 리포트 생성
         summary = self._generate_summary()
-        return generate_full_report(summary, self.equity_curve)
+        report = generate_full_report(summary, self.equity_curve)
+        report["trades"] = self.ctx.trades  # 거래 내역 추가
+        return report
 
     def _generate_summary(self) -> dict[str, Any]:
         """백테스트 요약 생성.

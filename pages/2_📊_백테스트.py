@@ -192,6 +192,71 @@ if st.button("🚀 백테스트 실행", type="primary", use_container_width=Tru
 
                 st.plotly_chart(fig, use_container_width=True)
 
+            # 거래 내역 테이블
+            st.subheader("📝 거래 내역")
+
+            if result.get("trades"):
+                trades_df = pd.DataFrame(result["trades"])
+                
+                # 타임스탬프를 날짜로 변환
+                trades_df["진입 시간"] = pd.to_datetime(trades_df["entry_time"], unit="ms").dt.strftime("%Y-%m-%d %H:%M")
+                trades_df["청산 시간"] = pd.to_datetime(trades_df["exit_time"], unit="ms").dt.strftime("%Y-%m-%d %H:%M")
+                
+                # 컬럼 이름 변경 및 정렬
+                display_df = trades_df[[
+                    "진입 시간",
+                    "청산 시간",
+                    "position_type",
+                    "entry_price",
+                    "exit_price",
+                    "quantity",
+                    "pnl",
+                    "fee",
+                ]].copy()
+                
+                display_df.columns = [
+                    "진입 시간",
+                    "청산 시간",
+                    "포지션",
+                    "진입 가격",
+                    "청산 가격",
+                    "수량",
+                    "손익 (USDT)",
+                    "수수료 (USDT)",
+                ]
+                
+                # 수치 포맷 적용
+                display_df["진입 가격"] = display_df["진입 가격"].apply(lambda x: f"${x:,.2f}")
+                display_df["청산 가격"] = display_df["청산 가격"].apply(lambda x: f"${x:,.2f}")
+                display_df["수량"] = display_df["수량"].apply(lambda x: f"{x:.4f}")
+                display_df["손익 (USDT)"] = display_df["손익 (USDT)"].apply(lambda x: f"${x:,.2f}")
+                display_df["수수료 (USDT)"] = display_df["수수료 (USDT)"].apply(lambda x: f"${x:,.2f}")
+                
+                # 테이블 표시
+                st.dataframe(
+                    display_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                
+                # 거래 요약
+                total_pnl = trades_df["pnl"].sum()
+                total_fee = trades_df["fee"].sum()
+                avg_pnl = trades_df["pnl"].mean()
+                
+                summary_col1, summary_col2, summary_col3 = st.columns(3)
+                
+                with summary_col1:
+                    st.metric("총 손익", f"${total_pnl:,.2f}")
+                
+                with summary_col2:
+                    st.metric("평균 손익", f"${avg_pnl:,.2f}")
+                
+                with summary_col3:
+                    st.metric("총 수수료", f"${total_fee:,.2f}")
+            else:
+                st.info("거래 내역이 없습니다.")
+
             # 상세 결과
             with st.expander("📋 상세 결과"):
                 st.json(result)
