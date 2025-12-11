@@ -22,8 +22,21 @@ OPENAI_MODEL=gpt-4
 ```
 
 ## 설치 및 실행
+
+### 의존성 설치
 ```bash
 uv sync --extra dev
+```
+
+### 웹 UI 실행 (권장)
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+브라우저에서 `http://localhost:8501`로 접속하면 웹 UI가 열립니다.
+
+### API 서버 실행 (선택)
+```bash
 uv run uvicorn llmtrader.main:app --reload
 ```
 
