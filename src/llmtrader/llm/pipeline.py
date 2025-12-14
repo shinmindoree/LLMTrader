@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from llmtrader.llm.generator import StrategyGenerator
+from llmtrader.llm.generator import InvalidStrategyDescriptionError, StrategyGenerator
 from llmtrader.llm.sandbox import SandboxRunner
 from llmtrader.llm.validator import CodeValidator
 from llmtrader.settings import Settings
@@ -41,7 +41,23 @@ class StrategyPipeline:
             "attempts": 0,
             "validation_errors": [],
             "lint_warnings": [],
+            "input_validation": None,
         }
+
+        # 0. 입력 검증 (트레이딩 전략 설명인지 확인)
+        print("\n=== Input Validation ===")
+        is_valid_input, validation_reason = await self.generator.validate_description(description)
+        metadata["input_validation"] = {
+            "is_valid": is_valid_input,
+            "reason": validation_reason,
+        }
+
+        if not is_valid_input:
+            error_msg = f"❌ 유효하지 않은 입력: {validation_reason}"
+            print(error_msg)
+            return False, error_msg, metadata
+
+        print(f"✅ 입력 검증 통과: {validation_reason}")
 
         previous_errors: list[str] = []
 

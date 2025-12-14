@@ -33,6 +33,12 @@ class SandboxContext:
         if name == "sma":
             period = args[0] if args else kwargs.get("period", 20)
             return self._sma_values.get(period, self.current_price)
+        elif name == "ema":
+            period = args[0] if args else kwargs.get("period", 20)
+            return self._sma_values.get(period, self.current_price)
+        elif name == "rsi":
+            # 스모크 테스트용: 중립값 50 반환
+            return 50.0
         return 0.0
 
 

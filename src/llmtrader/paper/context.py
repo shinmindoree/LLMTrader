@@ -77,6 +77,11 @@ class PaperContext:
         return self.position.size
 
     @property
+    def position_entry_price(self) -> float:
+        """현재 포지션 진입가 (포지션 없으면 0)."""
+        return self.position.entry_price if self.position.size != 0 else 0.0
+
+    @property
     def unrealized_pnl(self) -> float:
         """미실현 손익."""
         if self.position.size == 0:
@@ -137,10 +142,10 @@ class PaperContext:
             self.buy(abs(self.position.size))
 
     def get_indicator(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """지표 조회 (단순 이동평균만 지원).
+        """지표 조회.
 
         Args:
-            name: 지표 이름
+            name: 지표 이름 (예: 'sma', 'rsi', 'ema')
             *args: 위치 인자
             **kwargs: 키워드 인자
 
@@ -152,6 +157,71 @@ class PaperContext:
             if len(self._price_history) < period:
                 return self._current_price
             return sum(self._price_history[-period:]) / period
+
+        elif name == "ema":
+            period = args[0] if args else kwargs.get("period", 20)
+            if len(self._price_history) < period:
+                return self._current_price
+            prices = self._price_history[-period:]
+            multiplier = 2 / (period + 1)
+            ema = prices[0]
+            for price in prices[1:]:
+                ema = (price - ema) * multiplier + ema
+            return ema
+
+        elif name == "rsi":
+            period = args[0] if args else kwargs.get("period", 14)
+            if len(self._price_history) < period + 1:
+                return 50.0
+
+            prices = self._price_history[-(period + 1):]
+            gains = []
+            losses = []
+
+            for i in range(1, len(prices)):
+                change = prices[i] - prices[i - 1]
+                if change > 0:
+                    gains.append(change)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(change))
+
+            avg_gain = sum(gains) / period if gains else 0
+            avg_loss = sum(losses) / period if losses else 0
+
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi
+
+        elif name == "rsi_rt":
+            # 실시간 RSI: 닫힌 봉 close들 + 현재가(current_price)를 마지막 값으로 반영
+            period = args[0] if args else kwargs.get("period", 14)
+            if len(self._price_history) < period:
+                return 50.0
+            closes = self._price_history + [self._current_price]
+            if len(closes) < period + 1:
+                return 50.0
+            prices = closes[-(period + 1) :]
+            gains = []
+            losses = []
+            for i in range(1, len(prices)):
+                change = prices[i] - prices[i - 1]
+                if change > 0:
+                    gains.append(change)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(change))
+            avg_gain = sum(gains) / period if gains else 0
+            avg_loss = sum(losses) / period if losses else 0
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            return 100 - (100 / (1 + rs))
+
         return 0.0
 
     def update_price(self, price: float) -> None:
@@ -171,6 +241,23 @@ class PaperContext:
             if self._should_fill(order, price):
                 to_fill.append(order_id)
 
+        for order_id in to_fill:
+            order = self.open_orders.pop(order_id)
+            self._execute_order(order)
+
+    def mark_price(self, price: float) -> None:
+        """현재가(마크가격) 업데이트만 수행 (지표용 price_history는 건드리지 않음).
+
+        - 페이퍼 트레이딩에서 폴링 주기마다 로그/스탑로스를 반영하기 위해 사용
+        - update_price()와 달리 _price_history에는 추가하지 않음
+        """
+        self._current_price = price
+
+        # 대기 주문 체결 확인 (가격만으로 체결되는 지정가 주문)
+        to_fill = []
+        for order_id, order in self.open_orders.items():
+            if self._should_fill(order, price):
+                to_fill.append(order_id)
         for order_id in to_fill:
             order = self.open_orders.pop(order_id)
             self._execute_order(order)

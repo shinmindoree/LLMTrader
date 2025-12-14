@@ -103,8 +103,22 @@ if st.button("🚀 전략 생성", type="primary", use_container_width=True):
                 st.info("💡 다음 단계: 백테스트 페이지에서 생성된 전략을 테스트해보세요!")
 
             else:
-                st.error(f"❌ 전략 생성 실패 ({metadata['attempts']}회 시도)")
-                st.code(code, language="text")
+                # 입력 검증 실패인지 확인
+                input_validation = metadata.get("input_validation", {})
+                if input_validation and not input_validation.get("is_valid", True):
+                    st.error("❌ 트레이딩 전략 설명이 아닙니다!")
+                    st.warning(f"**사유**: {input_validation.get('reason', '알 수 없음')}")
+                    st.info("""
+                    💡 **올바른 전략 설명 예시:**
+                    - "RSI가 30 이하면 매수, 70 이상이면 매도"
+                    - "이동평균선 크로스오버 전략"
+                    - "볼린저 밴드 상단/하단에서 매매"
+                    
+                    트레이딩 로직(매수/매도 조건, 기술적 지표 등)을 포함해주세요.
+                    """)
+                else:
+                    st.error(f"❌ 전략 생성 실패 ({metadata['attempts']}회 시도)")
+                    st.code(code, language="text")
 
                 with st.expander("🔍 오류 상세"):
                     st.json(metadata)
@@ -132,4 +146,5 @@ with st.expander("💡 전략 설명 예시"):
     최근 5개 캔들의 평균 가격보다 현재가가 5% 이상 높으면 매수, 5% 이상 낮으면 매도
     ```
     """)
+
 

@@ -58,6 +58,11 @@ class BacktestContext:
         return self.position.size
 
     @property
+    def position_entry_price(self) -> float:
+        """현재 포지션 진입가 (포지션 없으면 0)."""
+        return self.position.entry_price if self.position.size != 0 else 0.0
+
+    @property
     def unrealized_pnl(self) -> float:
         """미실현 손익."""
         if self.position.size == 0:
@@ -170,10 +175,10 @@ class BacktestContext:
             self.buy(abs(self.position.size))
 
     def get_indicator(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """지표 조회 (임시: 단순 이동평균만 지원).
+        """지표 조회.
 
         Args:
-            name: 지표 이름 (예: 'sma')
+            name: 지표 이름 (예: 'sma', 'rsi', 'ema')
             *args: 위치 인자 (예: period)
             **kwargs: 키워드 인자
 
@@ -185,6 +190,73 @@ class BacktestContext:
             if len(self._price_history) < period:
                 return self._current_price
             return sum(self._price_history[-period:]) / period
+
+        elif name == "ema":
+            period = args[0] if args else kwargs.get("period", 20)
+            if len(self._price_history) < period:
+                return self._current_price
+            # EMA 계산
+            prices = self._price_history[-period:]
+            multiplier = 2 / (period + 1)
+            ema = prices[0]
+            for price in prices[1:]:
+                ema = (price - ema) * multiplier + ema
+            return ema
+
+        elif name == "rsi":
+            period = args[0] if args else kwargs.get("period", 14)
+            if len(self._price_history) < period + 1:
+                return 50.0  # 데이터 부족시 중립값 반환
+
+            # RSI 계산
+            prices = self._price_history[-(period + 1):]
+            gains = []
+            losses = []
+
+            for i in range(1, len(prices)):
+                change = prices[i] - prices[i - 1]
+                if change > 0:
+                    gains.append(change)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(change))
+
+            avg_gain = sum(gains) / period if gains else 0
+            avg_loss = sum(losses) / period if losses else 0
+
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi
+
+        elif name == "rsi_rt":
+            # 실시간 RSI(백테스트에서는 current_price를 마지막 값으로 반영)
+            period = args[0] if args else kwargs.get("period", 14)
+            if len(self._price_history) < period:
+                return 50.0
+            closes = self._price_history + [self._current_price]
+            if len(closes) < period + 1:
+                return 50.0
+            prices = closes[-(period + 1) :]
+            gains = []
+            losses = []
+            for i in range(1, len(prices)):
+                change = prices[i] - prices[i - 1]
+                if change > 0:
+                    gains.append(change)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(change))
+            avg_gain = sum(gains) / period if gains else 0
+            avg_loss = sum(losses) / period if losses else 0
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            return 100 - (100 / (1 + rs))
+
         return 0.0
 
     def update_price(self, price: float, timestamp: int = 0) -> None:
@@ -298,6 +370,7 @@ class BacktestEngine:
         summary = self._generate_summary()
         report = generate_full_report(summary, self.equity_curve)
         report["trades"] = self.ctx.trades  # 거래 내역 추가
+        report["klines"] = klines  # 캔들 데이터 추가
         return report
 
     def _generate_summary(self) -> dict[str, Any]:

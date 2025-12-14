@@ -94,3 +94,4 @@ if st.button("📋 명령어 복사", use_container_width=True):
     st.write("명령어가 클립보드에 복사되었습니다!")
     st.code(command, language="bash")
 
+

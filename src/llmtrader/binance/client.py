@@ -54,6 +54,24 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response.raise_for_status()
         return response.json()
 
+    async def fetch_ticker_price(self, symbol: str) -> float:
+        """최신 체결가(Last Price) 조회.
+
+        참고: 바이낸스 UI에서 보는 가격(Last/Mark/Index) 중 무엇을 기준으로 하느냐에 따라
+        값이 다를 수 있습니다. 이 메서드는 /fapi/v1/ticker/price 의 price(Last Price)를 반환합니다.
+        """
+        response = await self._client.get("/fapi/v1/ticker/price", params={"symbol": symbol})
+        response.raise_for_status()
+        data = response.json()
+        return float(data["price"])
+
+    async def fetch_mark_price(self, symbol: str) -> float:
+        """마크 가격(Mark Price) 조회."""
+        response = await self._client.get("/fapi/v1/premiumIndex", params={"symbol": symbol})
+        response.raise_for_status()
+        data = response.json()
+        return float(data["markPrice"])
+
     async def place_order(self, symbol: str, side: str, quantity: float, **params: object) -> dict:
         payload: dict[str, Any] = {
             "symbol": symbol,

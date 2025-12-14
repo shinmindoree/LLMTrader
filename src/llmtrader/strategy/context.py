@@ -17,6 +17,11 @@ class StrategyContext(Protocol):
         ...
 
     @property
+    def position_entry_price(self) -> float:
+        """현재 포지션의 진입가 (포지션 없으면 0)."""
+        ...
+
+    @property
     def unrealized_pnl(self) -> float:
         """미실현 손익."""
         ...

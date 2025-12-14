@@ -16,7 +16,7 @@ st.markdown("### LLM 기반 바이낸스 선물 자동 트레이딩 시스템")
 st.divider()
 
 # 주요 기능 소개
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("🤖 전략 생성")
@@ -38,10 +38,12 @@ with col2:
     
     - 히스토리컬 캔들 데이터
     - 수수료/슬리피지 반영
-    - PnL, MDD, 샤프, 승률 리포트
+    - 캔들 차트 & 매매 시점 시각화
     """)
     if st.button("백테스트 실행", key="nav_backtest", use_container_width=True):
         st.switch_page("pages/2_📊_백테스트.py")
+
+col3, col4 = st.columns(2)
 
 with col3:
     st.subheader("📉 페이퍼 트레이딩")
@@ -54,6 +56,18 @@ with col3:
     """)
     if st.button("페이퍼 시작", key="nav_paper", use_container_width=True):
         st.switch_page("pages/3_📉_페이퍼_트레이딩.py")
+
+with col4:
+    st.subheader("🔴 라이브 트레이딩")
+    st.markdown("""
+    실제 테스트넷에서 자동 트레이딩을 실행합니다.
+    
+    - 실제 주문 실행
+    - 리스크 관리 (손실 한도, 레버리지)
+    - 감사 로그 & 모니터링
+    """)
+    if st.button("라이브 실행", key="nav_live", use_container_width=True):
+        st.switch_page("pages/4_🔴_라이브_트레이딩.py")
 
 st.divider()
 
@@ -82,4 +96,5 @@ st.info(f"**Binance URL**: {settings.binance.base_url}")
 # 푸터
 st.divider()
 st.caption("LLMTrader v0.1.0 | 바이낸스 선물 테스트넷 전용")
+
 

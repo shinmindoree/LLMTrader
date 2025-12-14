@@ -1,5 +1,41 @@
 """LLM 프롬프트 템플릿."""
 
+# 입력 검증용 프롬프트
+VALIDATION_SYSTEM_PROMPT = """You are a trading strategy validator. Your job is to determine if a user's input is a valid trading strategy description.
+
+A VALID trading strategy description should contain:
+- Trading logic (buy/sell conditions)
+- Technical indicators (MA, RSI, MACD, Bollinger Bands, etc.)
+- Price action patterns
+- Position sizing rules
+- Entry/exit conditions
+- Time-based rules (e.g., "15분봉", "1시간봉")
+
+INVALID inputs include:
+- General questions unrelated to trading
+- Requests for information (weather, recipes, etc.)
+- Non-trading topics
+- Ambiguous or empty requests
+- Offensive or inappropriate content
+
+Respond with ONLY a JSON object in this exact format:
+{"is_valid": true/false, "reason": "explanation in Korean"}
+
+Examples:
+- "RSI가 30 이하면 매수, 70 이상이면 매도" -> {"is_valid": true, "reason": "RSI 기반 트레이딩 전략입니다."}
+- "이동평균선 교차 전략" -> {"is_valid": true, "reason": "이동평균선 크로스오버 전략입니다."}
+- "아침밥에 나오는 반찬은뭐지?" -> {"is_valid": false, "reason": "트레이딩과 관련 없는 일상적인 질문입니다."}
+- "오늘 날씨 어때?" -> {"is_valid": false, "reason": "트레이딩과 관련 없는 날씨 질문입니다."}
+- "" -> {"is_valid": false, "reason": "입력이 비어있습니다."}
+"""
+
+VALIDATION_USER_PROMPT = """Is this a valid trading strategy description?
+
+Input: {description}
+
+Respond with JSON only."""
+
+
 SYSTEM_PROMPT = """You are an expert Python trading strategy developer for cryptocurrency futures trading.
 
 Your task is to generate Python code for a trading strategy class that inherits from the `Strategy` base class.
@@ -36,7 +72,9 @@ class YourStrategy(Strategy):
 - `ctx.buy(quantity, price=None)` - Place buy order (price=None for market order)
 - `ctx.sell(quantity, price=None)` - Place sell order
 - `ctx.close_position()` - Close entire position
-- `ctx.get_indicator("sma", period)` - Get simple moving average
+- `ctx.get_indicator("sma", period)` - Get simple moving average (default period=20)
+- `ctx.get_indicator("ema", period)` - Get exponential moving average (default period=20)
+- `ctx.get_indicator("rsi", period)` - Get RSI (default period=14, returns 0-100)
 
 ## Rules
 

@@ -6,8 +6,10 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from llmtrader.backtest.data_loader import HistoricalDataLoader
@@ -157,6 +159,223 @@ if st.button("🚀 백테스트 실행", type="primary", use_container_width=Tru
             with trade_col4:
                 st.metric("캔들 수", result["num_bars"])
 
+            # 캔들 차트 with 매매 시점, 이동평균선, RSI
+            st.subheader("📊 캔들 차트 & 기술적 지표")
+
+            if result.get("klines"):
+                klines_df = pd.DataFrame(result["klines"])
+                klines_df["datetime"] = pd.to_datetime(klines_df["timestamp"], unit="ms")
+
+                # 이동평균선 계산
+                ma_periods = [5, 10, 20, 60, 120]
+                ma_colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7"]
+                
+                for period in ma_periods:
+                    klines_df[f"MA{period}"] = klines_df["close"].rolling(window=period).mean()
+
+                # RSI 계산 (14일 기본)
+                def calculate_rsi(prices, period=14):
+                    delta = prices.diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+                    rs = gain / loss
+                    rsi = 100 - (100 / (1 + rs))
+                    return rsi
+
+                klines_df["RSI"] = calculate_rsi(klines_df["close"], 14)
+
+                # 서브플롯 생성 (캔들 차트 + RSI)
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.03,
+                    row_heights=[0.7, 0.3],
+                    subplot_titles=("가격 & 이동평균선", "RSI (14)")
+                )
+
+                # 캔들 차트
+                fig.add_trace(
+                    go.Candlestick(
+                        x=klines_df["datetime"],
+                        open=klines_df["open"],
+                        high=klines_df["high"],
+                        low=klines_df["low"],
+                        close=klines_df["close"],
+                        name="Price",
+                        increasing_line_color="#26A69A",
+                        decreasing_line_color="#EF5350",
+                    ),
+                    row=1, col=1
+                )
+
+                # 이동평균선 추가
+                for i, period in enumerate(ma_periods):
+                    fig.add_trace(
+                        go.Scatter(
+                            x=klines_df["datetime"],
+                            y=klines_df[f"MA{period}"],
+                            mode="lines",
+                            name=f"MA{period}",
+                            line=dict(color=ma_colors[i], width=1.5),
+                            hovertemplate=f"MA{period}: %{{y:,.2f}}<extra></extra>",
+                        ),
+                        row=1, col=1
+                    )
+
+                # RSI 차트
+                fig.add_trace(
+                    go.Scatter(
+                        x=klines_df["datetime"],
+                        y=klines_df["RSI"],
+                        mode="lines",
+                        name="RSI",
+                        line=dict(color="#AB47BC", width=2),
+                        hovertemplate="RSI: %{y:.1f}<extra></extra>",
+                    ),
+                    row=2, col=1
+                )
+
+                # RSI 과매수/과매도 라인
+                fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
+                fig.add_hline(y=50, line_dash="dot", line_color="gray", line_width=1, row=2, col=1)
+
+                # RSI 과매수/과매도 영역 (음영)
+                fig.add_hrect(y0=70, y1=100, fillcolor="red", opacity=0.1, line_width=0, row=2, col=1)
+                fig.add_hrect(y0=0, y1=30, fillcolor="green", opacity=0.1, line_width=0, row=2, col=1)
+
+                # 거래 시점 표시
+                if result.get("trades"):
+                    trades_df = pd.DataFrame(result["trades"])
+                    
+                    for _, trade in trades_df.iterrows():
+                        entry_dt = pd.to_datetime(trade["entry_time"], unit="ms")
+                        exit_dt = pd.to_datetime(trade["exit_time"], unit="ms")
+                        
+                        if trade["position_type"] == "LONG":
+                            # 매수 진입 (초록 삼각형)
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=[entry_dt],
+                                    y=[trade["entry_price"]],
+                                    mode="markers",
+                                    marker=dict(
+                                        symbol="triangle-up",
+                                        size=12,
+                                        color="#00E676",
+                                        line=dict(color="white", width=1),
+                                    ),
+                                    name="매수 진입",
+                                    showlegend=False,
+                                    hovertemplate=f"<b>매수 진입</b><br>가격: ${trade['entry_price']:,.2f}<br>수량: {trade['quantity']:.4f}<extra></extra>",
+                                ),
+                                row=1, col=1
+                            )
+                            # 매도 청산 (빨강 역삼각형)
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=[exit_dt],
+                                    y=[trade["exit_price"]],
+                                    mode="markers",
+                                    marker=dict(
+                                        symbol="triangle-down",
+                                        size=12,
+                                        color="#FF5252",
+                                        line=dict(color="white", width=1),
+                                    ),
+                                    name="매도 청산",
+                                    showlegend=False,
+                                    hovertemplate=f"<b>매도 청산</b><br>가격: ${trade['exit_price']:,.2f}<br>손익: ${trade['pnl']:,.2f}<extra></extra>",
+                                ),
+                                row=1, col=1
+                            )
+                        else:  # SHORT
+                            # 매도 진입 (빨강 역삼각형)
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=[entry_dt],
+                                    y=[trade["entry_price"]],
+                                    mode="markers",
+                                    marker=dict(
+                                        symbol="triangle-down",
+                                        size=12,
+                                        color="#FF5252",
+                                        line=dict(color="white", width=1),
+                                    ),
+                                    name="매도 진입",
+                                    showlegend=False,
+                                    hovertemplate=f"<b>매도 진입</b><br>가격: ${trade['entry_price']:,.2f}<br>수량: {trade['quantity']:.4f}<extra></extra>",
+                                ),
+                                row=1, col=1
+                            )
+                            # 매수 청산 (초록 삼각형)
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=[exit_dt],
+                                    y=[trade["exit_price"]],
+                                    mode="markers",
+                                    marker=dict(
+                                        symbol="triangle-up",
+                                        size=12,
+                                        color="#00E676",
+                                        line=dict(color="white", width=1),
+                                    ),
+                                    name="매수 청산",
+                                    showlegend=False,
+                                    hovertemplate=f"<b>매수 청산</b><br>가격: ${trade['exit_price']:,.2f}<br>손익: ${trade['pnl']:,.2f}<extra></extra>",
+                                ),
+                                row=1, col=1
+                            )
+
+                fig.update_layout(
+                    hovermode="x unified",
+                    height=800,
+                    template="plotly_dark",
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    dragmode="zoom",  # 드래그로 줌 가능
+                )
+
+                # rangeslider 비활성화 (캔들 차트 기본 옵션)
+                fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
+                
+                # Y축 설정 - autorange로 자동 스케일
+                fig.update_yaxes(
+                    title_text="가격 (USDT)",
+                    autorange=True,
+                    fixedrange=False,  # Y축 줌 허용
+                    row=1, col=1
+                )
+                fig.update_yaxes(
+                    title_text="RSI",
+                    range=[0, 100],
+                    fixedrange=False,
+                    row=2, col=1
+                )
+                
+                # X축 설정 - 줌 허용
+                fig.update_xaxes(fixedrange=False, row=1, col=1)
+                fig.update_xaxes(title_text="날짜", fixedrange=False, row=2, col=1)
+
+                # 차트 출력 (스크롤 줌 활성화)
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    config={
+                        "scrollZoom": True,  # 마우스 휠로 줌
+                        "displayModeBar": True,
+                        "modeBarButtonsToAdd": ["autoScale2d", "resetScale2d"],
+                    }
+                )
+
+                # 이동평균선 범례 설명
+                st.caption("📈 이동평균선: MA5(빨강), MA10(청록), MA20(파랑), MA60(초록), MA120(노랑) | 📉 RSI: 70↑ 과매수, 30↓ 과매도")
+
             # 에쿼티 커브 차트
             st.subheader("📉 에쿼티 커브")
 
@@ -173,6 +392,7 @@ if st.button("🚀 백테스트 실행", type="primary", use_container_width=Tru
                         mode="lines",
                         name="Total Equity",
                         line=dict(color="blue", width=2),
+                        fill="tozeroy",
                     )
                 )
 
@@ -184,13 +404,27 @@ if st.button("🚀 백테스트 실행", type="primary", use_container_width=Tru
                 )
 
                 fig.update_layout(
-                    xaxis_title="Date",
-                    yaxis_title="Equity (USDT)",
+                    xaxis_title="날짜",
+                    yaxis_title="자산 (USDT)",
                     hovermode="x unified",
                     height=400,
+                    template="plotly_dark",
+                    dragmode="zoom",
                 )
+                
+                # 축 설정 - 자동 스케일 및 줌 허용
+                fig.update_xaxes(fixedrange=False)
+                fig.update_yaxes(autorange=True, fixedrange=False)
 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    config={
+                        "scrollZoom": True,
+                        "displayModeBar": True,
+                        "modeBarButtonsToAdd": ["autoScale2d", "resetScale2d"],
+                    }
+                )
 
             # 거래 내역 테이블
             st.subheader("📝 거래 내역")

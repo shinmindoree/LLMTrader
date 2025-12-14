@@ -1,0 +1,9 @@
+[
+  {
+    "timestamp": "2025-12-13T00:53:16.000750",
+    "action": "LEVERAGE_SET",
+    "data": {
+      "leverage": 1
+    }
+  }
+]
