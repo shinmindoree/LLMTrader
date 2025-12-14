@@ -29,12 +29,21 @@ class OpenAISettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+class SlackSettings(BaseSettings):
+    """Slack 알림 관련 설정."""
+
+    webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
 class Settings(BaseSettings):
     """애플리케이션 전역 설정."""
 
     env: str = Field(default="local", alias="ENV")
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    slack: SlackSettings = Field(default_factory=SlackSettings)
 
     model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
 

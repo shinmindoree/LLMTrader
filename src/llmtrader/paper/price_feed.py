@@ -15,6 +15,7 @@ class PriceFeed:
         client: BinanceHTTPClient,
         symbol: str,
         interval: float = 1.0,
+        candle_interval: str = "1m",
     ) -> None:
         """가격 피드 초기화.
 
@@ -22,10 +23,12 @@ class PriceFeed:
             client: 바이낸스 HTTP 클라이언트
             symbol: 심볼 (예: BTCUSDT)
             interval: 폴링 간격 (초)
+            candle_interval: 캔들 봉 간격 (예: '1m', '5m', '15m', '1h')
         """
         self.client = client
         self.symbol = symbol
         self.interval = interval
+        self.candle_interval = candle_interval
         self._running = False
         self._callbacks: list[Callable[[dict[str, Any]], None]] = []
         self._last_price: float = 0.0
@@ -53,7 +56,7 @@ class PriceFeed:
         Returns:
             (timestamp_ms, close) 리스트. timestamp는 kline open time.
         """
-        klines = await self.client.fetch_klines(symbol=self.symbol, interval="1m", limit=limit + 1)
+        klines = await self.client.fetch_klines(symbol=self.symbol, interval=self.candle_interval, limit=limit + 1)
         if not klines:
             return []
 
@@ -86,14 +89,14 @@ class PriceFeed:
                 # - last_price: 최신(미완성 포함) 가격(= klines[-1].close)을 마크가격/로그에 사용
                 klines = await self.client.fetch_klines(
                     symbol=self.symbol,
-                    interval="1m",
+                    interval=self.candle_interval,
                     limit=2,
                 )
                 if klines:
                     recv_ts = int(time.time() * 1000)
-                    safe_ts = recv_ts - 1500  # 네트워크/서버 지연 여유
-
-                    # closeTime(k[6])을 기준으로 "닫힌 봉(last closed candle)"을 선택한다.
+                    # 바이낸스 klines는 일반적으로 마지막 원소가 "진행 중인 현재 봉",
+                    # 그 직전(=klines[-2])이 "직전 닫힌 봉"입니다.
+                    # TradingView 차트와 봉 기준을 최대한 맞추기 위해 이를 우선 사용합니다.
                     parsed: list[tuple[int, int, float]] = []
                     for k in klines:
                         try:
@@ -105,9 +108,15 @@ class PriceFeed:
                         parsed.append((open_ts, close_ts, close_price))
 
                     parsed.sort(key=lambda x: x[0])
+                    # 어떤 경우에는 Binance가 "진행 중인 봉"을 포함하지 않고 "닫힌 봉"만 반환하기도 합니다.
+                    # 이때는 parsed[-1]이 이미 닫힌 봉이므로, closeTime 기준으로 가장 최신 닫힌 봉을 선택합니다.
+                    safe_ts = recv_ts - 1500  # 네트워크/서버 지연 여유
                     closed = [p for p in parsed if p[1] <= safe_ts]
                     if closed:
                         bar_ts, _, bar_close = closed[-1]
+                    elif len(parsed) >= 2:
+                        # 진행 중 봉을 포함하는 경우(마지막이 아직 안 닫힘)에는 직전 봉을 사용
+                        bar_ts, _, bar_close = parsed[-2]
                     else:
                         bar_ts, _, bar_close = parsed[-1]
 

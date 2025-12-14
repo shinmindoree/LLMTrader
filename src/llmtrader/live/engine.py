@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from llmtrader.live.context import LiveContext
+from llmtrader.indicators.rsi import rsi_wilder_from_closes
 from llmtrader.paper.price_feed import PriceFeed
 from llmtrader.strategy.base import Strategy
 
@@ -38,25 +39,7 @@ class LiveTradingEngine:
 
     @staticmethod
     def _compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:
-        if len(closes) < period + 1:
-            return 50.0
-        window = closes[-(period + 1) :]
-        gains: list[float] = []
-        losses: list[float] = []
-        for i in range(1, len(window)):
-            change = window[i] - window[i - 1]
-            if change > 0:
-                gains.append(change)
-                losses.append(0.0)
-            else:
-                gains.append(0.0)
-                losses.append(abs(change))
-        avg_gain = sum(gains) / period if gains else 0.0
-        avg_loss = sum(losses) / period if losses else 0.0
-        if avg_loss == 0:
-            return 100.0
-        rs = avg_gain / avg_loss
-        return 100.0 - (100.0 / (1.0 + rs))
+        return rsi_wilder_from_closes(list(closes), int(period))
 
     async def start(self) -> None:
         """라이브 트레이딩 시작."""
@@ -127,6 +110,11 @@ class LiveTradingEngine:
 
         # 전략 초기화 (첫 틱)
         if not self._initialized:
+            # 주문 체결 로그/알림에 "전략이 쓰는 RSI 파라미터"를 포함하기 위해 메타 주입
+            try:
+                self.ctx.set_strategy_meta(self.strategy)
+            except Exception:  # noqa: BLE001
+                pass
             self.strategy.initialize(self.ctx)
             self._initialized = True
 

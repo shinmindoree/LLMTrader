@@ -12,6 +12,7 @@ from llmtrader.binance.client import BinanceHTTPClient
 from llmtrader.live.context import LiveContext
 from llmtrader.live.engine import LiveTradingEngine
 from llmtrader.live.risk import RiskConfig, RiskManager
+from llmtrader.notifications.slack import SlackNotifier
 from llmtrader.paper.price_feed import PriceFeed
 from llmtrader.settings import get_settings
 
@@ -23,9 +24,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbol", type=str, default="BTCUSDT", help="거래 심볼")
     parser.add_argument("--leverage", type=int, default=1, help="레버리지 (기본: 1)")
     parser.add_argument("--interval", type=float, default=1.0, help="가격 피드 간격 (초)")
+    parser.add_argument("--candle-interval", type=str, default="1m", help="캔들 봉 간격 (예: 1m, 5m, 15m)")
     parser.add_argument("--max-position", type=float, default=0.5, help="최대 포지션 크기 (자산 대비, 기본: 0.5)")
     parser.add_argument("--daily-loss-limit", type=float, default=500.0, help="일일 손실 한도 (USDT)")
-    parser.add_argument("--max-consecutive-losses", type=int, default=3, help="최대 연속 손실 횟수")
+    parser.add_argument(
+        "--max-consecutive-losses",
+        type=int,
+        default=0,
+        help="최대 연속 손실 횟수 (0이면 비활성화)",
+    )
     parser.add_argument(
         "--yes",
         action="store_true",
@@ -64,8 +71,12 @@ async def main():
     print(f"심볼: {args.symbol}")
     print(f"레버리지: {args.leverage}x")
     print(f"최대 포지션: {args.max_position * 100}% (자산 대비)")
+    print(f"캔들 봉 간격: {args.candle_interval}")
     print(f"일일 손실 한도: ${args.daily_loss_limit}")
-    print(f"최대 연속 손실: {args.max_consecutive_losses}회")
+    if args.max_consecutive_losses > 0:
+        print(f"최대 연속 손실: {args.max_consecutive_losses}회")
+    else:
+        print("최대 연속 손실: 비활성화")
     print("=" * 80)
     print()
 
@@ -98,10 +109,16 @@ async def main():
     risk_config = RiskConfig(
         max_leverage=float(args.leverage),
         max_position_size=args.max_position,
+        # 단일 주문 한도는 기본적으로 "최대 포지션 한도"와 동일하게 둔다.
+        # 사용자가 --max-position 1.0 으로 설정해 "최대한 진입"을 원할 때,
+        # 기본 max_order_size=0.5 때문에 주문이 거절되는 혼란을 방지한다.
+        max_order_size=args.max_position,
         daily_loss_limit=args.daily_loss_limit,
         max_consecutive_losses=args.max_consecutive_losses,
     )
     risk_manager = RiskManager(risk_config)
+
+    notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
     # 컨텍스트 생성
     ctx = LiveContext(
@@ -109,6 +126,8 @@ async def main():
         risk_manager=risk_manager,
         symbol=args.symbol,
         leverage=args.leverage,
+        env=settings.env,
+        notifier=notifier,
     )
 
     # 전략 로드
@@ -116,7 +135,7 @@ async def main():
     strategy = strategy_class()
 
     # 가격 피드 생성
-    price_feed = PriceFeed(client, args.symbol, args.interval)
+    price_feed = PriceFeed(client, args.symbol, args.interval, candle_interval=args.candle_interval)
 
     # 엔진 생성
     engine = LiveTradingEngine(strategy, ctx, price_feed)

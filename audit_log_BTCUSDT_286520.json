@@ -1,0 +1,18 @@
+[
+  {
+    "timestamp": "2025-12-15T01:46:54.086582",
+    "action": "LEVERAGE_SET",
+    "data": {
+      "leverage": 5
+    }
+  },
+  {
+    "timestamp": "2025-12-15T01:54:02.602691",
+    "action": "ORDER_REJECTED_SIZE",
+    "data": {
+      "side": "BUY",
+      "quantity": 0.262,
+      "reason": "\uc8fc\ubb38 \ud06c\uae30 \ucd08\uacfc (\ucd5c\ub300: $11883.00)"
+    }
+  }
+]

@@ -27,6 +27,7 @@ async def main() -> None:
         client=client,
         symbol="BTCUSDT",
         interval=1.0,
+        candle_interval="1m",
     )
 
     # 전략 생성

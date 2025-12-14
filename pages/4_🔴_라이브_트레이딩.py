@@ -32,6 +32,9 @@ Streamlit UI에서는 장시간 실행되는 프로세스를 지원하지 않습
 ```bash
 uv run python scripts/run_live_trading.py <전략파일> --symbol BTCUSDT --leverage 1
 ```
+
+Slack 알림(선택):
+- 환경변수 `SLACK_WEBHOOK_URL` 를 설정하면 **포지션 진입/청산 시 Slack으로 알림**을 받을 수 있습니다.
 """)
 
 st.divider()
@@ -65,7 +68,13 @@ with col1:
 with col2:
     max_position = st.slider("최대 포지션 크기 (%)", min_value=10, max_value=100, value=50, step=10) / 100
     daily_loss_limit = st.number_input("일일 손실 한도 (USDT)", min_value=100.0, value=500.0, step=50.0)
-    max_consecutive_losses = st.number_input("최대 연속 손실 횟수", min_value=1, max_value=10, value=3, step=1)
+    max_consecutive_losses = st.number_input(
+        "최대 연속 손실 횟수 (0이면 비활성화)",
+        min_value=0,
+        max_value=10,
+        value=0,
+        step=1,
+    )
 
 st.divider()
 
@@ -80,7 +89,7 @@ with risk_col1:
 
 with risk_col2:
     st.metric("일일 손실 한도", f"${daily_loss_limit:,.0f}")
-    st.metric("연속 손실 제한", f"{max_consecutive_losses}회")
+    st.metric("연속 손실 제한", "비활성화" if max_consecutive_losses == 0 else f"{max_consecutive_losses}회")
 
 with risk_col3:
     st.metric("쿨다운 시간", "300초 (5분)")
@@ -227,3 +236,4 @@ with st.expander("자주 묻는 질문"):
     ### Q: 리스크 한도에 걸리면?
     A: 자동으로 거래가 중지되고 로그에 기록됩니다.
     """)
+

@@ -97,12 +97,57 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
 
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
         params_with_sig = self._attach_signature(params)
-        response = await self._client.request(method, path, params=params_with_sig)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = await self._client.request(method, path, params=params_with_sig)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            # Binance는 에러 바디에 {"code": ..., "msg": "..."} 형태를 주는 경우가 많음.
+            # 기존 로그만으로는 원인을 확정하기 어려워서, 응답 바디를 포함해 예외 메시지를 강화한다.
+            try:
+                data = e.response.json()
+            except Exception:  # noqa: BLE001
+                data = {"raw": e.response.text}
+            raise ValueError(
+                f"Binance API error: {e.response.status_code} {method} {path} | payload={data}"
+            ) from e
+
+    @staticmethod
+    def _normalize_params(params: dict[str, Any]) -> dict[str, Any]:
+        """서명/요청에 사용할 파라미터를 정규화한다.
+
+        중요:
+        - httpx는 bool 값을 쿼리스트링에서 'true'/'false'로 직렬화하는데,
+          urllib.parse.urlencode는 Python bool을 'True'/'False'로 바꿉니다.
+          이 불일치가 생기면 signature가 틀어져 4xx가 발생할 수 있습니다.
+        - 따라서 bool은 명시적으로 소문자 문자열로 변환합니다.
+        """
+        normalized: dict[str, Any] = {}
+        for k, v in params.items():
+            if isinstance(v, bool):
+                normalized[k] = "true" if v else "false"
+            elif isinstance(v, float):
+                # float 노이즈(예: 0.013000000000000001)로 인한 precision 에러 방지:
+                # 고정소수 문자열로 변환 후 불필요한 0 제거
+                s = f"{v:.15f}".rstrip("0").rstrip(".")
+                normalized[k] = s if s else "0"
+            elif isinstance(v, (list, tuple)):
+                items: list[Any] = []
+                for item in v:
+                    if isinstance(item, bool):
+                        items.append("true" if item else "false")
+                    elif isinstance(item, float):
+                        s = f"{item:.15f}".rstrip("0").rstrip(".")
+                        items.append(s if s else "0")
+                    else:
+                        items.append(item)
+                normalized[k] = items
+            else:
+                normalized[k] = v
+        return normalized
 
     def _attach_signature(self, params: dict[str, Any]) -> dict[str, Any]:
-        params = dict(params)
+        params = self._normalize_params(dict(params))
         params.setdefault("timestamp", int(time.time() * 1000))
         query_string = urlencode(params, doseq=True)
         signature = hmac.new(self._api_secret, query_string.encode(), hashlib.sha256).hexdigest()

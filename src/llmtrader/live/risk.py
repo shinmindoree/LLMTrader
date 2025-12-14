@@ -75,7 +75,8 @@ class RiskManager:
                 return False, f"쿨다운 중 (남은 시간: {int(remaining)}초)"
 
         # 연속 손실 확인
-        if self._consecutive_losses >= self.config.max_consecutive_losses:
+        # max_consecutive_losses <= 0 이면 비활성화
+        if self.config.max_consecutive_losses > 0 and self._consecutive_losses >= self.config.max_consecutive_losses:
             return False, f"최대 연속 손실 횟수 도달 ({self._consecutive_losses}회)"
 
         return True, "OK"
@@ -85,6 +86,7 @@ class RiskManager:
         order_size: float,
         current_price: float,
         total_equity: float,
+        leverage: float = 1.0,
     ) -> tuple[bool, str]:
         """주문 크기 검증.
 
@@ -92,12 +94,18 @@ class RiskManager:
             order_size: 주문 크기 (수량)
             current_price: 현재 가격
             total_equity: 총 자산
+            leverage: 레버리지 (명목가치 한도 계산에 반영)
 
         Returns:
             (유효 여부, 사유)
         """
+        if total_equity <= 0:
+            return False, f"총자산이 0 이하입니다 (total_equity={total_equity:.2f})"
         order_value = order_size * current_price
-        max_order_value = total_equity * self.config.max_order_size
+        # 명목가치(notional) 기준 한도:
+        # - max_order_size는 "총자산 대비 비율"로 두고
+        # - 레버리지 적용 시 총 명목 한도는 total_equity * leverage 만큼 늘어납니다.
+        max_order_value = total_equity * leverage * self.config.max_order_size
 
         if order_value > max_order_value:
             return False, f"주문 크기 초과 (최대: ${max_order_value:.2f})"
@@ -109,6 +117,7 @@ class RiskManager:
         new_position_size: float,
         current_price: float,
         total_equity: float,
+        leverage: float = 1.0,
     ) -> tuple[bool, str]:
         """포지션 크기 검증.
 
@@ -116,12 +125,18 @@ class RiskManager:
             new_position_size: 새 포지션 크기 (수량)
             current_price: 현재 가격
             total_equity: 총 자산
+            leverage: 레버리지 (명목가치 한도 계산에 반영)
 
         Returns:
             (유효 여부, 사유)
         """
+        if total_equity <= 0:
+            return False, f"총자산이 0 이하입니다 (total_equity={total_equity:.2f})"
         position_value = abs(new_position_size) * current_price
-        max_position_value = total_equity * self.config.max_position_size
+        # 명목가치(notional) 기준 한도:
+        # 사용자가 원하는 동작: 레버리지 5배면 총자산의 5배까지 포지션 한도 확대
+        # => max_position_size=1.0 일 때 max_notional = total_equity * leverage
+        max_position_value = total_equity * leverage * self.config.max_position_size
 
         if position_value > max_position_value:
             return False, f"포지션 크기 초과 (최대: ${max_position_value:.2f})"
@@ -205,3 +220,4 @@ class RiskManager:
             "last_loss_time": self._last_loss_time.isoformat() if self._last_loss_time else None,
             "num_trades_today": len([t for t in self._trade_history if datetime.fromisoformat(t["timestamp"]).date() == datetime.now().date()]),
         }
+

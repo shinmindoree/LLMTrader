@@ -14,34 +14,13 @@ from typing import Any
 import typer
 
 from llmtrader.binance.client import BinanceHTTPClient
+from llmtrader.indicators.rsi import rsi_wilder_from_closes
 from llmtrader.settings import get_settings
 
 
 def compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:
-    """마지막 (period+1)개의 종가로 RSI 계산(단순 평균 방식)."""
-    if len(closes) < period + 1:
-        return 50.0
-
-    window = closes[-(period + 1) :]
-    gains: list[float] = []
-    losses: list[float] = []
-
-    for i in range(1, len(window)):
-        change = window[i] - window[i - 1]
-        if change > 0:
-            gains.append(change)
-            losses.append(0.0)
-        else:
-            gains.append(0.0)
-            losses.append(abs(change))
-
-    avg_gain = sum(gains) / period if gains else 0.0
-    avg_loss = sum(losses) / period if losses else 0.0
-
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
+    """Wilder(RMA) 방식 RSI 계산(바이낸스/TradingView 기본 RSI와 동일 계열)."""
+    return rsi_wilder_from_closes(list(closes), int(period))
 
 
 def compute_realtime_rsi(closed_closes: list[float], last_price: float, period: int = 14) -> float:

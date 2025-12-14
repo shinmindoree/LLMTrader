@@ -21,9 +21,10 @@ def paper_trade(
     symbol: str = typer.Option("BTCUSDT", "--symbol", "-s", help="심볼"),
     balance: float = typer.Option(10000.0, "--balance", "-b", help="초기 잔고"),
     interval: float = typer.Option(1.0, "--interval", "-i", help="가격 피드 간격 (초)"),
+    candle_interval: str = typer.Option("1m", "--candle-interval", help="캔들 봉 간격 (예: 1m, 5m, 15m)"),
 ) -> None:
     """커스텀 전략으로 페이퍼 트레이딩 실행."""
-    asyncio.run(_paper_trade_async(strategy_file, symbol, balance, interval))
+    asyncio.run(_paper_trade_async(strategy_file, symbol, balance, interval, candle_interval))
 
 
 async def _paper_trade_async(
@@ -31,6 +32,7 @@ async def _paper_trade_async(
     symbol: str,
     balance: float,
     interval: float,
+    candle_interval: str,
 ) -> None:
     """비동기 페이퍼 트레이딩 실행."""
     # 전략 파일 로드
@@ -93,6 +95,7 @@ async def _paper_trade_async(
         client=client,
         symbol=symbol,
         interval=interval,
+        candle_interval=candle_interval,
     )
 
     # 페이퍼 트레이딩 엔진 생성

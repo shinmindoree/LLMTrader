@@ -3,6 +3,7 @@
 from typing import Any
 
 from llmtrader.backtest.report import generate_full_report
+from llmtrader.indicators.rsi import rsi_wilder_from_closes
 from llmtrader.strategy.base import Strategy
 
 
@@ -205,57 +206,13 @@ class BacktestContext:
 
         elif name == "rsi":
             period = args[0] if args else kwargs.get("period", 14)
-            if len(self._price_history) < period + 1:
-                return 50.0  # 데이터 부족시 중립값 반환
-
-            # RSI 계산
-            prices = self._price_history[-(period + 1):]
-            gains = []
-            losses = []
-
-            for i in range(1, len(prices)):
-                change = prices[i] - prices[i - 1]
-                if change > 0:
-                    gains.append(change)
-                    losses.append(0)
-                else:
-                    gains.append(0)
-                    losses.append(abs(change))
-
-            avg_gain = sum(gains) / period if gains else 0
-            avg_loss = sum(losses) / period if losses else 0
-
-            if avg_loss == 0:
-                return 100.0
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-            return rsi
+            return rsi_wilder_from_closes(list(self._price_history), int(period))
 
         elif name == "rsi_rt":
             # 실시간 RSI(백테스트에서는 current_price를 마지막 값으로 반영)
             period = args[0] if args else kwargs.get("period", 14)
-            if len(self._price_history) < period:
-                return 50.0
-            closes = self._price_history + [self._current_price]
-            if len(closes) < period + 1:
-                return 50.0
-            prices = closes[-(period + 1) :]
-            gains = []
-            losses = []
-            for i in range(1, len(prices)):
-                change = prices[i] - prices[i - 1]
-                if change > 0:
-                    gains.append(change)
-                    losses.append(0)
-                else:
-                    gains.append(0)
-                    losses.append(abs(change))
-            avg_gain = sum(gains) / period if gains else 0
-            avg_loss = sum(losses) / period if losses else 0
-            if avg_loss == 0:
-                return 100.0
-            rs = avg_gain / avg_loss
-            return 100 - (100 / (1 + rs))
+            closes = list(self._price_history) + [float(self._current_price)]
+            return rsi_wilder_from_closes(closes, int(period))
 
         return 0.0
 
