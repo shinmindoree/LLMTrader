@@ -1,12 +1,14 @@
 """라이브 트레이딩 엔진."""
 
 import asyncio
+import time
 from datetime import datetime
 from typing import Any
 
 from llmtrader.live.context import LiveContext
 from llmtrader.indicators.rsi import rsi_wilder_from_closes
-from llmtrader.paper.price_feed import PriceFeed
+from llmtrader.live.price_feed import PriceFeed
+from llmtrader.logging import get_logger
 from llmtrader.strategy.base import Strategy
 
 
@@ -36,6 +38,8 @@ class LiveTradingEngine:
         self._current_bar_close: float = 0.0
         self._last_bar_timestamp: int | None = None
         self._run_on_tick: bool = bool(getattr(strategy, "run_on_tick", False))
+        self._start_time: float = 0.0
+        self._logger = get_logger("llmtrader.live")
 
     @staticmethod
     def _compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:
@@ -43,6 +47,19 @@ class LiveTradingEngine:
 
     async def start(self) -> None:
         """라이브 트레이딩 시작."""
+        self._start_time = time.time()
+
+        # 세션 시작 로그
+        strategy_name = self.strategy.__class__.__name__
+        leverage = getattr(self.ctx, "leverage", 1)
+        max_position = getattr(self.ctx.risk_manager.config, "max_position_size", 1.0)
+        self._logger.log_session_start(
+            symbol=self.price_feed.symbol,
+            strategy=strategy_name,
+            leverage=int(leverage),
+            max_position=max_position,
+        )
+
         # 컨텍스트 초기화 (레버리지 설정, 잔고 조회)
         await self.ctx.initialize()
         
@@ -137,7 +154,12 @@ class LiveTradingEngine:
             try:
                 self.strategy.on_bar(self.ctx, bar)
             except Exception as e:
-                print(f"⚠️ 전략 실행 오류: {e}")
+                self._logger.log_error(
+                    error_type="STRATEGY_ERROR",
+                    message=str(e),
+                    symbol=self.price_feed.symbol,
+                    bar_timestamp=bar_ts,
+                )
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
             self._last_bar_timestamp = bar_ts
         elif self._run_on_tick:
@@ -154,7 +176,12 @@ class LiveTradingEngine:
             try:
                 self.strategy.on_bar(self.ctx, bar)
             except Exception as e:
-                print(f"⚠️ 전략 실행 오류: {e}")
+                self._logger.log_error(
+                    error_type="STRATEGY_ERROR",
+                    message=str(e),
+                    symbol=self.price_feed.symbol,
+                    is_tick=True,
+                )
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
 
         # 스냅샷 저장
@@ -209,31 +236,22 @@ class LiveTradingEngine:
         }
         self.snapshots.append(snapshot)
 
-        # 콘솔 출력: check_realtime_btcusdt_rsi.py 와 동일한 포맷(앞부분)
-        # + 라이브 트레이딩 상태(포지션/밸런스)는 뒤에 추가로 붙임
-        bar_dt = snapshot["bar_datetime"]
-        prefix = (
-            f"[{snapshot['datetime']}] "
-            f"(bar={bar_dt}) "
-            f"last={snapshot['price']:,.2f} "
-            f"rsi(14)={snapshot['rsi14']:.2f} "
-            f"rsi_rt(14)={snapshot['rsi_rt14']:.2f} "
+        # Azure 로거로 구조화된 틱 로그 전송 (콘솔 + Azure)
+        self._logger.log_tick(
+            symbol=self.price_feed.symbol,
+            bar_time=snapshot["bar_datetime"],
+            price=snapshot["price"],
+            rsi=snapshot["rsi_p"],
+            rsi_rt=snapshot["rsi_rt_p"],
+            position=snapshot["position_size"],
+            balance=snapshot["balance"],
+            pnl=snapshot["unrealized_pnl"],
+            rsi14=snapshot["rsi14"],
+            rsi_rt14=snapshot["rsi_rt14"],
+            rsi_period=snapshot["rsi_period"],
+            bar_close=snapshot["bar_close"],
+            total_equity=snapshot["total_equity"],
         )
-        if snapshot["rsi_period"] != 14:
-            prefix += (
-                f"rsi({snapshot['rsi_period']})={snapshot['rsi_p']:.2f} "
-                f"rsi_rt({snapshot['rsi_period']})={snapshot['rsi_rt_p']:.2f} "
-            )
-        prefix += f"bar_close={snapshot['bar_close']:,.2f}"
-        position_str = f"{snapshot['position_size']:+.4f}" if snapshot["position_size"] != 0 else "  0.0000"
-        pnl_str = f"{snapshot['unrealized_pnl']:+.2f}" if snapshot["unrealized_pnl"] != 0 else "  0.00"
-        suffix = (
-            f" | Position={position_str} "
-            f"| Balance={snapshot['balance']:,.2f} "
-            f"| PnL={pnl_str} "
-            f"| Total={snapshot['total_equity']:,.2f}"
-        )
-        print(prefix + suffix)
 
     def get_summary(self) -> dict[str, Any]:
         """요약 통계 반환.
@@ -263,6 +281,23 @@ class LiveTradingEngine:
         # 리스크 관리 상태
         risk_status = self.ctx.risk_manager.get_status()
 
+        # 세션 종료 로그
+        num_trades = len(self.ctx.filled_orders)
+        wins = sum(1 for o in self.ctx.filled_orders if o.get("realized_pnl", 0) > 0)
+        win_rate = wins / num_trades if num_trades > 0 else 0.0
+        duration_minutes = (time.time() - self._start_time) / 60 if self._start_time else 0.0
+
+        self._logger.log_session_end(
+            symbol=self.price_feed.symbol,
+            total_trades=num_trades,
+            total_pnl=final_equity - initial_equity,
+            win_rate=win_rate,
+            duration_minutes=duration_minutes,
+            initial_equity=initial_equity,
+            final_equity=final_equity,
+            max_drawdown_pct=max_dd * 100,
+        )
+
         return {
             "initial_equity": initial_equity,
             "final_equity": final_equity,
@@ -271,7 +306,7 @@ class LiveTradingEngine:
             "max_drawdown": max_dd,
             "max_drawdown_pct": max_dd * 100,
             "num_snapshots": len(self.snapshots),
-            "num_filled_orders": len(self.ctx.filled_orders),
+            "num_filled_orders": num_trades,
             "risk_status": risk_status,
             "audit_log_size": len(self.ctx.audit_log),
         }

@@ -7,7 +7,7 @@ class RsiUltraQuickTestStrategy(Strategy):
     """테스트용 RSI 롱 전략 (요구사항 버전).
 
     목적:
-    - 단순한 룰로 라이브/페이퍼 파이프라인이 정상 동작하는지 검증
+    - 단순한 룰로 라이브(테스트넷) 파이프라인이 정상 동작하는지 검증
 
     규칙:
     - 포지션 진입: LONG만
@@ -21,7 +21,7 @@ class RsiUltraQuickTestStrategy(Strategy):
       - tick에서는 StopLoss만 체크
       - 새 봉(is_new_bar=True)에서만 RSI 크로스 판단/prev_rsi 갱신
     """
-    # 페이퍼/라이브 엔진이 tick마다 on_bar을 호출하도록 하는 힌트
+    # 라이브 엔진이 tick마다 on_bar을 호출하도록 하는 힌트
     run_on_tick = True
 
     def __init__(

@@ -13,7 +13,7 @@ from llmtrader.live.context import LiveContext
 from llmtrader.live.engine import LiveTradingEngine
 from llmtrader.live.risk import RiskConfig, RiskManager
 from llmtrader.notifications.slack import SlackNotifier
-from llmtrader.paper.price_feed import PriceFeed
+from llmtrader.live.price_feed import PriceFeed
 from llmtrader.settings import get_settings
 
 
