@@ -1,6 +1,6 @@
 # LLMTrader
 
-FastAPI 기반의 LLM·바이낸스 선물 자동 매매 백엔드 스캐폴드입니다.
+바이낸스 선물 **라이브 트레이딩(테스트넷/메인넷)** 실행을 위한 프로젝트입니다.
 
 ## 요구사항
 - Python 3.11+
@@ -16,9 +16,8 @@ BINANCE_API_KEY=your_key
 BINANCE_API_SECRET=your_secret
 BINANCE_BASE_URL=https://testnet.binancefuture.com
 
-# OpenAI API (LLM 전략 생성 시 필수)
-OPENAI_API_KEY=your_openai_key
-OPENAI_MODEL=gpt-4
+# Slack 알림(선택)
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ```
 
 ## 설치 및 실행
@@ -51,33 +50,7 @@ uv run uvicorn llmtrader.main:app --reload
 
 ## 주요 기능
 
-### 1. 전략 생성 (LLM)
-```bash
-# 자연어 설명으로 전략 코드 자동 생성
-uv run python scripts/generate_strategy.py "5분봉에서 RSI가 30 이하면 매수, 70 이상이면 매도하는 전략" -o my_strategy.py
-```
-
-**필수**: `.env`에 `OPENAI_API_KEY` 설정 필요
-
-### 2. 백테스트
-```bash
-# 샘플 전략(단순 이동평균 크로스) 백테스트 실행
-uv run python scripts/run_backtest.py
-
-# 커스텀 전략 백테스트
-uv run python scripts/run_backtest_custom.py my_strategy.py --symbol BTCUSDT --days 7
-```
-
-### 3. 페이퍼 트레이딩
-```bash
-# 실시간 시세로 가상 트레이딩 (Ctrl+C로 중지)
-uv run python scripts/run_paper_trading.py
-
-# 커스텀 전략으로 페이퍼 트레이딩
-uv run python scripts/run_paper_trading_custom.py my_strategy.py --symbol BTCUSDT --balance 10000
-```
-
-### 4. 라이브 트레이딩 (NEW! ⚠️)
+### 라이브 트레이딩 (⚠️)
 ```bash
 # 실제 테스트넷에서 자동 트레이딩
 uv run python scripts/run_live_trading.py my_strategy.py \
@@ -89,7 +62,7 @@ uv run python scripts/run_live_trading.py my_strategy.py \
 
 **⚠️ 경고**: 
 - 반드시 **테스트넷 API**를 사용하세요 (`BINANCE_BASE_URL=https://testnet.binancefuture.com`)
-- 전략을 충분히 백테스트/페이퍼 테스트한 후 사용하세요
+- 먼저 `scripts/smoke_live_constraints.py` 스모크 테스트로 **주문 체결**을 확인하세요
 - 리스크 관리 설정을 신중히 검토하세요
 
 **리스크 관리 기능**:
@@ -111,20 +84,15 @@ uv run pytest
 LLMTrader/
 ├── src/llmtrader/
 │   ├── api/           # FastAPI 라우터
-│   ├── backtest/      # 백테스트 엔진
 │   ├── binance/       # 바이낸스 API 클라이언트
-│   ├── llm/           # LLM 전략 생성 파이프라인
-│   ├── paper/         # 페이퍼 트레이딩 엔진
-│   ├── live/          # 라이브 트레이딩 엔진 (NEW!)
+│   ├── live/          # 라이브 트레이딩 엔진
 │   │   ├── context.py # 라이브 트레이딩 컨텍스트
 │   │   ├── engine.py  # 라이브 트레이딩 엔진
+│   │   ├── price_feed.py # 가격 피드(REST 폴링)
 │   │   └── risk.py    # 리스크 관리 모듈
 │   └── strategy/      # 전략 인터페이스
 ├── pages/             # Streamlit 페이지
-│   ├── 1_🤖_전략_생성.py
-│   ├── 2_📊_백테스트.py
-│   ├── 3_📉_페이퍼_트레이딩.py
-│   └── 4_🔴_라이브_트레이딩.py (NEW!)
+│   └── 4_🔴_라이브_트레이딩.py
 ├── scripts/           # 실행 스크립트
 └── tests/             # 테스트
 ```
@@ -132,11 +100,8 @@ LLMTrader/
 ## 개발 로드맵
 
 - [x] 프로젝트 스캐폴딩
-- [x] LLM 전략 생성 파이프라인
 - [x] 바이낸스 API 연동
-- [x] 백테스트 엔진
-- [x] 페이퍼 트레이딩 엔진
-- [x] 라이브 트레이딩 엔진 (테스트넷)
+- [x] 라이브 트레이딩 엔진 (테스트넷/메인넷)
 - [x] 리스크 관리 시스템
 - [ ] 운영/모니터링 강화
 - [ ] 멀티 자산/거래소 지원

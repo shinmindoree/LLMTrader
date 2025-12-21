@@ -3,7 +3,7 @@ from llmtrader.strategy.context import StrategyContext
 
 
 class RsiQuickTestStrategy(Strategy):
-    """빠른 페이퍼트레이딩 검증용 RSI 전략 (거래 빈도 ↑).
+    """빠른 라이브(테스트넷) 검증용 RSI 전략 (거래 빈도 ↑).
 
     목적:
     - 주문/포지션/청산/손익 흐름이 제대로 동작하는지 빠르게 확인하기 위한 테스트용

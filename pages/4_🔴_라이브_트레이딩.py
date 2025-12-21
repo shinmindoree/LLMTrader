@@ -17,7 +17,7 @@ st.error("""
 
 이 페이지는 바이낸스 테스트넷/메인넷에 실제 주문을 전송합니다.
 - 반드시 **테스트넷 API**를 사용하세요.
-- 전략을 충분히 백테스트/페이퍼 테스트한 후 사용하세요.
+- 먼저 `scripts/smoke_live_constraints.py` 같은 스모크 테스트로 "주문 체결"을 확인한 후 사용하세요.
 - 리스크 관리 설정을 신중히 검토하세요.
 """)
 
@@ -43,7 +43,7 @@ st.divider()
 st.subheader("1️⃣ 전략 선택")
 
 strategy_files = list(Path(".").glob("*_strategy.py"))
-strategy_files += list(Path("src/llmtrader/strategy/examples").glob("*.py"))
+strategy_files = [p for p in strategy_files if p.name != "generated_strategy.py"]
 
 if not strategy_files:
     st.warning("전략 파일이 없습니다.")
