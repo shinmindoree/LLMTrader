@@ -67,6 +67,12 @@ class RsiUltraQuickTestStrategy(Strategy):
         self.prev_rsi = None
 
     def on_bar(self, ctx: StrategyContext, bar: dict) -> None:
+        # ===== 미체결 주문 가드 =====
+        # 미체결 주문이 있으면 새로운 주문을 내지 않음 (중복 주문 방지)
+        open_orders = getattr(ctx, "get_open_orders", lambda: [])()
+        if open_orders:
+            return
+
         # ===== 롱 전용 강제(전략 레벨 가드) =====
         # - BUY는 포지션이 0일 때만 허용
         # - SELL(청산)은 포지션이 +일 때만 허용

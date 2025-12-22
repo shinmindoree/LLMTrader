@@ -95,6 +95,72 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response = await self._signed_request("GET", "/fapi/v2/positionRisk", payload)
         return response
 
+    async def fetch_exchange_info(self, symbol: str | None = None) -> dict[str, Any]:
+        """거래소 정보 조회 (심볼별 필터 정보 포함).
+
+        Args:
+            symbol: 특정 심볼만 조회 (None이면 전체)
+
+        Returns:
+            심볼별 필터 정보를 파싱한 딕셔너리:
+            {
+                "BTCUSDT": {
+                    "step_size": "0.001",      # LOT_SIZE - 수량 스텝
+                    "tick_size": "0.10",       # PRICE_FILTER - 가격 스텝
+                    "min_notional": "5.0",     # MIN_NOTIONAL - 최소 주문 금액
+                    "min_qty": "0.001",        # LOT_SIZE - 최소 수량
+                    "max_qty": "1000.0",       # LOT_SIZE - 최대 수량
+                },
+                ...
+            }
+        """
+        response = await self._client.get("/fapi/v1/exchangeInfo")
+        response.raise_for_status()
+        data = response.json()
+
+        result: dict[str, Any] = {}
+        for sym_info in data.get("symbols", []):
+            sym = sym_info.get("symbol")
+            if symbol and sym != symbol:
+                continue
+
+            filters = {f["filterType"]: f for f in sym_info.get("filters", [])}
+            parsed: dict[str, Any] = {}
+
+            # LOT_SIZE: 수량 정밀도
+            lot_size = filters.get("LOT_SIZE", {})
+            parsed["step_size"] = lot_size.get("stepSize", "0.001")
+            parsed["min_qty"] = lot_size.get("minQty", "0.001")
+            parsed["max_qty"] = lot_size.get("maxQty", "1000")
+
+            # PRICE_FILTER: 가격 정밀도
+            price_filter = filters.get("PRICE_FILTER", {})
+            parsed["tick_size"] = price_filter.get("tickSize", "0.01")
+
+            # MIN_NOTIONAL: 최소 주문 금액
+            min_notional = filters.get("MIN_NOTIONAL", {})
+            parsed["min_notional"] = min_notional.get("notional", "5.0")
+
+            result[sym] = parsed
+
+            if symbol:
+                break
+
+        return result
+
+    async def fetch_open_orders(self, symbol: str) -> list[dict[str, Any]]:
+        """미체결 주문 목록 조회.
+
+        Args:
+            symbol: 거래 심볼 (예: BTCUSDT)
+
+        Returns:
+            미체결 주문 목록
+        """
+        payload: dict[str, Any] = {"symbol": symbol}
+        response = await self._signed_request("GET", "/fapi/v1/openOrders", payload)
+        return response if isinstance(response, list) else []
+
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
         params_with_sig = self._attach_signature(params)
         try:

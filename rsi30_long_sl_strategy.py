@@ -72,3 +72,4 @@ class Rsi30LongWithStopStrategy(Strategy):
         self.prev_rsi = current_rsi
 
 
+

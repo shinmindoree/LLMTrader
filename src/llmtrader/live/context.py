@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 import time
 from typing import Any
 
@@ -69,6 +70,16 @@ class LiveContext:
         self.pending_orders: dict[int, dict[str, Any]] = {}
         self.filled_orders: list[dict[str, Any]] = []
         
+        # 미체결 주문 (거래소에서 조회)
+        self.open_orders: list[dict[str, Any]] = []
+        
+        # 거래소 필터 정보 (정밀도 보정용)
+        self.step_size: Decimal | None = None  # LOT_SIZE - 수량 스텝
+        self.tick_size: Decimal | None = None  # PRICE_FILTER - 가격 스텝
+        self.min_notional: Decimal | None = None  # MIN_NOTIONAL - 최소 주문 금액
+        self.min_qty: Decimal | None = None  # LOT_SIZE - 최소 수량
+        self.max_qty: Decimal | None = None  # LOT_SIZE - 최대 수량
+        
         # 감사 로그
         self.audit_log: list[dict[str, Any]] = []
 
@@ -98,7 +109,7 @@ class LiveContext:
         return self.balance + self.unrealized_pnl
 
     async def initialize(self) -> None:
-        """컨텍스트 초기화 (레버리지 설정, 잔고 조회)."""
+        """컨텍스트 초기화 (레버리지 설정, 잔고 조회, 거래소 필터 조회)."""
         # 레버리지 검증
         valid, msg = self.risk_manager.validate_leverage(self.leverage)
         if not valid:
@@ -115,6 +126,29 @@ class LiveContext:
         except Exception as e:
             self._log_audit("LEVERAGE_SET_FAILED", {"error": str(e)})
             raise
+
+        # 거래소 필터 정보 조회 (정밀도 보정용)
+        try:
+            exchange_info = await self.client.fetch_exchange_info(self.symbol)
+            if self.symbol in exchange_info:
+                filters = exchange_info[self.symbol]
+                self.step_size = Decimal(filters.get("step_size", "0.001"))
+                self.tick_size = Decimal(filters.get("tick_size", "0.01"))
+                self.min_notional = Decimal(filters.get("min_notional", "5.0"))
+                self.min_qty = Decimal(filters.get("min_qty", "0.001"))
+                self.max_qty = Decimal(filters.get("max_qty", "1000"))
+                self._log_audit("EXCHANGE_INFO_LOADED", {
+                    "step_size": str(self.step_size),
+                    "tick_size": str(self.tick_size),
+                    "min_notional": str(self.min_notional),
+                    "min_qty": str(self.min_qty),
+                    "max_qty": str(self.max_qty),
+                })
+                print(f"📊 거래소 필터: step={self.step_size}, tick={self.tick_size}, min_notional={self.min_notional}")
+        except Exception as e:
+            # 필터 조회 실패해도 트레이딩은 계속 (기본값 사용)
+            self._log_audit("EXCHANGE_INFO_FAILED", {"error": str(e)})
+            print(f"⚠️ 거래소 필터 조회 실패 (기본값 사용): {e}")
 
         # 계좌 잔고 조회
         await self.update_account_info()
@@ -143,9 +177,25 @@ class LiveContext:
                     self.position.entry_price = float(pos["entryPrice"]) if self.position.size != 0 else 0.0
                     self.position.unrealized_pnl = float(pos["unrealizedProfit"])
                     break
+            
+            # 미체결 주문 목록 업데이트
+            try:
+                self.open_orders = await self.client.fetch_open_orders(self.symbol)
+            except Exception as oe:  # noqa: BLE001
+                # 미체결 주문 조회 실패는 치명적이지 않음
+                self._log_audit("OPEN_ORDERS_FETCH_FAILED", {"error": str(oe)})
+                
         except Exception as e:
             self._log_audit("ACCOUNT_UPDATE_FAILED", {"error": str(e)})
             raise
+
+    def get_open_orders(self) -> list[dict[str, Any]]:
+        """현재 미체결 주문 목록 반환.
+
+        Returns:
+            미체결 주문 목록
+        """
+        return self.open_orders
 
     def buy(self, quantity: float, price: float | None = None) -> None:
         """매수 주문.
@@ -337,10 +387,80 @@ class LiveContext:
             )
             if event == "EXIT" and pnl_exit is not None:
                 text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
-            try:
-                await self.notifier.send(text)
-            except Exception as e:  # noqa: BLE001
-                print(f"⚠️ Slack 알림 실패: {e}")
+            # Fire-and-forget: Slack API 지연이 트레이딩 루프를 막지 않도록 함
+            asyncio.create_task(self._send_notification_safe(text))
+
+    async def _send_notification_safe(self, text: str) -> None:
+        """Slack 알림 전송 (fire-and-forget, 실패해도 무시).
+
+        Args:
+            text: 알림 메시지
+        """
+        if not self.notifier:
+            return
+        try:
+            await asyncio.wait_for(self.notifier.send(text), timeout=5.0)
+        except asyncio.TimeoutError:
+            print("⚠️ Slack 알림 타임아웃 (5초)")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ Slack 알림 실패: {e}")
+
+    def _adjust_quantity(self, quantity: float) -> float:
+        """수량을 거래소 step_size 배수로 내림 처리.
+
+        Args:
+            quantity: 원래 수량
+
+        Returns:
+            정밀도가 보정된 수량
+        """
+        if self.step_size is None:
+            return quantity
+        
+        qty_decimal = Decimal(str(quantity))
+        # step_size 배수로 내림
+        adjusted = (qty_decimal / self.step_size).to_integral_value(rounding=ROUND_DOWN) * self.step_size
+        return float(adjusted)
+
+    def _adjust_price(self, price: float) -> float:
+        """가격을 거래소 tick_size 배수로 반올림 처리.
+
+        Args:
+            price: 원래 가격
+
+        Returns:
+            정밀도가 보정된 가격
+        """
+        if self.tick_size is None:
+            return price
+        
+        price_decimal = Decimal(str(price))
+        # tick_size 배수로 반올림
+        adjusted = (price_decimal / self.tick_size).to_integral_value(rounding=ROUND_HALF_UP) * self.tick_size
+        return float(adjusted)
+
+    def _check_min_notional(self, quantity: float, price: float | None = None) -> tuple[bool, str]:
+        """최소 주문 금액(MIN_NOTIONAL) 검증.
+
+        Args:
+            quantity: 주문 수량
+            price: 주문 가격 (None이면 현재가 사용)
+
+        Returns:
+            (통과 여부, 메시지)
+        """
+        if self.min_notional is None:
+            return True, ""
+        
+        use_price = price if price is not None else self._current_price
+        if use_price <= 0:
+            return False, "가격이 0 이하"
+        
+        notional = Decimal(str(quantity)) * Decimal(str(use_price))
+        if notional < self.min_notional:
+            return False, f"주문 금액({notional:.2f})이 최소 금액({self.min_notional})보다 작음"
+        
+        return True, ""
 
     async def _place_order(
         self,
@@ -364,6 +484,41 @@ class LiveContext:
             error_msg = f"거래 불가: {reason}"
             self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": reason})
             raise ValueError(error_msg)
+
+        # 정밀도 보정: 수량을 step_size 배수로 내림
+        original_qty = quantity
+        quantity = self._adjust_quantity(quantity)
+        
+        # 정밀도 보정: 가격을 tick_size 배수로 반올림
+        original_price = price
+        if price is not None:
+            price = self._adjust_price(price)
+        
+        if original_qty != quantity or original_price != price:
+            self._log_audit("ORDER_PRECISION_ADJUSTED", {
+                "original_qty": original_qty,
+                "adjusted_qty": quantity,
+                "original_price": original_price,
+                "adjusted_price": price,
+            })
+            print(f"📐 정밀도 보정: qty {original_qty} -> {quantity}, price {original_price} -> {price}")
+
+        # 최소 수량 검증
+        if self.min_qty is not None and Decimal(str(quantity)) < self.min_qty:
+            error_msg = f"수량({quantity})이 최소 수량({self.min_qty})보다 작음"
+            self._log_audit("ORDER_REJECTED_MIN_QTY", {"side": side, "quantity": quantity, "min_qty": str(self.min_qty)})
+            raise ValueError(error_msg)
+
+        # MIN_NOTIONAL 검증 (최소 주문 금액)
+        valid, notional_msg = self._check_min_notional(quantity, price)
+        if not valid:
+            self._log_audit("ORDER_REJECTED_MIN_NOTIONAL", {
+                "side": side,
+                "quantity": quantity,
+                "price": price or self._current_price,
+                "reason": notional_msg,
+            })
+            raise ValueError(f"최소 주문 금액 미달: {notional_msg}")
 
         # 새 포지션 크기 계산 및 검증
         new_position_size = self.position.size + (quantity if side == "BUY" else -quantity)
