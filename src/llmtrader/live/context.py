@@ -306,6 +306,7 @@ class LiveContext:
 
         # 체결 직후 account 반영이 약간 지연될 수 있어 짧게 재시도
         after_pos = before_pos
+        before_unrealized_pnl = float(self.position.unrealized_pnl)  # 청산 전 미실현 손익 저장
         for _ in range(3):
             try:
                 await self.update_account_info()
@@ -334,13 +335,54 @@ class LiveContext:
         elif abs(before_pos) >= 1e-12 and abs(after_pos) < 1e-12:
             event = "EXIT"
 
-        # EXIT PnL(추정): 청산 시점의 현재가(last) 기준으로 계산
-        # - market 주문은 응답에 avgPrice가 0/빈값으로 오는 경우가 있어 last를 fallback으로 사용
+        # EXIT PnL(추정): 청산 시점의 평균 체결가 기준으로 계산
+        # - market 주문은 응답에 avgPrice가 "0", "0.00", 빈값으로 오는 경우가 있어 현재가를 fallback으로 사용
+        # - 중요: avgPrice가 0이면 현재가를 사용해야 함 (0으로 계산하면 PnL이 엄청나게 틀려짐!)
         try:
-            exit_price = float(avg_price) if avg_price not in ("", None) else float(self.current_price)
-        except Exception:  # noqa: BLE001
+            parsed_avg_price = float(avg_price) if avg_price not in ("", None, "0", "0.0", "0.00") else 0.0
+        except (ValueError, TypeError):
+            parsed_avg_price = 0.0
+        
+        # avgPrice가 0이거나 비정상적으로 작으면 현재가 사용
+        if parsed_avg_price < 1.0:  # 가격이 1 미만이면 비정상
             exit_price = float(self.current_price)
-        pnl_exit = (before_pos * (exit_price - before_entry)) if (event == "EXIT" and before_entry > 0) else None
+        else:
+            exit_price = parsed_avg_price
+        
+        # PnL 계산: EXIT 이벤트일 때만 계산
+        # 방법 1: before_entry를 사용한 계산 (검증 후)
+        # 방법 2: unrealizedProfit 차이 사용 (더 정확)
+        pnl_exit = None
+        if event == "EXIT" and before_pos != 0:
+            current_price_check = float(self.current_price)
+            
+            # before_entry 검증: 0이거나 현재가의 2배 이상이면 비정상
+            entry_price_valid = (
+                before_entry > 0 
+                and before_entry < current_price_check * 2.0 
+                and before_entry > current_price_check * 0.1  # 현재가의 10% 이상
+            )
+            
+            if entry_price_valid:
+                # 방법 1: entry_price 기반 계산
+                pnl_exit = before_pos * (exit_price - before_entry)
+            else:
+                # 방법 2: unrealizedProfit 차이 사용 (더 정확)
+                # 청산 전 미실현 손익이 실제 실현 손익과 유사함
+                after_unrealized_pnl = float(self.position.unrealized_pnl)
+                pnl_exit = before_unrealized_pnl - after_unrealized_pnl
+                
+                # 여전히 비정상적이면 None으로 설정
+                if abs(pnl_exit) > abs(before_pos * current_price_check * 0.5):  # 포지션 가치의 50% 이상 손익은 비정상
+                    self._log_audit("PNL_CALC_ABNORMAL", {
+                        "pnl_calculated": pnl_exit,
+                        "before_entry": before_entry,
+                        "before_unrealized_pnl": before_unrealized_pnl,
+                        "after_unrealized_pnl": after_unrealized_pnl,
+                        "current_price": current_price_check,
+                        "exit_price": exit_price,
+                    })
+                    pnl_exit = None
 
         now = datetime.now().isoformat(timespec="seconds")
         last_now = float(self.current_price)
