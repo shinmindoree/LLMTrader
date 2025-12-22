@@ -18,21 +18,22 @@ class BinanceSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-class OpenAISettings(BaseSettings):
-    """OpenAI API 관련 설정."""
-
-    api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    model: str = Field(default="gpt-4", alias="OPENAI_MODEL")
-    max_tokens: int = Field(default=2000, alias="OPENAI_MAX_TOKENS")
-    temperature: float = Field(default=0.7, alias="OPENAI_TEMPERATURE")
-
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-
 class SlackSettings(BaseSettings):
     """Slack 알림 관련 설정."""
 
     webhook_url: str = Field(default="", alias="SLACK_WEBHOOK_URL")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+class AzureSettings(BaseSettings):
+    """Azure Application Insights 관련 설정."""
+
+    connection_string: str = Field(
+        default="",
+        alias="APPLICATIONINSIGHTS_CONNECTION_STRING",
+        description="Azure Application Insights 연결 문자열",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -42,8 +43,8 @@ class Settings(BaseSettings):
 
     env: str = Field(default="local", alias="ENV")
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
-    openai: OpenAISettings = Field(default_factory=OpenAISettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
+    azure: AzureSettings = Field(default_factory=AzureSettings)
 
     model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
 

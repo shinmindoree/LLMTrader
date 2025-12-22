@@ -1,4 +1,10 @@
-"""실시간 가격 피드."""
+"""실시간 가격 피드 (라이브 트레이딩 전용).
+
+REST 폴링 기반으로:
+- last(실시간 체결가)와
+- 마지막 닫힌 캔들(bar_close)
+를 함께 제공한다.
+"""
 
 import asyncio
 import time
@@ -56,7 +62,9 @@ class PriceFeed:
         Returns:
             (timestamp_ms, close) 리스트. timestamp는 kline open time.
         """
-        klines = await self.client.fetch_klines(symbol=self.symbol, interval=self.candle_interval, limit=limit + 1)
+        klines = await self.client.fetch_klines(
+            symbol=self.symbol, interval=self.candle_interval, limit=limit + 1
+        )
         if not klines:
             return []
 
@@ -81,12 +89,10 @@ class PriceFeed:
                 try:
                     last_price = await self.client.fetch_ticker_price(self.symbol)
                 except Exception:  # noqa: BLE001
-                    # ticker 실패 시 kline close로 fallback
+                    # ticker 실패 시 이전 값 fallback
                     last_price = self._last_price
 
-                # 최근 1분봉 2개 조회
-                # - bar_ts/close: 확정된 마지막 봉(= klines[-2])을 전략/지표에 사용
-                # - last_price: 최신(미완성 포함) 가격(= klines[-1].close)을 마크가격/로그에 사용
+                # 최근 캔들 2개 조회
                 klines = await self.client.fetch_klines(
                     symbol=self.symbol,
                     interval=self.candle_interval,
@@ -94,9 +100,7 @@ class PriceFeed:
                 )
                 if klines:
                     recv_ts = int(time.time() * 1000)
-                    # 바이낸스 klines는 일반적으로 마지막 원소가 "진행 중인 현재 봉",
-                    # 그 직전(=klines[-2])이 "직전 닫힌 봉"입니다.
-                    # TradingView 차트와 봉 기준을 최대한 맞추기 위해 이를 우선 사용합니다.
+
                     parsed: list[tuple[int, int, float]] = []
                     for k in klines:
                         try:
@@ -108,19 +112,16 @@ class PriceFeed:
                         parsed.append((open_ts, close_ts, close_price))
 
                     parsed.sort(key=lambda x: x[0])
-                    # 어떤 경우에는 Binance가 "진행 중인 봉"을 포함하지 않고 "닫힌 봉"만 반환하기도 합니다.
-                    # 이때는 parsed[-1]이 이미 닫힌 봉이므로, closeTime 기준으로 가장 최신 닫힌 봉을 선택합니다.
-                    safe_ts = recv_ts - 1500  # 네트워크/서버 지연 여유
+                    # closeTime 기준 "가장 최신 닫힌 봉" 선택(없으면 직전 봉 fallback)
+                    safe_ts = recv_ts - 1500
                     closed = [p for p in parsed if p[1] <= safe_ts]
                     if closed:
                         bar_ts, _, bar_close = closed[-1]
                     elif len(parsed) >= 2:
-                        # 진행 중 봉을 포함하는 경우(마지막이 아직 안 닫힘)에는 직전 봉을 사용
                         bar_ts, _, bar_close = parsed[-2]
                     else:
                         bar_ts, _, bar_close = parsed[-1]
 
-                    # ticker를 우선 사용, 없으면 bar_close 사용
                     if not last_price:
                         last_price = bar_close
 
@@ -132,23 +133,18 @@ class PriceFeed:
                     self._last_price = last_price
 
                     tick = {
-                        # 로컬 수신 시각(로그/모니터링용)
                         "timestamp": recv_ts,
-                        # 전략(1분봉) 기준
                         "bar_timestamp": bar_ts,
                         "bar_close": bar_close,
-                        # 마크가격/로그/스탑로스 기준
                         "price": last_price,
                         "volume": float(klines[-1][5]) if klines else 0.0,
                     }
 
-                    # 새 봉 여부
                     tick["is_new_bar"] = self._last_emitted_timestamp != bar_ts
                     if tick["is_new_bar"]:
                         self._last_emitted_timestamp = bar_ts
                         self._last_emitted_close = bar_close
 
-                    # 콜백 호출
                     for callback in self._callbacks:
                         callback(tick)
 
@@ -160,7 +156,5 @@ class PriceFeed:
     def stop(self) -> None:
         """가격 피드 중지."""
         self._running = False
-
-
 
 
