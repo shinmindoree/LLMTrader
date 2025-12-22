@@ -20,9 +20,9 @@ class RsiQuickTestStrategy(Strategy):
     def __init__(
         self,
         quantity: float = 0.01,
-        rsi_period: int = 6,
-        entry_rsi: float = 45.0,
-        exit_rsi: float = 55.0,
+        rsi_period: int = 14,
+        entry_rsi: float = 30.0,
+        exit_rsi: float = 60.0,
         stop_loss_usd: float = 150.0,
     ) -> None:
         super().__init__()

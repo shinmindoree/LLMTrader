@@ -301,8 +301,10 @@ class LiveContext:
         - 체결 로그에 RSI(진입/청산 조건 RSI) 포함
         - 진입/청산 시 Slack 알림
         """
-        before_pos = float(self.position.size)
-        before_entry = float(self.position.entry_price) if self.position.size != 0 else 0.0
+        # [Race Condition 해결] 스냅샷 데이터 우선 사용
+        # _place_order에서 저장한 주문 전 포지션 상태를 사용하여 정확한 PnL 계산
+        before_pos = float(result.get("_snapshot_pos_size", self.position.size))
+        before_entry = float(result.get("_snapshot_entry_price", self.position.entry_price if self.position.size != 0 else 0.0))
 
         # 체결 직후 account 반영이 약간 지연될 수 있어 짧게 재시도
         after_pos = before_pos
@@ -588,6 +590,11 @@ class LiveContext:
                 self._log_audit("ORDER_REJECTED_POSITION", {"side": side, "quantity": quantity, "reason": msg})
                 raise ValueError(f"포지션 크기 검증 실패: {msg}")
 
+        # [Race Condition 해결] 주문 전 포지션 상태 스냅샷 저장
+        # _after_order_filled에서 정확한 PnL 계산을 위해 주문 전 상태를 보존
+        snapshot_pos_size = self.position.size
+        snapshot_entry_price = self.position.entry_price
+
         # 주문 실행
         order_type = "MARKET" if price is None else "LIMIT"
         try:
@@ -605,6 +612,11 @@ class LiveContext:
                 quantity=quantity,
                 **order_params,
             )
+
+            # [Race Condition 해결] 응답에 스냅샷 데이터 주입
+            # _after_order_filled에서 이 스냅샷을 사용하여 정확한 PnL 계산
+            response["_snapshot_pos_size"] = snapshot_pos_size
+            response["_snapshot_entry_price"] = snapshot_entry_price
 
             self._log_audit("ORDER_PLACED", {
                 "order_id": response.get("orderId"),
@@ -627,8 +639,12 @@ class LiveContext:
                     "timestamp": datetime.now().isoformat(),
                 }
 
-            # 계좌 정보 업데이트 (백그라운드)
-            asyncio.create_task(self.update_account_info())
+            # [삭제] Race Condition 원인 제거
+            # 주문 직후 update_account_info()를 백그라운드로 실행하면,
+            # _after_order_filled 콜백 시점에 이미 포지션이 업데이트되어
+            # before_pos/before_entry가 잘못된 값이 됨
+            # 대신 _after_order_filled 내부에서 update_account_info()를 호출함
+            # asyncio.create_task(self.update_account_info())  <-- 삭제
 
             return response
 
