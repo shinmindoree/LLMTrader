@@ -14,7 +14,7 @@ class RsiUltraQuickTestStrategy(Strategy):
       - RSI(기본 14) 가 30 아래에서 30 상향 돌파 시 진입
     - 포지션 청산(둘 중 먼저 충족):
       - RSI 가 70 상향 돌파 시 청산 (RSI는 "마지막 닫힌 봉 close" 기준)
-      - StopLoss: 진입가 대비 -80 하락 시 청산 (StopLoss는 "실시간 현재가" 기준)
+      - StopLoss: 현재 미실현 손익(PnL)이 총 자산(Equity)의 -5%를 초과할 때 청산
 
     참고:
     - 엔진이 tick마다 on_bar을 호출할 수 있게 run_on_tick=True 로 둠
@@ -32,7 +32,7 @@ class RsiUltraQuickTestStrategy(Strategy):
         rsi_period: int = 14,
         entry_rsi: float = 30.0,
         exit_rsi: float = 70.0,
-        stop_loss_usd: float = 100.0,
+        stop_loss_pct: float = 0.05,  # [변경] 5% 손실 기준 (0.05)
         max_position: float = 1.0,
         sizing_buffer: float = 0.98,
         qty_step: float = 0.001,
@@ -44,8 +44,9 @@ class RsiUltraQuickTestStrategy(Strategy):
             raise ValueError("invalid RSI thresholds")
         if rsi_period <= 1:
             raise ValueError("rsi_period must be > 1")
-        if stop_loss_usd <= 0:
-            raise ValueError("stop_loss_usd must be > 0")
+        # [변경] 퍼센트 유효성 검사 (0.0 ~ 1.0 사이)
+        if not (0 < stop_loss_pct < 1.0):
+            raise ValueError("stop_loss_pct must be between 0 and 1 (e.g. 0.05 for 5%)")
         if not (0 < max_position <= 1.0):
             raise ValueError("max_position must be in (0, 1]")
         if not (0 < sizing_buffer <= 1.0):
@@ -57,7 +58,7 @@ class RsiUltraQuickTestStrategy(Strategy):
         self.rsi_period = rsi_period
         self.entry_rsi = entry_rsi
         self.exit_rsi = exit_rsi
-        self.stop_loss_usd = stop_loss_usd
+        self.stop_loss_pct = stop_loss_pct  # [변경] USD -> PCT
         self.max_position = max_position
         self.sizing_buffer = sizing_buffer
         self.qty_step = qty_step
@@ -66,34 +67,36 @@ class RsiUltraQuickTestStrategy(Strategy):
 
     def initialize(self, ctx: StrategyContext) -> None:
         self.prev_rsi = None
-        self.is_closing = False  # 플래그 초기화
+        self.is_closing = False
 
     def on_bar(self, ctx: StrategyContext, bar: dict) -> None:
         # ===== 청산 플래그 리셋 =====
-        # 포지션이 0이면 청산 주문이 완료된 것으로 간주하여 플래그 리셋
         if ctx.position_size == 0:
             self.is_closing = False
 
         # ===== 미체결 주문 가드 =====
-        # 미체결 주문이 있으면 새로운 주문을 내지 않음 (중복 주문 방지)
         open_orders = getattr(ctx, "get_open_orders", lambda: [])()
         if open_orders:
             return
 
-        # ===== 롱 전용 강제(전략 레벨 가드) =====
-        # - BUY는 포지션이 0일 때만 허용
-        # - SELL(청산)은 포지션이 +일 때만 허용
-        #   (실수로 short가 잡힌 경우를 대비해, 포지션<=0에서는 청산 시그널을 무시)
-
-        # StopLoss는 "실시간 현재가" 기준 (tick/봉 모두에서 체크)
+        # ===== 롱 전용 강제 및 StopLoss 체크 =====
+        # StopLoss는 "실시간 현재가/PnL" 기준 (tick/봉 모두에서 체크)
         if ctx.position_size > 0 and not self.is_closing:
-            entry = float(ctx.position_entry_price)
-            if entry > 0 and ctx.current_price <= entry - self.stop_loss_usd:
-                # 포지션이 있을 때만 청산(SELL) 허용
-                if ctx.position_size > 0:
-                    self.is_closing = True  # 청산 주문 진행 중 플래그 설정
-                    ctx.close_position(reason="StopLoss")
-                # 청산 후에도 prev_rsi는 유지(봉에서만 갱신)
+            # [변경] PnL 기반 StopLoss 로직
+            # equity = balance + unrealized_pnl (현재 총 자산가치)
+            equity = float(getattr(ctx, "total_equity", 0.0) or 0.0)
+            unrealized_pnl = float(getattr(ctx, "unrealized_pnl", 0.0) or 0.0)
+            
+            if equity > 0:
+                # 현재 손익률 계산 (예: -50불 / 1000불 = -0.05)
+                current_pnl_pct = unrealized_pnl / equity
+                
+                # 손실률이 설정된 제한(예: -0.05)보다 더 작으면(더 큰 손실이면) 청산
+                if current_pnl_pct <= -self.stop_loss_pct:
+                    self.is_closing = True
+                    # [변경] 로그 사유에 PnL 정보 포함
+                    reason_msg = f"StopLoss (PnL {current_pnl_pct*100:.2f}%)"
+                    ctx.close_position(reason=reason_msg)
 
         # RSI는 "마지막 닫힌 봉 close" 기준이어야 하므로,
         # 새 봉이 확정된 시점(is_new_bar=True)에서만 크로스 판단/prev_rsi 갱신.
@@ -109,39 +112,34 @@ class RsiUltraQuickTestStrategy(Strategy):
         # ===== 롱 청산: RSI 70 상향 돌파 =====
         if ctx.position_size > 0 and not self.is_closing:
             if self.prev_rsi < self.exit_rsi <= rsi:
-                # 포지션이 있을 때만 청산(SELL) 허용
                 if ctx.position_size > 0:
-                    self.is_closing = True  # 청산 주문 진행 중 플래그 설정
-                    ctx.close_position(reason="RSI 70 상향 돌파")
+                    self.is_closing = True
+                    reason_msg = f"RSI Exit ({self.prev_rsi:.1f} -> {rsi:.1f})"
+                    ctx.close_position(reason=reason_msg)
                 self.prev_rsi = rsi
                 return
 
         # ===== 롱 진입: RSI 30 상향 돌파 =====
         if ctx.position_size == 0:
             if self.prev_rsi < self.entry_rsi <= rsi:
-                # 포지션 0일 때만 진입(BUY) 허용 + 자동 포지션 사이징
                 if ctx.position_size == 0:
                     leverage = float(getattr(ctx, "leverage", 1.0) or 1.0)
                     equity = float(getattr(ctx, "total_equity", 0.0) or 0.0)
                     price = float(getattr(ctx, "current_price", 0.0) or 0.0)
                     if equity > 0 and price > 0 and leverage > 0:
-                        # 사용자가 원하는 동작:
-                        # - 레버리지 5x, max_position=1.0 이면
-                        #   목표 명목가치(notional) = 총자산 * 5
                         target_notional = equity * leverage * self.max_position * self.sizing_buffer
                         raw_qty = target_notional / price
-                        # 거래소 수량 스텝 반영(내림) - float 노이즈 방지(Decimal)
                         dq = (Decimal(str(raw_qty)) / Decimal(str(self.qty_step))).to_integral_value(
                             rounding=ROUND_DOWN
                         ) * Decimal(str(self.qty_step))
                         qty = float(dq)
                         if qty < self.min_quantity:
                             qty = self.min_quantity
-                        ctx.buy(qty)
+                        
+                        reason_msg = f"Entry ({self.prev_rsi:.1f} -> {rsi:.1f})"
+                        ctx.buy(qty, reason=reason_msg)
                     else:
-                        # 데이터가 부족하면 최소 수량으로 진입(안전 fallback)
-                        ctx.buy(self.min_quantity)
+                        reason_msg = f"Entry Fallback ({self.prev_rsi:.1f} -> {rsi:.1f})"
+                        ctx.buy(self.min_quantity, reason=reason_msg)
 
         self.prev_rsi = rsi
-
-

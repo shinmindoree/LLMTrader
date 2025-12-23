@@ -390,7 +390,7 @@ class LiveContext:
         now = datetime.now().isoformat(timespec="seconds")
         last_now = float(self.current_price)
         msg = (
-            f"✅ 주문 체결[{now}] orderId={order_id} side={side} qty={executed_qty} avg={avg_price} "
+            f"✅ 주문 체결[{now}] orderId={order_id} side={side} "
             f"| pos {before_pos:+.4f} -> {after_pos:+.4f} "
             f"| last={last_now:,.2f} "
             f"| rsi({p})={rsi_p:.2f} rsi_rt({p})={rsi_rt_p:.2f}"
