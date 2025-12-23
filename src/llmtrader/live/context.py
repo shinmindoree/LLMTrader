@@ -197,7 +197,7 @@ class LiveContext:
         """
         return self.open_orders
 
-    def buy(self, quantity: float, price: float | None = None) -> None:
+    def buy(self, quantity: float, price: float | None = None, reason: str | None = None) -> None:
         """매수 주문.
 
         Args:
@@ -214,11 +214,11 @@ class LiveContext:
         self._order_inflight = True
         self._last_order_started_at = time.time()
         # 비동기 주문을 태스크로 스케줄링
-        task = asyncio.create_task(self._place_order("BUY", quantity, price))
+        task = asyncio.create_task(self._place_order("BUY", quantity, price, reason=reason))
         # 태스크 완료를 기다리지 않고 백그라운드에서 실행
         task.add_done_callback(self._handle_order_result)
 
-    def sell(self, quantity: float, price: float | None = None) -> None:
+    def sell(self, quantity: float, price: float | None = None, reason: str | None = None) -> None:
         """매도 주문.
 
         Args:
@@ -234,11 +234,11 @@ class LiveContext:
         self._order_inflight = True
         self._last_order_started_at = time.time()
         # 비동기 주문을 태스크로 스케줄링
-        task = asyncio.create_task(self._place_order("SELL", quantity, price))
+        task = asyncio.create_task(self._place_order("SELL", quantity, price, reason=reason))
         # 태스크 완료를 기다리지 않고 백그라운드에서 실행
         task.add_done_callback(self._handle_order_result)
 
-    def close_position(self) -> None:
+    def close_position(self, reason: str | None = None) -> None:
         """현재 포지션 전체 청산."""
         if self._order_inflight:
             if (time.time() - self._last_order_started_at) > 5.0:
@@ -250,9 +250,9 @@ class LiveContext:
             return
         
         if self.position.size > 0:
-            self.sell(abs(self.position.size))
+            self.sell(abs(self.position.size), reason=reason)
         else:
-            self.buy(abs(self.position.size))
+            self.buy(abs(self.position.size), reason=reason)
     
     def set_strategy_meta(self, strategy: Any) -> None:
         """전략 메타데이터를 컨텍스트에 주입(로그/알림용).
@@ -302,7 +302,8 @@ class LiveContext:
         - 진입/청산 시 Slack 알림
         """
         # [Race Condition 해결] 스냅샷 데이터 우선 사용
-        # _place_order에서 저장한 주문 전 포지션 상태를 사용하여 정확한 PnL 계산
+        # _place_order에서 저장한 주문 전 포지션 상태를 사용하여 정확한 PnL 계산]
+        reason = result.get("_reason", None)
         before_pos = float(result.get("_snapshot_pos_size", self.position.size))
         before_entry = float(result.get("_snapshot_entry_price", self.position.entry_price if self.position.size != 0 else 0.0))
 
@@ -394,6 +395,9 @@ class LiveContext:
             f"| last={last_now:,.2f} "
             f"| rsi({p})={rsi_p:.2f} rsi_rt({p})={rsi_rt_p:.2f}"
         )
+        
+        if reason is not None:
+            msg += f" | reason={reason}"
         if pnl_exit is not None:
             msg += f" | pnl={pnl_exit:+.2f} (est)"
         if entry_thr is not None or exit_thr is not None:
@@ -511,6 +515,7 @@ class LiveContext:
         side: str,
         quantity: float,
         price: float | None = None,
+        reason: str | None = None,
     ) -> dict[str, Any]:
         """주문 실행.
 
@@ -614,7 +619,8 @@ class LiveContext:
             )
 
             # [Race Condition 해결] 응답에 스냅샷 데이터 주입
-            # _after_order_filled에서 이 스냅샷을 사용하여 정확한 PnL 계산
+            # _after_order_filled에서 이 스냅샷을 사용하여 정확한 PnL 계산]
+            response["_reason"] = reason
             response["_snapshot_pos_size"] = snapshot_pos_size
             response["_snapshot_entry_price"] = snapshot_entry_price
 

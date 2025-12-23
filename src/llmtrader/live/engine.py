@@ -70,7 +70,7 @@ class LiveTradingEngine:
         except Exception:  # noqa: BLE001
             rsi_period = 14
 
-        seed_limit = max(200, rsi_period + 50)
+        seed_limit = 1000 # max(200, rsi_period + 50)
         try:
             history = await self.price_feed.fetch_closed_closes(limit=seed_limit)
             for _, close in history:
@@ -162,6 +162,9 @@ class LiveTradingEngine:
                 )
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
             self._last_bar_timestamp = bar_ts
+            
+            # 스냅샷 저장 (1분봉 마감 시에만 로그 출력)
+            self._save_snapshot(tick["timestamp"], bar_timestamp=bar_ts)
         elif self._run_on_tick:
             # 초고빈도 테스트용: 폴링 주기마다 전략 실행(지표 히스토리는 닫힌 봉에서만 갱신)
             bar = {
@@ -184,9 +187,6 @@ class LiveTradingEngine:
                 )
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
 
-        # 스냅샷 저장
-        self._save_snapshot(tick["timestamp"], bar_timestamp=self._current_bar_timestamp)
-
     def _save_snapshot(self, timestamp: int, bar_timestamp: int | None = None) -> None:
         """현재 상태 스냅샷 저장.
 
@@ -198,9 +198,7 @@ class LiveTradingEngine:
         # - rsi(14): 닫힌 1분봉 close 기준 RSI
         # - rsi_rt(14): 닫힌 close들 + 현재가(last)를 마지막 값으로 반영한 RSI
         closes = list(self.ctx._price_history)
-        rsi14 = self._compute_rsi_from_closes(closes, period=14)
-        rsi_rt14 = self._compute_rsi_from_closes(closes + [float(self.ctx.current_price)], period=14)
-
+    
         # 전략의 rsi_period(예: 3)도 함께 출력
         strat_period = getattr(self.strategy, "rsi_period", 14)
         try:
@@ -227,8 +225,6 @@ class LiveTradingEngine:
             "total_equity": self.ctx.total_equity,
             "num_pending_orders": len(self.ctx.pending_orders),
             "num_filled_orders": len(self.ctx.filled_orders),
-            "rsi14": rsi14,
-            "rsi_rt14": rsi_rt14,
             "bar_close": self._current_bar_close,
             "rsi_period": strat_period_int,
             "rsi_p": rsi_p,
@@ -246,8 +242,6 @@ class LiveTradingEngine:
             position=snapshot["position_size"],
             balance=snapshot["balance"],
             pnl=snapshot["unrealized_pnl"],
-            rsi14=snapshot["rsi14"],
-            rsi_rt14=snapshot["rsi_rt14"],
             rsi_period=snapshot["rsi_period"],
             bar_close=snapshot["bar_close"],
             total_equity=snapshot["total_equity"],

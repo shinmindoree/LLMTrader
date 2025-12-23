@@ -162,13 +162,6 @@ async def main():
         print("=" * 80)
         summary = engine.get_summary()
         print(json.dumps(summary, indent=2))
-        
-        # 감사 로그 저장
-        if ctx.audit_log:
-            audit_file = Path(f"audit_log_{args.symbol}_{int(asyncio.get_event_loop().time())}.json")
-            with open(audit_file, "w") as f:
-                json.dump(ctx.audit_log, f, indent=2)
-            print(f"\n감사 로그 저장: {audit_file}")
 
         await client.aclose()
 

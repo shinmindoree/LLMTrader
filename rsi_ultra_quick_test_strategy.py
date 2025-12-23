@@ -62,11 +62,18 @@ class RsiUltraQuickTestStrategy(Strategy):
         self.sizing_buffer = sizing_buffer
         self.qty_step = qty_step
         self.prev_rsi: float | None = None
+        self.is_closing: bool = False  # 청산 주문 진행 중 플래그 (중복 청산 방지)
 
     def initialize(self, ctx: StrategyContext) -> None:
         self.prev_rsi = None
+        self.is_closing = False  # 플래그 초기화
 
     def on_bar(self, ctx: StrategyContext, bar: dict) -> None:
+        # ===== 청산 플래그 리셋 =====
+        # 포지션이 0이면 청산 주문이 완료된 것으로 간주하여 플래그 리셋
+        if ctx.position_size == 0:
+            self.is_closing = False
+
         # ===== 미체결 주문 가드 =====
         # 미체결 주문이 있으면 새로운 주문을 내지 않음 (중복 주문 방지)
         open_orders = getattr(ctx, "get_open_orders", lambda: [])()
@@ -79,12 +86,13 @@ class RsiUltraQuickTestStrategy(Strategy):
         #   (실수로 short가 잡힌 경우를 대비해, 포지션<=0에서는 청산 시그널을 무시)
 
         # StopLoss는 "실시간 현재가" 기준 (tick/봉 모두에서 체크)
-        if ctx.position_size > 0:
+        if ctx.position_size > 0 and not self.is_closing:
             entry = float(ctx.position_entry_price)
             if entry > 0 and ctx.current_price <= entry - self.stop_loss_usd:
                 # 포지션이 있을 때만 청산(SELL) 허용
                 if ctx.position_size > 0:
-                    ctx.close_position()
+                    self.is_closing = True  # 청산 주문 진행 중 플래그 설정
+                    ctx.close_position(reason="StopLoss")
                 # 청산 후에도 prev_rsi는 유지(봉에서만 갱신)
 
         # RSI는 "마지막 닫힌 봉 close" 기준이어야 하므로,
@@ -99,11 +107,12 @@ class RsiUltraQuickTestStrategy(Strategy):
             return
 
         # ===== 롱 청산: RSI 70 상향 돌파 =====
-        if ctx.position_size > 0:
+        if ctx.position_size > 0 and not self.is_closing:
             if self.prev_rsi < self.exit_rsi <= rsi:
                 # 포지션이 있을 때만 청산(SELL) 허용
                 if ctx.position_size > 0:
-                    ctx.close_position()
+                    self.is_closing = True  # 청산 주문 진행 중 플래그 설정
+                    ctx.close_position(reason="RSI 70 상향 돌파")
                 self.prev_rsi = rsi
                 return
 
