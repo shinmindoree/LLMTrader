@@ -22,6 +22,7 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret.encode()
+        self.base_url = base_url
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=timeout,
