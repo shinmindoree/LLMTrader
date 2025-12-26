@@ -66,6 +66,8 @@ class RsiUltraQuickTestStrategy(Strategy):
         self.is_closing: bool = False  # 청산 주문 진행 중 플래그 (중복 청산 방지)
 
     def initialize(self, ctx: StrategyContext) -> None:
+        # [추가] 이 로그가 안 보이면 배포가 안 된 것입니다.
+        print(f"🚀 [버전확인] RsiUltraQuickStrategy v2.0 (Reason 업데이트됨) 시작!")
         self.prev_rsi = None
         self.is_closing = False
 

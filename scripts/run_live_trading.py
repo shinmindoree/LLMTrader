@@ -55,6 +55,8 @@ def load_strategy_class(strategy_file: Path):
     for name in dir(module):
         obj = getattr(module, name)
         if isinstance(obj, type) and name.endswith("Strategy") and name != "Strategy":
+            # [✅ 추가] 어떤 클래스가 로드되었는지 로그로 출력
+            print(f"🧩 전략 클래스 로드됨: {name} (파일: {strategy_file})") 
             return obj
 
     raise ValueError(f"전략 클래스를 찾을 수 없습니다: {strategy_file}")

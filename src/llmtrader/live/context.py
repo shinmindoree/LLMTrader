@@ -332,11 +332,17 @@ class LiveContext:
         exit_thr = self.strategy_exit_rsi
 
         # 포지션 이벤트 분류(진입/청산만 Slack)
+        # 진입: 포지션이 0에서 양수로 변경
+        # 청산: 포지션이 양수에서 0으로 변경
         event: str | None = None
         if abs(before_pos) < 1e-12 and abs(after_pos) >= 1e-12:
             event = "ENTRY"
         elif abs(before_pos) >= 1e-12 and abs(after_pos) < 1e-12:
             event = "EXIT"
+        
+        # 디버그: 이벤트 분류 로그
+        if event:
+            print(f"🔔 이벤트 분류: {event} (before_pos={before_pos:+.6f}, after_pos={after_pos:+.6f})")
 
         # EXIT PnL(추정): 청산 시점의 평균 체결가 기준으로 계산
         # - market 주문은 응답에 avgPrice가 "0", "0.00", 빈값으로 오는 경우가 있어 현재가를 fallback으로 사용
@@ -435,8 +441,15 @@ class LiveContext:
             )
             if event == "EXIT" and pnl_exit is not None:
                 text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
+            if reason:
+                text += f"- reason: {reason}\n"
+            print(f"📤 Slack 알림 전송 시도: event={event}, notifier={'있음' if self.notifier else '없음'}")
             # Fire-and-forget: Slack API 지연이 트레이딩 루프를 막지 않도록 함
             asyncio.create_task(self._send_notification_safe(text))
+        elif event in {"ENTRY", "EXIT"}:
+            print(f"⚠️ Slack 알림 건너뜀: event={event}, notifier={'있음' if self.notifier else '없음'}")
+        elif self.notifier:
+            print(f"ℹ️ Slack 알림 건너뜀: event={event} (ENTRY/EXIT 아님)")
 
     async def _send_notification_safe(self, text: str) -> None:
         """Slack 알림 전송 (fire-and-forget, 실패해도 무시).
@@ -445,13 +458,23 @@ class LiveContext:
             text: 알림 메시지
         """
         if not self.notifier:
+            print("⚠️ Slack 알림 실패: notifier가 None입니다")
             return
+        
+        # webhook_url이 비어있는지 확인
+        if not self.notifier.webhook_url or not self.notifier.webhook_url.strip():
+            print("⚠️ Slack 알림 실패: webhook_url이 비어있습니다")
+            return
+        
         try:
             await asyncio.wait_for(self.notifier.send(text), timeout=5.0)
+            print("✅ Slack 알림 전송 성공")
         except asyncio.TimeoutError:
             print("⚠️ Slack 알림 타임아웃 (5초)")
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Slack 알림 실패: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _adjust_quantity(self, quantity: float) -> float:
         """수량을 거래소 step_size 배수로 내림 처리.
@@ -528,10 +551,10 @@ class LiveContext:
             주문 응답
         """
         # 거래 가능 여부 확인
-        can_trade, reason = self.risk_manager.can_trade()
+        can_trade, risk_reason = self.risk_manager.can_trade()
         if not can_trade:
-            error_msg = f"거래 불가: {reason}"
-            self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": reason})
+            error_msg = f"거래 불가: {risk_reason}"
+            self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
             raise ValueError(error_msg)
 
         # 정밀도 보정: 수량을 step_size 배수로 내림
