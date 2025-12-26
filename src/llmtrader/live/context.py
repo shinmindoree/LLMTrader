@@ -322,6 +322,14 @@ class LiveContext:
         side = result.get("side") or result.get("positionSide") or "N/A"
         executed_qty = result.get("executedQty") or result.get("origQty") or ""
         avg_price = result.get("avgPrice") or result.get("price") or ""
+        
+        # Commission 정보 추출 (바이낸스 API 응답에서)
+        commission = result.get("commission", "0")
+        commission_asset = result.get("commissionAsset", "USDT")
+        try:
+            commission_value = float(commission) if commission not in ("", None, "0", "0.0", "0.00") else 0.0
+        except (ValueError, TypeError):
+            commission_value = 0.0
 
         # RSI: 전략 rsi_period(없으면 14)
         p = self.strategy_rsi_period or 14
@@ -395,8 +403,14 @@ class LiveContext:
 
         now = datetime.now().isoformat(timespec="seconds")
         last_now = float(self.current_price)
+        
+        # USD 기준 position size 계산
+        before_pos_usd = before_pos * (before_entry if before_entry > 0 else last_now)
+        after_pos_usd = after_pos * last_now
+        
         msg = (
             f"✅ 주문 체결[{now}] orderId={order_id} side={side} "
+            f"| pos_usd ${before_pos_usd:,.2f} -> ${after_pos_usd:,.2f} "
             f"| pos {before_pos:+.4f} -> {after_pos:+.4f} "
             f"| last={last_now:,.2f} "
             f"| rsi({p})={rsi_p:.2f} rsi_rt({p})={rsi_rt_p:.2f}"
@@ -404,6 +418,8 @@ class LiveContext:
         
         if reason is not None:
             msg += f" | reason={reason}"
+        if commission_value > 0:
+            msg += f" | commission={commission_value:.4f} {commission_asset}"
         if pnl_exit is not None:
             msg += f" | pnl={pnl_exit:+.2f} (est)"
         if entry_thr is not None or exit_thr is not None:
@@ -419,6 +435,10 @@ class LiveContext:
                 "avg_price": avg_price,
                 "position_before": before_pos,
                 "position_after": after_pos,
+                "position_before_usd": before_pos_usd,
+                "position_after_usd": after_pos_usd,
+                "commission": commission_value,
+                "commission_asset": commission_asset,
                 "rsi_period": p,
                 "rsi_p": rsi_p,
                 "rsi_rt_p": rsi_rt_p,
