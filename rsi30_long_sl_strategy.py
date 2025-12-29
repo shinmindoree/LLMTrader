@@ -73,3 +73,6 @@ class Rsi30LongWithStopStrategy(Strategy):
 
 
 
+
+
+

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -19,13 +20,36 @@ class SlackNotifier:
     webhook_url: str
     timeout: float = 5.0
 
-    async def send(self, text: str) -> None:
+    async def send(self, text: str, color: str | None = None) -> None:
+        """Slack 메시지 전송.
+
+        Args:
+            text: 메시지 텍스트
+            color: 색상 (예: "good"=녹색, "danger"=빨간색, "#36a64f"=녹색 hex, "#ff0000"=빨간색 hex)
+        """
         if not self.webhook_url:
             return
-        payload = {"text": text}
+        
+        # 색상이 지정된 경우 attachments 사용 (색상 표시)
+        if color:
+            payload: dict[str, Any] = {
+                "attachments": [
+                    {
+                        "color": color,
+                        "text": text,
+                    }
+                ]
+            }
+        else:
+            # 색상이 없으면 기본 텍스트 메시지
+            payload: dict[str, Any] = {"text": text}
+        
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             r = await client.post(self.webhook_url, json=payload)
             r.raise_for_status()
+
+
+
 
 
 

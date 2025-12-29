@@ -52,3 +52,6 @@ def rsi_wilder_from_closes(closes: list[float], period: int = 14) -> float:
 
 
 
+
+
+
