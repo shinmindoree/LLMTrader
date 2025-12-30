@@ -459,6 +459,8 @@ class LiveContext:
                 f"- rsi({p}): {rsi_p:.2f} (rt {rsi_rt_p:.2f})\n"
                 + (f"- thresholds: entry={entry_thr}, exit={exit_thr}\n" if entry_thr is not None or exit_thr is not None else "")
             )
+            if commission_value > 0:
+                text += f"- commission: {commission_value:.4f} {commission_asset}\n"
             if event == "EXIT" and pnl_exit is not None:
                 text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
             if reason:
