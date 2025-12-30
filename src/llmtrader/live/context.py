@@ -463,19 +463,22 @@ class LiveContext:
                 text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
             if reason:
                 text += f"- reason: {reason}\n"
+            # Entry는 녹색, Exit는 빨간색
+            color = "good" if event == "ENTRY" else "danger"
             print(f"📤 Slack 알림 전송 시도: event={event}, notifier={'있음' if self.notifier else '없음'}")
             # Fire-and-forget: Slack API 지연이 트레이딩 루프를 막지 않도록 함
-            asyncio.create_task(self._send_notification_safe(text))
+            asyncio.create_task(self._send_notification_safe(text, color))
         elif event in {"ENTRY", "EXIT"}:
             print(f"⚠️ Slack 알림 건너뜀: event={event}, notifier={'있음' if self.notifier else '없음'}")
         elif self.notifier:
             print(f"ℹ️ Slack 알림 건너뜀: event={event} (ENTRY/EXIT 아님)")
 
-    async def _send_notification_safe(self, text: str) -> None:
+    async def _send_notification_safe(self, text: str, color: str | None = None) -> None:
         """Slack 알림 전송 (fire-and-forget, 실패해도 무시).
 
         Args:
             text: 알림 메시지
+            color: 색상 ("good"=녹색, "danger"=빨간색)
         """
         if not self.notifier:
             print("⚠️ Slack 알림 실패: notifier가 None입니다")
@@ -487,7 +490,7 @@ class LiveContext:
             return
         
         try:
-            await asyncio.wait_for(self.notifier.send(text), timeout=5.0)
+            await asyncio.wait_for(self.notifier.send(text, color=color), timeout=5.0)
             print("✅ Slack 알림 전송 성공")
         except asyncio.TimeoutError:
             print("⚠️ Slack 알림 타임아웃 (5초)")

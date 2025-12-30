@@ -95,7 +95,7 @@ class LiveTradingEngine:
             while self._running:
                 await asyncio.sleep(1)
         finally:
-            self.price_feed.stop()
+            await self.price_feed.stop()
             try:
                 await asyncio.wait_for(feed_task, timeout=2.0)
             except asyncio.TimeoutError:

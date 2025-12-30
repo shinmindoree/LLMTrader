@@ -1,0 +1,52 @@
+name: Deploy to Azure Container Apps (main)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AUTOTRADER_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AUTOTRADER_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AUTOTRADER_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          dockerfilePath: ./Dockerfile
+          registryUrl: autotraderbinance.azurecr.io
+          registryUsername: ${{ secrets.AUTOTRADER_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.AUTOTRADER_REGISTRY_PASSWORD }}
+          containerAppName: autotrader
+          resourceGroup: autotrader
+          imageToBuild: autotraderbinance.azurecr.io/autotrader:${{ github.sha }}
+
+      - name: Update Container App with latest image
+        run: |
+          az containerapp update \
+            --name autotrader \
+            --resource-group autotrader \
+            --image autotraderbinance.azurecr.io/autotrader:${{ github.sha }} \
+            --min-replicas 1 \
+            --max-replicas 1
+
+
+
+

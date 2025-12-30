@@ -1,45 +1,44 @@
 """실시간 가격 피드 (라이브 트레이딩 전용).
 
-REST 폴링 기반으로:
-- last(실시간 체결가)와
-- 마지막 닫힌 캔들(bar_close)
-를 함께 제공한다.
+WebSocket 기반으로:
+- Kline Stream을 통해 실시간 캔들 데이터를 수신
+- 마지막 닫힌 캔들(bar_close)과 현재가를 제공
 """
 
-import asyncio
-import time
 from typing import Any, Callable
 
 from llmtrader.binance.client import BinanceHTTPClient
+from llmtrader.binance.market_stream import BinanceMarketStream
 
 
 class PriceFeed:
-    """실시간 가격 피드 (REST 폴링 기반)."""
+    """실시간 가격 피드 (WebSocket 기반)."""
 
     def __init__(
         self,
         client: BinanceHTTPClient,
         symbol: str,
-        interval: float = 1.0,
+        interval: float = 1.0,  # 호환성을 위해 유지 (사용 안 함)
         candle_interval: str = "1m",
     ) -> None:
         """가격 피드 초기화.
 
         Args:
-            client: 바이낸스 HTTP 클라이언트
+            client: 바이낸스 HTTP 클라이언트 (REST API용 및 testnet 판단용)
             symbol: 심볼 (예: BTCUSDT)
-            interval: 폴링 간격 (초)
+            interval: 폴링 간격 (초) - 호환성을 위해 유지, 실제로는 사용 안 함
             candle_interval: 캔들 봉 간격 (예: '1m', '5m', '15m', '1h')
         """
         self.client = client
         self.symbol = symbol
-        self.interval = interval
+        self.interval = interval  # 호환성 유지
         self.candle_interval = candle_interval
         self._running = False
         self._callbacks: list[Callable[[dict[str, Any]], None]] = []
         self._last_price: float = 0.0
         self._last_emitted_timestamp: int | None = None
         self._last_emitted_close: float = 0.0
+        self._stream: BinanceMarketStream | None = None
 
     @property
     def last_price(self) -> float:
@@ -80,81 +79,102 @@ class PriceFeed:
             out.append((ts, close))
         return out
 
-    async def start(self) -> None:
-        """가격 피드 시작."""
-        self._running = True
-        while self._running:
+    async def _handle_websocket_message(self, data: dict[str, Any]) -> None:
+        """웹소켓 메시지 처리.
+
+        Args:
+            data: 웹소켓으로부터 수신한 JSON 데이터
+                - 단일 스트림: {"e": "kline", "k": {...}}
+                - 스트림 이름 포함: {"stream": "...", "data": {"e": "kline", "k": {...}}}
+        """
+        try:
+            # 바이낸스 Kline Stream 형식 처리
+            # 스트림 이름이 있는 경우: {"stream": "...", "data": {...}}
+            # 단일 스트림인 경우: {"e": "kline", "k": {...}}
+            if "data" in data:
+                kline_data = data["data"]
+            elif "e" in data:
+                kline_data = data
+            else:
+                return  # 알 수 없는 형식
+
+            # kline 이벤트 확인
+            if kline_data.get("e") != "kline":
+                return
+
+            k = kline_data.get("k", {})
+            if not k:
+                return
+
+            # Kline 데이터 파싱
             try:
-                # 실시간 가격(체결가) - 거래소 화면과 최대한 동일하게 맞추기
-                try:
-                    last_price = await self.client.fetch_ticker_price(self.symbol)
-                except Exception:  # noqa: BLE001
-                    # ticker 실패 시 이전 값 fallback
-                    last_price = self._last_price
+                bar_ts = int(k["t"])  # Kline Open Time (ms)
+                bar_close = float(k["c"])  # Close Price
+                current_price = float(k["c"])  # 현재가 = close price
+                is_closed = bool(k["x"])  # Is this kline closed?
+                volume = float(k.get("v", 0))  # Volume
+            except (KeyError, ValueError, TypeError) as e:
+                print(f"⚠️ PriceFeed: Kline 데이터 파싱 오류: {e}")
+                return
 
-                # 최근 캔들 2개 조회
-                klines = await self.client.fetch_klines(
-                    symbol=self.symbol,
-                    interval=self.candle_interval,
-                    limit=2,
-                )
-                if klines:
-                    recv_ts = int(time.time() * 1000)
+            # bar_ts가 과거로 되돌아가는 경우(노드/캐시 흔들림) 마지막 값으로 고정
+            if self._last_emitted_timestamp is not None and bar_ts < self._last_emitted_timestamp:
+                bar_ts = self._last_emitted_timestamp
+                bar_close = self._last_emitted_close
 
-                    parsed: list[tuple[int, int, float]] = []
-                    for k in klines:
-                        try:
-                            open_ts = int(k[0])
-                            close_ts = int(k[6])
-                            close_price = float(k[4])
-                        except Exception:  # noqa: BLE001
-                            continue
-                        parsed.append((open_ts, close_ts, close_price))
+            self._last_price = current_price
 
-                    parsed.sort(key=lambda x: x[0])
-                    # closeTime 기준 "가장 최신 닫힌 봉" 선택(없으면 직전 봉 fallback)
-                    safe_ts = recv_ts - 1500
-                    closed = [p for p in parsed if p[1] <= safe_ts]
-                    if closed:
-                        bar_ts, _, bar_close = closed[-1]
-                    elif len(parsed) >= 2:
-                        bar_ts, _, bar_close = parsed[-2]
-                    else:
-                        bar_ts, _, bar_close = parsed[-1]
+            # is_new_bar: 봉이 막 닫혔을 때만 True
+            is_new_bar = is_closed and (
+                self._last_emitted_timestamp is None or self._last_emitted_timestamp != bar_ts
+            )
 
-                    if not last_price:
-                        last_price = bar_close
+            if is_new_bar:
+                self._last_emitted_timestamp = bar_ts
+                self._last_emitted_close = bar_close
 
-                    # bar_ts가 과거로 되돌아가는 경우(노드/캐시 흔들림) 마지막 값으로 고정
-                    if self._last_emitted_timestamp is not None and bar_ts < self._last_emitted_timestamp:
-                        bar_ts = self._last_emitted_timestamp
-                        bar_close = self._last_emitted_close
+            # tick 데이터 생성
+            tick = {
+                "timestamp": bar_ts,  # Kline Open Time을 timestamp로 사용
+                "bar_timestamp": bar_ts,
+                "bar_close": bar_close,
+                "price": current_price,
+                "volume": volume,
+                "is_new_bar": is_new_bar,
+            }
 
-                    self._last_price = last_price
+            # 콜백 호출
+            for callback in self._callbacks:
+                callback(tick)
 
-                    tick = {
-                        "timestamp": recv_ts,
-                        "bar_timestamp": bar_ts,
-                        "bar_close": bar_close,
-                        "price": last_price,
-                        "volume": float(klines[-1][5]) if klines else 0.0,
-                    }
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️ PriceFeed: 웹소켓 메시지 처리 오류: {exc}")
 
-                    tick["is_new_bar"] = self._last_emitted_timestamp != bar_ts
-                    if tick["is_new_bar"]:
-                        self._last_emitted_timestamp = bar_ts
-                        self._last_emitted_close = bar_close
+    async def start(self) -> None:
+        """가격 피드 시작 (WebSocket 스트림 시작)."""
+        self._running = True
 
-                    for callback in self._callbacks:
-                        callback(tick)
+        # testnet 여부 판단 (base_url에서)
+        is_testnet = "testnet" in self.client.base_url.lower()
 
-            except Exception as exc:  # noqa: BLE001
-                print(f"PriceFeed error: {exc}")
+        # WebSocket 스트림 생성 및 시작
+        self._stream = BinanceMarketStream(
+            symbol=self.symbol,
+            interval=self.candle_interval,
+            callback=self._handle_websocket_message,
+            testnet=is_testnet,
+        )
 
-            await asyncio.sleep(self.interval)
+        try:
+            await self._stream.start()
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️ PriceFeed: 스트림 시작 오류: {exc}")
+            raise
+        finally:
+            self._running = False
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """가격 피드 중지."""
         self._running = False
-
-
+        if self._stream:
+            await self._stream.stop()
