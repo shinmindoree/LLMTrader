@@ -60,6 +60,9 @@ class LiveTradingEngine:
             max_position=max_position,
         )
 
+        # 컨텍스트에 candle_interval 설정 (알림 메시지용)
+        self.ctx.candle_interval = self.price_feed.candle_interval
+        
         # 컨텍스트 초기화 (레버리지 설정, 잔고 조회)
         await self.ctx.initialize()
         

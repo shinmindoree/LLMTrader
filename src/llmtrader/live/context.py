@@ -53,6 +53,9 @@ class LiveContext:
         self.strategy_rsi_period: int | None = None
         self.strategy_entry_rsi: float | None = None
         self.strategy_exit_rsi: float | None = None
+        
+        # 거래 설정 (알림 메시지용)
+        self.candle_interval: str = "1m"  # 엔진에서 설정
 
         # 주문 중복 방지(특히 run_on_tick 전략에서 동일 신호가 연속으로 발생하는 문제 방지)
         # - 주문 제출/체결 후 포지션이 계정에 반영될 때까지 추가 주문을 막는다.
@@ -461,19 +464,31 @@ class LiveContext:
         )
 
         if self.notifier and event in {"ENTRY", "EXIT"}:
+            # 거래 설정 정보
+            max_position_pct = self.risk_manager.config.max_position_size * 100
+            
             text = (
                 f"*{event}* ({self.env}) {self.symbol}\n"
                 f"- orderId: {order_id}\n"
-                f"- side: {side}, qty: {executed_qty}, avg: {avg_price}\n"
+                f"- side: {side}\n"
                 f"- pos: {before_pos:+.4f} -> {after_pos:+.4f}\n"
                 f"- last: {last_now:,.2f}\n"
                 f"- rsi({p}): {rsi_p:.2f} (rt {rsi_rt_p:.2f})\n"
                 + (f"- thresholds: entry={entry_thr}, exit={exit_thr}\n" if entry_thr is not None or exit_thr is not None else "")
             )
+            # 거래 설정 정보 추가
+            text += f"- leverage: {self.leverage}x\n"
+            text += f"- max-position: {max_position_pct:.0f}%\n"
+            text += f"- candle-interval: {self.candle_interval}\n"
+            # 수수료 정보 추가 (모든 거래에 표시)
             if commission_value > 0:
                 text += f"- commission: {commission_value:.4f} {commission_asset}\n"
+            # PnL 정보 (EXIT일 때만)
             if event == "EXIT" and pnl_exit is not None:
                 text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
+                # 수수료 차감한 PnL도 별도로 표기
+                pnl_after_fee = pnl_exit - commission_value
+                text += f"- pnl (after fee): {pnl_after_fee:+.2f} (est)\n"
             if reason:
                 text += f"- reason: {reason}\n"
             # Entry는 녹색, Exit는 빨간색

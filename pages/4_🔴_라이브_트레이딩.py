@@ -64,6 +64,11 @@ with col1:
     symbol = st.text_input("심볼", value="BTCUSDT")
     leverage = st.number_input("레버리지", min_value=1, max_value=20, value=1, step=1)
     interval = st.number_input("가격 피드 간격 (초)", min_value=0.1, max_value=10.0, value=1.0, step=0.1)
+    candle_interval = st.selectbox(
+        "캔들 봉 간격",
+        options=["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"],
+        index=0,  # 기본값: 1m
+    )
 
 with col2:
     max_position = st.slider("최대 포지션 크기 (%)", min_value=10, max_value=100, value=50, step=10) / 100
@@ -81,7 +86,7 @@ st.divider()
 # 리스크 관리 요약
 st.subheader("3️⃣ 리스크 관리 요약")
 
-risk_col1, risk_col2, risk_col3 = st.columns(3)
+risk_col1, risk_col2, risk_col3, risk_col4 = st.columns(4)
 
 with risk_col1:
     st.metric("레버리지", f"{leverage}x")
@@ -92,6 +97,10 @@ with risk_col2:
     st.metric("연속 손실 제한", "비활성화" if max_consecutive_losses == 0 else f"{max_consecutive_losses}회")
 
 with risk_col3:
+    st.metric("가격 피드 간격", f"{interval}초")
+    st.metric("캔들 봉 간격", candle_interval)
+
+with risk_col4:
     st.metric("쿨다운 시간", "300초 (5분)")
     st.metric("주문 크기 제한", "50% (자산 대비)")
 
@@ -103,6 +112,7 @@ command = (
     f"--symbol {symbol} "
     f"--leverage {leverage} "
     f"--interval {interval} "
+    f"--candle-interval {candle_interval} "
     f"--max-position {max_position} "
     f"--daily-loss-limit {daily_loss_limit} "
     f"--max-consecutive-losses {max_consecutive_losses}"
