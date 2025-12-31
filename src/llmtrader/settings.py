@@ -26,25 +26,12 @@ class SlackSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-class AzureSettings(BaseSettings):
-    """Azure Application Insights 관련 설정."""
-
-    connection_string: str = Field(
-        default="",
-        alias="APPLICATIONINSIGHTS_CONNECTION_STRING",
-        description="Azure Application Insights 연결 문자열",
-    )
-
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-
 class Settings(BaseSettings):
     """애플리케이션 전역 설정."""
 
     env: str = Field(default="local", alias="ENV")
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
-    azure: AzureSettings = Field(default_factory=AzureSettings)
 
     model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
 

@@ -171,15 +171,29 @@ class LiveContext:
         """계좌 정보 업데이트."""
         try:
             account = await self.client._signed_request("GET", "/fapi/v2/account", {})
-            # 바이낸스 UI에서 보는 "자산"은 보통 Wallet Balance(지갑 잔고)에 가깝습니다.
-            # availableBalance는 포지션 증거금으로 묶이면 0에 가까워질 수 있어,
-            # balance(총자산/리스크 계산)에는 walletBalance(또는 totalWalletBalance)를 사용합니다.
-            wallet = account.get("walletBalance")
+            
+            # 계정 모드 확인 (Single/Multi Asset Mode)
+            multi_assets_mode = account.get("multiAssetsMargin", False)
+            
+            if not multi_assets_mode:
+                # Single Asset Mode: assets 배열에서 USDT 잔고 사용
+                assets = account.get("assets", [])
+                usdt_asset = next((a for a in assets if a.get("asset") == "USDT"), None)
+                if usdt_asset:
+                    wallet = usdt_asset.get("walletBalance")
+                else:
+                    # assets 배열에 USDT가 없으면 account 레벨의 walletBalance 사용
+                    wallet = account.get("walletBalance")
+            else:
+                # Multi Asset Mode: account 레벨의 walletBalance 사용
+                wallet = account.get("walletBalance")
+            
+            # Fallback: walletBalance가 없으면 totalWalletBalance 또는 availableBalance 사용
             if wallet is None:
                 wallet = account.get("totalWalletBalance")
             if wallet is None:
-                # fallback: 그래도 없으면 availableBalance 사용
                 wallet = account.get("availableBalance", 0)
+            
             self.balance = float(wallet)
             self.available_balance = float(account.get("availableBalance", 0))
             
@@ -336,16 +350,12 @@ class LiveContext:
         side = result.get("side") or result.get("positionSide") or "N/A"
         executed_qty = result.get("executedQty") or result.get("origQty") or ""
         avg_price = result.get("avgPrice") or result.get("price") or ""
+        order_type = result.get("type", "MARKET")  # 주문 타입
         
-        # Commission 정보 추출 (바이낸스 API 응답에서)
-        commission = result.get("commission", "0")
+        # Commission Asset 정보 추출
         commission_asset = result.get("commissionAsset", "USDT")
-        try:
-            commission_value = float(commission) if commission not in ("", None, "0", "0.0", "0.00") else 0.0
-        except (ValueError, TypeError):
-            commission_value = 0.0
 
-        # User Commission Rate 정보 조회 (추가)
+        # User Commission Rate 정보 조회
         maker_rate: float | None = None
         taker_rate: float | None = None
         rpi_rate: float | None = None
@@ -357,6 +367,40 @@ class LiveContext:
         except Exception as e:  # noqa: BLE001
             # 수수료율 조회 실패는 치명적이지 않음
             self._log_audit("COMMISSION_RATE_FETCH_FAILED", {"error": str(e)})
+
+        # Maker/Taker 판단 및 Commission 계산
+        # - MARKET 주문: 항상 taker
+        # - LIMIT 주문: 일반적으로 maker
+        is_maker = order_type == "LIMIT"  # LIMIT 주문은 maker로 가정
+        is_taker = order_type == "MARKET"  # MARKET 주문은 taker
+        
+        # Commission 계산: rate로 계산
+        calculated_commission = 0.0
+        commission_rate_used: float | None = None
+        commission_type = "unknown"
+        
+        try:
+            executed_qty_float = float(executed_qty) if executed_qty else 0.0
+            parsed_avg_price = float(avg_price) if avg_price not in ("", None, "0", "0.0", "0.00") else 0.0
+            if parsed_avg_price < 1.0:
+                parsed_avg_price = float(self.current_price)
+            
+            if parsed_avg_price > 0 and executed_qty_float > 0:
+                notional = executed_qty_float * parsed_avg_price
+                
+                if is_taker and taker_rate:
+                    calculated_commission = notional * taker_rate
+                    commission_type = "taker"
+                    commission_rate_used = taker_rate
+                elif is_maker and maker_rate:
+                    calculated_commission = notional * maker_rate
+                    commission_type = "maker"
+                    commission_rate_used = maker_rate
+        except (ValueError, TypeError, ZeroDivisionError):
+            pass
+        
+        # 최종 commission 값 결정 (계산된 값만 사용)
+        final_commission = calculated_commission
 
         # RSI: 전략 rsi_period(없으면 14)
         p = self.strategy_rsi_period or 14
@@ -445,9 +489,11 @@ class LiveContext:
         
         if reason is not None:
             msg += f" | reason={reason}"
-        if commission_value > 0:
-            msg += f" | commission={commission_value:.4f} {commission_asset}"
-            if maker_rate is not None and taker_rate is not None:
+        if final_commission > 0:
+            msg += f" | commission={final_commission:.4f} {commission_asset}"
+            if commission_type != "unknown" and commission_rate_used:
+                msg += f" ({commission_type}, rate={commission_rate_used*100:.4f}%)"
+            elif maker_rate is not None and taker_rate is not None:
                 msg += f" | rate(maker={maker_rate*100:.4f}%, taker={taker_rate*100:.4f}%)"
         if pnl_exit is not None:
             msg += f" | pnl={pnl_exit:+.2f} (est)"
@@ -466,8 +512,10 @@ class LiveContext:
                 "position_after": after_pos,
                 "position_before_usd": before_pos_usd,
                 "position_after_usd": after_pos_usd,
-                "commission": commission_value,
+                "commission": final_commission,
                 "commission_asset": commission_asset,
+                "commission_type": commission_type,
+                "commission_rate_used": commission_rate_used,
                 "maker_commission_rate": maker_rate,
                 "taker_commission_rate": taker_rate,
                 "rpi_commission_rate": rpi_rate,
@@ -498,16 +546,20 @@ class LiveContext:
             text += f"- leverage: {self.leverage}x\n"
             text += f"- max-position: {max_position_pct:.0f}%\n"
             text += f"- candle-interval: {self.candle_interval}\n"
-            # 수수료 정보 추가 (모든 거래에 표시)
-            if commission_value > 0:
-                text += f"- commission: {commission_value:.4f} {commission_asset}\n"
-                if maker_rate is not None and taker_rate is not None:
-                    text += f"- commission rate: maker={maker_rate*100:.4f}%, taker={taker_rate*100:.4f}%\n"
+            # 수수료 정보 추가 (항상 표시, commission이 0이 아니거나 계산된 경우)
+            if final_commission > 0 or commission_type != "unknown":
+                text += f"- commission: {final_commission:.4f} {commission_asset}"
+                if commission_type != "unknown" and commission_rate_used:
+                    text += f" ({commission_type}, {commission_rate_used*100:.4f}%)\n"
+                elif maker_rate is not None and taker_rate is not None:
+                    text += f" (maker={maker_rate*100:.4f}%, taker={taker_rate*100:.4f}%)\n"
+                else:
+                    text += "\n"
             # PnL 정보 (EXIT일 때만)
             if event == "EXIT" and pnl_exit is not None:
                 text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
                 # 수수료 차감한 PnL도 별도로 표기
-                pnl_after_fee = pnl_exit - commission_value
+                pnl_after_fee = pnl_exit - final_commission
                 text += f"- pnl (after fee): {pnl_after_fee:+.2f} (est)\n"
             if reason:
                 text += f"- reason: {reason}\n"
