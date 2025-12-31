@@ -115,17 +115,31 @@ class LiveContext:
         if not valid:
             raise ValueError(f"레버리지 검증 실패: {msg}")
         
-        # 레버리지 설정 (바이낸스 API)
-        try:
-            await self.client._signed_request(
-                "POST",
-                "/fapi/v1/leverage",
-                {"symbol": self.symbol, "leverage": self.leverage}
-            )
-            self._log_audit("LEVERAGE_SET", {"leverage": self.leverage})
-        except Exception as e:
-            self._log_audit("LEVERAGE_SET_FAILED", {"error": str(e)})
-            raise
+        # 계좌 정보 먼저 조회 (포지션 확인용)
+        await self.update_account_info()
+        
+        # 포지션이 없을 때만 레버리지 설정
+        if abs(self.position.size) < 1e-12:  # 포지션이 없음
+            try:
+                await self.client._signed_request(
+                    "POST",
+                    "/fapi/v1/leverage",
+                    {"symbol": self.symbol, "leverage": self.leverage}
+                )
+                self._log_audit("LEVERAGE_SET", {"leverage": self.leverage})
+                print(f"✅ 레버리지 설정 완료: {self.leverage}x")
+            except Exception as e:
+                self._log_audit("LEVERAGE_SET_FAILED", {"error": str(e)})
+                raise
+        else:
+            # 포지션이 있는 경우 레버리지 변경 불가
+            print(f"⚠️ 기존 포지션 존재 (size={self.position.size:+.6f}). 레버리지 변경 건너뜀.")
+            print(f"   포지션 청산 후 레버리지를 변경할 수 있습니다.")
+            self._log_audit("LEVERAGE_SET_SKIPPED", {
+                "reason": "position_exists",
+                "position_size": self.position.size,
+                "requested_leverage": self.leverage
+            })
 
         # 거래소 필터 정보 조회 (정밀도 보정용)
         try:
@@ -149,9 +163,6 @@ class LiveContext:
             # 필터 조회 실패해도 트레이딩은 계속 (기본값 사용)
             self._log_audit("EXCHANGE_INFO_FAILED", {"error": str(e)})
             print(f"⚠️ 거래소 필터 조회 실패 (기본값 사용): {e}")
-
-        # 계좌 잔고 조회
-        await self.update_account_info()
 
     async def update_account_info(self) -> None:
         """계좌 정보 업데이트."""
