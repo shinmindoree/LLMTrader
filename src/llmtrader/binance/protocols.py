@@ -29,6 +29,10 @@ class BinanceTradingClient(Protocol):
     async def fetch_position(self, symbol: str) -> dict:
         ...
 
+    async def fetch_commission_rate(self, symbol: str) -> dict[str, Any]:
+        """사용자 수수료율 조회."""
+        ...
+
 
 
 

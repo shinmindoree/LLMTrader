@@ -162,6 +162,24 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response = await self._signed_request("GET", "/fapi/v1/openOrders", payload)
         return response if isinstance(response, list) else []
 
+    async def fetch_commission_rate(self, symbol: str) -> dict[str, Any]:
+        """사용자 수수료율 조회.
+
+        Args:
+            symbol: 거래 심볼 (예: BTCUSDT)
+
+        Returns:
+            {
+                "symbol": "BTCUSDT",
+                "makerCommissionRate": "0.0002",  # 0.02%
+                "takerCommissionRate": "0.0004",  # 0.04%
+                "rpiCommissionRate": "0.00005"   # 0.005%
+            }
+        """
+        payload: dict[str, Any] = {"symbol": symbol}
+        response = await self._signed_request("GET", "/fapi/v1/commissionRate", payload)
+        return response
+
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
         params_with_sig = self._attach_signature(params)
         try:

@@ -345,6 +345,19 @@ class LiveContext:
         except (ValueError, TypeError):
             commission_value = 0.0
 
+        # User Commission Rate 정보 조회 (추가)
+        maker_rate: float | None = None
+        taker_rate: float | None = None
+        rpi_rate: float | None = None
+        try:
+            commission_rate_info = await self.client.fetch_commission_rate(self.symbol)
+            maker_rate = float(commission_rate_info.get("makerCommissionRate", "0"))
+            taker_rate = float(commission_rate_info.get("takerCommissionRate", "0"))
+            rpi_rate = float(commission_rate_info.get("rpiCommissionRate", "0"))
+        except Exception as e:  # noqa: BLE001
+            # 수수료율 조회 실패는 치명적이지 않음
+            self._log_audit("COMMISSION_RATE_FETCH_FAILED", {"error": str(e)})
+
         # RSI: 전략 rsi_period(없으면 14)
         p = self.strategy_rsi_period or 14
         rsi_p = float(self.get_indicator("rsi", p))
@@ -434,6 +447,8 @@ class LiveContext:
             msg += f" | reason={reason}"
         if commission_value > 0:
             msg += f" | commission={commission_value:.4f} {commission_asset}"
+            if maker_rate is not None and taker_rate is not None:
+                msg += f" | rate(maker={maker_rate*100:.4f}%, taker={taker_rate*100:.4f}%)"
         if pnl_exit is not None:
             msg += f" | pnl={pnl_exit:+.2f} (est)"
         if entry_thr is not None or exit_thr is not None:
@@ -453,6 +468,9 @@ class LiveContext:
                 "position_after_usd": after_pos_usd,
                 "commission": commission_value,
                 "commission_asset": commission_asset,
+                "maker_commission_rate": maker_rate,
+                "taker_commission_rate": taker_rate,
+                "rpi_commission_rate": rpi_rate,
                 "rsi_period": p,
                 "rsi_p": rsi_p,
                 "rsi_rt_p": rsi_rt_p,
@@ -483,6 +501,8 @@ class LiveContext:
             # 수수료 정보 추가 (모든 거래에 표시)
             if commission_value > 0:
                 text += f"- commission: {commission_value:.4f} {commission_asset}\n"
+                if maker_rate is not None and taker_rate is not None:
+                    text += f"- commission rate: maker={maker_rate*100:.4f}%, taker={taker_rate*100:.4f}%\n"
             # PnL 정보 (EXIT일 때만)
             if event == "EXIT" and pnl_exit is not None:
                 text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
