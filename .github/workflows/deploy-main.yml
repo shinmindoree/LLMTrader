@@ -40,10 +40,14 @@ jobs:
 
       - name: Update Container App with latest image
         run: |
+          # 커밋 SHA의 짧은 버전 사용(7자리)
+          short_sha=$(echo ${{ github.sha }} | cut -c 1-7)
+
           az containerapp update \
             --name autotrader \
             --resource-group autotrader \
             --image autotraderbinance.azurecr.io/autotrader:${{ github.sha }} \
+            --revision-suffix ${short_sha} \
             --min-replicas 1 \
             --max-replicas 1
 
