@@ -166,8 +166,9 @@ class LiveTradingEngine:
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
             self._last_bar_timestamp = bar_ts
             
-            # 스냅샷 저장 (1분봉 마감 시에만 로그 출력)
-            self._save_snapshot(tick["timestamp"], bar_timestamp=bar_ts)
+            # 1분봉 마감 시 계좌 정보 업데이트 후 스냅샷 저장
+            # 비동기 작업으로 스케줄링 (콜백이 동기이므로)
+            asyncio.create_task(self._update_account_and_save_snapshot(tick["timestamp"], bar_ts))
         elif self._run_on_tick:
             # 초고빈도 테스트용: 폴링 주기마다 전략 실행(지표 히스토리는 닫힌 봉에서만 갱신)
             bar = {
@@ -189,6 +190,27 @@ class LiveTradingEngine:
                     is_tick=True,
                 )
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
+
+    async def _update_account_and_save_snapshot(self, timestamp: int, bar_timestamp: int) -> None:
+        """계좌 정보 업데이트 후 스냅샷 저장.
+        
+        Args:
+            timestamp: 타임스탬프
+            bar_timestamp: 현재 봉 타임스탬프
+        """
+        # 1분봉 마감 시 계좌 정보 업데이트 (바이낸스 UI 리셋 등 외부 변경사항 반영)
+        try:
+            await self.ctx.update_account_info()
+        except Exception as e:
+            # 계좌 정보 업데이트 실패해도 로그는 출력 (기존 캐시 값 사용)
+            self._logger.log_error(
+                error_type="ACCOUNT_UPDATE_ERROR",
+                message=f"Failed to update account info: {e}",
+                symbol=self.price_feed.symbol,
+            )
+        
+        # 스냅샷 저장 (업데이트된 계좌 정보 반영)
+        self._save_snapshot(timestamp, bar_timestamp=bar_timestamp)
 
     def _save_snapshot(self, timestamp: int, bar_timestamp: int | None = None) -> None:
         """현재 상태 스냅샷 저장.
