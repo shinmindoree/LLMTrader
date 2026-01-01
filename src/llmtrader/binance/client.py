@@ -1,6 +1,9 @@
+import asyncio
 import hashlib
 import hmac
+import re
 import time
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
 
@@ -196,20 +199,64 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
 
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
         params_with_sig = self._attach_signature(params)
-        try:
-            response = await self._client.request(method, path, params=params_with_sig)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            # Binance는 에러 바디에 {"code": ..., "msg": "..."} 형태를 주는 경우가 많음.
-            # 기존 로그만으로는 원인을 확정하기 어려워서, 응답 바디를 포함해 예외 메시지를 강화한다.
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                data = e.response.json()
-            except Exception:  # noqa: BLE001
-                data = {"raw": e.response.text}
-            raise ValueError(
-                f"Binance API error: {e.response.status_code} {method} {path} | payload={data}"
-            ) from e
+                response = await self._client.request(method, path, params=params_with_sig)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                # Binance는 에러 바디에 {"code": ..., "msg": "..."} 형태를 주는 경우가 많음.
+                # 기존 로그만으로는 원인을 확정하기 어려워서, 응답 바디를 포함해 예외 메시지를 강화한다.
+                try:
+                    data = e.response.json()
+                except Exception:  # noqa: BLE001
+                    data = {"raw": e.response.text}
+                
+                # 418 에러 (IP 차단) 처리: "banned until <timestamp>" 메시지에서 타임스탬프 추출
+                if e.response.status_code == 418:
+                    error_msg = data.get("msg", "") if isinstance(data, dict) else str(data)
+                    banned_until_ts = self._extract_banned_until_timestamp(error_msg)
+                    
+                    if banned_until_ts:
+                        current_ts = int(time.time() * 1000)  # 밀리초
+                        wait_time_ms = max(0, banned_until_ts - current_ts)
+                        wait_time_sec = wait_time_ms / 1000.0
+                        
+                        if wait_time_sec > 0 and attempt < max_retries - 1:
+                            print(f"⚠️ IP 차단 감지. {wait_time_sec:.1f}초 대기 후 재시도... (시도 {attempt + 1}/{max_retries})")
+                            await asyncio.sleep(min(wait_time_sec + 1.0, 60.0))  # 최대 60초까지 대기
+                            continue  # 재시도
+                        else:
+                            # 대기 시간이 너무 길거나 마지막 시도인 경우
+                            error_msg_full = f"IP banned until {datetime.fromtimestamp(banned_until_ts / 1000).isoformat()}"
+                            raise ValueError(
+                                f"Binance API error: {e.response.status_code} {method} {path} | {error_msg_full}"
+                            ) from e
+                
+                raise ValueError(
+                    f"Binance API error: {e.response.status_code} {method} {path} | payload={data}"
+                ) from e
+
+    @staticmethod
+    def _extract_banned_until_timestamp(error_msg: str) -> int | None:
+        """에러 메시지에서 'banned until <timestamp>' 형식의 타임스탬프를 추출.
+        
+        Args:
+            error_msg: 에러 메시지 문자열
+            
+        Returns:
+            밀리초 단위 타임스탬프 또는 None
+        """
+        # "banned until 1767288777555" 형식의 패턴 매칭
+        pattern = r"banned until (\d+)"
+        match = re.search(pattern, error_msg, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except (ValueError, IndexError):
+                pass
+        return None
 
     @staticmethod
     def _normalize_params(params: dict[str, Any]) -> dict[str, Any]:

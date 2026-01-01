@@ -62,6 +62,10 @@ class LiveContext:
         self._order_inflight: bool = False
         self._last_order_started_at: float = 0.0
         
+        # API rate limiting: update_account_info 최소 호출 간격 (초)
+        self._last_account_update_time: float = 0.0
+        self._min_account_update_interval: float = 1.0  # 최소 1초 간격
+        
         self.balance: float = 0.0
         # 바이낸스 선물 계정의 사용가능 잔고(availableBalance). 포지션 증거금으로 묶이면 0에 가까워질 수 있음.
         self.available_balance: float = 0.0
@@ -169,8 +173,17 @@ class LiveContext:
 
     async def update_account_info(self) -> None:
         """계좌 정보 업데이트."""
+        # Rate limiting: 최소 호출 간격 보장
+        current_time = time.time()
+        time_since_last_update = current_time - self._last_account_update_time
+        if time_since_last_update < self._min_account_update_interval:
+            wait_time = self._min_account_update_interval - time_since_last_update
+            await asyncio.sleep(wait_time)
+            current_time = time.time()
+        
         try:
             account = await self.client._signed_request("GET", "/fapi/v2/account", {})
+            self._last_account_update_time = time.time()
             
             # 계정 모드 확인 (Single/Multi Asset Mode)
             multi_assets_mode = account.get("multiAssetsMargin", False)
