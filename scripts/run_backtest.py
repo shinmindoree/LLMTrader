@@ -128,7 +128,12 @@ async def main():
         
         # 전략 로드
         strategy_class = load_strategy_class(args.strategy_file)
-        strategy = strategy_class()
+        # 전략 인스턴스 생성 시 max_position 파라미터 전달
+        try:
+            strategy = strategy_class(max_position=args.max_position)
+        except TypeError:
+            # max_position 파라미터를 지원하지 않는 전략의 경우 기본값 사용
+            strategy = strategy_class()
         
         # 백테스트 엔진 생성 및 실행
         engine = BacktestEngine(strategy, ctx, klines)

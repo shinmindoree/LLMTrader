@@ -41,8 +41,8 @@ class BacktestEngine:
             close_price = float(kline[4])
             volume = float(kline[5])
             
-            # 가격 업데이트 (현재가 = 종가)
-            self.ctx.update_price(close_price)
+            # 가격 업데이트 (현재가 = 종가, 타임스탬프 포함)
+            self.ctx.update_price(close_price, timestamp=close_time)
             
             # 새 봉인지 확인
             is_new_bar = prev_bar_timestamp != open_time

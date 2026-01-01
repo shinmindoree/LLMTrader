@@ -36,6 +36,7 @@ class BacktestContext:
         self.position = BacktestPosition()
         self._current_price: float = 0.0
         self._price_history: list[float] = []  # 실시간 가격 히스토리 (tick용)
+        self._current_timestamp: int = 0  # 현재 타임스탬프 (밀리초)
         
         # 거래 기록
         self.trades: list[dict[str, Any]] = []
@@ -75,13 +76,22 @@ class BacktestContext:
     def total_equity(self) -> float:
         return self.balance + self.unrealized_pnl
     
-    def update_price(self, price: float) -> None:
-        """가격 업데이트 (tick마다 호출)."""
+    def update_price(self, price: float, timestamp: int | None = None) -> None:
+        """가격 업데이트 (tick마다 호출).
+        
+        Args:
+            price: 가격
+            timestamp: 타임스탬프 (밀리초, 선택사항)
+        """
         self._current_price = price
         self._price_history.append(price)
         # 최근 1000개만 유지 (메모리 절약)
         if len(self._price_history) > 1000:
             self._price_history = self._price_history[-1000:]
+        
+        # 타임스탬프 업데이트
+        if timestamp is not None:
+            self._current_timestamp = timestamp
         
         # 미실현 손익 업데이트
         if self.position.size != 0 and self.position.entry_price != 0:
@@ -95,14 +105,56 @@ class BacktestContext:
             self._closes = self._closes[-500:]
     
     def buy(self, quantity: float, price: float | None = None, reason: str = "") -> None:
-        """매수 주문 (시장가 체결 시뮬레이션)."""
+        """매수 주문 (시장가 체결 시뮬레이션).
+        
+        - 포지션이 없으면: 롱 포지션 진입
+        - 롱 포지션이 있으면: 롱 포지션 추가 (평균 진입가 계산)
+        - 숏 포지션이 있으면: 숏 포지션 청산
+        """
         if price is None:
             price = self._current_price
         
         if price <= 0 or quantity <= 0:
             return
         
-        # 리스크 검증
+        # 숏 포지션이 있으면 청산 처리
+        if self.position.size < 0:
+            # 실제 체결 수량 (숏 포지션 크기만큼만)
+            fill_qty = min(quantity, abs(self.position.size))
+            
+            # 수수료 계산
+            order_value = fill_qty * price
+            commission = order_value * self.commission_rate
+            
+            # 손익 계산 (숏 포지션: entry_price - current_price)
+            pnl = (self.position.entry_price - price) * fill_qty
+            self.balance += pnl - commission
+            
+            # 포지션 업데이트
+            self.position.size += fill_qty  # 음수에서 0으로 수렴
+            if abs(self.position.size) < 1e-12:
+                self.position.size = 0.0
+                self.position.entry_price = 0.0
+            
+            # 거래 기록
+            self.trades.append({
+                "side": "BUY",
+                "quantity": fill_qty,
+                "price": price,
+                "pnl": pnl,
+                "commission": commission,
+                "reason": reason,
+                "timestamp": self._current_timestamp,
+            })
+            
+            self.orders.append({
+                "side": "BUY",
+                "quantity": fill_qty,
+                "price": price,
+            })
+            return
+        
+        # 리스크 검증 (롱 포지션 진입/추가 시)
         valid, msg = self.risk_manager.validate_order_size(
             quantity, price, self.total_equity, self.leverage
         )
@@ -115,11 +167,11 @@ class BacktestContext:
         
         # 포지션 업데이트
         if self.position.size == 0:
-            # 새 포지션
+            # 새 롱 포지션
             self.position.size = quantity
             self.position.entry_price = price
         else:
-            # 포지션 추가 (평균 진입가 계산)
+            # 롱 포지션 추가 (평균 진입가 계산)
             total_value = self.position.size * self.position.entry_price + quantity * price
             self.position.size += quantity
             self.position.entry_price = total_value / self.position.size
@@ -134,6 +186,7 @@ class BacktestContext:
             "price": price,
             "commission": commission,
             "reason": reason,
+            "timestamp": self._current_timestamp,
         })
         
         self.orders.append({
@@ -143,59 +196,108 @@ class BacktestContext:
         })
     
     def sell(self, quantity: float, price: float | None = None, reason: str = "") -> None:
-        """매도 주문 (시장가 체결 시뮬레이션)."""
+        """매도 주문 (시장가 체결 시뮬레이션).
+        
+        - 포지션이 없으면: 숏 포지션 진입
+        - 숏 포지션이 있으면: 숏 포지션 추가 (평균 진입가 계산)
+        - 롱 포지션이 있으면: 롱 포지션 청산
+        """
         if price is None:
             price = self._current_price
         
         if price <= 0 or quantity <= 0:
             return
         
-        if self.position.size <= 0:
-            return  # 롱 포지션이 없음
+        # 롱 포지션이 있으면 청산 처리
+        if self.position.size > 0:
+            # 실제 체결 수량 (롱 포지션 크기만큼만)
+            fill_qty = min(quantity, abs(self.position.size))
+            
+            # 수수료 계산
+            order_value = fill_qty * price
+            commission = order_value * self.commission_rate
+            
+            # 손익 계산 (롱 포지션: current_price - entry_price)
+            pnl = (price - self.position.entry_price) * fill_qty
+            self.balance += pnl - commission
+            
+            # 포지션 업데이트
+            self.position.size -= fill_qty
+            if abs(self.position.size) < 1e-12:
+                self.position.size = 0.0
+                self.position.entry_price = 0.0
+            
+            # 거래 기록
+            self.trades.append({
+                "side": "SELL",
+                "quantity": fill_qty,
+                "price": price,
+                "pnl": pnl,
+                "commission": commission,
+                "reason": reason,
+                "timestamp": self._current_timestamp,
+            })
+            
+            self.orders.append({
+                "side": "SELL",
+                "quantity": fill_qty,
+                "price": price,
+            })
+            return
         
-        # 실제 체결 수량
-        fill_qty = min(quantity, abs(self.position.size))
+        # 리스크 검증 (숏 포지션 진입/추가 시)
+        valid, msg = self.risk_manager.validate_order_size(
+            quantity, price, self.total_equity, self.leverage
+        )
+        if not valid:
+            return
         
         # 수수료 계산
-        order_value = fill_qty * price
+        order_value = quantity * price
         commission = order_value * self.commission_rate
         
-        # 손익 계산
-        pnl = (price - self.position.entry_price) * fill_qty
-        self.balance += pnl - commission
-        
         # 포지션 업데이트
-        self.position.size -= fill_qty
-        if abs(self.position.size) < 1e-12:
-            self.position.size = 0.0
-            self.position.entry_price = 0.0
+        if self.position.size == 0:
+            # 새 숏 포지션 (음수 크기)
+            self.position.size = -quantity
+            self.position.entry_price = price
+        else:
+            # 숏 포지션 추가 (평균 진입가 계산)
+            # position.size는 음수이므로 절댓값으로 계산
+            total_value = abs(self.position.size) * self.position.entry_price + quantity * price
+            self.position.size -= quantity  # 더 음수로
+            self.position.entry_price = total_value / abs(self.position.size)
+        
+        # 잔고 차감 (수수료 포함)
+        self.balance -= commission
         
         # 거래 기록
         self.trades.append({
             "side": "SELL",
-            "quantity": fill_qty,
+            "quantity": quantity,
             "price": price,
-            "pnl": pnl,
             "commission": commission,
             "reason": reason,
+            "timestamp": self._current_timestamp,
         })
         
         self.orders.append({
             "side": "SELL",
-            "quantity": fill_qty,
+            "quantity": quantity,
             "price": price,
         })
     
     def close_position(self, reason: str = "") -> None:
-        """포지션 전체 청산."""
+        """포지션 전체 청산 (롱/숏 모두 지원)."""
         if self.position.size == 0:
             return
         
         quantity = abs(self.position.size)
         if self.position.size > 0:
+            # 롱 포지션 청산
             self.sell(quantity, reason=reason)
         else:
-            # 숏 포지션인 경우 (현재는 롱만 지원하지만 확장성 고려)
+            # 숏 포지션 청산
             self.buy(quantity, reason=reason)
     
     def get_indicator(self, name: str, *args: Any, **kwargs: Any) -> Any:
