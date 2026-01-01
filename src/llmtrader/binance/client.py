@@ -180,6 +180,20 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response = await self._signed_request("GET", "/fapi/v1/commissionRate", payload)
         return response
 
+    async def fetch_order(self, symbol: str, order_id: int) -> dict[str, Any]:
+        """주문 정보 조회.
+
+        Args:
+            symbol: 거래 심볼 (예: BTCUSDT)
+            order_id: 주문 ID
+
+        Returns:
+            주문 정보 (status, executedQty, origQty 등 포함)
+        """
+        payload: dict[str, Any] = {"symbol": symbol, "orderId": order_id}
+        response = await self._signed_request("GET", "/fapi/v1/order", payload)
+        return response
+
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
         params_with_sig = self._attach_signature(params)
         try:

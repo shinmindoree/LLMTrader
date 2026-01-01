@@ -33,6 +33,10 @@ class BinanceTradingClient(Protocol):
         """사용자 수수료율 조회."""
         ...
 
+    async def fetch_order(self, symbol: str, order_id: int) -> dict[str, Any]:
+        """주문 정보 조회."""
+        ...
+
 
 
 

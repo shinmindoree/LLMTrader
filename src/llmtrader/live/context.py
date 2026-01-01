@@ -335,22 +335,47 @@ class LiveContext:
         before_pos = float(result.get("_snapshot_pos_size", self.position.size))
         before_entry = float(result.get("_snapshot_entry_price", self.position.entry_price if self.position.size != 0 else 0.0))
 
-        # 체결 직후 account 반영이 약간 지연될 수 있어 짧게 재시도
-        after_pos = before_pos
+        # 체결 직후 account 반영이 약간 지연될 수 있어 재시도
+        after_pos_api = before_pos  # API로 조회한 포지션
         before_unrealized_pnl = float(self.position.unrealized_pnl)  # 청산 전 미실현 손익 저장
-        for _ in range(3):
+        for _ in range(5):  # 재시도 횟수 증가: 3 -> 5
             try:
                 await self.update_account_info()
-                after_pos = float(self.position.size)
+                after_pos_api = float(self.position.size)
                 break
             except Exception:  # noqa: BLE001
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.3)  # 대기 시간 증가: 0.2 -> 0.3초
 
         order_id = result.get("orderId", "N/A")
         side = result.get("side") or result.get("positionSide") or "N/A"
         executed_qty = result.get("executedQty") or result.get("origQty") or ""
         avg_price = result.get("avgPrice") or result.get("price") or ""
         order_type = result.get("type", "MARKET")  # 주문 타입
+        
+        # [개선] executedQty를 사용하여 포지션 변화 계산 (API 지연에 독립적)
+        executed_qty_float = float(executed_qty) if executed_qty else 0.0
+        after_pos = after_pos_api  # 기본값: API 조회값
+        
+        if executed_qty_float > 0:
+            # BUY/SELL에 따라 포지션 변화 계산
+            if side == "BUY":
+                calculated_after_pos = before_pos + executed_qty_float
+            elif side == "SELL":
+                calculated_after_pos = before_pos - executed_qty_float
+            else:
+                calculated_after_pos = after_pos_api
+            
+            # API 조회값이 변화가 없는데 executedQty가 있으면 계산값 사용
+            # (API 지연으로 인해 포지션이 아직 반영되지 않은 경우)
+            if abs(executed_qty_float) > 1e-12:  # executedQty가 유효한 값
+                if abs(after_pos_api - before_pos) < 1e-12:  # API 조회값은 변화 없음
+                    print(f"⚠️ API 지연 감지: after_pos_api={after_pos_api:+.6f} (변화 없음), executedQty={executed_qty_float:+.6f} 기반 계산값={calculated_after_pos:+.6f} 사용")
+                    after_pos = calculated_after_pos
+                elif abs(calculated_after_pos - after_pos_api) > 1e-8:  # 계산값과 API값 차이가 크면 경고
+                    print(f"⚠️ 포지션 불일치: API={after_pos_api:+.6f}, 계산값={calculated_after_pos:+.6f}, executedQty={executed_qty_float:+.6f}, side={side}")
+                    # 차이가 크지만 같은 부호이면 계산값 사용 (더 정확할 수 있음)
+                    if (calculated_after_pos * after_pos_api) >= 0:  # 같은 부호 또는 둘 중 하나가 0
+                        after_pos = calculated_after_pos
         
         # Commission Asset 정보 추출
         commission_asset = result.get("commissionAsset", "USDT")
@@ -369,10 +394,59 @@ class LiveContext:
             self._log_audit("COMMISSION_RATE_FETCH_FAILED", {"error": str(e)})
 
         # Maker/Taker 판단 및 Commission 계산
-        # - MARKET 주문: 항상 taker
-        # - LIMIT 주문: 일반적으로 maker
-        is_maker = order_type == "LIMIT"  # LIMIT 주문은 maker로 가정
-        is_taker = order_type == "MARKET"  # MARKET 주문은 taker
+        # 개선: LIMIT 주문이 즉시 체결된 경우 Taker로 처리
+        order_status = result.get("status", "").upper()
+        orig_qty = float(result.get("origQty", "0") or "0")
+        executed_qty = float(result.get("executedQty", "0") or "0")
+        
+        # LIMIT 주문이 즉시 체결되었는지 판단
+        # - status가 FILLED이고 executedQty가 origQty와 같으면 즉시 체결로 간주
+        is_limit_immediately_filled = (
+            order_type == "LIMIT" 
+            and order_status == "FILLED" 
+            and orig_qty > 0 
+            and abs(executed_qty - orig_qty) < 1e-12
+        )
+        
+        # Maker/Taker 판단
+        if order_type == "MARKET":
+            # MARKET 주문: 항상 taker
+            is_maker = False
+            is_taker = True
+        elif is_limit_immediately_filled:
+            # LIMIT 주문이 즉시 체결된 경우: taker로 처리
+            is_maker = False
+            is_taker = True
+        else:
+            # LIMIT 주문이 오더북에 남아서 체결된 경우: maker로 처리
+            is_maker = True
+            is_taker = False
+        
+        # 추가 검증: 주문 조회 API로 실제 체결 정보 확인 (선택적, 실패해도 계속 진행)
+        if order_id and order_id != "N/A" and isinstance(order_id, (int, str)):
+            try:
+                # 주문 조회로 더 정확한 정보 확인
+                order_detail = await self.client.fetch_order(self.symbol, int(order_id))
+                detail_status = order_detail.get("status", "").upper()
+                detail_executed_qty = float(order_detail.get("executedQty", "0") or "0")
+                detail_orig_qty = float(order_detail.get("origQty", "0") or "0")
+                
+                # 주문 조회 결과로 재판단
+                if order_type == "LIMIT" and detail_status == "FILLED":
+                    if detail_orig_qty > 0 and abs(detail_executed_qty - detail_orig_qty) < 1e-12:
+                        # 즉시 체결된 LIMIT 주문
+                        is_maker = False
+                        is_taker = True
+                    else:
+                        # 부분 체결 또는 오더북 체결
+                        is_maker = True
+                        is_taker = False
+            except Exception as e:
+                # 주문 조회 실패는 치명적이지 않음, 기존 판단 결과 사용
+                self._log_audit("ORDER_FETCH_FAILED", {
+                    "order_id": order_id,
+                    "error": str(e)
+                })
         
         # Commission 계산: rate로 계산
         calculated_commission = 0.0
@@ -380,7 +454,7 @@ class LiveContext:
         commission_type = "unknown"
         
         try:
-            executed_qty_float = float(executed_qty) if executed_qty else 0.0
+            # executed_qty_float는 이미 위에서 계산됨
             parsed_avg_price = float(avg_price) if avg_price not in ("", None, "0", "0.0", "0.00") else 0.0
             if parsed_avg_price < 1.0:
                 parsed_avg_price = float(self.current_price)
@@ -411,17 +485,20 @@ class LiveContext:
         exit_thr = self.strategy_exit_rsi
 
         # 포지션 이벤트 분류(진입/청산만 Slack)
-        # 진입: 포지션이 0에서 양수로 변경
-        # 청산: 포지션이 양수에서 0으로 변경
+        # 롱숏 전략 기준:
+        # - ENTRY: 0 → 양수(롱 진입) 또는 0 → 음수(숏 진입)
+        # - EXIT: 양수(롱) → 0 또는 음수(숏) → 0
         event: str | None = None
         if abs(before_pos) < 1e-12 and abs(after_pos) >= 1e-12:
             event = "ENTRY"
         elif abs(before_pos) >= 1e-12 and abs(after_pos) < 1e-12:
             event = "EXIT"
         
-        # 디버그: 이벤트 분류 로그
+        # 디버그: 이벤트 분류 로그 (API값도 함께 표시)
         if event:
-            print(f"🔔 이벤트 분류: {event} (before_pos={before_pos:+.6f}, after_pos={after_pos:+.6f})")
+            print(f"🔔 이벤트 분류: {event} (before_pos={before_pos:+.6f}, after_pos={after_pos:+.6f}, after_pos_api={after_pos_api:+.6f}, side={side}, executed_qty={executed_qty_float:+.6f})")
+        elif abs(before_pos) >= 1e-12 or abs(after_pos) >= 1e-12:  # 이벤트가 None인데 포지션 변화가 있었던 경우
+            print(f"⚠️ 이벤트 분류 실패: before_pos={before_pos:+.6f}, after_pos={after_pos:+.6f}, after_pos_api={after_pos_api:+.6f}, side={side}, executed_qty={executed_qty_float:+.6f}")
 
         # EXIT PnL(추정): 청산 시점의 평균 체결가 기준으로 계산
         # - market 주문은 응답에 avgPrice가 "0", "0.00", 빈값으로 오는 경우가 있어 현재가를 fallback으로 사용

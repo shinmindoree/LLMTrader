@@ -1,17 +1,44 @@
-"""간단한 콘솔 로거 (Azure Application Insights 제거됨)."""
+"""Azure Application Insights 로거.
+
+로그를 Azure에 전송하여:
+1. 실시간 에러 감지 및 알림
+2. 장기 로그 저장 및 쿼리
+3. 대시보드 및 메트릭 분석
+"""
 
 import logging
+import os
 import sys
 from datetime import datetime
 from typing import Any
 
+# Azure OpenTelemetry 통합 (선택적)
+try:
+    from azure.monitor.opentelemetry import configure_azure_monitor
+    from opentelemetry import trace
+    from opentelemetry.trace import Status, StatusCode
 
-class SimpleLogger:
-    """간단한 콘솔 로거."""
+    AZURE_AVAILABLE = True
+except ImportError:
+    AZURE_AVAILABLE = False
+    configure_azure_monitor = None  # type: ignore
+    trace = None  # type: ignore
+
+
+class AzureLogger:
+    """Azure Application Insights 통합 로거.
+
+    기능:
+    - 콘솔 출력 (기존 동작 유지)
+    - Azure Application Insights로 구조화된 로그 전송
+    - 에러 자동 추적 및 예외 상세 정보
+    - 커스텀 이벤트/메트릭 전송
+    """
 
     def __init__(
         self,
         name: str = "llmtrader",
+        connection_string: str | None = None,
         console_output: bool = True,
         log_level: int = logging.INFO,
     ) -> None:
@@ -19,12 +46,18 @@ class SimpleLogger:
 
         Args:
             name: 로거 이름
+            connection_string: Azure Application Insights 연결 문자열
             console_output: 콘솔 출력 여부
             log_level: 로그 레벨
         """
         self.name = name
+        self.connection_string = connection_string or os.getenv(
+            "APPLICATIONINSIGHTS_CONNECTION_STRING", ""
+        )
         self.console_output = console_output
         self.log_level = log_level
+        self._azure_configured = False
+        self._tracer = None
 
         # 표준 Python 로거 설정
         self.logger = logging.getLogger(name)
@@ -42,10 +75,36 @@ class SimpleLogger:
             console_handler.setFormatter(console_format)
             self.logger.addHandler(console_handler)
 
+        # Azure Application Insights 설정
+        self._setup_azure()
+
+    def _setup_azure(self) -> None:
+        """Azure Application Insights 연결 설정."""
+        if not AZURE_AVAILABLE:
+            self.logger.warning(
+                "Azure Monitor SDK not installed. Run: uv add azure-monitor-opentelemetry"
+            )
+            return
+
+        if not self.connection_string:
+            self.logger.info("APPLICATIONINSIGHTS_CONNECTION_STRING not set. Azure logging disabled.")
+            return
+
+        try:
+            configure_azure_monitor(
+                connection_string=self.connection_string,
+                logger_name=self.name,
+            )
+            self._tracer = trace.get_tracer(self.name)
+            self._azure_configured = True
+            self.logger.info("Azure Application Insights configured successfully.")
+        except Exception as e:
+            self.logger.warning(f"Failed to configure Azure Monitor: {e}")
+
     @property
     def is_azure_enabled(self) -> bool:
-        """Azure 로깅 활성화 여부 (항상 False)."""
-        return False
+        """Azure 로깅 활성화 여부."""
+        return self._azure_configured
 
     def info(self, message: str, **extra: Any) -> None:
         """INFO 레벨 로그."""
@@ -56,7 +115,7 @@ class SimpleLogger:
         self._log(logging.WARNING, message, extra)
 
     def error(self, message: str, exc_info: bool = False, **extra: Any) -> None:
-        """ERROR 레벨 로그."""
+        """ERROR 레벨 로그 (Azure에서 자동 알림 트리거 가능)."""
         self._log(logging.ERROR, message, extra, exc_info=exc_info)
 
     def critical(self, message: str, exc_info: bool = True, **extra: Any) -> None:
@@ -74,7 +133,7 @@ class SimpleLogger:
         extra: dict[str, Any],
         exc_info: bool = False,
     ) -> None:
-        """로그 메시지 출력."""
+        """로그 메시지 출력 및 Azure 전송."""
         # 구조화된 데이터를 메시지에 포함
         if extra:
             extra_str = " | ".join(f"{k}={v}" for k, v in extra.items())
@@ -82,7 +141,7 @@ class SimpleLogger:
         else:
             full_message = message
 
-        # Python 로거로 출력 (콘솔)
+        # Python 로거로 출력 (콘솔 + Azure 핸들러)
         self.logger.log(level, full_message, exc_info=exc_info, extra=extra)
 
     # ─────────────────────────────────────────────────────────────────
@@ -101,7 +160,11 @@ class SimpleLogger:
         pnl: float,
         **extra: Any,
     ) -> None:
-        """틱 데이터 로그 (1초마다 호출, INFO 레벨)."""
+        """틱 데이터 로그 (1초마다 호출, INFO 레벨).
+
+        Azure에서 쿼리 예시:
+        traces | where message contains "TICK" | project timestamp, customDimensions
+        """
         self.info(
             "TICK",
             symbol=symbol,
@@ -127,7 +190,11 @@ class SimpleLogger:
         pnl: float | None = None,
         **extra: Any,
     ) -> None:
-        """주문 이벤트 로그 (WARNING 레벨로 눈에 띄게)."""
+        """주문 이벤트 로그 (WARNING 레벨로 눈에 띄게).
+
+        Azure에서 쿼리 예시:
+        traces | where message == "ORDER" | where customDimensions.event == "ENTRY"
+        """
         self.warning(
             "ORDER",
             event=event,
@@ -148,7 +215,11 @@ class SimpleLogger:
         symbol: str | None = None,
         **extra: Any,
     ) -> None:
-        """에러 로그."""
+        """에러 로그 (Azure Alert 트리거 대상).
+
+        Azure에서 Alert Rule 설정:
+        traces | where severityLevel >= 3 | where message == "TRADE_ERROR"
+        """
         self.error(
             "TRADE_ERROR",
             error_type=error_type,
@@ -167,7 +238,11 @@ class SimpleLogger:
         reason: str,
         **extra: Any,
     ) -> None:
-        """전략 신호 로그 (분석용)."""
+        """전략 신호 로그 (분석용).
+
+        Azure에서 쿼리 예시:
+        traces | where message == "SIGNAL" | summarize count() by customDimensions.signal
+        """
         self.info(
             "SIGNAL",
             signal=signal,
@@ -233,14 +308,20 @@ class SimpleLogger:
         )
 
 
-def get_logger(name: str = "llmtrader", connection_string: str | None = None) -> SimpleLogger:
+def get_logger(name: str = "llmtrader", connection_string: str | None = None) -> AzureLogger:
     """로거 인스턴스 반환.
     
     Args:
         name: 로거 이름
-        connection_string: 무시됨 (호환성을 위해 유지)
+        connection_string: Azure 연결 문자열 (None이면 환경변수/설정에서 로드)
     """
-    return SimpleLogger(name=name)
+    # Settings에서 연결 문자열 로드 시도
+    if connection_string is None:
+        try:
+            from llmtrader.settings import get_settings
+            connection_string = get_settings().azure.connection_string
+        except Exception:  # noqa: BLE001
+            pass
+    
+    return AzureLogger(name=name, connection_string=connection_string)
 
-# 호환성을 위한 별칭
-AzureLogger = SimpleLogger
