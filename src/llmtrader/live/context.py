@@ -393,78 +393,9 @@ class LiveContext:
         # Commission Asset 정보 추출
         commission_asset = result.get("commissionAsset", "USDT")
 
-        # User Commission Rate 정보 조회
-        maker_rate: float | None = None
-        taker_rate: float | None = None
-        rpi_rate: float | None = None
-        try:
-            commission_rate_info = await self.client.fetch_commission_rate(self.symbol)
-            maker_rate = float(commission_rate_info.get("makerCommissionRate", "0"))
-            taker_rate = float(commission_rate_info.get("takerCommissionRate", "0"))
-            rpi_rate = float(commission_rate_info.get("rpiCommissionRate", "0"))
-        except Exception as e:  # noqa: BLE001
-            # 수수료율 조회 실패는 치명적이지 않음
-            self._log_audit("COMMISSION_RATE_FETCH_FAILED", {"error": str(e)})
-
-        # Maker/Taker 판단 및 Commission 계산
-        # 개선: LIMIT 주문이 즉시 체결된 경우 Taker로 처리
-        order_status = result.get("status", "").upper()
-        orig_qty = float(result.get("origQty", "0") or "0")
-        executed_qty = float(result.get("executedQty", "0") or "0")
-        
-        # LIMIT 주문이 즉시 체결되었는지 판단
-        # - status가 FILLED이고 executedQty가 origQty와 같으면 즉시 체결로 간주
-        is_limit_immediately_filled = (
-            order_type == "LIMIT" 
-            and order_status == "FILLED" 
-            and orig_qty > 0 
-            and abs(executed_qty - orig_qty) < 1e-12
-        )
-        
-        # Maker/Taker 판단
-        if order_type == "MARKET":
-            # MARKET 주문: 항상 taker
-            is_maker = False
-            is_taker = True
-        elif is_limit_immediately_filled:
-            # LIMIT 주문이 즉시 체결된 경우: taker로 처리
-            is_maker = False
-            is_taker = True
-        else:
-            # LIMIT 주문이 오더북에 남아서 체결된 경우: maker로 처리
-            is_maker = True
-            is_taker = False
-        
-        # 추가 검증: 주문 조회 API로 실제 체결 정보 확인 (선택적, 실패해도 계속 진행)
-        if order_id and order_id != "N/A" and isinstance(order_id, (int, str)):
-            try:
-                # 주문 조회로 더 정확한 정보 확인
-                order_detail = await self.client.fetch_order(self.symbol, int(order_id))
-                detail_status = order_detail.get("status", "").upper()
-                detail_executed_qty = float(order_detail.get("executedQty", "0") or "0")
-                detail_orig_qty = float(order_detail.get("origQty", "0") or "0")
-                
-                # 주문 조회 결과로 재판단
-                if order_type == "LIMIT" and detail_status == "FILLED":
-                    if detail_orig_qty > 0 and abs(detail_executed_qty - detail_orig_qty) < 1e-12:
-                        # 즉시 체결된 LIMIT 주문
-                        is_maker = False
-                        is_taker = True
-                    else:
-                        # 부분 체결 또는 오더북 체결
-                        is_maker = True
-                        is_taker = False
-            except Exception as e:
-                # 주문 조회 실패는 치명적이지 않음, 기존 판단 결과 사용
-                self._log_audit("ORDER_FETCH_FAILED", {
-                    "order_id": order_id,
-                    "error": str(e)
-                })
-        
-        # Commission 계산: rate로 계산
-        calculated_commission = 0.0
-        commission_rate_used: float | None = None
-        commission_type = "unknown"
+        # 수수료 계산: 고정 0.04% (0.0004) 사용
+        DEFAULT_COMMISSION_RATE = 0.0004  # 0.04%
+        final_commission = 0.0
         
         try:
             # executed_qty_float는 이미 위에서 계산됨
@@ -474,20 +405,9 @@ class LiveContext:
             
             if parsed_avg_price > 0 and executed_qty_float > 0:
                 notional = executed_qty_float * parsed_avg_price
-                
-                if is_taker and taker_rate:
-                    calculated_commission = notional * taker_rate
-                    commission_type = "taker"
-                    commission_rate_used = taker_rate
-                elif is_maker and maker_rate:
-                    calculated_commission = notional * maker_rate
-                    commission_type = "maker"
-                    commission_rate_used = maker_rate
+                final_commission = notional * DEFAULT_COMMISSION_RATE
         except (ValueError, TypeError, ZeroDivisionError):
             pass
-        
-        # 최종 commission 값 결정 (계산된 값만 사용)
-        final_commission = calculated_commission
 
         # RSI: 전략 rsi_period(없으면 14)
         p = self.strategy_rsi_period or 14
@@ -579,14 +499,14 @@ class LiveContext:
         
         if reason is not None:
             msg += f" | reason={reason}"
-        if final_commission > 0:
-            msg += f" | commission={final_commission:.4f} {commission_asset}"
-            if commission_type != "unknown" and commission_rate_used:
-                msg += f" ({commission_type}, rate={commission_rate_used*100:.4f}%)"
-            elif maker_rate is not None and taker_rate is not None:
-                msg += f" | rate(maker={maker_rate*100:.4f}%, taker={taker_rate*100:.4f}%)"
+        
+        # 수수료 항상 출력
+        msg += f" | commission={final_commission:.4f} {commission_asset} (rate=0.04%)"
+        
+        # PnL 정보: 수수료 적용 전/후 모두 표시
         if pnl_exit is not None:
-            msg += f" | pnl={pnl_exit:+.2f} (est)"
+            pnl_after_fee = pnl_exit - final_commission
+            msg += f" | pnl={pnl_exit:+.2f} (before fee) | pnl_after_fee={pnl_after_fee:+.2f} (after fee)"
         if entry_thr is not None or exit_thr is not None:
             msg += f" | thr(entry={entry_thr}, exit={exit_thr})"
         print(msg)
@@ -604,11 +524,7 @@ class LiveContext:
                 "position_after_usd": after_pos_usd,
                 "commission": final_commission,
                 "commission_asset": commission_asset,
-                "commission_type": commission_type,
-                "commission_rate_used": commission_rate_used,
-                "maker_commission_rate": maker_rate,
-                "taker_commission_rate": taker_rate,
-                "rpi_commission_rate": rpi_rate,
+                "commission_rate": DEFAULT_COMMISSION_RATE,
                 "rsi_period": p,
                 "rsi_p": rsi_p,
                 "rsi_rt_p": rsi_rt_p,
@@ -616,6 +532,7 @@ class LiveContext:
                 "exit_rsi": exit_thr,
                 "event": event,
                 "pnl_exit_est": pnl_exit,
+                "pnl_exit_after_fee": pnl_exit - final_commission if pnl_exit is not None else None,
             },
         )
 
@@ -636,20 +553,14 @@ class LiveContext:
             text += f"- leverage: {self.leverage}x\n"
             text += f"- max-position: {max_position_pct:.0f}%\n"
             text += f"- candle-interval: {self.candle_interval}\n"
-            # 수수료 정보 추가 (항상 표시, commission이 0이 아니거나 계산된 경우)
-            if final_commission > 0 or commission_type != "unknown":
-                text += f"- commission: {final_commission:.4f} {commission_asset}"
-                if commission_type != "unknown" and commission_rate_used:
-                    text += f" ({commission_type}, {commission_rate_used*100:.4f}%)\n"
-                elif maker_rate is not None and taker_rate is not None:
-                    text += f" (maker={maker_rate*100:.4f}%, taker={taker_rate*100:.4f}%)\n"
-                else:
-                    text += "\n"
-            # PnL 정보 (EXIT일 때만)
+            
+            # 수수료 정보 항상 표시
+            text += f"- commission: {final_commission:.4f} {commission_asset} (rate=0.04%)\n"
+            
+            # PnL 정보 (EXIT일 때만): 수수료 적용 전/후 모두 표시
             if event == "EXIT" and pnl_exit is not None:
-                text += f"- pnl: {pnl_exit:+.2f} (est, using last price)\n"
-                # 수수료 차감한 PnL도 별도로 표기
                 pnl_after_fee = pnl_exit - final_commission
+                text += f"- pnl (before fee): {pnl_exit:+.2f} (est, using last price)\n"
                 text += f"- pnl (after fee): {pnl_after_fee:+.2f} (est)\n"
             if reason:
                 text += f"- reason: {reason}\n"
