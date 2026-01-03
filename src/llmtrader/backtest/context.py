@@ -137,6 +137,8 @@ class BacktestContext:
                 self.position.entry_price = 0.0
             
             # 거래 기록
+            position_size_usdt = fill_qty * price
+            balance_after = self.balance
             self.trades.append({
                 "side": "BUY",
                 "quantity": fill_qty,
@@ -145,6 +147,9 @@ class BacktestContext:
                 "commission": commission,
                 "reason": reason,
                 "timestamp": self._current_timestamp,
+                "position_size_usdt": position_size_usdt,
+                "entry_price": self.position.entry_price if self.position.size != 0 else price,
+                "balance_after": balance_after,
             })
             
             self.orders.append({
@@ -180,6 +185,8 @@ class BacktestContext:
         self.balance -= commission
         
         # 거래 기록
+        position_size_usdt = quantity * price
+        balance_after = self.balance
         self.trades.append({
             "side": "BUY",
             "quantity": quantity,
@@ -187,6 +194,9 @@ class BacktestContext:
             "commission": commission,
             "reason": reason,
             "timestamp": self._current_timestamp,
+            "position_size_usdt": position_size_usdt,
+            "entry_price": self.position.entry_price,
+            "balance_after": balance_after,
         })
         
         self.orders.append({
@@ -228,6 +238,8 @@ class BacktestContext:
                 self.position.entry_price = 0.0
             
             # 거래 기록
+            position_size_usdt = fill_qty * price
+            balance_after = self.balance
             self.trades.append({
                 "side": "SELL",
                 "quantity": fill_qty,
@@ -236,6 +248,9 @@ class BacktestContext:
                 "commission": commission,
                 "reason": reason,
                 "timestamp": self._current_timestamp,
+                "position_size_usdt": position_size_usdt,
+                "entry_price": self.position.entry_price if abs(self.position.size) > 1e-12 else price,
+                "balance_after": balance_after,
             })
             
             self.orders.append({
@@ -272,6 +287,8 @@ class BacktestContext:
         self.balance -= commission
         
         # 거래 기록
+        position_size_usdt = quantity * price
+        balance_after = self.balance
         self.trades.append({
             "side": "SELL",
             "quantity": quantity,
@@ -279,6 +296,9 @@ class BacktestContext:
             "commission": commission,
             "reason": reason,
             "timestamp": self._current_timestamp,
+            "position_size_usdt": position_size_usdt,
+            "entry_price": self.position.entry_price if self.position.size != 0 else price,
+            "balance_after": balance_after,
         })
         
         self.orders.append({

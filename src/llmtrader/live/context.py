@@ -390,24 +390,40 @@ class LiveContext:
                     if (calculated_after_pos * after_pos_api) >= 0:  # 같은 부호 또는 둘 중 하나가 0
                         after_pos = calculated_after_pos
         
-        # Commission Asset 정보 추출
-        commission_asset = result.get("commissionAsset", "USDT")
-
-        # 수수료 계산: 고정 0.04% (0.0004) 사용
-        DEFAULT_COMMISSION_RATE = 0.0004  # 0.04%
-        final_commission = 0.0
+        # ========== avgPrice 파싱 및 commission 계산 (리팩토링) ==========
+        def parse_price(price_str: str) -> float:
+            """가격 문자열을 float로 변환. 0이거나 유효하지 않으면 0.0 반환."""
+            if not price_str or price_str in ("0", "0.0", "0.00", "0.000", "0.0000", "0.00000"):
+                return 0.0
+            try:
+                price = float(price_str)
+                return price if price > 0 else 0.0
+            except (ValueError, TypeError):
+                return 0.0
         
-        try:
-            # executed_qty_float는 이미 위에서 계산됨
-            parsed_avg_price = float(avg_price) if avg_price not in ("", None, "0", "0.0", "0.00") else 0.0
-            if parsed_avg_price < 1.0:
-                parsed_avg_price = float(self.current_price)
-            
-            if parsed_avg_price > 0 and executed_qty_float > 0:
-                notional = executed_qty_float * parsed_avg_price
-                final_commission = notional * DEFAULT_COMMISSION_RATE
-        except (ValueError, TypeError, ZeroDivisionError):
-            pass
+        parsed_avg_price = parse_price(avg_price)
+        if parsed_avg_price <= 0:
+            parsed_avg_price = float(self.current_price)
+        
+        # Commission 계산 (단순화)
+        commission_asset = result.get("commissionAsset", "USDT")
+        DEFAULT_COMMISSION_RATE = 0.0004  # 0.04%
+        
+        # 1. API 응답의 commission 필드 우선 사용
+        final_commission = 0.0
+        if "commission" in result:
+            try:
+                api_commission = float(result.get("commission", "0"))
+                if api_commission > 0:
+                    final_commission = api_commission
+            except (ValueError, TypeError):
+                pass
+        
+        # 2. API commission이 없으면 계산
+        if final_commission == 0.0 and parsed_avg_price > 0 and executed_qty_float > 0:
+            notional = executed_qty_float * parsed_avg_price
+            final_commission = notional * DEFAULT_COMMISSION_RATE
+        # ========== 리팩토링 끝 ==========
 
         # RSI: 전략 rsi_period(없으면 14)
         p = self.strategy_rsi_period or 14
@@ -434,18 +450,8 @@ class LiveContext:
             print(f"⚠️ 이벤트 분류 실패: before_pos={before_pos:+.6f}, after_pos={after_pos:+.6f}, after_pos_api={after_pos_api:+.6f}, side={side}, executed_qty={executed_qty_float:+.6f}")
 
         # EXIT PnL(추정): 청산 시점의 평균 체결가 기준으로 계산
-        # - market 주문은 응답에 avgPrice가 "0", "0.00", 빈값으로 오는 경우가 있어 현재가를 fallback으로 사용
-        # - 중요: avgPrice가 0이면 현재가를 사용해야 함 (0으로 계산하면 PnL이 엄청나게 틀려짐!)
-        try:
-            parsed_avg_price = float(avg_price) if avg_price not in ("", None, "0", "0.0", "0.00") else 0.0
-        except (ValueError, TypeError):
-            parsed_avg_price = 0.0
-        
-        # avgPrice가 0이거나 비정상적으로 작으면 현재가 사용
-        if parsed_avg_price < 1.0:  # 가격이 1 미만이면 비정상
-            exit_price = float(self.current_price)
-        else:
-            exit_price = parsed_avg_price
+        # parsed_avg_price는 이미 위에서 파싱되어 current_price로 fallback 처리됨
+        exit_price = parsed_avg_price
         
         # PnL 계산: EXIT 이벤트일 때만 계산
         # 방법 1: before_entry를 사용한 계산 (검증 후)

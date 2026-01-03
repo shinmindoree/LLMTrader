@@ -87,10 +87,11 @@ async def main():
     settings = get_settings()
     
     # 클라이언트 생성 (데이터 조회만 하므로 API 키는 선택사항이지만 기본값 사용)
+    # 백테스트는 실서버 데이터 사용 (라이브 트레이딩은 테스트넷 사용)
     client = BinanceHTTPClient(
         api_key=settings.binance.api_key or "",
         api_secret=settings.binance.api_secret or "",
-        base_url=settings.binance.base_url,
+        base_url="https://fapi.binance.com",  # 실서버 URL
     )
     
     try:

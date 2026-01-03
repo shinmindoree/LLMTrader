@@ -1,7 +1,10 @@
 """백테스트 페이지."""
 
 import asyncio
+import inspect
+import importlib.util
 import json
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -55,6 +58,64 @@ selected_file = st.selectbox(
 
 st.divider()
 
+# 전략 기본값 추출 함수
+def get_strategy_defaults(strategy_file: Path) -> dict[str, Any]:
+    """전략 클래스의 기본값 추출."""
+    defaults = {
+        "stop_loss_pct": None,
+        "stop_loss_usd": None,
+        "has_stop_loss_pct": False,
+        "has_stop_loss_usd": False,
+    }
+    
+    try:
+        spec = importlib.util.spec_from_file_location("temp_strategy", strategy_file)
+        if not spec or not spec.loader:
+            return defaults
+        
+        module = importlib.util.module_from_spec(spec)
+        # 고유한 모듈 이름 사용 (여러 번 로드 방지)
+        module_name = f"temp_strategy_{id(spec)}"
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        
+        # Strategy 클래스 찾기
+        strategy_class = None
+        for name in dir(module):
+            obj = getattr(module, name)
+            if isinstance(obj, type) and name.endswith("Strategy") and name != "Strategy":
+                strategy_class = obj
+                break
+        
+        if strategy_class:
+            sig = inspect.signature(strategy_class.__init__)
+            params = sig.parameters
+            
+            if "stop_loss_pct" in params:
+                defaults["has_stop_loss_pct"] = True
+                param = params["stop_loss_pct"]
+                if param.default != inspect.Parameter.empty:
+                    defaults["stop_loss_pct"] = param.default
+            
+            if "stop_loss_usd" in params:
+                defaults["has_stop_loss_usd"] = True
+                param = params["stop_loss_usd"]
+                if param.default != inspect.Parameter.empty:
+                    defaults["stop_loss_usd"] = param.default
+        
+        # 모듈 정리
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+    except Exception:
+        pass  # 전략 로드 실패 시 기본값 반환
+    
+    return defaults
+
+# 전략 기본값 추출
+strategy_defaults = get_strategy_defaults(selected_file)
+
+st.divider()
+
 # 설정
 st.subheader("2️⃣ 거래 설정")
 
@@ -90,6 +151,97 @@ with col2:
 
 st.divider()
 
+# StopLoss 설정
+st.subheader("🛡️ StopLoss 설정")
+
+# 전략이 지원하는 StopLoss 타입 확인
+has_pct = strategy_defaults["has_stop_loss_pct"]
+has_usd = strategy_defaults["has_stop_loss_usd"]
+
+if has_pct or has_usd:
+    # 전략이 지원하는 타입 중 선택 (둘 다 지원하면 선택 가능)
+    if has_pct and has_usd:
+        stop_loss_type = st.radio(
+            "StopLoss 기준",
+            options=["퍼센트 (%)", "USDT"],
+            index=0,  # 기본값: 퍼센트
+            horizontal=True,
+            key="stop_loss_type"
+        )
+    elif has_pct:
+        stop_loss_type = "퍼센트 (%)"
+        st.info("이 전략은 StopLoss를 퍼센트(%) 기준으로 지원합니다.")
+    else:
+        stop_loss_type = "USDT"
+        st.info("이 전략은 StopLoss를 USDT 기준으로 지원합니다.")
+    
+    # StopLoss 값 입력
+    col_stop1, col_stop2 = st.columns(2)
+    
+    with col_stop1:
+        if stop_loss_type == "퍼센트 (%)":
+            default_pct = strategy_defaults["stop_loss_pct"]
+            if default_pct is not None:
+                # 소수(0.05)를 퍼센트(5.0)로 변환
+                default_pct_display = default_pct * 100 if default_pct < 1.0 else default_pct
+            else:
+                default_pct_display = 5.0
+            
+            stop_loss_value = st.number_input(
+                "StopLoss (%)",
+                min_value=0.1,
+                max_value=50.0,
+                value=float(default_pct_display),
+                step=0.1,
+                format="%.1f",
+                help="총 자산(Equity) 대비 손실 비율",
+                key="stop_loss_pct_input"
+            )
+            stop_loss_pct = stop_loss_value / 100.0  # 퍼센트를 소수로 변환
+            stop_loss_usd = None
+        else:
+            default_usd = strategy_defaults["stop_loss_usd"]
+            if default_usd is None:
+                default_usd = 500.0
+            
+            stop_loss_value = st.number_input(
+                "StopLoss (USDT)",
+                min_value=1.0,
+                max_value=10000.0,
+                value=float(default_usd),
+                step=10.0,
+                format="%.2f",
+                help="진입가 대비 최대 손실 금액",
+                key="stop_loss_usd_input"
+            )
+            stop_loss_usd = stop_loss_value
+            stop_loss_pct = None
+    
+    with col_stop2:
+        st.markdown("**전략 기본값 정보**")
+        if strategy_defaults["stop_loss_pct"] is not None:
+            pct_val = strategy_defaults["stop_loss_pct"]
+            pct_display = pct_val * 100 if pct_val < 1.0 else pct_val
+            st.caption(f"기본값: {pct_display:.1f}%")
+        if strategy_defaults["stop_loss_usd"] is not None:
+            st.caption(f"기본값: ${strategy_defaults['stop_loss_usd']:.2f}")
+        if strategy_defaults["stop_loss_pct"] is None and strategy_defaults["stop_loss_usd"] is None:
+            st.caption("전략에 StopLoss 기본값이 없습니다.")
+else:
+    st.info("⚠️ 이 전략은 StopLoss 파라미터를 지원하지 않습니다. 전략 파일에 stop_loss_pct 또는 stop_loss_usd 파라미터를 추가하세요.")
+    stop_loss_pct = None
+    stop_loss_usd = None
+    stop_loss_value = None
+    stop_loss_type = None
+
+# 변수 초기화 (함수에서 참조하기 위해)
+if 'stop_loss_pct' not in locals():
+    stop_loss_pct = None
+if 'stop_loss_usd' not in locals():
+    stop_loss_usd = None
+
+st.divider()
+
 # 백테스트 설정 요약
 st.subheader("3️⃣ 백테스트 설정 요약")
 
@@ -111,6 +263,11 @@ with summary_col4:
     days = (end_date - start_date).days
     st.metric("기간", f"{days}일")
     st.metric("시작일", start_date.strftime("%Y-%m-%d"))
+    if stop_loss_type:
+        if stop_loss_type == "퍼센트 (%)":
+            st.metric("StopLoss", f"{stop_loss_value:.1f}%")
+        else:
+            st.metric("StopLoss", f"${stop_loss_value:.2f}")
 
 st.divider()
 
@@ -122,10 +279,12 @@ async def run_backtest_async() -> dict[str, Any]:
     """백테스트를 비동기로 실행."""
     settings = get_settings()
     
+    # 백테스트는 실서버 데이터 사용 (라이브 트레이딩은 테스트넷 사용)
     client = BinanceHTTPClient(
         api_key=settings.binance.api_key or "",
         api_secret=settings.binance.api_secret or "",
-        base_url=settings.binance.base_url,
+        base_url="https://fapi.binance.com",  # 실서버 URL
+        timeout=60.0,  # 대용량 데이터 조회를 위해 타임아웃 증가
     )
     
     try:
@@ -135,14 +294,16 @@ async def run_backtest_async() -> dict[str, Any]:
         end_ts = int(end_dt.timestamp() * 1000)
         
         # 데이터 수집
-        with st.spinner("📥 과거 데이터 수집 중..."):
-            klines = await fetch_all_klines(
-                client=client,
-                symbol=symbol,
-                interval=candle_interval,
-                start_ts=start_ts,
-                end_ts=end_ts,
-            )
+        data_progress_bar = st.progress(0, text="📥 과거 데이터 수집 중...")
+        klines = await fetch_all_klines(
+            client=client,
+            symbol=symbol,
+            interval=candle_interval,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            progress_callback=lambda p: data_progress_bar.progress(p / 100, text=f"📥 과거 데이터 수집 중... {p:.1f}%"),
+        )
+        data_progress_bar.empty()
         
         if not klines:
             return {"error": "데이터가 없습니다.", "klines": []}
@@ -165,9 +326,6 @@ async def run_backtest_async() -> dict[str, Any]:
         )
         
         # 전략 로드
-        import importlib.util
-        import sys
-        
         spec = importlib.util.spec_from_file_location("custom_strategy", selected_file)
         if not spec or not spec.loader:
             return {"error": f"전략 파일을 로드할 수 없습니다: {selected_file}", "klines": klines}
@@ -187,17 +345,50 @@ async def run_backtest_async() -> dict[str, Any]:
         if not strategy_class:
             return {"error": f"전략 클래스를 찾을 수 없습니다: {selected_file}", "klines": klines}
         
-        # 전략 인스턴스 생성 시 max_position 파라미터 전달
+        # 전략 파라미터 확인
+        strategy_sig = inspect.signature(strategy_class.__init__)
+        strategy_params = strategy_sig.parameters
+        
+        # 전략 인스턴스 생성 시 파라미터 전달 (지원하는 것만)
+        strategy_kwargs = {}
+        
+        # max_position 파라미터
+        if "max_position" in strategy_params:
+            strategy_kwargs["max_position"] = max_position
+        
+        # StopLoss 파라미터 override (전략이 지원하는 경우만)
+        if stop_loss_pct is not None and "stop_loss_pct" in strategy_params:
+            strategy_kwargs["stop_loss_pct"] = stop_loss_pct
+        
+        if stop_loss_usd is not None and "stop_loss_usd" in strategy_params:
+            strategy_kwargs["stop_loss_usd"] = stop_loss_usd
+        
+        # 전략 인스턴스 생성
         try:
-            strategy = strategy_class(max_position=max_position)
-        except TypeError:
-            # max_position 파라미터를 지원하지 않는 전략의 경우 기본값 사용
-            strategy = strategy_class()
+            if strategy_kwargs:
+                strategy = strategy_class(**strategy_kwargs)
+            else:
+                strategy = strategy_class()
+        except TypeError as e:
+            # 파라미터 오류 시 기본값으로 생성
+            try:
+                strategy = strategy_class()
+            except Exception as e2:
+                return {"error": f"전략 인스턴스 생성 실패: {e2}", "klines": klines}
         
         # 백테스트 엔진 생성 및 실행
-        with st.spinner("🚀 백테스트 실행 중..."):
-            engine = BacktestEngine(strategy, ctx, klines)
-            results = engine.run()
+        backtest_progress_bar = st.progress(0, text="🚀 백테스트 실행 중... 0%")
+        engine = BacktestEngine(
+            strategy, 
+            ctx, 
+            klines,
+            progress_callback=lambda p: backtest_progress_bar.progress(
+                p / 100, 
+                text=f"🚀 백테스트 실행 중... {p:.1f}% ({len(klines)}개 캔들 처리 중)"
+            ),
+        )
+        results = engine.run()
+        backtest_progress_bar.empty()
         
         # klines 데이터를 결과에 포함
         results["klines"] = klines
@@ -213,6 +404,10 @@ if st.button("▶️ 백테스트 실행", type="primary", use_container_width=T
     if start_date >= end_date:
         st.error("시작 날짜는 종료 날짜보다 이전이어야 합니다.")
     else:
+        # 기존 결과 삭제 (메모리 해제)
+        if "backtest_results" in st.session_state:
+            del st.session_state.backtest_results
+        
         # 백테스트 실행
         try:
             # Streamlit에서는 일반적으로 새 이벤트 루프가 없으므로 asyncio.run() 사용
@@ -239,6 +434,49 @@ if "backtest_results" in st.session_state:
         # 결과 표시
         st.subheader("5️⃣ 백테스트 결과")
         
+        # 거래 통계 계산
+        trades = results.get("trades", [])
+        profitable_trades = []
+        losing_trades = []
+        total_profit = 0.0
+        total_loss = 0.0
+        max_profit = 0.0
+        max_loss = 0.0
+        
+        # 연속 손실/이익 추적
+        max_consecutive_losses = 0
+        max_consecutive_wins = 0
+        current_consecutive_losses = 0
+        current_consecutive_wins = 0
+        
+        for trade in trades:
+            pnl = trade.get("pnl")
+            if pnl is not None:
+                if pnl > 0:
+                    profitable_trades.append(pnl)
+                    total_profit += pnl
+                    max_profit = max(max_profit, pnl)
+                    # 연속 이익 추적
+                    current_consecutive_wins += 1
+                    current_consecutive_losses = 0
+                    max_consecutive_wins = max(max_consecutive_wins, current_consecutive_wins)
+                elif pnl < 0:
+                    losing_trades.append(pnl)
+                    total_loss += abs(pnl)
+                    max_loss = min(max_loss, pnl)  # max_loss는 음수값
+                    # 연속 손실 추적
+                    current_consecutive_losses += 1
+                    current_consecutive_wins = 0
+                    max_consecutive_losses = max(max_consecutive_losses, current_consecutive_losses)
+                else:
+                    # pnl이 0인 경우 연속 카운트 리셋
+                    current_consecutive_losses = 0
+                    current_consecutive_wins = 0
+        
+        total_trades_with_pnl = len(profitable_trades) + len(losing_trades)
+        win_rate = (len(profitable_trades) / total_trades_with_pnl * 100) if total_trades_with_pnl > 0 else 0.0
+        profit_factor = (total_profit / total_loss) if total_loss > 0 else (float('inf') if total_profit > 0 else 0.0)
+        
         # 주요 지표
         result_col1, result_col2, result_col3, result_col4 = st.columns(4)
         
@@ -255,7 +493,7 @@ if "backtest_results" in st.session_state:
             final_balance = results.get("final_balance", 0)
             net_profit = results.get("net_profit", 0)
             st.metric("최종 자산", f"${final_balance:,.2f}")
-            st.metric("순손익", f"{net_profit:,.2f}", delta=f"{net_profit:,.2f}")
+            st.metric("순손익(수수료 포함)", f"{net_profit:,.2f}", delta=f"{net_profit:,.2f}")
         
         with result_col3:
             total_trades = results.get("total_trades", 0)
@@ -269,6 +507,48 @@ if "backtest_results" in st.session_state:
                 st.metric("거래당 평균 수익", f"${avg_profit_per_trade:,.2f}")
             else:
                 st.metric("거래당 평균 수익", "$0.00")
+        
+        st.divider()
+        
+        # 추가 통계 지표
+        st.subheader("📊 거래 통계")
+        stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
+        
+        with stats_col1:
+            st.metric("승률", f"{win_rate:.1f}%")
+            st.caption(f"수익 거래: {len(profitable_trades)}건 / 손실 거래: {len(losing_trades)}건")
+        
+        with stats_col2:
+            if profit_factor == float('inf'):
+                st.metric("손익비", "∞")
+            else:
+                st.metric("손익비", f"{profit_factor:.2f}")
+            st.caption(f"총 수익: ${total_profit:,.2f} / 총 손실: ${total_loss:,.2f}")
+        
+        with stats_col3:
+            if max_profit > 0:
+                st.metric("최대 수익", f"${max_profit:,.2f}")
+            else:
+                st.metric("최대 수익", "$0.00")
+            st.caption("개별 거래 중 최대 수익")
+        
+        with stats_col4:
+            if max_loss < 0:
+                st.metric("최대 손실", f"${max_loss:,.2f}")
+            else:
+                st.metric("최대 손실", "$0.00")
+            st.caption("개별 거래 중 최대 손실")
+        
+        # 연속 거래 통계
+        stats_col5, stats_col6 = st.columns(2)
+        
+        with stats_col5:
+            st.metric("최대 연속 손실", f"{max_consecutive_losses}회")
+            st.caption("연속으로 손실이 발생한 최대 횟수")
+        
+        with stats_col6:
+            st.metric("최대 연속 이익", f"{max_consecutive_wins}회")
+            st.caption("연속으로 수익이 발생한 최대 횟수")
         
         st.divider()
         
@@ -509,40 +789,56 @@ if "backtest_results" in st.session_state:
                 # 시간순 정렬
                 df_trade_chart = df_trade_chart.sort_values("datetime")
                 
+                # 거래 순서 인덱스 추가 (1부터 시작)
+                df_trade_chart["trade_index"] = range(1, len(df_trade_chart) + 1)
+                
                 # 이중 Y축 차트 생성
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
                 
-                # 거래별 손익 바 차트 (왼쪽 Y축) - 연속적으로 표시
+                # 거래별 손익 바 차트 (왼쪽 Y축) - 거래 순서로 표시
                 colors = ["#2ecc71" if pnl > 0 else "#e74c3c" for pnl in df_trade_chart["pnl"]]
+                
+                # 호버 템플릿에 날짜 정보 포함
+                hover_texts = []
+                for idx, row in df_trade_chart.iterrows():
+                    dt_str = row["datetime"].strftime("%Y-%m-%d %H:%M:%S")
+                    hover_texts.append(f"거래 #{row['trade_index']}<br>{dt_str}<br>손익: ${row['pnl']:,.2f}")
                 
                 fig.add_trace(
                     go.Bar(
-                        x=df_trade_chart["datetime"],
+                        x=df_trade_chart["trade_index"],
                         y=df_trade_chart["pnl"],
                         name="거래별 손익",
                         marker_color=colors,
-                        hovertemplate="<b>%{x}</b><br>손익: $%{y:,.2f}<extra></extra>",
-                        width=None,  # 기본 너비 사용 (시간 간격에 맞춰 자동 조정)
+                        hovertemplate="%{customdata}<extra></extra>",
+                        customdata=hover_texts,
+                        width=0.6,  # 일정한 너비로 설정
                     ),
                     secondary_y=False,
                 )
                 
-                # 자산 변동 선형 차트 (오른쪽 Y축) - 거래 시점만 표시
+                # 자산 변동 선형 차트 (오른쪽 Y축) - 거래 순서로 표시
+                equity_hover_texts = []
+                for idx, row in df_trade_chart.iterrows():
+                    dt_str = row["datetime"].strftime("%Y-%m-%d %H:%M:%S")
+                    equity_hover_texts.append(f"거래 #{row['trade_index']}<br>{dt_str}<br>자산: ${row['equity']:,.2f}")
+                
                 fig.add_trace(
                     go.Scatter(
-                        x=df_trade_chart["datetime"],
+                        x=df_trade_chart["trade_index"],
                         y=df_trade_chart["equity"],
                         name="자산",
                         mode="lines+markers",
                         line=dict(color="#3498db", width=2),
                         marker=dict(size=6),
-                        hovertemplate="<b>%{x}</b><br>자산: $%{y:,.2f}<extra></extra>",
+                        hovertemplate="%{customdata}<extra></extra>",
+                        customdata=equity_hover_texts,
                     ),
                     secondary_y=True,
                 )
                 
                 # 축 레이블 설정
-                fig.update_xaxes(title_text="시점")
+                fig.update_xaxes(title_text="거래 순서")
                 fig.update_yaxes(title_text="거래별 손익 (USDT)", secondary_y=False)
                 fig.update_yaxes(title_text="자산 (USDT)", secondary_y=True)
                 
@@ -559,7 +855,8 @@ if "backtest_results" in st.session_state:
                         x=1,
                     ),
                     xaxis=dict(
-                        type="date",  # 날짜 타입으로 설정하여 연속적으로 표시
+                        type="linear",  # 선형 타입으로 설정하여 일정한 간격 유지
+                        dtick=1,  # 거래마다 눈금 표시
                     ),
                 )
                 
@@ -582,6 +879,8 @@ if "backtest_results" in st.session_state:
             with st.expander(f"📋 거래 내역 ({len(trades)}건)"):
                 # 거래 내역을 테이블로 표시
                 trade_data = []
+                previous_balance = initial_balance
+                
                 for i, trade in enumerate(trades, 1):
                     # 타임스탬프를 초 단위까지 표시
                     timestamp = trade.get("timestamp", 0)
@@ -591,14 +890,35 @@ if "backtest_results" in st.session_state:
                     else:
                         time_str = "-"
                     
+                    side = trade.get("side", "")
+                    pnl = trade.get("pnl")
+                    position_size_usdt = trade.get("position_size_usdt")
+                    entry_price = trade.get("entry_price")
+                    balance_after = trade.get("balance_after")
+                    
+                    # Exit 거래(pnl이 있는 거래)인지 확인
+                    is_exit = pnl is not None and pnl != 0
+                    
+                    # 자산 변동 계산 (exit 거래인 경우만)
+                    balance_change = None
+                    if is_exit and balance_after is not None:
+                        balance_change = balance_after - previous_balance
+                        previous_balance = balance_after
+                    elif balance_after is not None:
+                        previous_balance = balance_after
+                    
                     trade_data.append({
                         "#": i,
                         "시점": time_str,
-                        "구분": trade.get("side", ""),
+                        "구분": side,
                         "수량": f"{trade.get('quantity', 0):.6f}",
-                        "가격": f"${trade.get('price', 0):,.2f}",
-                        "손익": f"${trade.get('pnl', 0):,.2f}" if trade.get("pnl") else "-",
+                        "체결가": f"${trade.get('price', 0):,.2f}",
+                        "포지션 크기 (USDT)": f"${position_size_usdt:,.2f}" if position_size_usdt else "-",
+                        "평균 진입가": f"${entry_price:,.2f}" if entry_price else "-",
+                        "손익": f"${pnl:,.2f}" if pnl is not None else "-",
                         "수수료": f"${trade.get('commission', 0):,.4f}",
+                        "자산 변동": f"${balance_change:+,.2f}" if balance_change is not None else "-",
+                        "거래 후 자산": f"${balance_after:,.2f}" if balance_after is not None else "-",
                         "사유": trade.get("reason", ""),
                     })
                 

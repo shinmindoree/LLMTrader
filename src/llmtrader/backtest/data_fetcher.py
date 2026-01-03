@@ -1,7 +1,7 @@
 """백테스트용 과거 데이터 수집."""
 
 import asyncio
-from typing import Any
+from typing import Any, Callable
 
 from llmtrader.binance.client import BinanceHTTPClient
 
@@ -13,6 +13,7 @@ async def fetch_all_klines(
     start_ts: int,
     end_ts: int,
     batch_size: int = 1500,
+    progress_callback: Callable[[float], None] | None = None,
 ) -> list[list[Any]]:
     """전체 기간의 캔들 데이터를 여러 번 API 호출로 가져옵니다.
     
@@ -27,6 +28,7 @@ async def fetch_all_klines(
         start_ts: 시작 타임스탬프 (밀리초)
         end_ts: 종료 타임스탬프 (밀리초)
         batch_size: 한 번에 가져올 최대 개수 (기본 1500, API 최대값)
+        progress_callback: 진행률 콜백 함수 (0.0 ~ 100.0)
     
     Returns:
         전체 기간의 캔들 데이터 리스트
@@ -37,6 +39,9 @@ async def fetch_all_klines(
     
     print(f"📥 과거 데이터 수집 시작: {symbol} {interval}")
     print(f"   기간: {start_ts} ~ {end_ts}")
+    
+    # 전체 기간 추정 (진행률 계산용)
+    total_duration = end_ts - start_ts
     
     for iteration in range(max_iterations):
         # 한 번에 최대 batch_size개씩 조회
@@ -75,12 +80,23 @@ async def fetch_all_klines(
         # 다음 배치의 시작 시간
         current_start_ts = last_close_time + 1
         
+        # 진행률 계산 및 업데이트
+        if total_duration > 0:
+            elapsed_duration = last_close_time - start_ts
+            progress = min(100.0, (elapsed_duration / total_duration) * 100)
+            if progress_callback:
+                progress_callback(progress)
+        
         # 진행 상황 출력
         if (iteration + 1) % 10 == 0:
             print(f"   진행 중... {len(all_klines)}개 수집됨")
         
         # API 레이트 리밋을 피하기 위해 약간 대기
         await asyncio.sleep(0.1)
+    
+    # 최종 진행률 100%로 설정
+    if progress_callback:
+        progress_callback(100.0)
     
     print(f"✅ 데이터 수집 완료: 총 {len(all_klines)}개 캔들")
     return all_klines

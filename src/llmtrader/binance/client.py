@@ -54,9 +54,22 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         if end_ts is not None:
             params["endTime"] = end_ts
 
-        response = await self._client.get("/fapi/v1/klines", params=params)
-        response.raise_for_status()
-        return response.json()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = await self._client.get("/fapi/v1/klines", params=params)
+                response.raise_for_status()
+                return response.json()
+            except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # 2초, 4초, 6초 대기
+                    print(f"⚠️ 네트워크 타임아웃 발생. {wait_time}초 후 재시도... (시도 {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    raise ValueError(
+                        f"Binance API timeout: {symbol} {interval} | {type(e).__name__}"
+                    ) from e
 
     async def fetch_ticker_price(self, symbol: str) -> float:
         """최신 체결가(Last Price) 조회.
@@ -82,6 +95,7 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
             "side": side,
             "type": params.pop("type", "MARKET"),
             "quantity": quantity,
+            "newOrderRespType": "RESULT",  # 최종 FILLED 결과 직접 반환
         }
         # None/빈값 필터링
         filtered_params = {k: v for k, v in params.items() if v is not None and v != ""}

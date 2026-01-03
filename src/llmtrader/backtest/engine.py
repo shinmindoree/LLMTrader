@@ -1,6 +1,6 @@
 """백테스트 엔진."""
 
-from typing import Any
+from typing import Any, Callable
 
 from llmtrader.backtest.context import BacktestContext
 from llmtrader.strategy.base import Strategy
@@ -14,11 +14,13 @@ class BacktestEngine:
         strategy: Strategy,
         context: BacktestContext,
         klines: list[list[Any]],
+        progress_callback: Callable[[float], None] | None = None,
     ) -> None:
         self.strategy = strategy
         self.ctx = context
         self.klines = klines
         self.results: dict[str, Any] = {}
+        self.progress_callback = progress_callback
     
     def run(self) -> dict[str, Any]:
         """백테스트 실행."""
@@ -41,17 +43,73 @@ class BacktestEngine:
             close_price = float(kline[4])
             volume = float(kline[5])
             
-            # 가격 업데이트 (현재가 = 종가, 타임스탬프 포함)
-            self.ctx.update_price(close_price, timestamp=close_time)
-            
             # 새 봉인지 확인
             is_new_bar = prev_bar_timestamp != open_time
             
             # 새 봉이 시작될 때 이전 봉의 종가로 지표 업데이트
-            if is_new_bar and prev_bar_timestamp is not None and i > 0:
-                # 이전 봉이 닫힌 후 지표 업데이트
-                prev_close = float(self.klines[i-1][4])
-                self.ctx.update_bar(prev_close)
+            # 중요: 지표는 "닫힌 봉"의 종가만 사용해야 함
+            if is_new_bar:
+                if prev_bar_timestamp is not None and i > 0:
+                    # 이전 봉이 닫힌 후 지표 업데이트
+                    prev_close = float(self.klines[i-1][4])
+                    self.ctx.update_bar(prev_close)
+                # 첫 번째 캔들은 이전 봉이 없으므로 지표 업데이트하지 않음
+            
+            # 포지션이 있는 경우, 캔들 내부의 high/low로 StopLoss 체크
+            position_size_before = self.ctx.position_size
+            if abs(position_size_before) > 1e-12:
+                # 전략의 StopLoss 로직을 그대로 사용하되, low/high 가격으로 체크
+                # 롱 포지션: low 가격으로 StopLoss 체크
+                if position_size_before > 0:
+                    # low 가격으로 가격 업데이트 및 StopLoss 체크
+                    self.ctx.update_price(low_price, timestamp=close_time)
+                    bar_stoploss = {
+                        "timestamp": close_time,
+                        "bar_timestamp": open_time,
+                        "bar_close": close_price,
+                        "price": low_price,
+                        "open": open_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "close": close_price,
+                        "volume": volume,
+                        "is_new_bar": False,  # StopLoss 체크만 하고 RSI 계산은 건너뜀
+                    }
+                    self.strategy.on_bar(self.ctx, bar_stoploss)
+                    
+                    # StopLoss가 발생했는지 확인 (포지션이 청산되었는지)
+                    if abs(self.ctx.position_size) < 1e-12:
+                        # StopLoss로 청산됨, 다음 캔들로 진행
+                        prev_bar_timestamp = open_time
+                        continue
+                
+                # 숏 포지션: high 가격으로 StopLoss 체크
+                elif position_size_before < 0:
+                    # high 가격으로 가격 업데이트 및 StopLoss 체크
+                    self.ctx.update_price(high_price, timestamp=close_time)
+                    bar_stoploss = {
+                        "timestamp": close_time,
+                        "bar_timestamp": open_time,
+                        "bar_close": close_price,
+                        "price": high_price,
+                        "open": open_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "close": close_price,
+                        "volume": volume,
+                        "is_new_bar": False,  # StopLoss 체크만 하고 RSI 계산은 건너뜀
+                    }
+                    self.strategy.on_bar(self.ctx, bar_stoploss)
+                    
+                    # StopLoss가 발생했는지 확인 (포지션이 청산되었는지)
+                    if abs(self.ctx.position_size) < 1e-12:
+                        # StopLoss로 청산됨, 다음 캔들로 진행
+                        prev_bar_timestamp = open_time
+                        continue
+            
+            # StopLoss가 발생하지 않았거나 포지션이 없는 경우, 종가로 일반 로직 진행
+            # 가격 업데이트 (현재가 = 종가, 타임스탬프 포함)
+            self.ctx.update_price(close_price, timestamp=close_time)
             
             # 바 데이터 생성
             bar = {
@@ -70,11 +128,20 @@ class BacktestEngine:
             # 전략 실행
             self.strategy.on_bar(self.ctx, bar)
             
+            # 현재 캔들의 종가를 지표에 추가 (다음 캔들에서 사용)
+            # 새 봉이 확정된 경우에만 지표 업데이트 (중복 방지)
+            if is_new_bar:
+                self.ctx.update_bar(close_price)
+            
             prev_bar_timestamp = open_time
+            
+            # 진행률 업데이트 (1% 단위로 업데이트)
+            progress = (i + 1) / len(self.klines) * 100
+            if self.progress_callback:
+                self.progress_callback(progress)
             
             # 진행 상황 출력 (10% 단위)
             if len(self.klines) > 10 and (i + 1) % (len(self.klines) // 10 + 1) == 0:
-                progress = (i + 1) / len(self.klines) * 100
                 print(f"   진행 중... {progress:.1f}%")
         
         # 마지막 봉 종가 업데이트
