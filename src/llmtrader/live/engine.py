@@ -65,6 +65,16 @@ class LiveTradingEngine:
         
         # 컨텍스트 초기화 (레버리지 설정, 잔고 조회)
         await self.ctx.initialize()
+
+        # 유저데이터 스트림 시작 (계좌/주문 상태는 WS로 갱신)
+        try:
+            await self.ctx.start_user_stream()
+        except Exception as e:  # noqa: BLE001
+            self._logger.log_error(
+                error_type="USER_STREAM_START_FAILED",
+                message=str(e),
+                symbol=self.price_feed.symbol,
+            )
         
         # 지표가 시작부터 의미 있게 나오도록 최근 캔들 종가로 시딩(seed)
         try:
@@ -98,6 +108,7 @@ class LiveTradingEngine:
             while self._running:
                 await asyncio.sleep(1)
         finally:
+            await self.ctx.stop_user_stream()
             await self.price_feed.stop()
             try:
                 await asyncio.wait_for(feed_task, timeout=2.0)
@@ -329,4 +340,3 @@ class LiveTradingEngine:
             "risk_status": risk_status,
             "audit_log_size": len(self.ctx.audit_log),
         }
-

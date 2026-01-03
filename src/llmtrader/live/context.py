@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from llmtrader.binance.client import BinanceHTTPClient
+from llmtrader.binance.user_stream import BinanceUserStream
 from llmtrader.indicators.rsi import rsi_wilder_from_closes
 from llmtrader.live.risk import RiskManager
 from llmtrader.notifications.slack import SlackNotifier
@@ -65,6 +66,15 @@ class LiveContext:
         # API rate limiting: update_account_info 최소 호출 간격 (초)
         self._last_account_update_time: float = 0.0
         self._min_account_update_interval: float = 1.0  # 최소 1초 간격
+
+        # User data stream 상태
+        self._user_stream: BinanceUserStream | None = None
+        self._user_stream_task: asyncio.Task | None = None
+        self._use_user_stream: bool = False
+        self._last_user_stream_account_update: float = 0.0
+        self._account_reconcile_interval: float = 300.0
+        self._last_reconcile_time: float = 0.0
+        self._open_orders_by_id: dict[int, dict[str, Any]] = {}
         
         self.balance: float = 0.0
         # 바이낸스 선물 계정의 사용가능 잔고(availableBalance). 포지션 증거금으로 묶이면 0에 가까워질 수 있음.
@@ -123,7 +133,7 @@ class LiveContext:
             raise ValueError(f"레버리지 검증 실패: {msg}")
         
         # 계좌 정보 먼저 조회 (포지션 확인용)
-        await self.update_account_info()
+        await self.update_account_info(force=True)
         
         # 포지션이 없을 때만 레버리지 설정
         if abs(self.position.size) < 1e-12:  # 포지션이 없음
@@ -171,8 +181,150 @@ class LiveContext:
             self._log_audit("EXCHANGE_INFO_FAILED", {"error": str(e)})
             print(f"⚠️ 거래소 필터 조회 실패 (기본값 사용): {e}")
 
-    async def update_account_info(self) -> None:
-        """계좌 정보 업데이트."""
+    async def start_user_stream(self) -> None:
+        """유저데이터 스트림 시작."""
+        if self._user_stream_task:
+            return
+
+        is_testnet = "testnet" in self.client.base_url.lower()
+        self._user_stream = BinanceUserStream(
+            client=self.client,
+            callback=self._handle_user_stream_event,
+            testnet=is_testnet,
+        )
+        self._use_user_stream = True
+        now = time.time()
+        self._last_user_stream_account_update = now
+        self._last_reconcile_time = now
+        self._user_stream_task = asyncio.create_task(self._user_stream.start())
+        self._user_stream_task.add_done_callback(self._handle_user_stream_task_result)
+
+    async def stop_user_stream(self) -> None:
+        """유저데이터 스트림 중지."""
+        if self._user_stream:
+            await self._user_stream.stop()
+        if self._user_stream_task:
+            try:
+                await asyncio.wait_for(self._user_stream_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+        self._user_stream_task = None
+        self._user_stream = None
+        self._use_user_stream = False
+
+    def _handle_user_stream_task_result(self, task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except Exception as exc:  # noqa: BLE001
+            print(f"User Stream stopped: {exc}")
+            self._use_user_stream = False
+            self._user_stream_task = None
+            self._user_stream = None
+
+    async def _handle_user_stream_event(self, data: dict[str, Any]) -> None:
+        event_type = data.get("e")
+        if event_type == "ACCOUNT_UPDATE":
+            self._apply_account_update(data)
+        elif event_type == "ORDER_TRADE_UPDATE":
+            self._apply_order_update(data)
+
+    def _apply_account_update(self, data: dict[str, Any]) -> None:
+        account = data.get("a", {})
+        balances = account.get("B", [])
+        for bal in balances:
+            if bal.get("a") == "USDT":
+                wallet = bal.get("wb")
+                cross = bal.get("cw")
+                if wallet is not None:
+                    self.balance = float(wallet)
+                if cross is not None:
+                    self.available_balance = float(cross)
+                break
+
+        positions = account.get("P", [])
+        for pos in positions:
+            if pos.get("s") != self.symbol:
+                continue
+            try:
+                size = float(pos.get("pa", 0))
+                self.position.size = size
+                self.position.entry_price = float(pos.get("ep", 0)) if abs(size) > 1e-12 else 0.0
+                self.position.unrealized_pnl = float(pos.get("up", 0))
+            except (TypeError, ValueError):
+                pass
+            break
+
+        now = time.time()
+        self._last_user_stream_account_update = now
+        self._last_account_update_time = now
+
+    def _apply_order_update(self, data: dict[str, Any]) -> None:
+        order = data.get("o", {})
+        if order.get("s") != self.symbol:
+            return
+
+        order_id = order.get("i")
+        if order_id is None:
+            return
+
+        try:
+            order_id_int = int(order_id)
+        except (TypeError, ValueError):
+            return
+
+        status = order.get("X")
+
+        def _to_float(value: Any) -> float | None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        order_info = {
+            "order_id": order_id_int,
+            "side": order.get("S"),
+            "type": order.get("o"),
+            "price": _to_float(order.get("p")),
+            "avg_price": _to_float(order.get("ap")),
+            "orig_qty": _to_float(order.get("q")),
+            "executed_qty": _to_float(order.get("z")),
+            "status": status,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+
+        if status in {"NEW", "PARTIALLY_FILLED"}:
+            self.pending_orders[order_id_int] = order_info
+            self._open_orders_by_id[order_id_int] = order_info
+        else:
+            self.pending_orders.pop(order_id_int, None)
+            self._open_orders_by_id.pop(order_id_int, None)
+
+        self.open_orders = list(self._open_orders_by_id.values())
+
+    async def _wait_for_user_stream_account_update(self, timeout: float = 1.0) -> bool:
+        if not self._use_user_stream:
+            return False
+
+        start_ts = self._last_user_stream_account_update
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._last_user_stream_account_update > start_ts:
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def update_account_info(self, force: bool = False) -> None:
+        """계좌 정보 업데이트.
+
+        Args:
+            force: 유저데이터 스트림 사용 중에도 REST 조회를 강제할지 여부
+        """
+        if self._use_user_stream and not force and self._last_user_stream_account_update > 0:
+            now = time.time()
+            if self._account_reconcile_interval <= 0:
+                return
+            if (now - self._last_reconcile_time) < self._account_reconcile_interval:
+                return
         # Rate limiting: 최소 호출 간격 보장
         current_time = time.time()
         time_since_last_update = current_time - self._last_account_update_time
@@ -183,7 +335,10 @@ class LiveContext:
         
         try:
             account = await self.client._signed_request("GET", "/fapi/v2/account", {})
-            self._last_account_update_time = time.time()
+            now = time.time()
+            self._last_account_update_time = now
+            if self._use_user_stream:
+                self._last_reconcile_time = now
             
             # 계정 모드 확인 (Single/Multi Asset Mode)
             multi_assets_mode = account.get("multiAssetsMargin", False)
@@ -220,11 +375,17 @@ class LiveContext:
                     break
             
             # 미체결 주문 목록 업데이트
-            try:
-                self.open_orders = await self.client.fetch_open_orders(self.symbol)
-            except Exception as oe:  # noqa: BLE001
-                # 미체결 주문 조회 실패는 치명적이지 않음
-                self._log_audit("OPEN_ORDERS_FETCH_FAILED", {"error": str(oe)})
+            if not self._use_user_stream or force:
+                try:
+                    self.open_orders = await self.client.fetch_open_orders(self.symbol)
+                    self._open_orders_by_id = {
+                        int(o.get("orderId")): o
+                        for o in self.open_orders
+                        if o.get("orderId") is not None
+                    }
+                except Exception as oe:  # noqa: BLE001
+                    # 미체결 주문 조회 실패는 치명적이지 않음
+                    self._log_audit("OPEN_ORDERS_FETCH_FAILED", {"error": str(oe)})
                 
         except Exception as e:
             self._log_audit("ACCOUNT_UPDATE_FAILED", {"error": str(e)})
@@ -353,9 +514,16 @@ class LiveContext:
         before_unrealized_pnl = float(self.position.unrealized_pnl)  # 청산 전 미실현 손익 저장
         for _ in range(5):  # 재시도 횟수 증가: 3 -> 5
             try:
-                await self.update_account_info()
-                after_pos_api = float(self.position.size)
-                break
+                if self._use_user_stream:
+                    updated = await self._wait_for_user_stream_account_update(timeout=0.6)
+                    if updated:
+                        after_pos_api = float(self.position.size)
+                        break
+                    await asyncio.sleep(0.3)
+                else:
+                    await self.update_account_info()
+                    after_pos_api = float(self.position.size)
+                    break
             except Exception:  # noqa: BLE001
                 await asyncio.sleep(0.3)  # 대기 시간 증가: 0.2 -> 0.3초
 
@@ -939,4 +1107,3 @@ class LiveContext:
             "action": action,
             "data": data,
         })
-

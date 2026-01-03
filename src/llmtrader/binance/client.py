@@ -211,6 +211,26 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response = await self._signed_request("GET", "/fapi/v1/order", payload)
         return response
 
+    async def create_listen_key(self) -> str:
+        """유저데이터 스트림용 listenKey 생성."""
+        response = await self._client.post("/fapi/v1/listenKey")
+        response.raise_for_status()
+        data = response.json()
+        listen_key = data.get("listenKey") if isinstance(data, dict) else None
+        if not listen_key:
+            raise ValueError("Failed to create listenKey")
+        return listen_key
+
+    async def keepalive_listen_key(self, listen_key: str) -> None:
+        """유저데이터 스트림 listenKey 갱신."""
+        response = await self._client.put("/fapi/v1/listenKey", params={"listenKey": listen_key})
+        response.raise_for_status()
+
+    async def close_listen_key(self, listen_key: str) -> None:
+        """유저데이터 스트림 listenKey 종료."""
+        response = await self._client.delete("/fapi/v1/listenKey", params={"listenKey": listen_key})
+        response.raise_for_status()
+
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
         params_with_sig = self._attach_signature(params)
         max_retries = 3
@@ -313,4 +333,3 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         signature = hmac.new(self._api_secret, query_string.encode(), hashlib.sha256).hexdigest()
         params["signature"] = signature
         return params
-
