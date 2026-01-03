@@ -50,6 +50,12 @@ def parse_args() -> argparse.Namespace:
         help="최대 연속 손실 횟수 (0이면 비활성화)",
     )
     parser.add_argument(
+        "--rsi-period",
+        type=int,
+        default=int(os.getenv("RSI_PERIOD", "2")),
+        help="RSI 기간 (기본: 2). 환경 변수 RSI_PERIOD로도 설정 가능",
+    )
+    parser.add_argument(
         "--yes",
         action="store_true",
         help="대화형 확인 프롬프트를 건너뛰고 즉시 실행합니다(컨테이너/서버 환경 필수).",
@@ -90,6 +96,7 @@ async def main():
     print(f"레버리지: {args.leverage}x")
     print(f"최대 포지션: {args.max_position * 100}% (자산 대비)")
     print(f"캔들 봉 간격: {args.candle_interval}")
+    print(f"RSI 기간: {args.rsi_period}")
     print(f"일일 손실 한도: ${args.daily_loss_limit}")
     if args.max_consecutive_losses > 0:
         print(f"최대 연속 손실: {args.max_consecutive_losses}회")
@@ -151,22 +158,11 @@ async def main():
     # 전략 로드
     strategy_class = load_strategy_class(args.strategy_file)
     
-    # 환경 변수에서 rsi_period 읽기 (기본값: 전략 클래스의 기본값 사용)
-    rsi_period = os.getenv("RSI_PERIOD")
-    if rsi_period:
-        try:
-            rsi_period_int = int(rsi_period)
-            # rsi_period 파라미터를 지원하는 전략의 경우 전달
-            try:
-                strategy = strategy_class(rsi_period=rsi_period_int)
-            except TypeError:
-                # rsi_period 파라미터를 지원하지 않는 전략의 경우 기본값 사용
-                strategy = strategy_class()
-        except ValueError:
-            print(f"⚠️  RSI_PERIOD 환경 변수 값 '{rsi_period}'이 유효하지 않습니다. 기본값 사용.")
-            strategy = strategy_class()
-    else:
-        # 환경 변수가 없으면 전략의 기본값 사용
+    # rsi_period 파라미터를 지원하는 전략의 경우 전달
+    try:
+        strategy = strategy_class(rsi_period=args.rsi_period)
+    except TypeError:
+        # rsi_period 파라미터를 지원하지 않는 전략의 경우 기본값 사용
         strategy = strategy_class()
 
     # 가격 피드 생성
