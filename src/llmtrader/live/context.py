@@ -182,9 +182,19 @@ class LiveContext:
             print(f"⚠️ 거래소 필터 조회 실패 (기본값 사용): {e}")
 
     async def start_user_stream(self) -> None:
-        """유저데이터 스트림 시작."""
-        if self._user_stream_task:
+        """유저데이터 스트림 시작 (중복 호출 방지 강화)."""
+        # 태스크가 존재하고 아직 실행 중이면 중복 호출 방지
+        if self._user_stream_task and not self._user_stream_task.done():
             return
+        
+        # 이전 태스크가 완료되었으면 정리
+        if self._user_stream_task and self._user_stream_task.done():
+            try:
+                self._user_stream_task.result()  # 예외 확인
+            except Exception:
+                pass
+            self._user_stream_task = None
+            self._user_stream = None
 
         is_testnet = "testnet" in self.client.base_url.lower()
         self._user_stream = BinanceUserStream(

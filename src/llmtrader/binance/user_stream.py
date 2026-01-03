@@ -112,14 +112,41 @@ class BinanceUserStream:
         await self._close_listen_key()
 
     async def _keepalive_loop(self) -> None:
+        """listenKey keepalive 루프 (제한적 재시도 + 지수 백오프)."""
         while self.running and self._listen_key:
             await asyncio.sleep(self.keepalive_interval)
             if not self.running or not self._listen_key:
                 break
-            try:
-                await self.client.keepalive_listen_key(self._listen_key)
-            except Exception as exc:  # noqa: BLE001
-                print(f"User Stream keepalive failed: {exc}")
+            
+            # 제한적 재시도 (최대 3회) + 지수 백오프
+            max_retries = 3
+            success = False
+            for attempt in range(max_retries):
+                try:
+                    await self.client.keepalive_listen_key(self._listen_key)
+                    success = True
+                    break  # 성공 시 루프 종료
+                except Exception as exc:  # noqa: BLE001
+                    if attempt < max_retries - 1:
+                        # 지수 백오프: 1분, 2분, 4분 (최대 5분)
+                        backoff_seconds = min(60 * (2 ** attempt), 300)
+                        print(
+                            f"User Stream keepalive failed (attempt {attempt + 1}/{max_retries}): {exc}. "
+                            f"Retrying in {backoff_seconds}s..."
+                        )
+                        await asyncio.sleep(backoff_seconds)
+                    else:
+                        # 최종 실패: 재연결은 start() 메서드의 자동 재연결 로직이 처리
+                        print(
+                            f"User Stream keepalive failed after {max_retries} attempts: {exc}. "
+                            f"Will reconnect on next listenKey expiration."
+                        )
+            
+            # keepalive 실패 시 listenKey를 None으로 설정하여 재연결 트리거
+            if not success:
+                # start() 메서드의 재연결 로직이 새로운 listenKey를 생성하도록 함
+                # 현재 listenKey는 만료될 것이므로 None으로 설정하지 않고 그대로 둠
+                pass
 
     async def _stop_keepalive(self) -> None:
         if not self._keepalive_task:
