@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib.util
 import json
+import os
 import signal
 import sys
 from pathlib import Path
@@ -22,10 +23,25 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="라이브 트레이딩 실행")
     parser.add_argument("strategy_file", type=Path, help="전략 파일 경로")
     parser.add_argument("--symbol", type=str, default="BTCUSDT", help="거래 심볼")
-    parser.add_argument("--leverage", type=int, default=1, help="레버리지 (기본: 1)")
+    parser.add_argument(
+        "--leverage",
+        type=int,
+        default=int(os.getenv("LEVERAGE", "1")),
+        help="레버리지 (기본: 1). 환경 변수 LEVERAGE로도 설정 가능",
+    )
     parser.add_argument("--interval", type=float, default=1.0, help="가격 피드 간격 (초)")
-    parser.add_argument("--candle-interval", type=str, default="1m", help="캔들 봉 간격 (예: 1m, 5m, 15m)")
-    parser.add_argument("--max-position", type=float, default=0.5, help="최대 포지션 크기 (자산 대비, 기본: 0.5)")
+    parser.add_argument(
+        "--candle-interval",
+        type=str,
+        default=os.getenv("CANDLE_INTERVAL", "1m"),
+        help="캔들 봉 간격 (예: 1m, 5m, 15m). 환경 변수 CANDLE_INTERVAL로도 설정 가능",
+    )
+    parser.add_argument(
+        "--max-position",
+        type=float,
+        default=float(os.getenv("MAX_POSITION", "0.5")),
+        help="최대 포지션 크기 (자산 대비, 기본: 0.5). 환경 변수 MAX_POSITION로도 설정 가능",
+    )
     parser.add_argument("--daily-loss-limit", type=float, default=500.0, help="일일 손실 한도 (USDT)")
     parser.add_argument(
         "--max-consecutive-losses",

@@ -33,7 +33,7 @@ class RsiLongShortStrategy(Strategy):
         # quantity는 더 이상 고정 수량으로 쓰지 않음(자동 포지션 사이징 사용).
         # 다만 너무 작은 값/라운딩으로 0이 되는 것을 방지하기 위해 최소 수량으로 사용.
         quantity: float = 0.001,
-        rsi_period: int = 14,
+        rsi_period: int = 2,
         long_entry_rsi: float = 30.0,
         long_exit_rsi: float = 70.0,
         short_entry_rsi: float = 70.0,
