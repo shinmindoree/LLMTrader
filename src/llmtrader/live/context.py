@@ -910,6 +910,11 @@ class LiveContext:
 
         # 주문 크기 검증 (감축 주문은 예외 처리)
         if not is_reducing_order:
+            # 디버깅: 검증 전 값들 로그
+            order_value = quantity * self._current_price
+            max_order_value = self.total_equity * float(self.leverage) * self.risk_manager.config.max_order_size
+            print(f"🔍 주문 크기 검증: order_value=${order_value:.2f}, max_order_value=${max_order_value:.2f}, total_equity=${self.total_equity:.2f}, leverage={self.leverage}, max_order_size={self.risk_manager.config.max_order_size}")
+            
             valid, msg = self.risk_manager.validate_order_size(
                 quantity, self._current_price, self.total_equity, float(self.leverage)
             )
