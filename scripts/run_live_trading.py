@@ -158,20 +158,23 @@ async def main():
     # 전략 로드
     strategy_class = load_strategy_class(args.strategy_file)
     
-    # rsi_period 파라미터를 지원하는 전략의 경우 전달
+    # 전략 인스턴스 생성 (rsi_period, max_position 전달)
     try:
-        strategy = strategy_class(rsi_period=args.rsi_period)
+        strategy = strategy_class(rsi_period=args.rsi_period, max_position=args.max_position)
     except TypeError:
-        # rsi_period 파라미터를 지원하지 않는 전략의 경우 기본값 사용
-        strategy = strategy_class()
+        try:
+            strategy = strategy_class(rsi_period=args.rsi_period)
+        except TypeError:
+            strategy = strategy_class()
     
-    # 전략의 sizing_buffer를 확인하여 max_order_size 조정
-    # 전략에서 target_notional = equity * leverage * max_position * sizing_buffer로 계산하므로
-    # 리스크 매니저의 max_order_size도 max_position * sizing_buffer로 설정해야 함
+    # 전략의 실제 max_position과 sizing_buffer 확인하여 리스크 매니저 동기화
+    strategy_max_position = getattr(strategy, 'max_position', args.max_position)
     strategy_sizing_buffer = getattr(strategy, 'sizing_buffer', 0.98)
-    adjusted_max_order_size = args.max_position * strategy_sizing_buffer
-    risk_config.max_order_size = adjusted_max_order_size
-    print(f"📊 주문 크기 한도 조정: max_order_size={adjusted_max_order_size:.4f} (max_position={args.max_position} * sizing_buffer={strategy_sizing_buffer})")
+    
+    risk_config.max_order_size = strategy_max_position * strategy_sizing_buffer
+    risk_config.max_position_size = strategy_max_position
+    
+    print(f"📊 리스크 설정: max_order_size={risk_config.max_order_size:.4f} (max_position={strategy_max_position} × sizing_buffer={strategy_sizing_buffer})")
 
     # 가격 피드 생성
     price_feed = PriceFeed(client, args.symbol, args.interval, candle_interval=args.candle_interval)
