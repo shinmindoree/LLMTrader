@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
         help="RSI 기간 (기본: 2). 환경 변수 RSI_PERIOD로도 설정 가능",
     )
     parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=int(os.getenv("LOG_INTERVAL", "0")),
+        help="로그 출력 주기 (초). 0이면 캔들 마감 시에만 저장 (기본: 0). 환경 변수 LOG_INTERVAL로도 설정 가능",
+    )
+    parser.add_argument(
         "--yes",
         action="store_true",
         help="대화형 확인 프롬프트를 건너뛰고 즉시 실행합니다(컨테이너/서버 환경 필수).",
@@ -180,7 +186,8 @@ async def main():
     price_feed = PriceFeed(client, args.symbol, args.interval, candle_interval=args.candle_interval)
 
     # 엔진 생성
-    engine = LiveTradingEngine(strategy, ctx, price_feed)
+    log_interval = args.log_interval if args.log_interval > 0 else None
+    engine = LiveTradingEngine(strategy, ctx, price_feed, log_interval=log_interval)
 
     # 시그널 핸들러 설정
     def signal_handler(sig, frame):

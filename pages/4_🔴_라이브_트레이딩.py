@@ -81,6 +81,28 @@ with col2:
         step=1,
     )
 
+# 로그 출력 주기 설정
+st.divider()
+st.subheader("2️⃣-1 로그 출력 설정")
+
+log_interval_options = {
+    0: "캔들 마감시",
+    1: "1초",
+    5: "5초",
+    10: "10초",
+    30: "30초",
+    60: "60초",
+}
+
+log_interval_display = st.selectbox(
+    "로그 출력 주기",
+    options=list(log_interval_options.keys()),
+    format_func=lambda x: log_interval_options[x],
+    index=0,  # 기본값: 캔들 마감시
+)
+
+log_interval = log_interval_display if log_interval_display > 0 else None
+
 st.divider()
 
 # 리스크 관리 요약
@@ -107,16 +129,21 @@ with risk_col4:
 st.divider()
 
 # 명령어 생성
-command = (
-    f"uv run python scripts/run_live_trading.py {selected_file} "
-    f"--symbol {symbol} "
-    f"--leverage {leverage} "
-    f"--interval {interval} "
-    f"--candle-interval {candle_interval} "
-    f"--max-position {max_position} "
-    f"--daily-loss-limit {daily_loss_limit} "
-    f"--max-consecutive-losses {max_consecutive_losses}"
-)
+command_parts = [
+    f"uv run python scripts/run_live_trading.py {selected_file}",
+    f"--symbol {symbol}",
+    f"--leverage {leverage}",
+    f"--interval {interval}",
+    f"--candle-interval {candle_interval}",
+    f"--max-position {max_position}",
+    f"--daily-loss-limit {daily_loss_limit}",
+    f"--max-consecutive-losses {max_consecutive_losses}",
+]
+
+if log_interval is not None:
+    command_parts.append(f"--log-interval {log_interval}")
+
+command = " ".join(command_parts)
 
 st.subheader("4️⃣ 실행 명령어")
 st.code(command, language="bash")

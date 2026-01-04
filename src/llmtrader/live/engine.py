@@ -20,6 +20,7 @@ class LiveTradingEngine:
         strategy: Strategy,
         context: LiveContext,
         price_feed: PriceFeed,
+        log_interval: int | None = None,
     ) -> None:
         """라이브 트레이딩 엔진 초기화.
 
@@ -27,6 +28,7 @@ class LiveTradingEngine:
             strategy: 실행할 전략
             context: 라이브 트레이딩 컨텍스트
             price_feed: 가격 피드
+            log_interval: 로그 출력 주기 (초). None 또는 0이면 캔들 마감 시에만 저장
         """
         self.strategy = strategy
         self.ctx = context
@@ -40,6 +42,8 @@ class LiveTradingEngine:
         self._run_on_tick: bool = bool(getattr(strategy, "run_on_tick", False))
         self._start_time: float = 0.0
         self._logger = get_logger("llmtrader.live")
+        self.log_interval: int | None = log_interval if log_interval and log_interval > 0 else None
+        self._last_log_time: float = 0.0
 
     @staticmethod
     def _compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:
@@ -48,6 +52,8 @@ class LiveTradingEngine:
     async def start(self) -> None:
         """라이브 트레이딩 시작."""
         self._start_time = time.time()
+        # 로그 시간 초기화 (시작 시점으로 설정)
+        self._last_log_time = time.time()
 
         # 세션 시작 로그
         strategy_name = self.strategy.__class__.__name__
@@ -176,10 +182,6 @@ class LiveTradingEngine:
                 )
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
             self._last_bar_timestamp = bar_ts
-            
-            # 1분봉 마감 시 계좌 정보 업데이트 후 스냅샷 저장
-            # 비동기 작업으로 스케줄링 (콜백이 동기이므로)
-            asyncio.create_task(self._update_account_and_save_snapshot(tick["timestamp"], bar_ts))
         elif self._run_on_tick:
             # 초고빈도 테스트용: 폴링 주기마다 전략 실행(지표 히스토리는 닫힌 봉에서만 갱신)
             bar = {
@@ -201,6 +203,24 @@ class LiveTradingEngine:
                     is_tick=True,
                 )
                 self.ctx._log_audit("STRATEGY_ERROR", {"error": str(e)})
+
+        # 로그 저장 로직 (전략 실행과 독립적으로 동작)
+        should_log = False
+        current_ts_sec = time.time()  # 현재 시간을 초 단위로 사용
+
+        if self.log_interval:
+            # log_interval이 설정된 경우: 시간 간격으로 체크
+            if current_ts_sec - self._last_log_time >= self.log_interval:
+                should_log = True
+                self._last_log_time = current_ts_sec
+        else:
+            # log_interval이 없는 경우: 기존 방식(캔들 마감 시)
+            if is_new_bar and bar_ts and (self._last_bar_timestamp == bar_ts):
+                should_log = True
+
+        if should_log:
+            # 비동기 작업으로 스케줄링 (콜백이 동기이므로)
+            asyncio.create_task(self._update_account_and_save_snapshot(tick["timestamp"], bar_ts))
 
     async def _update_account_and_save_snapshot(self, timestamp: int, bar_timestamp: int) -> None:
         """계좌 정보 업데이트 후 스냅샷 저장.
