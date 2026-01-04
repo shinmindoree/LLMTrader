@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+# 시간대 설정 (UTC)
+ENV TZ=UTC
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 WORKDIR /app
 COPY . /app
 

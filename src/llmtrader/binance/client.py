@@ -329,6 +329,8 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
     def _attach_signature(self, params: dict[str, Any]) -> dict[str, Any]:
         params = self._normalize_params(dict(params))
         params.setdefault("timestamp", int(time.time() * 1000))
+        # recvWindow 추가: 타임스탬프 허용 범위를 60초로 설정 (네트워크 지연 및 시간 동기화 문제 완화)
+        params.setdefault("recvWindow", 60000)
         query_string = urlencode(params, doseq=True)
         signature = hmac.new(self._api_secret, query_string.encode(), hashlib.sha256).hexdigest()
         params["signature"] = signature
