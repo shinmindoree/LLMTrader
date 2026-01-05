@@ -8,14 +8,22 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import typer
 
-from llmtrader.binance.client import BinanceHTTPClient
-from llmtrader.indicators.rsi import rsi_wilder_from_closes
-from llmtrader.settings import get_settings
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from binance.client import BinanceHTTPClient
+from indicators.rsi import rsi_wilder_from_closes
+from settings import get_settings
 
 
 def compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:

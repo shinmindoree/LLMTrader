@@ -14,13 +14,21 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from decimal import Decimal, ROUND_DOWN
+from pathlib import Path
 from typing import Any
 
 import typer
 
-from llmtrader.binance.client import BinanceHTTPClient
-from llmtrader.settings import get_settings
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from binance.client import BinanceHTTPClient
+from settings import get_settings
 
 
 app = typer.Typer(add_completion=False)

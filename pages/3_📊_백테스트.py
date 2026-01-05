@@ -14,12 +14,19 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from llmtrader.backtest.context import BacktestContext
-from llmtrader.backtest.data_fetcher import fetch_all_klines
-from llmtrader.backtest.engine import BacktestEngine
-from llmtrader.binance.client import BinanceHTTPClient
-from llmtrader.live.risk import RiskConfig, RiskManager
-from llmtrader.settings import get_settings
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from backtest.context import BacktestContext
+from backtest.data_fetcher import fetch_all_klines
+from backtest.engine import BacktestEngine
+from backtest.risk import BacktestRiskManager
+from binance.client import BinanceHTTPClient
+from common.risk import RiskConfig
+from settings import get_settings
 
 st.set_page_config(page_title="백테스트", page_icon="📊", layout="wide")
 
@@ -314,7 +321,7 @@ async def run_backtest_async() -> dict[str, Any]:
             max_position_size=max_position,
             max_order_size=max_position,
         )
-        risk_manager = RiskManager(risk_config)
+        risk_manager = BacktestRiskManager(risk_config)
         
         # 백테스트 컨텍스트 생성
         ctx = BacktestContext(
@@ -442,6 +449,7 @@ if "backtest_results" in st.session_state:
         total_loss = 0.0
         max_profit = 0.0
         max_loss = 0.0
+        stoploss_exit_count = 0  # StopLoss로 인한 청산 횟수
         
         # 연속 손실/이익 추적
         max_consecutive_losses = 0
@@ -451,6 +459,12 @@ if "backtest_results" in st.session_state:
         
         for trade in trades:
             pnl = trade.get("pnl")
+            reason = trade.get("reason", "")
+            
+            # StopLoss로 인한 청산인지 확인 (pnl이 있는 exit 거래만 카운트)
+            if pnl is not None and "StopLoss" in reason:
+                stoploss_exit_count += 1
+            
             if pnl is not None:
                 if pnl > 0:
                     profitable_trades.append(pnl)
@@ -539,8 +553,8 @@ if "backtest_results" in st.session_state:
                 st.metric("최대 손실", "$0.00")
             st.caption("개별 거래 중 최대 손실")
         
-        # 연속 거래 통계
-        stats_col5, stats_col6 = st.columns(2)
+        # 연속 거래 통계 및 StopLoss 통계
+        stats_col5, stats_col6, stats_col7 = st.columns(3)
         
         with stats_col5:
             st.metric("최대 연속 손실", f"{max_consecutive_losses}회")
@@ -549,6 +563,11 @@ if "backtest_results" in st.session_state:
         with stats_col6:
             st.metric("최대 연속 이익", f"{max_consecutive_wins}회")
             st.caption("연속으로 수익이 발생한 최대 횟수")
+        
+        with stats_col7:
+            st.metric("StopLoss 청산 횟수", f"{stoploss_exit_count}회")
+            stoploss_pct = (stoploss_exit_count / total_trades_with_pnl * 100) if total_trades_with_pnl > 0 else 0.0
+            st.caption(f"전체 거래 대비 {stoploss_pct:.1f}%")
         
         st.divider()
         

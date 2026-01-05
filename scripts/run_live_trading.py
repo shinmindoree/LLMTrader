@@ -9,13 +9,20 @@ import signal
 import sys
 from pathlib import Path
 
-from llmtrader.binance.client import BinanceHTTPClient
-from llmtrader.live.context import LiveContext
-from llmtrader.live.engine import LiveTradingEngine
-from llmtrader.live.risk import RiskConfig, RiskManager
-from llmtrader.notifications.slack import SlackNotifier
-from llmtrader.live.price_feed import PriceFeed
-from llmtrader.settings import get_settings
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from binance.client import BinanceHTTPClient
+from common.risk import RiskConfig
+from live.context import LiveContext
+from live.engine import LiveTradingEngine
+from live.price_feed import PriceFeed
+from live.risk import LiveRiskManager
+from notifications.slack import SlackNotifier
+from settings import get_settings
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,7 +36,6 @@ def parse_args() -> argparse.Namespace:
         default=int(os.getenv("LEVERAGE", "1")),
         help="레버리지 (기본: 1). 환경 변수 LEVERAGE로도 설정 가능",
     )
-    parser.add_argument("--interval", type=float, default=1.0, help="가격 피드 간격 (초)")
     parser.add_argument(
         "--candle-interval",
         type=str,
@@ -83,7 +89,6 @@ def load_strategy_class(strategy_file: Path):
     for name in dir(module):
         obj = getattr(module, name)
         if isinstance(obj, type) and name.endswith("Strategy") and name != "Strategy":
-            # [✅ 추가] 어떤 클래스가 로드되었는지 로그로 출력
             print(f"🧩 전략 클래스 로드됨: {name} (파일: {strategy_file})") 
             return obj
 
@@ -147,7 +152,7 @@ async def main():
         daily_loss_limit=args.daily_loss_limit,
         max_consecutive_losses=args.max_consecutive_losses,
     )
-    risk_manager = RiskManager(risk_config)
+    risk_manager = LiveRiskManager(risk_config)
 
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
@@ -183,7 +188,7 @@ async def main():
     print(f"📊 리스크 설정: max_order_size={risk_config.max_order_size:.4f} (max_position={strategy_max_position} × sizing_buffer={strategy_sizing_buffer})")
 
     # 가격 피드 생성
-    price_feed = PriceFeed(client, args.symbol, args.interval, candle_interval=args.candle_interval)
+    price_feed = PriceFeed(client, args.symbol, candle_interval=args.candle_interval)
 
     # 엔진 생성
     log_interval = args.log_interval if args.log_interval > 0 else None

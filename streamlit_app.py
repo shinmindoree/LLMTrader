@@ -1,6 +1,15 @@
 """LLMTrader Streamlit UI (라이브 트레이딩 전용)."""
 
+import sys
+from pathlib import Path
+
 import streamlit as st
+
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
 
 st.set_page_config(
     page_title="LLMTrader",
@@ -45,7 +54,7 @@ st.divider()
 # 시스템 상태
 st.subheader("⚙️ 시스템 상태")
 
-from llmtrader.settings import get_settings
+from settings import get_settings
 
 settings = get_settings()
 

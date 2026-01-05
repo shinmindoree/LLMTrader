@@ -8,13 +8,20 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from llmtrader.backtest.context import BacktestContext
-from llmtrader.backtest.data_fetcher import fetch_all_klines
-from llmtrader.backtest.engine import BacktestEngine
-from llmtrader.binance.client import BinanceHTTPClient
-from llmtrader.live.risk import RiskConfig, RiskManager
-from llmtrader.settings import get_settings
-from llmtrader.strategy.base import Strategy
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from backtest.context import BacktestContext
+from backtest.data_fetcher import fetch_all_klines
+from backtest.engine import BacktestEngine
+from backtest.risk import BacktestRiskManager
+from binance.client import BinanceHTTPClient
+from common.risk import RiskConfig
+from settings import get_settings
+from strategy.base import Strategy
 
 
 def parse_args() -> argparse.Namespace:
@@ -116,7 +123,7 @@ async def main():
             max_position_size=args.max_position,
             max_order_size=args.max_position,
         )
-        risk_manager = RiskManager(risk_config)
+        risk_manager = BacktestRiskManager(risk_config)
         
         # 백테스트 컨텍스트 생성
         ctx = BacktestContext(

@@ -63,7 +63,6 @@ col1, col2 = st.columns(2)
 with col1:
     symbol = st.text_input("심볼", value="BTCUSDT")
     leverage = st.number_input("레버리지", min_value=1, max_value=20, value=1, step=1)
-    interval = st.number_input("가격 피드 간격 (초)", min_value=0.1, max_value=10.0, value=1.0, step=0.1)
     candle_interval = st.selectbox(
         "캔들 봉 간격",
         options=["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"],
@@ -119,7 +118,6 @@ with risk_col2:
     st.metric("연속 손실 제한", "비활성화" if max_consecutive_losses == 0 else f"{max_consecutive_losses}회")
 
 with risk_col3:
-    st.metric("가격 피드 간격", f"{interval}초")
     st.metric("캔들 봉 간격", candle_interval)
 
 with risk_col4:
@@ -133,7 +131,6 @@ command_parts = [
     f"uv run python scripts/run_live_trading.py {selected_file}",
     f"--symbol {symbol}",
     f"--leverage {leverage}",
-    f"--interval {interval}",
     f"--candle-interval {candle_interval}",
     f"--max-position {max_position}",
     f"--daily-loss-limit {daily_loss_limit}",

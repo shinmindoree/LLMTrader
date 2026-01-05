@@ -28,30 +28,20 @@ dev = [
     "ruff>=0.6.0",
     "black>=24.8.0",
     "mypy>=1.9.0",
-    "pytest>=8.2.0",
-    "pytest-asyncio>=0.23.0",
-    "respx>=0.21.1",
-    "types-requests>=2.32.0.20241016",
-    "anyio>=4.3.0",
-]
-azure = [
-    "azure-monitor-opentelemetry>=1.6.0",
 ]
 
 [project.urls]
 homepage = "https://github.com/minsuk/LLMTrader"
 
-[project.scripts]
-llmtrader = "llmtrader.main:run"
 
 [tool.uv]
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/llmtrader"]
+packages = ["src"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/llmtrader", "tests"]
+include = ["src"]
 
 [tool.ruff]
 line-length = 100
@@ -61,9 +51,6 @@ src = ["src"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "S", "PL", "Q"]
 ignore = ["PLR2004", "S101"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -81,11 +68,4 @@ strict_equality = true
 check_untyped_defs = true
 plugins = []
 
-[tool.pytest.ini_options]
-addopts = "-q"
-testpaths = ["tests"]
-filterwarnings = [
-    "ignore::DeprecationWarning:httpx.*",
-    "ignore::DeprecationWarning:uvicorn.*",
-]
 

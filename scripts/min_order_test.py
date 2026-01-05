@@ -1,11 +1,19 @@
 import asyncio
+import sys
+from pathlib import Path
 from typing import Optional
 
 import typer
 from httpx import HTTPStatusError
 
-from llmtrader.binance.client import BinanceHTTPClient
-from llmtrader.settings import get_settings
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from binance.client import BinanceHTTPClient
+from settings import get_settings
 
 app = typer.Typer(add_completion=False, help="바이낸스 테스트넷 최소 주문/취소 스모크")
 

@@ -1,6 +1,15 @@
-from llmtrader.strategy.base import Strategy
-from llmtrader.strategy.context import StrategyContext
+import sys
 from decimal import Decimal, ROUND_DOWN
+from pathlib import Path
+
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from strategy.base import Strategy
+from strategy.context import StrategyContext
 
 
 class RsiLongShortStrategy(Strategy):
@@ -13,11 +22,11 @@ class RsiLongShortStrategy(Strategy):
     - 롱 포지션 진입: RSI(기본 14)가 long_entry_rsi 아래에서 long_entry_rsi 상향 돌파 시 진입
     - 롱 포지션 청산(둘 중 먼저 충족):
       - RSI가 long_exit_rsi 상향 돌파 시 청산
-      - StopLoss: 현재 미실현 손익(PnL)이 총 자산(Equity)의 -5%를 초과할 때 청산
+      - StopLoss: 현재 미실현 손익(PnL)이 자본금(Balance)의 -5%를 초과할 때 청산
     - 숏 포지션 진입: RSI가 short_entry_rsi 위에서 short_entry_rsi 하향 돌파 시 진입
     - 숏 포지션 청산(둘 중 먼저 충족):
       - RSI가 short_exit_rsi 하향 돌파 시 청산
-      - StopLoss: 현재 미실현 손익(PnL)이 총 자산(Equity)의 -5%를 초과할 때 청산
+      - StopLoss: 현재 미실현 손익(PnL)이 자본금(Balance)의 -5%를 초과할 때 청산
 
     참고:
     - 엔진이 tick마다 on_bar을 호출할 수 있게 run_on_tick=True 로 둠
@@ -92,22 +101,45 @@ class RsiLongShortStrategy(Strategy):
 
         # ===== StopLoss 체크 (롱/숏 모두) =====
         # StopLoss는 "실시간 현재가/PnL" 기준 (tick/봉 모두에서 체크)
+        # 레버리지와 무관하게 포지션 진입 시점의 balance 대비 %로 계산
+        # 백테스트에서는 설정값을 넘어서는 경우 설정값에 맞는 가격으로 역산하여 체결
         if ctx.position_size != 0 and not self.is_closing:
             # PnL 기반 StopLoss 로직
-            # equity = balance + unrealized_pnl (현재 총 자산가치)
-            equity = float(getattr(ctx, "total_equity", 0.0) or 0.0)
+            # 포지션 진입 시점의 balance를 기준으로 계산하여 레버리지와 무관하게 일정한 기준 적용
+            entry_balance = float(getattr(ctx, "position_entry_balance", 0.0) or 0.0)
             unrealized_pnl = float(getattr(ctx, "unrealized_pnl", 0.0) or 0.0)
             
-            if equity > 0:
-                # 현재 손익률 계산 (예: -50불 / 1000불 = -0.05)
-                current_pnl_pct = unrealized_pnl / equity
+            if entry_balance > 0:
+                # 포지션 진입 시점의 balance 대비 손익률 계산
+                # 레버리지와 무관하게 일정한 기준 적용
+                current_pnl_pct = unrealized_pnl / entry_balance
                 
                 # 손실률이 설정된 제한(예: -0.05)보다 더 작으면(더 큰 손실이면) 청산
                 if current_pnl_pct <= -self.stop_loss_pct:
                     self.is_closing = True
                     position_type = "Long" if ctx.position_size > 0 else "Short"
-                    reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct*100:.2f}%)"
-                    ctx.close_position(reason=reason_msg)
+                    
+                    # 설정값에 정확히 맞는 가격 역산
+                    entry_price = ctx.position_entry_price
+                    position_size = abs(ctx.position_size)
+                    
+                    if ctx.position_size > 0:  # 롱 포지션
+                        # stop_loss_pct = -(target_price - entry_price) * size / entry_balance
+                        # target_price = entry_price - (stop_loss_pct * entry_balance / size)
+                        target_price = entry_price - (self.stop_loss_pct * entry_balance / position_size)
+                    else:  # 숏 포지션
+                        # stop_loss_pct = -(entry_price - target_price) * size / entry_balance
+                        # target_price = entry_price + (stop_loss_pct * entry_balance / size)
+                        target_price = entry_price + (self.stop_loss_pct * entry_balance / position_size)
+                    
+                    # 가격이 유효한 범위 내인지 확인 (음수 방지)
+                    if target_price > 0:
+                        reason_msg = f"StopLoss {position_type} (PnL {(-self.stop_loss_pct)*100:.2f}% of entry balance)"
+                        ctx.close_position_at_price(target_price, reason=reason_msg)
+                    else:
+                        # 가격이 유효하지 않으면 현재가로 청산
+                        reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct*100:.2f}% of entry balance)"
+                        ctx.close_position(reason=reason_msg)
 
         # RSI는 "마지막 닫힌 봉 close" 기준이어야 하므로,
         # 새 봉이 확정된 시점(is_new_bar=True)에서만 크로스 판단/prev_rsi 갱신.

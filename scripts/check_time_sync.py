@@ -1,10 +1,19 @@
 """Binance 서버 시간과 로컬 시간 동기화 상태 확인 스크립트."""
 import asyncio
+import sys
 import time
+from pathlib import Path
+
 import httpx
 from datetime import datetime
 
-from llmtrader.settings import get_settings
+# src 디렉토리를 Python 경로에 추가
+project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from settings import get_settings
 
 
 async def check_time_sync(base_url: str = "https://testnet.binancefuture.com"):
