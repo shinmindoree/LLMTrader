@@ -8,7 +8,7 @@ from typing import Any
 from live.context import LiveContext
 from indicators.rsi import rsi_wilder_from_closes
 from live.price_feed import PriceFeed
-from logger import get_logger
+from live.logger import get_logger
 from strategy.base import Strategy
 
 

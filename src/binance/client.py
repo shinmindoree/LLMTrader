@@ -31,6 +31,9 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
             timeout=timeout,
             headers={"X-MBX-APIKEY": api_key} if api_key else None,
         )
+        self._time_offset: int = 0
+        self._last_time_sync: float = 0.0
+        self._time_sync_interval: float = 300.0
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -39,6 +42,39 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response = await self._client.get("/fapi/v1/time")
         response.raise_for_status()
         return response.json()
+
+    async def sync_time(self) -> int:
+        """Binance 서버와의 시간 차이(ms)를 계산하고 저장.
+        
+        Returns:
+            서버와의 시간 차이 (밀리초)
+        """
+        try:
+            local_before = int(time.time() * 1000)
+            server_data = await self.fetch_server_time()
+            local_after = int(time.time() * 1000)
+            
+            server_time = server_data["serverTime"]
+            local_time = (local_before + local_after) // 2
+            
+            self._time_offset = server_time - local_time
+            self._last_time_sync = time.time()
+            
+            if abs(self._time_offset) > 1000:
+                print(f"⚠️ 서버 시간 동기화: offset={self._time_offset}ms (로컬 시간과 {abs(self._time_offset)/1000:.1f}초 차이)")
+            
+            return self._time_offset
+        except Exception as e:
+            print(f"⚠️ 서버 시간 동기화 실패: {e}")
+            return self._time_offset
+
+    def _get_adjusted_timestamp(self) -> int:
+        """보정된 타임스탬프 반환 (서버 시간 기준).
+        
+        Returns:
+            서버 시간에 맞춰 보정된 밀리초 타임스탬프
+        """
+        return int(time.time() * 1000) + self._time_offset
 
     async def fetch_klines(
         self,
@@ -232,45 +268,63 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response.raise_for_status()
 
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
-        params_with_sig = self._attach_signature(params)
-        max_retries = 3
+        max_retries = 5
+        base_delay = 1.0
+        
         for attempt in range(max_retries):
+            params_with_sig = self._attach_signature(dict(params))
             try:
                 response = await self._client.request(method, path, params=params_with_sig)
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
-                # Binance는 에러 바디에 {"code": ..., "msg": "..."} 형태를 주는 경우가 많음.
-                # 기존 로그만으로는 원인을 확정하기 어려워서, 응답 바디를 포함해 예외 메시지를 강화한다.
                 try:
                     data = e.response.json()
                 except Exception:  # noqa: BLE001
                     data = {"raw": e.response.text}
                 
-                # 418 에러 (IP 차단) 처리: "banned until <timestamp>" 메시지에서 타임스탬프 추출
+                error_code = data.get("code") if isinstance(data, dict) else None
+                
+                if error_code == -1021:
+                    if attempt < max_retries - 1:
+                        await self.sync_time()
+                        delay = base_delay * (2 ** attempt)
+                        print(f"⚠️ Timestamp 에러 감지. 시간 동기화 후 {delay:.1f}초 대기... (시도 {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+                
                 if e.response.status_code == 418:
                     error_msg = data.get("msg", "") if isinstance(data, dict) else str(data)
                     banned_until_ts = self._extract_banned_until_timestamp(error_msg)
                     
                     if banned_until_ts:
-                        current_ts = int(time.time() * 1000)  # 밀리초
+                        current_ts = self._get_adjusted_timestamp()
                         wait_time_ms = max(0, banned_until_ts - current_ts)
                         wait_time_sec = wait_time_ms / 1000.0
                         
                         if wait_time_sec > 0 and attempt < max_retries - 1:
-                            print(f"⚠️ IP 차단 감지. {wait_time_sec:.1f}초 대기 후 재시도... (시도 {attempt + 1}/{max_retries})")
-                            await asyncio.sleep(min(wait_time_sec + 1.0, 60.0))  # 최대 60초까지 대기
-                            continue  # 재시도
+                            actual_wait = min(wait_time_sec + 1.0, 120.0)
+                            print(f"⚠️ IP 차단 감지. {actual_wait:.1f}초 대기 후 재시도... (시도 {attempt + 1}/{max_retries})")
+                            await asyncio.sleep(actual_wait)
+                            continue
                         else:
-                            # 대기 시간이 너무 길거나 마지막 시도인 경우
                             error_msg_full = f"IP banned until {datetime.fromtimestamp(banned_until_ts / 1000).isoformat()}"
                             raise ValueError(
                                 f"Binance API error: {e.response.status_code} {method} {path} | {error_msg_full}"
                             ) from e
                 
+                if e.response.status_code == 429 or error_code == -1003:
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt) * 2
+                        print(f"⚠️ Rate Limit 초과. {delay:.1f}초 대기 후 재시도... (시도 {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(min(delay, 60.0))
+                        continue
+                
                 raise ValueError(
                     f"Binance API error: {e.response.status_code} {method} {path} | payload={data}"
                 ) from e
+        
+        raise ValueError(f"Binance API error: max retries exceeded for {method} {path}")
 
     @staticmethod
     def _extract_banned_until_timestamp(error_msg: str) -> int | None:
@@ -328,8 +382,7 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
 
     def _attach_signature(self, params: dict[str, Any]) -> dict[str, Any]:
         params = self._normalize_params(dict(params))
-        params.setdefault("timestamp", int(time.time() * 1000))
-        # recvWindow 추가: 타임스탬프 허용 범위를 60초로 설정 (네트워크 지연 및 시간 동기화 문제 완화)
+        params.setdefault("timestamp", self._get_adjusted_timestamp())
         params.setdefault("recvWindow", 60000)
         query_string = urlencode(params, doseq=True)
         signature = hmac.new(self._api_secret, query_string.encode(), hashlib.sha256).hexdigest()

@@ -10,6 +10,7 @@ from binance.client import BinanceHTTPClient
 from binance.user_stream import BinanceUserStream
 from indicators.rsi import rsi_wilder_from_closes
 from live.risk import LiveRiskManager
+from live.logger import get_logger
 from notifications.slack import SlackNotifier
 
 
@@ -50,6 +51,7 @@ class LiveContext:
         self.leverage = leverage
         self.env = env
         self.notifier = notifier
+        self._logger = get_logger("llmtrader.live")
 
         self.strategy_rsi_period: int | None = None
         self.strategy_entry_rsi: float | None = None
@@ -63,11 +65,17 @@ class LiveContext:
         self._last_account_update_time: float = 0.0
         self._min_account_update_interval: float = 1.0
 
+        self._chase_enabled: bool = True
+        self._chase_max_attempts: int = 5
+        self._chase_interval: float = 1.0
+        self._chase_slippage_bps: float = 1.0
+        self._chase_fallback_to_market: bool = True
+
         self._user_stream: BinanceUserStream | None = None
         self._user_stream_task: asyncio.Task | None = None
         self._use_user_stream: bool = False
         self._last_user_stream_account_update: float = 0.0
-        self._account_reconcile_interval: float = 300.0
+        self._account_reconcile_interval: float = 600.0
         self._last_reconcile_time: float = 0.0
         self._open_orders_by_id: dict[int, dict[str, Any]] = {}
         
@@ -121,7 +129,9 @@ class LiveContext:
         return self.balance + self.unrealized_pnl
 
     async def initialize(self) -> None:
-        """컨텍스트 초기화 (레버리지 설정, 잔고 조회, 거래소 필터 조회)."""
+        """컨텍스트 초기화 (시간 동기화, 레버리지 설정, 잔고 조회, 거래소 필터 조회)."""
+        await self.client.sync_time()
+        
         valid, msg = self.risk_manager.validate_leverage(self.leverage)
         if not valid:
             raise ValueError(f"레버리지 검증 실패: {msg}")
@@ -393,7 +403,6 @@ class LiveContext:
                 
         except Exception as e:
             self._log_audit("ACCOUNT_UPDATE_FAILED", {"error": str(e)})
-            raise
 
     def get_open_orders(self) -> list[dict[str, Any]]:
         """현재 미체결 주문 목록 반환.
@@ -403,12 +412,14 @@ class LiveContext:
         """
         return self.open_orders
 
-    def buy(self, quantity: float, price: float | None = None, reason: str | None = None) -> None:
+    def buy(self, quantity: float, price: float | None = None, reason: str | None = None, use_chase: bool | None = None) -> None:
         """매수 주문.
 
         Args:
             quantity: 수량
-            price: 가격 (None이면 시장가)
+            price: 가격 (None이면 시장가 또는 Chase Order)
+            reason: 주문 사유
+            use_chase: Chase Order 사용 여부 (None이면 _chase_enabled 설정 따름)
         """
         if self._order_inflight:
             if (time.time() - self._last_order_started_at) > 5.0:
@@ -418,15 +429,22 @@ class LiveContext:
                 return
         self._order_inflight = True
         self._last_order_started_at = time.time()
-        task = asyncio.create_task(self._place_order("BUY", quantity, price, reason=reason))
+
+        should_chase = use_chase if use_chase is not None else self._chase_enabled
+        if should_chase and price is None:
+            task = asyncio.create_task(self._place_chase_order("BUY", quantity, reason=reason))
+        else:
+            task = asyncio.create_task(self._place_order("BUY", quantity, price, reason=reason))
         task.add_done_callback(self._handle_order_result)
 
-    def sell(self, quantity: float, price: float | None = None, reason: str | None = None) -> None:
+    def sell(self, quantity: float, price: float | None = None, reason: str | None = None, use_chase: bool | None = None) -> None:
         """매도 주문.
 
         Args:
             quantity: 수량
-            price: 가격 (None이면 시장가)
+            price: 가격 (None이면 시장가 또는 Chase Order)
+            reason: 주문 사유
+            use_chase: Chase Order 사용 여부 (None이면 _chase_enabled 설정 따름)
         """
         if self._order_inflight:
             if (time.time() - self._last_order_started_at) > 5.0:
@@ -436,11 +454,21 @@ class LiveContext:
                 return
         self._order_inflight = True
         self._last_order_started_at = time.time()
-        task = asyncio.create_task(self._place_order("SELL", quantity, price, reason=reason))
+
+        should_chase = use_chase if use_chase is not None else self._chase_enabled
+        if should_chase and price is None:
+            task = asyncio.create_task(self._place_chase_order("SELL", quantity, reason=reason))
+        else:
+            task = asyncio.create_task(self._place_order("SELL", quantity, price, reason=reason))
         task.add_done_callback(self._handle_order_result)
 
-    def close_position(self, reason: str | None = None) -> None:
-        """현재 포지션 전체 청산."""
+    def close_position(self, reason: str | None = None, use_chase: bool | None = None) -> None:
+        """현재 포지션 전체 청산.
+        
+        Args:
+            reason: 청산 사유
+            use_chase: Chase Order 사용 여부 (None이면 _chase_enabled 설정 따름)
+        """
         if self._order_inflight:
             if (time.time() - self._last_order_started_at) > 5.0:
                 print("⚠️ order_inflight timeout: releasing lock")
@@ -451,10 +479,63 @@ class LiveContext:
             return
         
         if self.position.size > 0:
-            self.sell(abs(self.position.size), reason=reason)
+            self.sell(abs(self.position.size), reason=reason, use_chase=use_chase)
         else:
-            self.buy(abs(self.position.size), reason=reason)
-    
+            self.buy(abs(self.position.size), reason=reason, use_chase=use_chase)
+
+    def close_position_at_price(self, price: float, reason: str | None = None) -> None:
+        """포지션 전체 청산 (지정가).
+        
+        Args:
+            price: 청산 가격
+            reason: 청산 사유
+        """
+        if self._order_inflight:
+            if (time.time() - self._last_order_started_at) > 5.0:
+                print("⚠️ order_inflight timeout: releasing lock")
+                self._release_order_inflight()
+            else:
+                return
+        if self.position.size == 0:
+            return
+        
+        if self.position.size > 0:
+            self.sell(abs(self.position.size), price=price, reason=reason, use_chase=False)
+        else:
+            self.buy(abs(self.position.size), price=price, reason=reason, use_chase=False)
+
+    def configure_chase_order(
+        self,
+        enabled: bool | None = None,
+        max_attempts: int | None = None,
+        interval: float | None = None,
+        slippage_bps: float | None = None,
+        fallback_to_market: bool | None = None,
+    ) -> None:
+        """Chase Order 설정 변경.
+
+        Args:
+            enabled: Chase Order 활성화 여부
+            max_attempts: 최대 재시도 횟수 (기본값: 5)
+            interval: 재시도 간격 (초, 기본값: 1.0)
+            slippage_bps: 슬리피지 (bps 단위, 기본값: 1.0 = 0.01%)
+            fallback_to_market: 실패 시 시장가 전환 여부 (기본값: True)
+        """
+        if enabled is not None:
+            self._chase_enabled = enabled
+        if max_attempts is not None:
+            self._chase_max_attempts = max_attempts
+        if interval is not None:
+            self._chase_interval = interval
+        if slippage_bps is not None:
+            self._chase_slippage_bps = slippage_bps
+        if fallback_to_market is not None:
+            self._chase_fallback_to_market = fallback_to_market
+
+        print(f"⚙️ Chase Order 설정: enabled={self._chase_enabled}, max_attempts={self._chase_max_attempts}, "
+              f"interval={self._chase_interval}s, slippage={self._chase_slippage_bps}bps, "
+              f"fallback_to_market={self._chase_fallback_to_market}")
+
     def set_strategy_meta(self, strategy: Any) -> None:
         """전략 메타데이터를 컨텍스트에 주입(로그/알림용).
 
@@ -523,6 +604,10 @@ class LiveContext:
         avg_price = result.get("avgPrice") or result.get("price") or ""
         order_type = result.get("type", "MARKET")
         
+        internal_order_type = result.get("_order_type")
+        is_maker = order_type == "LIMIT" or internal_order_type in ("CHASE_LIMIT", "LIMIT")
+        order_type_display = "LIMIT(Maker)" if is_maker else "MARKET(Taker)"
+        
         executed_qty_float = float(executed_qty) if executed_qty else 0.0
         after_pos = after_pos_api
         
@@ -558,7 +643,10 @@ class LiveContext:
             parsed_avg_price = float(self.current_price)
         
         commission_asset = result.get("commissionAsset", "USDT")
-        DEFAULT_COMMISSION_RATE = 0.0004
+        MAKER_COMMISSION_RATE = 0.0002
+        TAKER_COMMISSION_RATE = 0.0004
+        commission_rate = MAKER_COMMISSION_RATE if is_maker else TAKER_COMMISSION_RATE
+        commission_rate_pct = commission_rate * 100
         
         final_commission = 0.0
         if "commission" in result:
@@ -571,7 +659,7 @@ class LiveContext:
         
         if final_commission == 0.0 and parsed_avg_price > 0 and executed_qty_float > 0:
             notional = executed_qty_float * parsed_avg_price
-            final_commission = notional * DEFAULT_COMMISSION_RATE
+            final_commission = notional * commission_rate
 
         p = self.strategy_rsi_period or 14
         rsi_p = float(self.get_indicator("rsi", p))
@@ -627,7 +715,7 @@ class LiveContext:
         after_pos_usd = after_pos * last_now
         
         msg = (
-            f"✅ 주문 체결[{now}] orderId={order_id} side={side} "
+            f"✅ 주문 체결[{now}] orderId={order_id} side={side} type={order_type_display} "
             f"| pos_usd ${before_pos_usd:,.2f} -> ${after_pos_usd:,.2f} "
             f"| pos {before_pos:+.4f} -> {after_pos:+.4f} "
             f"| last={last_now:,.2f} "
@@ -637,7 +725,7 @@ class LiveContext:
         if reason is not None:
             msg += f" | reason={reason}"
         
-        msg += f" | commission={final_commission:.4f} {commission_asset} (rate=0.04%)"
+        msg += f" | commission={final_commission:.4f} {commission_asset} (rate={commission_rate_pct:.2f}%)"
         
         if pnl_exit is not None:
             pnl_after_fee = pnl_exit - final_commission
@@ -646,6 +734,28 @@ class LiveContext:
             msg += f" | thr(entry={entry_thr}, exit={exit_thr})"
         print(msg)
 
+        self._logger.log_order_filled(
+            symbol=self.symbol,
+            order_id=order_id,
+            side=side,
+            event=event,
+            position_before=before_pos,
+            position_after=after_pos,
+            position_before_usd=before_pos_usd,
+            position_after_usd=after_pos_usd,
+            price=last_now,
+            rsi=rsi_p,
+            rsi_rt=rsi_rt_p,
+            rsi_period=p,
+            pnl=pnl_exit,
+            commission=final_commission,
+            reason=reason,
+            entry_rsi=entry_thr,
+            exit_rsi=exit_thr,
+            order_type=order_type_display,
+            commission_rate=commission_rate_pct,
+        )
+
         self._log_audit(
             "ORDER_FILLED",
             {
@@ -653,13 +763,16 @@ class LiveContext:
                 "side": side,
                 "executed_qty": executed_qty,
                 "avg_price": avg_price,
+                "order_type": order_type_display,
+                "is_maker": is_maker,
                 "position_before": before_pos,
                 "position_after": after_pos,
                 "position_before_usd": before_pos_usd,
                 "position_after_usd": after_pos_usd,
                 "commission": final_commission,
                 "commission_asset": commission_asset,
-                "commission_rate": DEFAULT_COMMISSION_RATE,
+                "commission_rate": commission_rate,
+                "commission_rate_pct": commission_rate_pct,
                 "rsi_period": p,
                 "rsi_p": rsi_p,
                 "rsi_rt_p": rsi_rt_p,
@@ -678,6 +791,7 @@ class LiveContext:
                 f"*{event}* ({self.env}) {self.symbol}\n"
                 f"- orderId: {order_id}\n"
                 f"- side: {side}\n"
+                f"- type: {order_type_display}\n"
                 f"- pos: {before_pos:+.4f} -> {after_pos:+.4f}\n"
                 f"- last: {last_now:,.2f}\n"
                 f"- rsi({p}): {rsi_p:.2f} (rt {rsi_rt_p:.2f})\n"
@@ -686,7 +800,7 @@ class LiveContext:
             text += f"- leverage: {self.leverage}x\n"
             text += f"- max-position: {max_position_pct:.0f}%\n"
             text += f"- candle-interval: {self.candle_interval}\n"
-            text += f"- commission: {final_commission:.4f} {commission_asset} (rate=0.04%)\n"
+            text += f"- commission: {final_commission:.4f} {commission_asset} (rate={commission_rate_pct:.2f}%)\n"
             
             if event == "EXIT" and pnl_exit is not None:
                 pnl_after_fee = pnl_exit - final_commission
@@ -912,6 +1026,152 @@ class LiveContext:
                 "error": str(e),
             })
             raise
+
+    async def _place_chase_order(
+        self,
+        side: str,
+        quantity: float,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Chase Order 실행 - 지정가로 시도하고 미체결 시 가격을 추적하여 재주문.
+
+        Args:
+            side: BUY/SELL
+            quantity: 수량
+            reason: 주문 사유
+
+        Returns:
+            주문 응답
+        """
+        original_qty = quantity
+        quantity = self._adjust_quantity(quantity)
+
+        for attempt in range(self._chase_max_attempts):
+            current_price = self._current_price
+            if current_price <= 0:
+                raise ValueError("현재 가격이 유효하지 않습니다")
+
+            slippage_mult = self._chase_slippage_bps / 10000.0
+            if side == "BUY":
+                limit_price = current_price * (1 + slippage_mult)
+            else:
+                limit_price = current_price * (1 - slippage_mult)
+
+            limit_price = self._adjust_price(limit_price)
+
+            self._log_audit("CHASE_ORDER_ATTEMPT", {
+                "attempt": attempt + 1,
+                "max_attempts": self._chase_max_attempts,
+                "side": side,
+                "quantity": quantity,
+                "limit_price": limit_price,
+                "current_price": current_price,
+            })
+            print(f"🎯 Chase Order 시도 {attempt + 1}/{self._chase_max_attempts}: {side} {quantity} @ {limit_price:,.2f} (현재가: {current_price:,.2f})")
+
+            try:
+                snapshot_pos_size = self.position.size
+                snapshot_entry_price = self.position.entry_price
+                new_position_size = self.position.size + (quantity if side == "BUY" else -quantity)
+                is_reducing_order = abs(new_position_size) < abs(self.position.size) - 1e-12
+
+                order_params: dict[str, Any] = {
+                    "type": "LIMIT",
+                    "price": limit_price,
+                    "timeInForce": "GTX",
+                }
+                if is_reducing_order:
+                    order_params["reduceOnly"] = True
+
+                response = await self.client.place_order(
+                    symbol=self.symbol,
+                    side=side,
+                    quantity=quantity,
+                    **order_params,
+                )
+
+                order_id = response.get("orderId")
+                order_status = response.get("status")
+
+                if order_status == "FILLED":
+                    response["_reason"] = reason
+                    response["_snapshot_pos_size"] = snapshot_pos_size
+                    response["_snapshot_entry_price"] = snapshot_entry_price
+                    response["_chase_attempts"] = attempt + 1
+                    response["_order_type"] = "CHASE_LIMIT"
+
+                    self._log_audit("CHASE_ORDER_FILLED", {
+                        "order_id": order_id,
+                        "attempts": attempt + 1,
+                        "final_price": limit_price,
+                    })
+                    print(f"✅ Chase Order 체결: {side} {quantity} @ {limit_price:,.2f} ({attempt + 1}번 시도)")
+                    return response
+
+                if order_status in ("NEW", "PARTIALLY_FILLED"):
+                    await asyncio.sleep(self._chase_interval)
+
+                    try:
+                        order_info = await self.client.fetch_order(self.symbol, order_id)
+                        current_status = order_info.get("status")
+                        executed_qty = float(order_info.get("executedQty", 0))
+
+                        if current_status == "FILLED":
+                            order_info["_reason"] = reason
+                            order_info["_snapshot_pos_size"] = snapshot_pos_size
+                            order_info["_snapshot_entry_price"] = snapshot_entry_price
+                            order_info["_chase_attempts"] = attempt + 1
+                            order_info["_order_type"] = "CHASE_LIMIT"
+                            print(f"✅ Chase Order 체결: {side} {quantity} @ {limit_price:,.2f} ({attempt + 1}번 시도)")
+                            return order_info
+
+                        if executed_qty > 0:
+                            remaining_qty = quantity - executed_qty
+                            print(f"⚠️ 부분 체결: {executed_qty}/{quantity}, 남은 수량 {remaining_qty}")
+                            quantity = self._adjust_quantity(remaining_qty)
+
+                        await self.client.cancel_order(self.symbol, order_id)
+                        self._log_audit("CHASE_ORDER_CANCELLED", {
+                            "order_id": order_id,
+                            "attempt": attempt + 1,
+                            "reason": "price_moved",
+                        })
+                        print(f"🔄 Chase Order 취소 후 재시도: 가격 이동")
+
+                    except Exception as e:
+                        self._log_audit("CHASE_ORDER_CHECK_FAILED", {
+                            "order_id": order_id,
+                            "error": str(e),
+                        })
+                        try:
+                            await self.client.cancel_order(self.symbol, order_id)
+                        except Exception:
+                            pass
+
+                elif order_status == "EXPIRED":
+                    self._log_audit("CHASE_ORDER_EXPIRED_GTX", {
+                        "order_id": order_id,
+                        "attempt": attempt + 1,
+                        "reason": "would_be_taker",
+                    })
+                    print(f"⚠️ GTX 주문 거부 (Taker 방지): 가격 갱신 후 재시도")
+
+            except Exception as e:
+                self._log_audit("CHASE_ORDER_ERROR", {
+                    "attempt": attempt + 1,
+                    "error": str(e),
+                })
+                print(f"⚠️ Chase Order 에러: {e}")
+
+        if self._chase_fallback_to_market:
+            print(f"🚨 Chase Order 실패 → 시장가로 전환")
+            self._log_audit("CHASE_ORDER_FALLBACK_MARKET", {
+                "original_qty": original_qty,
+                "remaining_qty": quantity,
+            })
+            return await self._place_order(side, quantity, price=None, reason=reason)
+        else:
+            raise ValueError(f"Chase Order 실패: {self._chase_max_attempts}회 시도 후 미체결")
 
     def cancel_order(self, order_id: int) -> None:
         """주문 취소.

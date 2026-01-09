@@ -1,7 +1,6 @@
 """간단한 콘솔 로거."""
 
 import logging as std_logging
-from datetime import datetime
 from typing import Any
 
 
@@ -143,6 +142,46 @@ class SimpleLogger:
             **extra,
         )
 
+    def log_order_filled(
+        self,
+        symbol: str,
+        order_id: str | int,
+        side: str,
+        event: str | None,
+        position_before: float,
+        position_after: float,
+        position_before_usd: float,
+        position_after_usd: float,
+        price: float,
+        rsi: float,
+        rsi_rt: float,
+        rsi_period: int,
+        pnl: float | None = None,
+        commission: float | None = None,
+        reason: str | None = None,
+        order_type: str | None = None,
+        commission_rate: float | None = None,
+        **extra: Any,
+    ) -> None:
+        """주문 체결 로그."""
+        msg = (
+            f"ORDER_FILLED | symbol={symbol}, orderId={order_id}, side={side}"
+            f", type={order_type or 'N/A'}, event={event or 'N/A'}"
+            f", pos={position_before:+.4f}->{position_after:+.4f}"
+            f", pos_usd=${position_before_usd:,.2f}->${position_after_usd:,.2f}"
+            f", price={price:,.2f}"
+            f", rsi({rsi_period})={rsi:.2f}, rsi_rt={rsi_rt:.2f}"
+        )
+        if pnl is not None:
+            pnl_after_fee = pnl - (commission or 0)
+            msg += f", pnl={pnl:+.2f}, pnl_after_fee={pnl_after_fee:+.2f}"
+        if commission is not None:
+            rate_str = f"{commission_rate:.2f}%" if commission_rate is not None else "N/A"
+            msg += f", commission={commission:.4f} (rate={rate_str})"
+        if reason:
+            msg += f", reason={reason}"
+        self.info(msg, **extra)
+
 
 def get_logger(name: str = "llmtrader", **kwargs: Any) -> SimpleLogger:
     """로거 인스턴스 반환.
@@ -152,4 +191,3 @@ def get_logger(name: str = "llmtrader", **kwargs: Any) -> SimpleLogger:
         **kwargs: 추가 인자 (호환성을 위해 무시)
     """
     return SimpleLogger(name=name, **kwargs)
-
