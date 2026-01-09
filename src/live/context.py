@@ -96,6 +96,9 @@ class LiveContext:
         self.min_qty: Decimal | None = None
         self.max_qty: Decimal | None = None
         
+        self._best_bid: Decimal | None = None
+        self._best_ask: Decimal | None = None
+        
         self.audit_log: list[dict[str, Any]] = []
 
     @property
@@ -327,6 +330,18 @@ class LiveContext:
                 return True
             await asyncio.sleep(0.05)
         return False
+
+    async def update_book_ticker(self, data: dict[str, Any]) -> None:
+        """BookTicker 스트림 콜백 - best bid/ask 업데이트.
+
+        Args:
+            data: BookTicker 데이터 {"b": "best_bid", "a": "best_ask", ...}
+        """
+        try:
+            self._best_bid = Decimal(data["b"])
+            self._best_ask = Decimal(data["a"])
+        except (KeyError, ValueError) as e:
+            print(f"⚠️ BookTicker 데이터 파싱 오류: {e}")
 
     async def update_account_info(self, force: bool = False) -> None:
         """계좌 정보 업데이트.
@@ -578,7 +593,8 @@ class LiveContext:
     async def _after_order_filled(self, result: dict[str, Any]) -> None:
         """주문 체결 후 후처리."""
         reason = result.get("_reason", None)
-        before_pos = float(result.get("_snapshot_pos_size", self.position.size))
+        initial_pos = result.get("_initial_pos_size")
+        before_pos = float(initial_pos if initial_pos is not None else result.get("_snapshot_pos_size", self.position.size))
         before_entry = float(result.get("_snapshot_entry_price", self.position.entry_price if self.position.size != 0 else 0.0))
 
         after_pos_api = before_pos
@@ -611,7 +627,8 @@ class LiveContext:
         executed_qty_float = float(executed_qty) if executed_qty else 0.0
         after_pos = after_pos_api
         
-        if executed_qty_float > 0:
+        # _initial_pos_size가 있으면 API 값을 신뢰 (Chase Order에서 부분 체결로 인한 불일치 정상)
+        if initial_pos is None and executed_qty_float > 0:
             if side == "BUY":
                 calculated_after_pos = before_pos + executed_qty_float
             elif side == "SELL":
@@ -841,37 +858,37 @@ class LiveContext:
             import traceback
             traceback.print_exc()
 
-    def _adjust_quantity(self, quantity: float) -> float:
+    def _adjust_quantity(self, quantity: float) -> Decimal:
         """수량을 거래소 step_size 배수로 내림 처리.
 
         Args:
             quantity: 원래 수량
 
         Returns:
-            정밀도가 보정된 수량
+            정밀도가 보정된 수량 (Decimal - API 전달 시 str()로 변환 필요)
         """
         if self.step_size is None:
-            return quantity
+            return Decimal(str(quantity))
         
         qty_decimal = Decimal(str(quantity))
         adjusted = (qty_decimal / self.step_size).to_integral_value(rounding=ROUND_DOWN) * self.step_size
-        return float(adjusted)
+        return adjusted
 
-    def _adjust_price(self, price: float) -> float:
+    def _adjust_price(self, price: float) -> Decimal:
         """가격을 거래소 tick_size 배수로 반올림 처리.
 
         Args:
             price: 원래 가격
 
         Returns:
-            정밀도가 보정된 가격
+            정밀도가 보정된 가격 (Decimal - API 전달 시 str()로 변환 필요)
         """
         if self.tick_size is None:
-            return price
+            return Decimal(str(price))
         
         price_decimal = Decimal(str(price))
         adjusted = (price_decimal / self.tick_size).to_integral_value(rounding=ROUND_HALF_UP) * self.tick_size
-        return float(adjusted)
+        return adjusted
 
     def _check_min_notional(self, quantity: float, price: float | None = None) -> tuple[bool, str]:
         """최소 주문 금액(MIN_NOTIONAL) 검증.
@@ -950,17 +967,17 @@ class LiveContext:
             })
             raise ValueError(f"최소 주문 금액 미달: {notional_msg}")
 
-        new_position_size = self.position.size + (quantity if side == "BUY" else -quantity)
+        new_position_size = self.position.size + (float(quantity) if side == "BUY" else -float(quantity))
 
         is_reducing_order = abs(new_position_size) < abs(self.position.size) - 1e-12
 
         if not is_reducing_order:
-            order_value = quantity * self._current_price
+            order_value = float(quantity) * self._current_price
             max_order_value = self.total_equity * float(self.leverage) * self.risk_manager.config.max_order_size
             print(f"🔍 주문 크기 검증: order_value=${order_value:.2f}, max_order_value=${max_order_value:.2f}, total_equity=${self.total_equity:.2f}, leverage={self.leverage}, max_order_size={self.risk_manager.config.max_order_size}")
             
             valid, msg = self.risk_manager.validate_order_size(
-                quantity, self._current_price, self.total_equity, float(self.leverage)
+                float(quantity), self._current_price, self.total_equity, float(self.leverage)
             )
             if not valid:
                 self._log_audit("ORDER_REJECTED_SIZE", {"side": side, "quantity": quantity, "reason": msg})
@@ -981,7 +998,7 @@ class LiveContext:
         try:
             order_params: dict[str, Any] = {"type": order_type}
             if price is not None:
-                order_params["price"] = price
+                order_params["price"] = str(price)
                 order_params["timeInForce"] = "GTC"
             if is_reducing_order:
                 order_params["reduceOnly"] = True
@@ -989,7 +1006,7 @@ class LiveContext:
             response = await self.client.place_order(
                 symbol=self.symbol,
                 side=side,
-                quantity=quantity,
+                quantity=str(quantity),
                 **order_params,
             )
 
@@ -1045,19 +1062,37 @@ class LiveContext:
         """
         original_qty = quantity
         quantity = self._adjust_quantity(quantity)
+        
+        initial_pos_size = self.position.size
+        total_executed_qty = Decimal("0")
+        last_response: dict[str, Any] | None = None
 
         for attempt in range(self._chase_max_attempts):
+            pos_change = abs(self.position.size - initial_pos_size)
+            if pos_change >= float(quantity) - 1e-9:
+                print(f"✅ Chase Order 이미 체결됨 (포지션 확인: {initial_pos_size:.4f} → {self.position.size:.4f})")
+                if last_response:
+                    last_response["_initial_pos_size"] = initial_pos_size
+                    last_response.setdefault("side", side)
+                    last_response.setdefault("executedQty", str(float(original_qty)))
+                    return last_response
+                return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": attempt, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+            
             current_price = self._current_price
             if current_price <= 0:
                 raise ValueError("현재 가격이 유효하지 않습니다")
 
-            slippage_mult = self._chase_slippage_bps / 10000.0
-            if side == "BUY":
-                limit_price = current_price * (1 + slippage_mult)
+            if self._best_bid is not None and self._best_ask is not None and self.tick_size is not None:
+                if side == "BUY":
+                    limit_price = self._best_ask - self.tick_size
+                else:
+                    limit_price = self._best_bid + self.tick_size
             else:
-                limit_price = current_price * (1 - slippage_mult)
-
-            limit_price = self._adjust_price(limit_price)
+                slippage_mult = self._chase_slippage_bps / 10000.0
+                if side == "BUY":
+                    limit_price = self._adjust_price(current_price * (1 - slippage_mult))
+                else:
+                    limit_price = self._adjust_price(current_price * (1 + slippage_mult))
 
             self._log_audit("CHASE_ORDER_ATTEMPT", {
                 "attempt": attempt + 1,
@@ -1067,17 +1102,17 @@ class LiveContext:
                 "limit_price": limit_price,
                 "current_price": current_price,
             })
-            print(f"🎯 Chase Order 시도 {attempt + 1}/{self._chase_max_attempts}: {side} {quantity} @ {limit_price:,.2f} (현재가: {current_price:,.2f})")
+            print(f"🎯 Chase Order 시도 {attempt + 1}/{self._chase_max_attempts}: {side} {quantity} @ {float(limit_price):,.2f} (현재가: {current_price:,.2f})")
 
             try:
                 snapshot_pos_size = self.position.size
                 snapshot_entry_price = self.position.entry_price
-                new_position_size = self.position.size + (quantity if side == "BUY" else -quantity)
+                new_position_size = self.position.size + (float(quantity) if side == "BUY" else -float(quantity))
                 is_reducing_order = abs(new_position_size) < abs(self.position.size) - 1e-12
 
                 order_params: dict[str, Any] = {
                     "type": "LIMIT",
-                    "price": limit_price,
+                    "price": str(limit_price),
                     "timeInForce": "GTX",
                 }
                 if is_reducing_order:
@@ -1086,7 +1121,7 @@ class LiveContext:
                 response = await self.client.place_order(
                     symbol=self.symbol,
                     side=side,
-                    quantity=quantity,
+                    quantity=str(quantity),
                     **order_params,
                 )
 
@@ -1099,13 +1134,14 @@ class LiveContext:
                     response["_snapshot_entry_price"] = snapshot_entry_price
                     response["_chase_attempts"] = attempt + 1
                     response["_order_type"] = "CHASE_LIMIT"
+                    response["_initial_pos_size"] = initial_pos_size
 
                     self._log_audit("CHASE_ORDER_FILLED", {
                         "order_id": order_id,
                         "attempts": attempt + 1,
                         "final_price": limit_price,
                     })
-                    print(f"✅ Chase Order 체결: {side} {quantity} @ {limit_price:,.2f} ({attempt + 1}번 시도)")
+                    print(f"✅ Chase Order 체결: {side} {quantity} @ {float(limit_price):,.2f} ({attempt + 1}번 시도)")
                     return response
 
                 if order_status in ("NEW", "PARTIALLY_FILLED"):
@@ -1122,11 +1158,12 @@ class LiveContext:
                             order_info["_snapshot_entry_price"] = snapshot_entry_price
                             order_info["_chase_attempts"] = attempt + 1
                             order_info["_order_type"] = "CHASE_LIMIT"
-                            print(f"✅ Chase Order 체결: {side} {quantity} @ {limit_price:,.2f} ({attempt + 1}번 시도)")
+                            order_info["_initial_pos_size"] = initial_pos_size
+                            print(f"✅ Chase Order 체결: {side} {quantity} @ {float(limit_price):,.2f} ({attempt + 1}번 시도)")
                             return order_info
 
                         if executed_qty > 0:
-                            remaining_qty = quantity - executed_qty
+                            remaining_qty = float(quantity) - executed_qty
                             print(f"⚠️ 부분 체결: {executed_qty}/{quantity}, 남은 수량 {remaining_qty}")
                             quantity = self._adjust_quantity(remaining_qty)
 
@@ -1163,13 +1200,31 @@ class LiveContext:
                 })
                 print(f"⚠️ Chase Order 에러: {e}")
 
+        pos_change = abs(self.position.size - initial_pos_size)
+        if pos_change >= float(original_qty) * 0.99:
+            print(f"✅ Chase Order 이미 체결됨 (시장가 전환 전 확인: {initial_pos_size:.4f} → {self.position.size:.4f})")
+            return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": self._chase_max_attempts, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+        
+        remaining_qty_to_fill = float(original_qty) - pos_change
+        if remaining_qty_to_fill < float(self.min_qty or Decimal("0.001")):
+            print(f"✅ Chase Order 거의 체결됨 (남은 수량 무시: {remaining_qty_to_fill:.6f})")
+            return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": self._chase_max_attempts, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+        
         if self._chase_fallback_to_market:
-            print(f"🚨 Chase Order 실패 → 시장가로 전환")
+            print(f"🚨 Chase Order 실패 → 시장가로 전환 (남은 수량: {remaining_qty_to_fill:.4f})")
             self._log_audit("CHASE_ORDER_FALLBACK_MARKET", {
                 "original_qty": original_qty,
-                "remaining_qty": quantity,
+                "remaining_qty": remaining_qty_to_fill,
+                "position_change": pos_change,
             })
-            return await self._place_order(side, quantity, price=None, reason=reason)
+            adjusted_remaining = self._adjust_quantity(remaining_qty_to_fill)
+            if float(adjusted_remaining) < float(self.min_qty or Decimal("0.001")):
+                print(f"✅ 남은 수량이 최소 수량 미만으로 시장가 전환 생략")
+                return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": self._chase_max_attempts, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+            response = await self._place_order(side, float(adjusted_remaining), price=None, reason=reason)
+            response["_initial_pos_size"] = initial_pos_size
+            response["executedQty"] = str(float(original_qty))
+            return response
         else:
             raise ValueError(f"Chase Order 실패: {self._chase_max_attempts}회 시도 후 미체결")
 

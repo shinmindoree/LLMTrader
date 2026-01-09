@@ -118,28 +118,8 @@ class RsiLongShortStrategy(Strategy):
                 if current_pnl_pct <= -self.stop_loss_pct:
                     self.is_closing = True
                     position_type = "Long" if ctx.position_size > 0 else "Short"
-                    
-                    # 설정값에 정확히 맞는 가격 역산
-                    entry_price = ctx.position_entry_price
-                    position_size = abs(ctx.position_size)
-                    
-                    if ctx.position_size > 0:  # 롱 포지션
-                        # stop_loss_pct = -(target_price - entry_price) * size / entry_balance
-                        # target_price = entry_price - (stop_loss_pct * entry_balance / size)
-                        target_price = entry_price - (self.stop_loss_pct * entry_balance / position_size)
-                    else:  # 숏 포지션
-                        # stop_loss_pct = -(entry_price - target_price) * size / entry_balance
-                        # target_price = entry_price + (stop_loss_pct * entry_balance / size)
-                        target_price = entry_price + (self.stop_loss_pct * entry_balance / position_size)
-                    
-                    # 가격이 유효한 범위 내인지 확인 (음수 방지)
-                    if target_price > 0:
-                        reason_msg = f"StopLoss {position_type} (PnL {(-self.stop_loss_pct)*100:.2f}% of entry balance)"
-                        ctx.close_position_at_price(target_price, reason=reason_msg)
-                    else:
-                        # 가격이 유효하지 않으면 현재가로 청산
-                        reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct*100:.2f}% of entry balance)"
-                        ctx.close_position(reason=reason_msg)
+                    reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct*100:.2f}% of entry balance)"
+                    ctx.close_position(reason=reason_msg, use_chase=False)
 
         # RSI는 "마지막 닫힌 봉 close" 기준이어야 하므로,
         # 새 봉이 확정된 시점(is_new_bar=True)에서만 크로스 판단/prev_rsi 갱신.

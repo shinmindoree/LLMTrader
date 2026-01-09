@@ -10,6 +10,7 @@ from indicators.rsi import rsi_wilder_from_closes
 from live.price_feed import PriceFeed
 from live.logger import get_logger
 from strategy.base import Strategy
+from binance.market_stream import BinanceBookTickerStream
 
 
 class LiveTradingEngine:
@@ -44,6 +45,8 @@ class LiveTradingEngine:
         self._logger = get_logger("llmtrader.live")
         self.log_interval: int | None = log_interval if log_interval and log_interval > 0 else None
         self._last_log_time: float = 0.0
+        self._book_ticker_stream: BinanceBookTickerStream | None = None
+        self._book_ticker_task: asyncio.Task[None] | None = None
 
     @staticmethod
     def _compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:
@@ -100,6 +103,14 @@ class LiveTradingEngine:
 
         self.price_feed.subscribe(self._on_price_update)
 
+        is_testnet = "testnet" in self.price_feed.client.base_url.lower()
+        self._book_ticker_stream = BinanceBookTickerStream(
+            symbol=self.price_feed.symbol,
+            callback=self.ctx.update_book_ticker,
+            testnet=is_testnet,
+        )
+        self._book_ticker_task = asyncio.create_task(self._book_ticker_stream.start())
+
         feed_task = asyncio.create_task(self.price_feed.start())
 
         try:
@@ -108,10 +119,17 @@ class LiveTradingEngine:
         finally:
             await self.ctx.stop_user_stream()
             await self.price_feed.stop()
+            if self._book_ticker_stream:
+                await self._book_ticker_stream.stop()
             try:
                 await asyncio.wait_for(feed_task, timeout=2.0)
             except asyncio.TimeoutError:
                 pass
+            if self._book_ticker_task:
+                try:
+                    await asyncio.wait_for(self._book_ticker_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
 
     def stop(self) -> None:
         """라이브 트레이딩 중지."""
