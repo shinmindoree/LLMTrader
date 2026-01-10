@@ -597,22 +597,28 @@ class LiveContext:
         before_pos = float(initial_pos if initial_pos is not None else result.get("_snapshot_pos_size", self.position.size))
         before_entry = float(result.get("_snapshot_entry_price", self.position.entry_price if self.position.size != 0 else 0.0))
 
-        after_pos_api = before_pos
         before_unrealized_pnl = float(self.position.unrealized_pnl)
-        for _ in range(5):
-            try:
-                if self._use_user_stream:
-                    updated = await self._wait_for_user_stream_account_update(timeout=0.6)
-                    if updated:
+        
+        # Chase Order인 경우: 이미 User Stream으로 포지션이 업데이트된 상태이므로 직접 사용
+        if initial_pos is not None:
+            after_pos_api = float(self.position.size)
+        else:
+            # 일반 주문: User Stream 업데이트 대기
+            after_pos_api = before_pos
+            for _ in range(5):
+                try:
+                    if self._use_user_stream:
+                        updated = await self._wait_for_user_stream_account_update(timeout=0.6)
+                        if updated:
+                            after_pos_api = float(self.position.size)
+                            break
+                        await asyncio.sleep(0.3)
+                    else:
+                        await self.update_account_info()
                         after_pos_api = float(self.position.size)
                         break
-                    await asyncio.sleep(0.3)
-                else:
-                    await self.update_account_info()
-                    after_pos_api = float(self.position.size)
-                    break
-            except Exception:  # noqa: BLE001
-                    await asyncio.sleep(0.3)
+                except Exception:  # noqa: BLE001
+                        await asyncio.sleep(0.3)
 
         order_id = result.get("orderId", "N/A")
         side = result.get("side") or result.get("positionSide") or "N/A"
