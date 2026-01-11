@@ -246,7 +246,10 @@ class LiveContext:
             self._user_stream = None
 
     async def _on_user_stream_disconnect(self) -> None:
-        """User Stream 연결 끊김 시 호출 - REST 폴백 활성화."""
+        """User Stream 연결 끊김 시 호출 - REST 폴백 활성화.
+        
+        Note: 이 콜백은 실제 연결 끊김 시에만 호출됨 (user_stream.py에서 _is_actual_disconnect=True일 때만)
+        """
         self._user_stream_connected = False
         self._rest_fallback_active = True
         self._log_audit("USER_STREAM_DISCONNECTED", {
@@ -258,8 +261,12 @@ class LiveContext:
         if self._rest_fallback_task is None or self._rest_fallback_task.done():
             self._rest_fallback_task = asyncio.create_task(self._rest_fallback_loop())
 
-    async def _on_user_stream_reconnect(self) -> None:
-        """User Stream 재연결 시 호출 - 누락 거래 보정."""
+    async def _on_user_stream_reconnect(self, is_actual_disconnect: bool) -> None:
+        """User Stream 재연결 시 호출 - 누락 거래 보정.
+        
+        Args:
+            is_actual_disconnect: 실제 연결 끊김 여부 (True면 실제 문제, False면 메시지 타임아웃 등)
+        """
         self._user_stream_connected = True
         self._rest_fallback_active = False
         
@@ -271,19 +278,27 @@ class LiveContext:
                 pass
             self._rest_fallback_task = None
         
-        print("🔄 REST 폴백 비활성화, 누락 거래 확인 중...")
-        
-        await self._reconcile_missed_trades()
-        await self.update_account_info(force=True)
+        # 실제 연결 끊김인 경우에만 로그 출력
+        if is_actual_disconnect:
+            print("🔄 REST 폴백 비활성화, 누락 거래 확인 중...")
+            await self._reconcile_missed_trades(is_actual_disconnect=True)
+            await self.update_account_info(force=True)
+        else:
+            # 메시지 타임아웃으로 인한 정상 재연결: 조용히 처리
+            await self._reconcile_missed_trades(is_actual_disconnect=False)
+            await self.update_account_info(force=True)
         
         self._log_audit("USER_STREAM_RECONNECTED", {
+            "is_actual_disconnect": is_actual_disconnect,
             "position_size": self.position.size,
             "balance": self.balance,
         })
 
     async def _rest_fallback_loop(self) -> None:
-        """REST 폴백 루프 - User Stream 끊김 시 주기적으로 REST로 계좌/포지션 조회."""
-        print("🔄 REST 폴백 루프 시작")
+        """REST 폴백 루프 - User Stream 끊김 시 주기적으로 REST로 계좌/포지션 조회.
+        
+        Note: 이 루프는 실제 연결 끊김 시에만 시작되므로 로그 출력 안 함 (조용히 동작)
+        """
         while self._rest_fallback_active and self._use_user_stream:
             try:
                 await self.update_account_info(force=True)
@@ -292,10 +307,13 @@ class LiveContext:
                 print(f"⚠️ REST 폴백 조회 오류: {e}")
             
             await asyncio.sleep(self._rest_fallback_interval)
-        print("🔄 REST 폴백 루프 종료")
 
-    async def _reconcile_missed_trades(self) -> None:
-        """재연결 후 누락된 거래 보정."""
+    async def _reconcile_missed_trades(self, is_actual_disconnect: bool = True) -> None:
+        """재연결 후 누락된 거래 보정.
+        
+        Args:
+            is_actual_disconnect: 실제 연결 끊김 여부 (True면 로그 출력, False면 조용히 처리)
+        """
         try:
             now_ms = int(time.time() * 1000)
             start_time = int(self._last_trade_check_time * 1000) if self._last_trade_check_time > 0 else now_ms - 3600000
@@ -308,13 +326,15 @@ class LiveContext:
             )
             
             if not trades:
-                print("✅ 누락 거래 없음")
+                if is_actual_disconnect:
+                    print("✅ 누락 거래 없음")
                 return
             
             new_trades = [t for t in trades if t.get("id") not in self._processed_trade_ids]
             
             if new_trades:
-                print(f"📋 누락 거래 {len(new_trades)}건 발견, 로그 기록 중...")
+                if is_actual_disconnect:
+                    print(f"📋 누락 거래 {len(new_trades)}건 발견, 로그 기록 중...")
                 for trade in new_trades:
                     trade_id = trade.get("id")
                     if trade_id:
@@ -335,13 +355,15 @@ class LiveContext:
                     sorted_ids = sorted(self._processed_trade_ids)
                     self._processed_trade_ids = set(sorted_ids[-5000:])
             else:
-                print("✅ 모든 거래가 이미 처리됨")
+                if is_actual_disconnect:
+                    print("✅ 모든 거래가 이미 처리됨")
             
             self._last_trade_check_time = time.time()
             
         except Exception as e:  # noqa: BLE001
             self._log_audit("RECONCILE_TRADES_FAILED", {"error": str(e)})
-            print(f"⚠️ 누락 거래 조회 실패: {e}")
+            if is_actual_disconnect:
+                print(f"⚠️ 누락 거래 조회 실패: {e}")
 
     async def _check_recent_trades(self) -> None:
         """최근 거래 확인 (REST 폴백 시 사용)."""

@@ -20,7 +20,7 @@ class BinanceUserStream:
         testnet: bool = False,
         keepalive_interval: float = 25 * 60.0,
         on_disconnect: Callable[[], Awaitable[None]] | None = None,
-        on_reconnect: Callable[[], Awaitable[None]] | None = None,
+        on_reconnect: Callable[[bool], Awaitable[None]] | None = None,
     ) -> None:
         """유저데이터 스트림 초기화.
 
@@ -31,6 +31,7 @@ class BinanceUserStream:
             keepalive_interval: listenKey 갱신 주기(초)
             on_disconnect: 연결 끊김 시 호출될 콜백 (REST 폴백 트리거용)
             on_reconnect: 재연결 시 호출될 콜백 (누락 거래 보정용)
+                          파라미터: is_actual_disconnect (실제 연결 끊김 여부)
         """
         self.client = client
         self.callback = callback
@@ -88,7 +89,7 @@ class BinanceUserStream:
         while self.running:
             reconnect = False
             was_connected = self._connected
-            self._is_actual_disconnect = False
+            is_actual_disconnect_for_reconnect = False
             try:
                 self._listen_key = await self.client.create_listen_key()
                 self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -105,12 +106,17 @@ class BinanceUserStream:
                         print("✅ User Stream 연결됨")
                         is_first_connect = False
                     else:
-                        print(f"🔄 User Stream 재연결됨 (연결 #{self._connection_count})")
+                        # 실제 연결 끊김인 경우에만 재연결 로그 출력
+                        if is_actual_disconnect_for_reconnect:
+                            print(f"🔄 User Stream 재연결됨 (연결 #{self._connection_count})")
                         if self.on_reconnect:
                             try:
-                                await self.on_reconnect()
+                                await self.on_reconnect(is_actual_disconnect_for_reconnect)
                             except Exception as e:  # noqa: BLE001
                                 print(f"⚠️ on_reconnect 콜백 오류: {e}")
+                        
+                        # 재연결 후 플래그 리셋
+                        self._is_actual_disconnect = False
 
                     self._healthcheck_task = asyncio.create_task(self._healthcheck_loop())
 
@@ -157,15 +163,17 @@ class BinanceUserStream:
                     self._connected = False
                     self._disconnect_count += 1
                     
-                    # 실제 연결 끊김인 경우에만 로그 출력
+                    # 실제 연결 끊김인 경우에만 로그 출력 및 콜백 호출
                     if self._is_actual_disconnect:
                         print(f"📡 User Stream 연결 끊김 (끊김 #{self._disconnect_count})")
-                    
-                    if self.on_disconnect:
-                        try:
-                            await self.on_disconnect()
-                        except Exception as e:  # noqa: BLE001
-                            print(f"⚠️ on_disconnect 콜백 오류: {e}")
+                        is_actual_disconnect_for_reconnect = True
+                        
+                        # 실제 연결 끊김인 경우에만 REST 폴백 활성화
+                        if self.on_disconnect:
+                            try:
+                                await self.on_disconnect()
+                            except Exception as e:  # noqa: BLE001
+                                print(f"⚠️ on_disconnect 콜백 오류: {e}")
                 
                 await self._stop_healthcheck()
                 await self._stop_keepalive()
