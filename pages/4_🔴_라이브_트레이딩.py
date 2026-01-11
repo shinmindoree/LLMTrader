@@ -4,6 +4,9 @@ from pathlib import Path
 
 import streamlit as st
 
+# 프로젝트 루트 경로 설정
+project_root = Path(__file__).parent.parent
+
 st.set_page_config(page_title="라이브 트레이딩", page_icon="🔴", layout="wide")
 
 st.title("🔴 라이브 트레이딩")
@@ -42,7 +45,7 @@ st.divider()
 # 전략 파일 선택
 st.subheader("1️⃣ 전략 선택")
 
-strategy_files = list(Path(".").glob("*_strategy.py"))
+strategy_files = list(project_root.glob("*_strategy.py"))
 strategy_files = [p for p in strategy_files if p.name != "generated_strategy.py"]
 
 if not strategy_files:

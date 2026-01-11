@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from indicators.pandas_ta_wrapper import PandasTAWrapper
 from indicators.rsi import rsi_wilder_from_closes
 from backtest.risk import BacktestRiskManager
 from strategy.context import StrategyContext
@@ -350,6 +351,51 @@ class BacktestContext:
                 return 50.0
             closes = list(self._closes) + [float(self._current_price)]
             return rsi_wilder_from_closes(closes, int(period))
+
+        # pandas-ta 지표 지원
+        elif name == "macd":
+            fast = args[0] if len(args) > 0 else kwargs.get("fast", 12)
+            slow = args[1] if len(args) > 1 else kwargs.get("slow", 26)
+            signal = args[2] if len(args) > 2 else kwargs.get("signal", 9)
+            return PandasTAWrapper.macd(self._closes, fast=int(fast), slow=int(slow), signal=int(signal))
+
+        elif name == "bollinger" or name == "bbands":
+            period = args[0] if args else kwargs.get("period", 20)
+            std_dev = args[1] if len(args) > 1 else kwargs.get("std_dev", 2.0)
+            return PandasTAWrapper.bollinger_bands(self._closes, period=int(period), std_dev=float(std_dev))
+
+        elif name == "atr":
+            # ATR은 high, low가 필요하지만 BacktestContext에는 closes만 있음
+            # 일단 closes를 high/low로 사용 (근사치)
+            period = args[0] if args else kwargs.get("period", 14)
+            if len(self._closes) < period + 1:
+                return 0.0
+            # closes를 high/low로 사용 (정확하지 않지만 기본 동작)
+            highs = list(self._closes)
+            lows = list(self._closes)
+            return PandasTAWrapper.atr(highs, lows, self._closes, period=int(period))
+
+        elif name == "stochastic" or name == "stoch":
+            # Stochastic은 high, low가 필요하지만 BacktestContext에는 closes만 있음
+            # 일단 closes를 high/low로 사용 (근사치)
+            k_period = args[0] if args else kwargs.get("k_period", 14)
+            d_period = args[1] if len(args) > 1 else kwargs.get("d_period", 3)
+            if len(self._closes) < k_period + d_period:
+                return (50.0, 50.0)
+            # closes를 high/low로 사용 (정확하지 않지만 기본 동작)
+            highs = list(self._closes)
+            lows = list(self._closes)
+            return PandasTAWrapper.stochastic(highs, lows, self._closes, k_period=int(k_period), d_period=int(d_period))
+
+        elif name == "obv":
+            # OBV는 volume이 필요하지만 BacktestContext에는 volume 데이터가 없음
+            # 일단 0 반환 (나중에 volume 데이터 추가 시 확장 가능)
+            return 0.0
+
+        # pandas-ta RSI (기존 rsi와 동일하지만 pandas-ta 사용)
+        elif name == "rsi_ta":
+            period = args[0] if args else kwargs.get("period", 14)
+            return PandasTAWrapper.rsi(self._closes, period=int(period))
         
         return 0.0
     
