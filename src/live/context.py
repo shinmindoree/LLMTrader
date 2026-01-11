@@ -74,10 +74,19 @@ class LiveContext:
         self._user_stream: BinanceUserStream | None = None
         self._user_stream_task: asyncio.Task | None = None
         self._use_user_stream: bool = False
+        self._user_stream_connected: bool = False
         self._last_user_stream_account_update: float = 0.0
         self._account_reconcile_interval: float = 600.0
         self._last_reconcile_time: float = 0.0
         self._open_orders_by_id: dict[int, dict[str, Any]] = {}
+        
+        self._rest_fallback_active: bool = False
+        self._rest_fallback_interval: float = 2.0
+        self._rest_fallback_task: asyncio.Task | None = None
+        
+        self._last_trade_check_time: float = 0.0
+        self._processed_trade_ids: set[int] = set()
+        self._chase_order_ids: list[int] = []
         
         self.balance: float = 0.0
         self.available_balance: float = 0.0
@@ -190,7 +199,7 @@ class LiveContext:
         
         if self._user_stream_task and self._user_stream_task.done():
             try:
-                self._user_stream_task.result()  # 예외 확인
+                self._user_stream_task.result()
             except Exception:
                 pass
             self._user_stream_task = None
@@ -201,11 +210,15 @@ class LiveContext:
             client=self.client,
             callback=self._handle_user_stream_event,
             testnet=is_testnet,
+            on_disconnect=self._on_user_stream_disconnect,
+            on_reconnect=self._on_user_stream_reconnect,
         )
         self._use_user_stream = True
+        self._user_stream_connected = True
         now = time.time()
         self._last_user_stream_account_update = now
         self._last_reconcile_time = now
+        self._last_trade_check_time = now
         self._user_stream_task = asyncio.create_task(self._user_stream.start())
         self._user_stream_task.add_done_callback(self._handle_user_stream_task_result)
 
@@ -228,8 +241,197 @@ class LiveContext:
         except Exception as exc:  # noqa: BLE001
             print(f"User Stream stopped: {exc}")
             self._use_user_stream = False
+            self._user_stream_connected = False
             self._user_stream_task = None
             self._user_stream = None
+
+    async def _on_user_stream_disconnect(self) -> None:
+        """User Stream 연결 끊김 시 호출 - REST 폴백 활성화."""
+        self._user_stream_connected = False
+        self._rest_fallback_active = True
+        self._log_audit("USER_STREAM_DISCONNECTED", {
+            "fallback_enabled": True,
+            "fallback_interval": self._rest_fallback_interval,
+        })
+        print(f"📡 REST 폴백 활성화 (주기: {self._rest_fallback_interval}초)")
+        
+        if self._rest_fallback_task is None or self._rest_fallback_task.done():
+            self._rest_fallback_task = asyncio.create_task(self._rest_fallback_loop())
+
+    async def _on_user_stream_reconnect(self) -> None:
+        """User Stream 재연결 시 호출 - 누락 거래 보정."""
+        self._user_stream_connected = True
+        self._rest_fallback_active = False
+        
+        if self._rest_fallback_task and not self._rest_fallback_task.done():
+            self._rest_fallback_task.cancel()
+            try:
+                await self._rest_fallback_task
+            except asyncio.CancelledError:
+                pass
+            self._rest_fallback_task = None
+        
+        print("🔄 REST 폴백 비활성화, 누락 거래 확인 중...")
+        
+        await self._reconcile_missed_trades()
+        await self.update_account_info(force=True)
+        
+        self._log_audit("USER_STREAM_RECONNECTED", {
+            "position_size": self.position.size,
+            "balance": self.balance,
+        })
+
+    async def _rest_fallback_loop(self) -> None:
+        """REST 폴백 루프 - User Stream 끊김 시 주기적으로 REST로 계좌/포지션 조회."""
+        print("🔄 REST 폴백 루프 시작")
+        while self._rest_fallback_active and self._use_user_stream:
+            try:
+                await self.update_account_info(force=True)
+                await self._check_recent_trades()
+            except Exception as e:  # noqa: BLE001
+                print(f"⚠️ REST 폴백 조회 오류: {e}")
+            
+            await asyncio.sleep(self._rest_fallback_interval)
+        print("🔄 REST 폴백 루프 종료")
+
+    async def _reconcile_missed_trades(self) -> None:
+        """재연결 후 누락된 거래 보정."""
+        try:
+            now_ms = int(time.time() * 1000)
+            start_time = int(self._last_trade_check_time * 1000) if self._last_trade_check_time > 0 else now_ms - 3600000
+            
+            trades = await self.client.fetch_user_trades(
+                symbol=self.symbol,
+                start_time=start_time,
+                end_time=now_ms,
+                limit=100,
+            )
+            
+            if not trades:
+                print("✅ 누락 거래 없음")
+                return
+            
+            new_trades = [t for t in trades if t.get("id") not in self._processed_trade_ids]
+            
+            if new_trades:
+                print(f"📋 누락 거래 {len(new_trades)}건 발견, 로그 기록 중...")
+                for trade in new_trades:
+                    trade_id = trade.get("id")
+                    if trade_id:
+                        self._processed_trade_ids.add(trade_id)
+                    
+                    self._log_audit("MISSED_TRADE_RECONCILED", {
+                        "trade_id": trade_id,
+                        "order_id": trade.get("orderId"),
+                        "side": trade.get("side"),
+                        "price": trade.get("price"),
+                        "qty": trade.get("qty"),
+                        "realized_pnl": trade.get("realizedPnl"),
+                        "commission": trade.get("commission"),
+                        "time": trade.get("time"),
+                    })
+                
+                if len(self._processed_trade_ids) > 10000:
+                    sorted_ids = sorted(self._processed_trade_ids)
+                    self._processed_trade_ids = set(sorted_ids[-5000:])
+            else:
+                print("✅ 모든 거래가 이미 처리됨")
+            
+            self._last_trade_check_time = time.time()
+            
+        except Exception as e:  # noqa: BLE001
+            self._log_audit("RECONCILE_TRADES_FAILED", {"error": str(e)})
+            print(f"⚠️ 누락 거래 조회 실패: {e}")
+
+    async def _check_recent_trades(self) -> None:
+        """최근 거래 확인 (REST 폴백 시 사용)."""
+        try:
+            now_ms = int(time.time() * 1000)
+            start_time = now_ms - 60000
+            
+            trades = await self.client.fetch_user_trades(
+                symbol=self.symbol,
+                start_time=start_time,
+                limit=20,
+            )
+            
+            for trade in trades:
+                trade_id = trade.get("id")
+                if trade_id and trade_id not in self._processed_trade_ids:
+                    self._processed_trade_ids.add(trade_id)
+                    print(f"📋 REST 폴백: 거래 감지 orderId={trade.get('orderId')} side={trade.get('side')} qty={trade.get('qty')}")
+                    self._log_audit("REST_FALLBACK_TRADE_DETECTED", {
+                        "trade_id": trade_id,
+                        "order_id": trade.get("orderId"),
+                        "side": trade.get("side"),
+                        "price": trade.get("price"),
+                        "qty": trade.get("qty"),
+                    })
+            
+            self._last_trade_check_time = time.time()
+            
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ 최근 거래 확인 실패: {e}")
+
+    async def _verify_order_with_rest(
+        self,
+        result: dict[str, Any],
+        before_pos: float,
+        after_pos_api: float,
+    ) -> None:
+        """주문 체결 후 REST API로 거래 검증.
+        
+        Args:
+            result: 주문 응답
+            before_pos: 주문 전 포지션
+            after_pos_api: User Stream/REST로 확인된 현재 포지션
+        """
+        try:
+            order_id = result.get("orderId")
+            all_order_ids = result.get("_all_order_ids", [])
+            
+            if not order_id and not all_order_ids:
+                return
+            
+            now_ms = int(time.time() * 1000)
+            start_time = now_ms - 300000
+            
+            trades = await self.client.fetch_user_trades(
+                symbol=self.symbol,
+                start_time=start_time,
+                limit=50,
+            )
+            
+            order_ids_to_check = set(all_order_ids) if all_order_ids else {order_id}
+            matched_trades = [t for t in trades if t.get("orderId") in order_ids_to_check]
+            
+            if matched_trades:
+                total_qty = sum(float(t.get("qty", 0)) for t in matched_trades)
+                total_commission = sum(float(t.get("commission", 0)) for t in matched_trades)
+                total_pnl = sum(float(t.get("realizedPnl", 0)) for t in matched_trades)
+                
+                self._log_audit("ORDER_VERIFIED_REST", {
+                    "order_ids": list(order_ids_to_check),
+                    "matched_trade_count": len(matched_trades),
+                    "total_qty": total_qty,
+                    "total_commission": total_commission,
+                    "total_realized_pnl": total_pnl,
+                    "before_pos": before_pos,
+                    "after_pos_api": after_pos_api,
+                })
+                
+                for trade in matched_trades:
+                    trade_id = trade.get("id")
+                    if trade_id:
+                        self._processed_trade_ids.add(trade_id)
+            else:
+                self._log_audit("ORDER_VERIFY_NO_MATCH", {
+                    "order_ids": list(order_ids_to_check),
+                    "trades_checked": len(trades),
+                })
+                
+        except Exception as e:  # noqa: BLE001
+            self._log_audit("ORDER_VERIFY_FAILED", {"error": str(e)})
 
     async def _handle_user_stream_event(self, data: dict[str, Any]) -> None:
         event_type = data.get("e")
@@ -599,26 +801,33 @@ class LiveContext:
 
         before_unrealized_pnl = float(self.position.unrealized_pnl)
         
-        # Chase Order인 경우: 이미 User Stream으로 포지션이 업데이트된 상태이므로 직접 사용
+        all_order_ids = result.get("_all_order_ids", [])
+        if all_order_ids:
+            self._log_audit("CHASE_ORDER_IDS_SUMMARY", {
+                "all_order_ids": all_order_ids,
+                "count": len(all_order_ids),
+            })
+        
         if initial_pos is not None:
             after_pos_api = float(self.position.size)
         else:
-            # 일반 주문: User Stream 업데이트 대기
             after_pos_api = before_pos
             for _ in range(5):
                 try:
-                    if self._use_user_stream:
+                    if self._use_user_stream and self._user_stream_connected:
                         updated = await self._wait_for_user_stream_account_update(timeout=0.6)
                         if updated:
                             after_pos_api = float(self.position.size)
                             break
                         await asyncio.sleep(0.3)
                     else:
-                        await self.update_account_info()
+                        await self.update_account_info(force=True)
                         after_pos_api = float(self.position.size)
                         break
                 except Exception:  # noqa: BLE001
                         await asyncio.sleep(0.3)
+        
+        await self._verify_order_with_rest(result, before_pos, after_pos_api)
 
         order_id = result.get("orderId", "N/A")
         side = result.get("side") or result.get("positionSide") or "N/A"
@@ -1064,7 +1273,7 @@ class LiveContext:
             reason: 주문 사유
 
         Returns:
-            주문 응답
+            주문 응답 (모든 orderId 포함)
         """
         original_qty = quantity
         quantity = self._adjust_quantity(quantity)
@@ -1072,6 +1281,9 @@ class LiveContext:
         initial_pos_size = self.position.size
         total_executed_qty = Decimal("0")
         last_response: dict[str, Any] | None = None
+        
+        chase_order_ids: list[int] = []
+        chase_fills: list[dict[str, Any]] = []
 
         for attempt in range(self._chase_max_attempts):
             pos_change = abs(self.position.size - initial_pos_size)
@@ -1079,10 +1291,22 @@ class LiveContext:
                 print(f"✅ Chase Order 이미 체결됨 (포지션 확인: {initial_pos_size:.4f} → {self.position.size:.4f})")
                 if last_response:
                     last_response["_initial_pos_size"] = initial_pos_size
+                    last_response["_all_order_ids"] = chase_order_ids
+                    last_response["_chase_fills"] = chase_fills
                     last_response.setdefault("side", side)
                     last_response.setdefault("executedQty", str(float(original_qty)))
                     return last_response
-                return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": attempt, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+                return {
+                    "status": "FILLED",
+                    "_reason": reason,
+                    "_order_type": "CHASE_LIMIT",
+                    "_chase_attempts": attempt,
+                    "_initial_pos_size": initial_pos_size,
+                    "_all_order_ids": chase_order_ids,
+                    "_chase_fills": chase_fills,
+                    "side": side,
+                    "executedQty": str(float(original_qty)),
+                }
             
             current_price = self._current_price
             if current_price <= 0:
@@ -1133,6 +1357,17 @@ class LiveContext:
 
                 order_id = response.get("orderId")
                 order_status = response.get("status")
+                
+                if order_id:
+                    chase_order_ids.append(order_id)
+                    chase_fills.append({
+                        "order_id": order_id,
+                        "attempt": attempt + 1,
+                        "price": str(limit_price),
+                        "qty": str(quantity),
+                        "status": order_status,
+                        "executed_qty": response.get("executedQty", "0"),
+                    })
 
                 if order_status == "FILLED":
                     response["_reason"] = reason
@@ -1141,13 +1376,17 @@ class LiveContext:
                     response["_chase_attempts"] = attempt + 1
                     response["_order_type"] = "CHASE_LIMIT"
                     response["_initial_pos_size"] = initial_pos_size
+                    response["_all_order_ids"] = chase_order_ids
+                    response["_chase_fills"] = chase_fills
 
                     self._log_audit("CHASE_ORDER_FILLED", {
                         "order_id": order_id,
+                        "all_order_ids": chase_order_ids,
                         "attempts": attempt + 1,
                         "final_price": limit_price,
+                        "total_fills": len(chase_fills),
                     })
-                    print(f"✅ Chase Order 체결: {side} {quantity} @ {float(limit_price):,.2f} ({attempt + 1}번 시도)")
+                    print(f"✅ Chase Order 체결: {side} {quantity} @ {float(limit_price):,.2f} ({attempt + 1}번 시도, 총 {len(chase_order_ids)}개 주문)")
                     return response
 
                 if order_status in ("NEW", "PARTIALLY_FILLED"):
@@ -1165,7 +1404,9 @@ class LiveContext:
                             order_info["_chase_attempts"] = attempt + 1
                             order_info["_order_type"] = "CHASE_LIMIT"
                             order_info["_initial_pos_size"] = initial_pos_size
-                            print(f"✅ Chase Order 체결: {side} {quantity} @ {float(limit_price):,.2f} ({attempt + 1}번 시도)")
+                            order_info["_all_order_ids"] = chase_order_ids
+                            order_info["_chase_fills"] = chase_fills
+                            print(f"✅ Chase Order 체결: {side} {quantity} @ {float(limit_price):,.2f} ({attempt + 1}번 시도, 총 {len(chase_order_ids)}개 주문)")
                             return order_info
 
                         if executed_qty > 0:
@@ -1208,31 +1449,64 @@ class LiveContext:
 
         pos_change = abs(self.position.size - initial_pos_size)
         if pos_change >= float(original_qty) * 0.99:
-            print(f"✅ Chase Order 이미 체결됨 (시장가 전환 전 확인: {initial_pos_size:.4f} → {self.position.size:.4f})")
-            return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": self._chase_max_attempts, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+            print(f"✅ Chase Order 이미 체결됨 (시장가 전환 전 확인: {initial_pos_size:.4f} → {self.position.size:.4f}, 총 {len(chase_order_ids)}개 주문)")
+            return {
+                "status": "FILLED",
+                "_reason": reason,
+                "_order_type": "CHASE_LIMIT",
+                "_chase_attempts": self._chase_max_attempts,
+                "_initial_pos_size": initial_pos_size,
+                "_all_order_ids": chase_order_ids,
+                "_chase_fills": chase_fills,
+                "side": side,
+                "executedQty": str(float(original_qty)),
+            }
         
         remaining_qty_to_fill = float(original_qty) - pos_change
         if remaining_qty_to_fill < float(self.min_qty or Decimal("0.001")):
-            print(f"✅ Chase Order 거의 체결됨 (남은 수량 무시: {remaining_qty_to_fill:.6f})")
-            return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": self._chase_max_attempts, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+            print(f"✅ Chase Order 거의 체결됨 (남은 수량 무시: {remaining_qty_to_fill:.6f}, 총 {len(chase_order_ids)}개 주문)")
+            return {
+                "status": "FILLED",
+                "_reason": reason,
+                "_order_type": "CHASE_LIMIT",
+                "_chase_attempts": self._chase_max_attempts,
+                "_initial_pos_size": initial_pos_size,
+                "_all_order_ids": chase_order_ids,
+                "_chase_fills": chase_fills,
+                "side": side,
+                "executedQty": str(float(original_qty)),
+            }
         
         if self._chase_fallback_to_market:
-            print(f"🚨 Chase Order 실패 → 시장가로 전환 (남은 수량: {remaining_qty_to_fill:.4f})")
+            print(f"🚨 Chase Order 실패 → 시장가로 전환 (남은 수량: {remaining_qty_to_fill:.4f}, 기존 {len(chase_order_ids)}개 주문)")
             self._log_audit("CHASE_ORDER_FALLBACK_MARKET", {
                 "original_qty": original_qty,
                 "remaining_qty": remaining_qty_to_fill,
                 "position_change": pos_change,
+                "chase_order_ids": chase_order_ids,
             })
             adjusted_remaining = self._adjust_quantity(remaining_qty_to_fill)
             if float(adjusted_remaining) < float(self.min_qty or Decimal("0.001")):
                 print(f"✅ 남은 수량이 최소 수량 미만으로 시장가 전환 생략")
-                return {"status": "FILLED", "_reason": reason, "_order_type": "CHASE_LIMIT", "_chase_attempts": self._chase_max_attempts, "_initial_pos_size": initial_pos_size, "side": side, "executedQty": str(float(original_qty))}
+                return {
+                    "status": "FILLED",
+                    "_reason": reason,
+                    "_order_type": "CHASE_LIMIT",
+                    "_chase_attempts": self._chase_max_attempts,
+                    "_initial_pos_size": initial_pos_size,
+                    "_all_order_ids": chase_order_ids,
+                    "_chase_fills": chase_fills,
+                    "side": side,
+                    "executedQty": str(float(original_qty)),
+                }
             response = await self._place_order(side, float(adjusted_remaining), price=None, reason=reason)
             response["_initial_pos_size"] = initial_pos_size
+            response["_all_order_ids"] = chase_order_ids + [response.get("orderId")]
+            response["_chase_fills"] = chase_fills
             response["executedQty"] = str(float(original_qty))
             return response
         else:
-            raise ValueError(f"Chase Order 실패: {self._chase_max_attempts}회 시도 후 미체결")
+            raise ValueError(f"Chase Order 실패: {self._chase_max_attempts}회 시도 후 미체결 (주문 IDs: {chase_order_ids})")
 
     def cancel_order(self, order_id: int) -> None:
         """주문 취소.

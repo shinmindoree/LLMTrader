@@ -267,6 +267,52 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response = await self._client.delete("/fapi/v1/listenKey", params={"listenKey": listen_key})
         response.raise_for_status()
 
+    async def fetch_user_trades(
+        self,
+        symbol: str,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """사용자 거래 내역 조회.
+
+        Args:
+            symbol: 거래 심볼 (예: BTCUSDT)
+            start_time: 시작 시간 (밀리초 타임스탬프)
+            end_time: 종료 시간 (밀리초 타임스탬프)
+            limit: 조회 개수 (최대 1000)
+
+        Returns:
+            거래 내역 목록
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "id": 12345,
+                    "orderId": 11579702518,
+                    "side": "SELL",
+                    "price": "90579.20",
+                    "qty": "0.225",
+                    "realizedPnl": "0.00",
+                    "marginAsset": "USDT",
+                    "quoteQty": "20380.32",
+                    "commission": "8.152",
+                    "commissionAsset": "USDT",
+                    "time": 1736579227000,
+                    "positionSide": "BOTH",
+                    "buyer": false,
+                    "maker": false
+                },
+                ...
+            ]
+        """
+        payload: dict[str, Any] = {"symbol": symbol, "limit": limit}
+        if start_time is not None:
+            payload["startTime"] = start_time
+        if end_time is not None:
+            payload["endTime"] = end_time
+        response = await self._signed_request("GET", "/fapi/v1/userTrades", payload)
+        return response if isinstance(response, list) else []
+
     async def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> dict:
         max_retries = 5
         base_delay = 1.0
