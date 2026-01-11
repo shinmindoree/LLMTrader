@@ -808,9 +808,41 @@ class LiveContext:
                 "count": len(all_order_ids),
             })
         
+        order_id = result.get("orderId", "N/A")
+        side = result.get("side") or result.get("positionSide") or "N/A"
+        executed_qty = result.get("executedQty") or result.get("origQty") or ""
+        avg_price = result.get("avgPrice") or result.get("price") or ""
+        order_type = result.get("type", "MARKET")
+        
+        internal_order_type = result.get("_order_type")
+        is_maker = order_type == "LIMIT" or internal_order_type in ("CHASE_LIMIT", "LIMIT")
+        order_type_display = "LIMIT(Maker)" if is_maker else "MARKET(Taker)"
+        
+        executed_qty_float = float(executed_qty) if executed_qty else 0.0
+        
+        # executed_qty 기반으로 포지션 계산 (REST API 응답이므로 정확함)
+        calculated_after_pos: float | None = None
+        if executed_qty_float > 0:
+            if side == "BUY":
+                calculated_after_pos = before_pos + executed_qty_float
+            elif side == "SELL":
+                calculated_after_pos = before_pos - executed_qty_float
+        
+        # API 포지션 확인 (User Stream 또는 REST)
         if initial_pos is not None:
-            after_pos_api = float(self.position.size)
+            # Chase Order: User Stream이 연결되어 있으면 업데이트 대기, 아니면 계산값 사용
+            if self._use_user_stream and self._user_stream_connected:
+                updated = await self._wait_for_user_stream_account_update(timeout=0.5)
+                if updated:
+                    after_pos_api = float(self.position.size)
+                else:
+                    # User Stream 업데이트 없으면 계산값 사용
+                    after_pos_api = calculated_after_pos if calculated_after_pos is not None else float(self.position.size)
+            else:
+                # User Stream 끊김: 계산값 우선 사용 (REST API 호출 없음)
+                after_pos_api = calculated_after_pos if calculated_after_pos is not None else float(self.position.size)
         else:
+            # 일반 주문: User Stream 업데이트 대기 또는 REST API 호출
             after_pos_api = before_pos
             for _ in range(5):
                 try:
@@ -828,37 +860,22 @@ class LiveContext:
                         await asyncio.sleep(0.3)
         
         await self._verify_order_with_rest(result, before_pos, after_pos_api)
-
-        order_id = result.get("orderId", "N/A")
-        side = result.get("side") or result.get("positionSide") or "N/A"
-        executed_qty = result.get("executedQty") or result.get("origQty") or ""
-        avg_price = result.get("avgPrice") or result.get("price") or ""
-        order_type = result.get("type", "MARKET")
         
-        internal_order_type = result.get("_order_type")
-        is_maker = order_type == "LIMIT" or internal_order_type in ("CHASE_LIMIT", "LIMIT")
-        order_type_display = "LIMIT(Maker)" if is_maker else "MARKET(Taker)"
-        
-        executed_qty_float = float(executed_qty) if executed_qty else 0.0
+        # 최종 포지션 결정: 계산값과 API 값 비교
         after_pos = after_pos_api
-        
-        # _initial_pos_size가 있으면 API 값을 신뢰 (Chase Order에서 부분 체결로 인한 불일치 정상)
-        if initial_pos is None and executed_qty_float > 0:
-            if side == "BUY":
-                calculated_after_pos = before_pos + executed_qty_float
-            elif side == "SELL":
-                calculated_after_pos = before_pos - executed_qty_float
-            else:
-                calculated_after_pos = after_pos_api
-            
-            if abs(executed_qty_float) > 1e-12:
-                if abs(after_pos_api - before_pos) < 1e-12:
-                    print(f"⚠️ API 지연 감지: after_pos_api={after_pos_api:+.6f} (변화 없음), executedQty={executed_qty_float:+.6f} 기반 계산값={calculated_after_pos:+.6f} 사용")
+        if calculated_after_pos is not None and abs(executed_qty_float) > 1e-12:
+            if abs(after_pos_api - before_pos) < 1e-12:
+                # API 값이 변화 없으면 계산값 사용 (API 지연)
+                print(f"⚠️ API 지연 감지: after_pos_api={after_pos_api:+.6f} (변화 없음), executedQty={executed_qty_float:+.6f} 기반 계산값={calculated_after_pos:+.6f} 사용")
+                after_pos = calculated_after_pos
+            elif abs(calculated_after_pos - after_pos_api) > 1e-8:
+                # 불일치 시 계산값 우선 (REST API 응답이 더 정확)
+                print(f"⚠️ 포지션 불일치: API={after_pos_api:+.6f}, 계산값={calculated_after_pos:+.6f}, executedQty={executed_qty_float:+.6f}, side={side} → 계산값 사용")
+                if (calculated_after_pos * after_pos_api) >= 0:
                     after_pos = calculated_after_pos
-                elif abs(calculated_after_pos - after_pos_api) > 1e-8:
-                    print(f"⚠️ 포지션 불일치: API={after_pos_api:+.6f}, 계산값={calculated_after_pos:+.6f}, executedQty={executed_qty_float:+.6f}, side={side}")
-                    if (calculated_after_pos * after_pos_api) >= 0:
-                        after_pos = calculated_after_pos
+            else:
+                # 일치하면 API 값 사용
+                after_pos = after_pos_api
         
         def parse_price(price_str: str) -> float:
             """가격 문자열을 float로 변환. 0이거나 유효하지 않으면 0.0 반환."""
@@ -1025,12 +1042,8 @@ class LiveContext:
                 f"- side: {side}\n"
                 f"- type: {order_type_display}\n"
                 f"- pos: {before_pos:+.4f} -> {after_pos:+.4f}\n"
-                f"- last: {last_now:,.2f}\n"
-                f"- rsi({p}): {rsi_p:.2f} (rt {rsi_rt_p:.2f})\n"
                 + (f"- thresholds: entry={entry_thr}, exit={exit_thr}\n" if entry_thr is not None or exit_thr is not None else "")
             )
-            text += f"- leverage: {self.leverage}x\n"
-            text += f"- max-position: {max_position_pct:.0f}%\n"
             text += f"- candle-interval: {self.candle_interval}\n"
             text += f"- commission: {final_commission:.4f} {commission_asset} (rate={commission_rate_pct:.2f}%)\n"
             

@@ -54,8 +54,9 @@ class BinanceUserStream:
         self._last_message_time: float = 0.0
         self._connection_count: int = 0
         self._disconnect_count: int = 0
-        self._healthcheck_interval: float = 2
-        self._message_timeout: float = 10
+        self._healthcheck_interval: float = 5
+        self._message_timeout: float = 60
+        self._is_actual_disconnect: bool = False
 
     @property
     def is_connected(self) -> bool:
@@ -87,6 +88,7 @@ class BinanceUserStream:
         while self.running:
             reconnect = False
             was_connected = self._connected
+            self._is_actual_disconnect = False
             try:
                 self._listen_key = await self.client.create_listen_key()
                 self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -126,16 +128,19 @@ class BinanceUserStream:
 
                             if data.get("e") == "listenKeyExpired":
                                 print("⚠️ User Stream listenKey 만료")
+                                self._is_actual_disconnect = True
                                 reconnect = True
                                 break
 
                             await self.callback(data)
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             print(f"⚠️ User Stream 오류: {msg.data}")
+                            self._is_actual_disconnect = True
                             reconnect = True
                             break
                         elif msg.type == aiohttp.WSMsgType.CLOSE:
                             print("⚠️ User Stream 연결 종료됨")
+                            self._is_actual_disconnect = True
                             reconnect = True
                             break
             except asyncio.CancelledError:
@@ -143,6 +148,7 @@ class BinanceUserStream:
             except Exception as exc:  # noqa: BLE001
                 if self.running:
                     print(f"⚠️ User Stream 오류 발생, 재연결 예정: {exc}")
+                    self._is_actual_disconnect = True
                     reconnect = True
                 else:
                     break
@@ -150,7 +156,11 @@ class BinanceUserStream:
                 if was_connected or self._connected:
                     self._connected = False
                     self._disconnect_count += 1
-                    print(f"📡 User Stream 연결 끊김 (끊김 #{self._disconnect_count})")
+                    
+                    # 실제 연결 끊김인 경우에만 로그 출력
+                    if self._is_actual_disconnect:
+                        print(f"📡 User Stream 연결 끊김 (끊김 #{self._disconnect_count})")
+                    
                     if self.on_disconnect:
                         try:
                             await self.on_disconnect()
@@ -185,16 +195,67 @@ class BinanceUserStream:
         await self._close_listen_key()
 
     async def _healthcheck_loop(self) -> None:
-        """연결 상태 헬스체크 루프 - 메시지 수신 없으면 재연결 트리거."""
+        """연결 상태 헬스체크 루프 - WebSocket 상태 확인 + 메시지 타임아웃 (하이브리드)."""
         while self.running and self._connected:
             await asyncio.sleep(self._healthcheck_interval)
             if not self.running or not self._connected:
                 break
             
-            if self.last_message_age > self._message_timeout:
-                print(f"⚠️ User Stream 헬스체크 실패: {self.last_message_age:.1f}초간 메시지 없음")
-                if self._ws:
-                    await self._ws.close()
+            reconnect_needed = False
+            reason = ""
+            is_actual_disconnect = False
+            
+            # 방법 2: WebSocket 연결 상태 직접 확인 (우선) - 실제 연결 끊김
+            try:
+                if self._ws is None:
+                    reconnect_needed = True
+                    is_actual_disconnect = True
+                    reason = "WebSocket 객체가 None"
+                elif self._ws.closed:
+                    reconnect_needed = True
+                    is_actual_disconnect = True
+                    reason = "WebSocket 연결이 닫힘"
+                elif self._ws.exception() is not None:
+                    reconnect_needed = True
+                    is_actual_disconnect = True
+                    reason = f"WebSocket 예외 발생: {self._ws.exception()}"
+            except Exception as e:
+                reconnect_needed = True
+                is_actual_disconnect = True
+                reason = f"WebSocket 상태 확인 실패: {e}"
+            
+            # 방법 1: 메시지 타임아웃 확인 (백업) - 거래 없어서 메시지 없는 경우도 포함
+            if not reconnect_needed and self.last_message_age > self._message_timeout:
+                # 메시지 타임아웃인 경우, WebSocket 연결 상태를 다시 한 번 확인
+                # 실제로 연결이 끊겼는지 확인 (거래 없어서 메시지 없는 정상 상태와 구분)
+                try:
+                    if self._ws is None or self._ws.closed or self._ws.exception() is not None:
+                        reconnect_needed = True
+                        is_actual_disconnect = True
+                        reason = f"WebSocket 연결 끊김 감지 ({self.last_message_age:.1f}초간 메시지 없음)"
+                    else:
+                        # WebSocket은 정상인데 메시지만 없는 경우 (거래 없는 정상 상태)
+                        # 조용히 재연결만 수행 (로그 출력 안 함)
+                        reconnect_needed = True
+                        is_actual_disconnect = False
+                except Exception:
+                    # 상태 확인 실패 시 안전하게 재연결
+                    reconnect_needed = True
+                    is_actual_disconnect = True
+                    reason = f"상태 확인 실패 ({self.last_message_age:.1f}초간 메시지 없음)"
+            
+            if reconnect_needed:
+                # 실제 연결 끊김 여부 저장 (start() 메서드에서 로그 출력용)
+                self._is_actual_disconnect = is_actual_disconnect
+                
+                # 실제 연결 끊김인 경우에만 로그 출력
+                if is_actual_disconnect:
+                    print(f"⚠️ User Stream 헬스체크 실패: {reason}")
+                if self._ws and not self._ws.closed:
+                    try:
+                        await self._ws.close()
+                    except Exception:
+                        pass
                 break
 
     async def _stop_healthcheck(self) -> None:
