@@ -50,11 +50,16 @@ class StrategyGenerationPipeline:
         self.code_generator = CodeGenerator(llm_client=llm_client)
         self.sample_data_path = sample_data_path
 
-    async def generate(self, user_prompt: str) -> GenerationResult:
+    async def generate(
+        self, 
+        user_prompt: str, 
+        manual_config: dict[str, Any] | None = None
+    ) -> GenerationResult:
         """자연어 입력으로부터 전략 코드 생성.
 
         Args:
             user_prompt: 사용자의 자연어 입력
+            manual_config: UI에서 입력한 정형 데이터 설정값
 
         Returns:
             GenerationResult
@@ -89,7 +94,7 @@ class StrategyGenerationPipeline:
 
         # Stage 2: Spec Generator
         try:
-            spec = self.spec_generator.generate(intent_result)
+            spec = self.spec_generator.generate(intent_result, manual_config)
             result.spec = spec
 
             # 기본값 경고

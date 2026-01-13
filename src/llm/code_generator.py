@@ -58,9 +58,19 @@ class CodeGenerator:
                         lines.append(f"self.{param_key} = {default}")
 
         # 리스크 관리 파라미터
-        lines.append(f"self.stop_loss_pct = {spec.risk_management.stop_loss_pct}")
+        lines.append(f"self.leverage = {spec.leverage}")
         lines.append(f"self.max_position = {spec.risk_management.max_position}")
         lines.append(f"self.min_quantity = {spec.risk_management.min_quantity}")
+        
+        # 리스크 관리 추가 변수
+        lines.append(f"self.daily_loss_limit = {spec.daily_loss_limit}")
+        lines.append(f"self.max_consecutive_losses = {spec.max_consecutive_losses}")
+        lines.append("self.current_daily_loss = 0.0")
+        lines.append("self.consecutive_loss_count = 0")
+        
+        # StopLoss 설정
+        lines.append(f'self.stop_loss_type = "{spec.stop_loss_type}"')
+        lines.append(f"self.stop_loss_value = {spec.stop_loss_value}")
 
         # 상태 변수는 템플릿에 이미 있으므로 제외
         # lines.append("self.prev_rsi: float | None = None")
@@ -139,6 +149,32 @@ class CodeGenerator:
         
         return "\n".join(indented_lines) if indented_lines else "        # 지표 계산"
 
+    def _generate_risk_guard(self, spec: StrategySpec) -> str:
+        """리스크 관리 가드 코드 생성.
+
+        Args:
+            spec: 전략 명세
+
+        Returns:
+            리스크 관리 가드 코드 (8칸 인덴트 포함)
+        """
+        lines: list[str] = []
+        lines.append("# === 리스크 관리 가드 ===")
+        lines.append("if self.daily_loss_limit > 0 and self.current_daily_loss >= self.daily_loss_limit:")
+        lines.append("    return  # 일일 손실 한도 초과")
+        lines.append("if self.max_consecutive_losses > 0 and self.consecutive_loss_count >= self.max_consecutive_losses:")
+        lines.append("    return  # 최대 연속 손실 초과")
+        lines.append("")
+        
+        indented_lines = []
+        for line in lines:
+            if line.strip():
+                indented_lines.append("        " + line)
+            else:
+                indented_lines.append("")
+        
+        return "\n".join(indented_lines) if indented_lines else ""
+
     def _generate_trading_logic(self, spec: StrategySpec) -> str:
         """트레이딩 로직 코드 생성.
 
@@ -195,12 +231,26 @@ class CodeGenerator:
                 lines.append("# 롱 청산 조건")
                 lines.append(f"# {rule.condition}")
                 lines.append("if ctx.position_size > 0 and not self.is_closing:")
+                lines.append("    # 손실 추적")
+                lines.append("    unrealized_pnl = float(getattr(ctx, 'unrealized_pnl', 0.0) or 0.0)")
+                lines.append("    if unrealized_pnl < 0:")
+                lines.append("        self.consecutive_loss_count += 1")
+                lines.append("        self.current_daily_loss -= unrealized_pnl")
+                lines.append("    else:")
+                lines.append("        self.consecutive_loss_count = 0  # 수익 시 리셋")
                 lines.append("    self.is_closing = True")
                 lines.append('    ctx.close_position(reason="Exit Long")')
             elif rule.position_type == "short":
                 lines.append("# 숏 청산 조건")
                 lines.append(f"# {rule.condition}")
                 lines.append("if ctx.position_size < 0 and not self.is_closing:")
+                lines.append("    # 손실 추적")
+                lines.append("    unrealized_pnl = float(getattr(ctx, 'unrealized_pnl', 0.0) or 0.0)")
+                lines.append("    if unrealized_pnl < 0:")
+                lines.append("        self.consecutive_loss_count += 1")
+                lines.append("        self.current_daily_loss -= unrealized_pnl")
+                lines.append("    else:")
+                lines.append("        self.consecutive_loss_count = 0  # 수익 시 리셋")
                 lines.append("    self.is_closing = True")
                 lines.append('    ctx.close_position(reason="Exit Short")')
 
@@ -223,17 +273,32 @@ class CodeGenerator:
         Returns:
             StopLoss 로직 코드
         """
-        return f"""        # StopLoss 체크
+        return """        # StopLoss 체크
         if ctx.position_size != 0 and not self.is_closing:
             entry_balance = float(getattr(ctx, "position_entry_balance", 0.0) or 0.0)
             unrealized_pnl = float(getattr(ctx, "unrealized_pnl", 0.0) or 0.0)
             
-            if entry_balance > 0:
+            should_close = False
+            sl_reason = ""
+            
+            # 1. 비율(%) 기준 손절
+            if self.stop_loss_type == "pct" and entry_balance > 0:
                 pnl_pct = unrealized_pnl / entry_balance
-                if pnl_pct <= -self.stop_loss_pct:
-                    self.is_closing = True
-                    position_type = "Long" if ctx.position_size > 0 else "Short"
-                    ctx.close_position(reason=f"StopLoss {{position_type}}")"""
+                if pnl_pct <= -self.stop_loss_value:
+                    should_close = True
+                    sl_reason = f"StopLoss (Pct: {pnl_pct*100:.2f}%)"
+            
+            # 2. 금액(USDT) 기준 손절
+            elif self.stop_loss_type == "amount":
+                if unrealized_pnl <= -self.stop_loss_value:
+                    should_close = True
+                    sl_reason = f"StopLoss (Amount: {unrealized_pnl:.2f})"
+            
+            if should_close:
+                self.is_closing = True
+                self.consecutive_loss_count += 1
+                self.current_daily_loss -= unrealized_pnl
+                ctx.close_position(reason=sl_reason)"""
 
     def _generate_prev_indicator_update(self, spec: StrategySpec) -> str:
         """이전 지표 값 갱신 코드 생성.
@@ -277,12 +342,13 @@ class CodeGenerator:
         # 각 부분 생성
         init_params = self._generate_init_params(spec)
         stop_loss_logic = self._generate_stop_loss_logic(spec)
+        risk_guard = self._generate_risk_guard(spec)
         indicator_calls = self._generate_indicator_calls(spec)
         trading_logic = self._generate_trading_logic(spec)
         prev_indicator_update = self._generate_prev_indicator_update(spec)
 
-        # 트레이딩 로직에 지표 호출 포함
-        full_trading_logic = f"{indicator_calls}\n\n{trading_logic}"
+        # 트레이딩 로직 구성: 가드 코드 -> 지표 호출 -> 트레이딩 로직
+        full_trading_logic = f"{risk_guard}\n{indicator_calls}\n\n{trading_logic}"
 
         # 템플릿 포맷팅
         # init_params는 이미 8칸 인덴트가 포함되어 있음 (_generate_init_params에서 추가)

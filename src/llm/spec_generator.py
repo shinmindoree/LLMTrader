@@ -50,6 +50,12 @@ class StrategySpec:
     exit_rules: list[Rule] = field(default_factory=list)
     risk_management: RiskConfig = field(default_factory=RiskConfig)
     parameters: dict[str, Any] = field(default_factory=dict)
+    # UI에서 입력받은 환경/리스크 설정 필드
+    leverage: float = 1.0
+    daily_loss_limit: float = 0.0
+    max_consecutive_losses: int = 0
+    stop_loss_type: str = "pct"  # "pct" | "amount"
+    stop_loss_value: float = 0.05
 
 
 class SpecGenerator:
@@ -219,32 +225,49 @@ class SpecGenerator:
 
         return params
 
-    def generate(self, intent_result: IntentResult) -> StrategySpec:
+    def generate(
+        self, 
+        intent_result: IntentResult, 
+        manual_config: dict[str, Any] | None = None
+    ) -> StrategySpec:
         """Intent 결과를 전략 명세로 변환.
 
         Args:
             intent_result: Intent 분석 결과
+            manual_config: UI에서 입력한 정형 데이터 설정값
 
         Returns:
             StrategySpec
         """
-        # 클래스 이름 생성
+        # 1. 기본 생성 (기존 로직 수행)
         class_name = self._generate_class_name(intent_result)
-
-        # 지표 설정 생성
         indicator_configs = self._generate_indicator_configs(intent_result)
-
-        # 진입 규칙 생성
         entry_rules = self._generate_entry_rules(intent_result)
-
-        # 청산 규칙 생성
         exit_rules = self._generate_exit_rules(intent_result)
-
-        # 리스크 관리 설정
         risk_config = self._generate_risk_config(intent_result)
-
-        # 파라미터 생성
         parameters = self._generate_parameters(intent_result, indicator_configs)
+
+        # 2. Manual Config 오버라이딩 (UI 입력값 우선 적용)
+        leverage = 1.0
+        daily_loss_limit = 0.0
+        max_consecutive_losses = 0
+        sl_type = "pct"
+        sl_value = risk_config.stop_loss_pct
+
+        if manual_config:
+            # risk_config 객체 업데이트
+            risk_config.max_position = manual_config.get("max_position", risk_config.max_position)
+            
+            # 개별 변수 추출
+            leverage = manual_config.get("leverage", 1.0)
+            daily_loss_limit = manual_config.get("daily_loss_limit", 0.0)
+            max_consecutive_losses = manual_config.get("max_consecutive_losses", 0)
+            sl_type = manual_config.get("stop_loss_type", "pct")
+            sl_value = manual_config.get("stop_loss_value", 0.05)
+            
+            # 템플릿용 parameters 딕셔너리에도 업데이트
+            parameters["leverage"] = leverage
+            parameters["max_position"] = risk_config.max_position
 
         return StrategySpec(
             class_name=class_name,
@@ -255,4 +278,10 @@ class SpecGenerator:
             exit_rules=exit_rules,
             risk_management=risk_config,
             parameters=parameters,
+            # 신규 필드 할당
+            leverage=leverage,
+            daily_loss_limit=daily_loss_limit,
+            max_consecutive_losses=max_consecutive_losses,
+            stop_loss_type=sl_type,
+            stop_loss_value=sl_value
         )

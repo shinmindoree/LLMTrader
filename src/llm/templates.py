@@ -50,6 +50,8 @@ class {class_name}(Strategy):
         """전략 초기화."""
         self.prev_rsi = None
         self.is_closing = False
+        self.current_daily_loss = 0.0
+        self.consecutive_loss_count = 0
     
     def on_bar(self, ctx: StrategyContext, bar: dict) -> None:
         """

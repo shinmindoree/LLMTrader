@@ -75,6 +75,40 @@ st.markdown("""
 
 st.divider()
 
+# === [추가] 정형 데이터 입력 섹션 ===
+with st.expander("🛠️ 트레이딩 환경 및 리스크 설정 (필수)", expanded=True):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        manual_leverage = st.number_input("레버리지 (Leverage)", min_value=1, max_value=125, value=1)
+        manual_max_pos = st.number_input("최대 포지션 크기 (비중 0.0~1.0)", min_value=0.01, max_value=1.0, value=1.0, step=0.01)
+
+    with col2:
+        manual_daily_loss = st.number_input("일일 손실 한도 (USDT, 0=미사용)", min_value=0.0, value=0.0, step=10.0)
+        manual_consec_loss = st.number_input("최대 연속 손실 횟수 (0=미사용)", min_value=0, value=0)
+    
+    st.divider()
+    
+    # StopLoss 설정 방식 선택
+    sl_col1, sl_col2 = st.columns([1, 2])
+    with sl_col1:
+        sl_type = st.radio("StopLoss 기준", ["자본금 대비 %", "USDT 고정 금액"])
+    with sl_col2:
+        if sl_type == "자본금 대비 %":
+            manual_sl_val = st.number_input("StopLoss 비율 (예: 0.05 = 5%)", min_value=0.001, max_value=1.0, value=0.05, step=0.001)
+        else:
+            manual_sl_val = st.number_input("StopLoss 금액 (USDT)", min_value=1.0, value=100.0, step=10.0)
+
+# 설정값을 딕셔너리로 구성
+manual_config = {
+    "leverage": manual_leverage,
+    "max_position": manual_max_pos,
+    "daily_loss_limit": manual_daily_loss,
+    "max_consecutive_losses": manual_consec_loss,
+    "stop_loss_type": "pct" if sl_type == "자본금 대비 %" else "amount",
+    "stop_loss_value": manual_sl_val
+}
+
 # 자연어 입력 영역
 st.subheader("📝 자연어 입력")
 user_input = st.text_area(
@@ -102,7 +136,7 @@ if generate_button:
 
                 # 파이프라인 생성 및 실행
                 pipeline = StrategyGenerationPipeline(sample_data_path=sample_data_path)
-                result = asyncio.run(pipeline.generate(user_input))
+                result = asyncio.run(pipeline.generate(user_input, manual_config=manual_config))
 
                 # 세션 상태에 저장
                 st.session_state.generation_result = result
