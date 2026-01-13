@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from src.settings import get_settings
+
 
 @dataclass
 class StrategyGenerationResult:
@@ -19,13 +21,20 @@ class StrategyGenerationResult:
 class LLMClient:
     """LLM 클라이언트 - 중계 서버와 통신."""
 
-    def __init__(self, base_url: str = "http://192.168.219.122:8000", timeout: float = 60.0) -> None:
+    def __init__(self, base_url: str | None = None, timeout: float = 60.0) -> None:
         """LLM 클라이언트 초기화.
 
         Args:
-            base_url: 중계 서버 기본 URL
+            base_url: 중계 서버 기본 URL (None이면 환경 변수에서 읽음)
             timeout: 요청 타임아웃 (초)
         """
+        if base_url is None:
+            settings = get_settings()
+            base_url = settings.relay_server.url
+            if not base_url:
+                raise ValueError(
+                    "RELAY_SERVER_URL 환경 변수가 설정되지 않았습니다. .env 파일에 RELAY_SERVER_URL을 설정해주세요."
+                )
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = 3

@@ -30,6 +30,31 @@ from settings import get_settings
 
 st.set_page_config(page_title="백테스트", page_icon="📊", layout="wide")
 
+# 코드 블록 너비 반응형 스타일
+st.markdown("""
+<style>
+    div[data-testid="stCodeBlock"] {
+        width: 100% !important;
+    }
+    div[data-testid="stCodeBlock"] pre {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+    .stCode {
+        width: 100% !important;
+    }
+    pre {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+    code {
+        white-space: pre !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📊 백테스트")
 st.markdown("**과거 데이터를 사용하여 전략을 테스트합니다.**")
 

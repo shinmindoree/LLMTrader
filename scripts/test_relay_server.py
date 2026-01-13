@@ -1,6 +1,6 @@
 """중계 서버 연결 테스트 스크립트.
 
-중계 서버(192.168.219.122:8000)의 연결 상태를 확인합니다.
+중계 서버의 연결 상태를 확인합니다.
 """
 
 import sys
@@ -10,20 +10,33 @@ import httpx
 
 # 프로젝트 루트 설정
 project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-# 기본 서버 주소
-DEFAULT_RELAY_SERVER_URL = "http://192.168.219.122:8000"
+from src.settings import get_settings
 
 
-async def test_relay_server(base_url: str = DEFAULT_RELAY_SERVER_URL) -> bool:
+def get_default_relay_server_url() -> str:
+    """환경 변수에서 중계 서버 URL을 가져옵니다."""
+    settings = get_settings()
+    url = settings.relay_server.url
+    if not url:
+        raise ValueError(
+            "RELAY_SERVER_URL 환경 변수가 설정되지 않았습니다. .env 파일에 RELAY_SERVER_URL을 설정해주세요."
+        )
+    return url
+
+
+async def test_relay_server(base_url: str | None = None) -> bool:
     """중계 서버 연결 테스트.
 
     Args:
-        base_url: 중계 서버 기본 URL
+        base_url: 중계 서버 기본 URL (None이면 환경 변수에서 읽음)
 
     Returns:
         연결 성공 여부
     """
+    if base_url is None:
+        base_url = get_default_relay_server_url()
     print(f"🔌 중계 서버 연결 테스트: {base_url}")
 
     # 타임아웃 설정 (5초)
@@ -125,11 +138,15 @@ async def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="중계 서버 연결 테스트")
+    try:
+        default_url = get_default_relay_server_url()
+    except ValueError:
+        default_url = None
     parser.add_argument(
         "--url",
         type=str,
-        default=DEFAULT_RELAY_SERVER_URL,
-        help=f"중계 서버 URL (기본값: {DEFAULT_RELAY_SERVER_URL})",
+        default=default_url,
+        help="중계 서버 URL (기본값: 환경 변수 RELAY_SERVER_URL)",
     )
 
     args = parser.parse_args()

@@ -26,6 +26,37 @@ st.set_page_config(
     layout="wide",
 )
 
+# 코드 블록 너비 반응형 스타일
+st.markdown("""
+<style>
+    div[data-testid="stCodeBlock"] {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    div[data-testid="stCodeBlock"] pre {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+    .stCode {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    .element-container:has(div[data-testid="stCodeBlock"]) {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    pre {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+    code {
+        white-space: pre !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # 세션 상태 초기화
 st.session_state.setdefault("generated_code", None)
 st.session_state.setdefault("validation_result", None)
@@ -33,6 +64,7 @@ st.session_state.setdefault("intent_result", None)
 st.session_state.setdefault("spec", None)
 st.session_state.setdefault("generation_result", None)
 st.session_state.setdefault("strategy_name", "GeneratedStrategy")
+st.session_state.setdefault("show_code", False)
 
 # 제목 및 설명
 st.title("🤖 전략 생성")
@@ -168,8 +200,12 @@ if st.session_state.generation_result:
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             if st.button("📋 코드 표시", use_container_width=True):
-                st.code(edited_code, language="python")
-                st.info("위 코드 블록을 선택하여 복사하세요")
+                st.session_state.show_code = not st.session_state.get("show_code", False)
+        
+        # 코드 블록은 컬럼 밖에서 전체 너비로 표시
+        if st.session_state.get("show_code", False):
+            st.code(edited_code, language="python")
+            st.info("위 코드 블록을 선택하여 복사하세요")
 
         with col2:
             if st.button("🔄 재검증", use_container_width=True):

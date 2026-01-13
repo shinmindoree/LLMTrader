@@ -9,6 +9,31 @@ project_root = Path(__file__).parent.parent
 
 st.set_page_config(page_title="라이브 트레이딩", page_icon="🔴", layout="wide")
 
+# 코드 블록 너비 반응형 스타일
+st.markdown("""
+<style>
+    div[data-testid="stCodeBlock"] {
+        width: 100% !important;
+    }
+    div[data-testid="stCodeBlock"] pre {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+    .stCode {
+        width: 100% !important;
+    }
+    pre {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+    }
+    code {
+        white-space: pre !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🔴 라이브 트레이딩")
 st.markdown("**실제 테스트넷 계좌에서 자동 트레이딩을 실행합니다.**")
 
