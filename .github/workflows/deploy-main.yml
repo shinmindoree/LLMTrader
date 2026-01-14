@@ -34,7 +34,7 @@ jobs:
           registryUrl: autotraderbinance.azurecr.io
           registryUsername: ${{ secrets.AUTOTRADER_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.AUTOTRADER_REGISTRY_PASSWORD }}
-          containerAppName: autotrader
+          containerAppName: autotrade-real
           resourceGroup: autotrader
           imageToBuild: autotraderbinance.azurecr.io/autotrader:${{ github.sha }}
 
@@ -44,13 +44,12 @@ jobs:
           short_sha=$(echo ${{ github.sha }} | cut -c 1-7)
 
           az containerapp update \
-            --name autotrader \
+            --name autotrade-real \
             --resource-group autotrader \
             --image autotraderbinance.azurecr.io/autotrader:${{ github.sha }} \
             --revision-suffix ${short_sha} \
             --min-replicas 1 \
             --max-replicas 1
-
 
 
 
