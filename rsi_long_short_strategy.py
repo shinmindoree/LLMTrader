@@ -47,7 +47,6 @@ class RsiLongShortStrategy(Strategy):
         long_exit_rsi: float = 70.0,
         short_entry_rsi: float = 70.0,
         short_exit_rsi: float = 30.0,
-        stop_loss_pct: float = 0.05,  # 5% 손실 기준 (0.05)
         max_position: float = 1.0,
         sizing_buffer: float = 0.98,
         qty_step: float = 0.001,
@@ -61,9 +60,6 @@ class RsiLongShortStrategy(Strategy):
             raise ValueError("invalid short RSI thresholds")
         if rsi_period <= 1:
             raise ValueError("rsi_period must be > 1")
-        # 퍼센트 유효성 검사 (0.0 ~ 1.0 사이)
-        if not (0 < stop_loss_pct < 1.0):
-            raise ValueError("stop_loss_pct must be between 0 and 1 (e.g. 0.05 for 5%)")
         if not (0 < max_position <= 1.0):
             raise ValueError("max_position must be in (0, 1]")
         if not (0 < sizing_buffer <= 1.0):
@@ -77,7 +73,6 @@ class RsiLongShortStrategy(Strategy):
         self.long_exit_rsi = long_exit_rsi
         self.short_entry_rsi = short_entry_rsi
         self.short_exit_rsi = short_exit_rsi
-        self.stop_loss_pct = stop_loss_pct
         self.max_position = max_position
         self.sizing_buffer = sizing_buffer
         self.qty_step = qty_step
@@ -114,8 +109,15 @@ class RsiLongShortStrategy(Strategy):
                 # 레버리지와 무관하게 일정한 기준 적용
                 current_pnl_pct = unrealized_pnl / entry_balance
                 
+                # 시스템 설정에서 stoploss 비율 가져오기
+                risk_manager = getattr(ctx, "risk_manager", None)
+                if risk_manager and hasattr(risk_manager, "config"):
+                    stop_loss_pct = risk_manager.config.stop_loss_pct
+                else:
+                    stop_loss_pct = 0.05
+                
                 # 손실률이 설정된 제한(예: -0.05)보다 더 작으면(더 큰 손실이면) 청산
-                if current_pnl_pct <= -self.stop_loss_pct:
+                if current_pnl_pct <= -stop_loss_pct:
                     self.is_closing = True
                     position_type = "Long" if ctx.position_size > 0 else "Short"
                     reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct*100:.2f}% of entry balance)"

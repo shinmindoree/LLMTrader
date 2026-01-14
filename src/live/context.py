@@ -1060,26 +1060,6 @@ class LiveContext:
         
         before_pos_usd = before_pos * (before_entry if before_entry > 0 else last_now)
         after_pos_usd = after_pos * last_now
-        
-        msg = (
-            f"✅ 주문 체결[{now}] orderId={order_id} side={side} type={order_type_display} "
-            f"| pos_usd ${before_pos_usd:,.2f} -> ${after_pos_usd:,.2f} "
-            f"| pos {before_pos:+.4f} -> {after_pos:+.4f} "
-            f"| last={last_now:,.2f} "
-            f"| rsi({p})={rsi_p:.2f} rsi_rt({p})={rsi_rt_p:.2f}"
-        )
-        
-        if reason is not None:
-            msg += f" | reason={reason}"
-        
-        msg += f" | commission={final_commission:.4f} {commission_asset} (rate={commission_rate_pct:.2f}%)"
-        
-        if pnl_exit is not None:
-            pnl_after_fee = pnl_exit - final_commission
-            msg += f" | pnl={pnl_exit:+.2f} (before fee) | pnl_after_fee={pnl_after_fee:+.2f} (after fee)"
-        if entry_thr is not None or exit_thr is not None:
-            msg += f" | thr(entry={entry_thr}, exit={exit_thr})"
-        print(msg)
 
         self._logger.log_order_filled(
             symbol=self.symbol,
@@ -1097,8 +1077,6 @@ class LiveContext:
             pnl=pnl_exit,
             commission=final_commission,
             reason=reason,
-            entry_rsi=entry_thr,
-            exit_rsi=exit_thr,
             order_type=order_type_display,
             commission_rate=commission_rate_pct,
         )
@@ -1394,6 +1372,20 @@ class LiveContext:
         Returns:
             주문 응답 (모든 orderId 포함)
         """
+        can_trade, risk_reason = self.risk_manager.can_trade()
+        if not can_trade:
+            error_msg = f"거래 불가: {risk_reason}"
+            self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
+            raise ValueError(error_msg)
+
+        # StopLoss cooldown 체크 (포지션 진입만 차단, 청산은 허용)
+        if abs(self.position.size) < 1e-12:
+            in_cooldown, cooldown_reason = self.is_in_stoploss_cooldown()
+            if in_cooldown:
+                error_msg = f"거래 불가: {cooldown_reason}"
+                self._log_audit("ORDER_REJECTED_STOPLOSS_COOLDOWN", {"side": side, "quantity": quantity, "reason": cooldown_reason})
+                raise ValueError(error_msg)
+
         original_qty = quantity
         quantity = self._adjust_quantity(quantity)
         

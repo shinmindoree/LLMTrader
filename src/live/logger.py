@@ -64,7 +64,10 @@ class SimpleLogger:
     ) -> None:
         """로그 메시지 출력."""
         if extra:
-            message = f"{message} | {extra}"
+            # None 값 항목 필터링
+            filtered_extra = {k: v for k, v in extra.items() if v is not None}
+            if filtered_extra:
+                message = f"{message} | {filtered_extra}"
         self.logger.log(level, message, exc_info=exc_info)
 
     def log_session_start(
@@ -165,7 +168,7 @@ class SimpleLogger:
     ) -> None:
         """주문 체결 로그."""
         msg = (
-            f"ORDER_FILLED | symbol={symbol}, orderId={order_id}, side={side}"
+            f"✅ ORDER_FILLED | symbol={symbol}, orderId={order_id}, side={side}"
             f", type={order_type or 'N/A'}, event={event or 'N/A'}"
             f", pos={position_before:+.4f}->{position_after:+.4f}"
             f", pos_usd=${position_before_usd:,.2f}->${position_after_usd:,.2f}"

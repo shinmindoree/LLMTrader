@@ -79,6 +79,14 @@ with col2:
         value=0,
         step=1,
     )
+    stop_loss_pct = st.number_input(
+        "StopLoss 비율 (%)",
+        min_value=0.1,
+        max_value=50.0,
+        value=5.0,
+        step=0.1,
+        help="포지션 진입 시점 balance 대비 손실률. 예: 5.0 = 5% 손실 시 청산",
+    ) / 100.0
     stoploss_cooldown_candles = st.number_input(
         "StopLoss Cooldown 캔들 수 (0이면 비활성화)",
         min_value=0,
@@ -131,6 +139,7 @@ with risk_col3:
 with risk_col4:
     st.metric("쿨다운 시간", "300초 (5분)")
     st.metric("주문 크기 제한", "50% (자산 대비)")
+    st.metric("StopLoss 비율", f"{stop_loss_pct * 100:.1f}%")
     if stoploss_cooldown_candles > 0:
         st.metric("StopLoss Cooldown", f"{stoploss_cooldown_candles}개 캔들")
     else:
@@ -147,6 +156,7 @@ command_parts = [
     f"--max-position {max_position}",
     f"--daily-loss-limit {daily_loss_limit}",
     f"--max-consecutive-losses {max_consecutive_losses}",
+    f"--stop-loss-pct {stop_loss_pct}",
     f"--stoploss-cooldown-candles {stoploss_cooldown_candles}",
 ]
 

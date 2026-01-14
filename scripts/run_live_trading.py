@@ -74,6 +74,12 @@ def parse_args() -> argparse.Namespace:
         help="StopLoss 청산 후 거래 중단 캔들 수 (0이면 비활성화, 기본: 0). 환경 변수 STOPLOSS_COOLDOWN_CANDLES로도 설정 가능",
     )
     parser.add_argument(
+        "--stop-loss-pct",
+        type=float,
+        default=float(os.getenv("STOP_LOSS_PCT", "0.05")),
+        help="StopLoss 비율 (0.0~1.0, 예: 0.05 = 5%, 기본: 0.05). 환경 변수 STOP_LOSS_PCT로도 설정 가능",
+    )
+    parser.add_argument(
         "--yes",
         action="store_true",
         help="대화형 확인 프롬프트를 건너뛰고 즉시 실행합니다(컨테이너/서버 환경 필수).",
@@ -123,6 +129,7 @@ async def main():
         print(f"StopLoss Cooldown: {args.stoploss_cooldown_candles}개 캔들")
     else:
         print("StopLoss Cooldown: 비활성화")
+    print(f"StopLoss 비율: {args.stop_loss_pct * 100:.1f}%")
     print("=" * 80)
     print()
 
@@ -162,6 +169,7 @@ async def main():
         daily_loss_limit=args.daily_loss_limit,
         max_consecutive_losses=args.max_consecutive_losses,
         stoploss_cooldown_candles=args.stoploss_cooldown_candles,
+        stop_loss_pct=args.stop_loss_pct,
     )
     risk_manager = LiveRiskManager(risk_config)
 
