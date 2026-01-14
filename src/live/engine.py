@@ -164,6 +164,8 @@ class LiveTradingEngine:
         if is_new_bar and bar_ts and (self._last_bar_timestamp != bar_ts):
             self.ctx.update_price(bar_close)
             self.ctx.mark_price(last_price)
+            # 새 봉 시작 시 cooldown 업데이트
+            self.ctx.on_new_bar(bar_ts)
 
             bar = {
                 "timestamp": bar_ts,

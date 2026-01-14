@@ -79,6 +79,14 @@ with col2:
         value=0,
         step=1,
     )
+    stoploss_cooldown_candles = st.number_input(
+        "StopLoss Cooldown 캔들 수 (0이면 비활성화)",
+        min_value=0,
+        max_value=100,
+        value=0,
+        step=1,
+        help="StopLoss로 청산 발생 시 지정한 캔들 수만큼 거래 중단",
+    )
 
 # 로그 출력 주기 설정
 st.divider()
@@ -123,6 +131,10 @@ with risk_col3:
 with risk_col4:
     st.metric("쿨다운 시간", "300초 (5분)")
     st.metric("주문 크기 제한", "50% (자산 대비)")
+    if stoploss_cooldown_candles > 0:
+        st.metric("StopLoss Cooldown", f"{stoploss_cooldown_candles}개 캔들")
+    else:
+        st.metric("StopLoss Cooldown", "비활성화")
 
 st.divider()
 
@@ -135,6 +147,7 @@ command_parts = [
     f"--max-position {max_position}",
     f"--daily-loss-limit {daily_loss_limit}",
     f"--max-consecutive-losses {max_consecutive_losses}",
+    f"--stoploss-cooldown-candles {stoploss_cooldown_candles}",
 ]
 
 if log_interval is not None:

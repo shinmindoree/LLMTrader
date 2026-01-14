@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
         help="로그 출력 주기 (초). 0이면 캔들 마감 시에만 저장 (기본: 0). 환경 변수 LOG_INTERVAL로도 설정 가능",
     )
     parser.add_argument(
+        "--stoploss-cooldown-candles",
+        type=int,
+        default=int(os.getenv("STOPLOSS_COOLDOWN_CANDLES", "0")),
+        help="StopLoss 청산 후 거래 중단 캔들 수 (0이면 비활성화, 기본: 0). 환경 변수 STOPLOSS_COOLDOWN_CANDLES로도 설정 가능",
+    )
+    parser.add_argument(
         "--yes",
         action="store_true",
         help="대화형 확인 프롬프트를 건너뛰고 즉시 실행합니다(컨테이너/서버 환경 필수).",
@@ -113,6 +119,10 @@ async def main():
         print(f"최대 연속 손실: {args.max_consecutive_losses}회")
     else:
         print("최대 연속 손실: 비활성화")
+    if args.stoploss_cooldown_candles > 0:
+        print(f"StopLoss Cooldown: {args.stoploss_cooldown_candles}개 캔들")
+    else:
+        print("StopLoss Cooldown: 비활성화")
     print("=" * 80)
     print()
 
@@ -151,6 +161,7 @@ async def main():
         max_order_size=args.max_position,
         daily_loss_limit=args.daily_loss_limit,
         max_consecutive_losses=args.max_consecutive_losses,
+        stoploss_cooldown_candles=args.stoploss_cooldown_candles,
     )
     risk_manager = LiveRiskManager(risk_config)
 

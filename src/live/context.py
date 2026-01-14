@@ -86,7 +86,12 @@ class LiveContext:
         
         self._last_trade_check_time: float = 0.0
         self._processed_trade_ids: set[int] = set()
+        self._processed_order_ids: set[int] = set()
         self._chase_order_ids: list[int] = []
+        
+        # StopLoss cooldown 관련 변수
+        self._stoploss_cooldown_until_bar_timestamp: int | None = None
+        self._last_bar_timestamp: int | None = None
         
         self.balance: float = 0.0
         self.available_balance: float = 0.0
@@ -816,6 +821,20 @@ class LiveContext:
 
     async def _after_order_filled(self, result: dict[str, Any]) -> None:
         """주문 체결 후 후처리."""
+        order_id = result.get("orderId")
+        
+        # 중복 처리 방지: 이미 처리된 주문이면 건너뜀
+        if order_id and order_id != "N/A":
+            try:
+                order_id_int = int(order_id)
+                if order_id_int in self._processed_order_ids:
+                    print(f"⚠️ 이미 처리된 주문: orderId={order_id}, 중복 처리 건너뜀")
+                    self._log_audit("ORDER_AFTER_FILLED_SKIPPED_DUPLICATE", {"order_id": order_id_int})
+                    return
+                self._processed_order_ids.add(order_id_int)
+            except (TypeError, ValueError):
+                pass
+        
         reason = result.get("_reason", None)
         initial_pos = result.get("_initial_pos_size")
         before_pos = float(initial_pos if initial_pos is not None else result.get("_snapshot_pos_size", self.position.size))
@@ -825,12 +844,21 @@ class LiveContext:
         
         all_order_ids = result.get("_all_order_ids", [])
         if all_order_ids:
+            # Chase Order의 모든 orderId도 처리됨으로 표시
+            for oid in all_order_ids:
+                try:
+                    oid_int = int(oid)
+                    self._processed_order_ids.add(oid_int)
+                except (TypeError, ValueError):
+                    pass
+            
             self._log_audit("CHASE_ORDER_IDS_SUMMARY", {
                 "all_order_ids": all_order_ids,
                 "count": len(all_order_ids),
             })
         
-        order_id = result.get("orderId", "N/A")
+        if not order_id or order_id == "N/A":
+            order_id = "N/A"
         side = result.get("side") or result.get("positionSide") or "N/A"
         executed_qty = result.get("executedQty") or result.get("origQty") or ""
         avg_price = result.get("avgPrice") or result.get("price") or ""
@@ -951,6 +979,54 @@ class LiveContext:
             print(f"⚠️ 이벤트 분류 실패: before_pos={before_pos:+.6f}, after_pos={after_pos:+.6f}, after_pos_api={after_pos_api:+.6f}, side={side}, executed_qty={executed_qty_float:+.6f}")
 
         exit_price = parsed_avg_price
+        
+        # StopLoss로 청산된 경우 cooldown 시작
+        if event == "EXIT" and reason and "StopLoss" in reason:
+            cooldown_candles = self.risk_manager.config.stoploss_cooldown_candles
+            if cooldown_candles > 0:
+                # 현재 봉부터 cooldown_candles 개의 봉 동안 거래 중단
+                # 봉 간격을 계산 (예: 5m = 300초)
+                interval_seconds = self._get_candle_interval_seconds()
+                cooldown_duration_ms = cooldown_candles * interval_seconds * 1000
+                
+                # _last_bar_timestamp가 없으면 현재 시간을 기반으로 계산
+                if self._last_bar_timestamp is not None:
+                    start_timestamp = self._last_bar_timestamp
+                else:
+                    # 현재 시간을 밀리초로 변환하고, 봉 간격으로 반올림
+                    current_time_ms = int(time.time() * 1000)
+                    start_timestamp = (current_time_ms // (interval_seconds * 1000)) * (interval_seconds * 1000)
+                
+                self._stoploss_cooldown_until_bar_timestamp = start_timestamp + cooldown_duration_ms
+                
+                # 시스템 로그 출력
+                interval_str = self.candle_interval
+                cooldown_duration_minutes = (cooldown_candles * interval_seconds) / 60
+                self._logger.info(
+                    f"STOPLOSS_COOLDOWN_STARTED | symbol={self.symbol}, cooldown_candles={cooldown_candles}, "
+                    f"candle_interval={interval_str}, duration_minutes={cooldown_duration_minutes:.1f}, "
+                    f"until_bar_timestamp={self._stoploss_cooldown_until_bar_timestamp}, reason={reason}"
+                )
+                
+                print(f"⏸️ StopLoss 청산으로 인한 거래 중단: {cooldown_candles}개 캔들 동안 거래 중단 (종료 예상: {self._stoploss_cooldown_until_bar_timestamp})")
+                
+                self._log_audit("STOPLOSS_COOLDOWN_STARTED", {
+                    "cooldown_candles": cooldown_candles,
+                    "until_bar_timestamp": self._stoploss_cooldown_until_bar_timestamp,
+                    "last_bar_timestamp": self._last_bar_timestamp,
+                    "start_timestamp": start_timestamp,
+                })
+                
+                # Slack 알림 전송
+                if self.notifier:
+                    cooldown_text = (
+                        f"*⏸️ StopLoss Cooldown 시작* ({self.env}) {self.symbol}\n"
+                        f"- 이유: {reason}\n"
+                        f"- Cooldown 기간: {cooldown_candles}개 캔들 ({cooldown_duration_minutes:.1f}분)\n"
+                        f"- 캔들 간격: {interval_str}\n"
+                        f"- 거래 재개 예상: {cooldown_candles}개 캔들 후"
+                    )
+                    asyncio.create_task(self._send_notification_safe(cooldown_text, "warning"))
         
         pnl_exit = None
         if event == "EXIT" and before_pos != 0:
@@ -1185,6 +1261,14 @@ class LiveContext:
             error_msg = f"거래 불가: {risk_reason}"
             self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
             raise ValueError(error_msg)
+        
+        # StopLoss cooldown 체크 (포지션 진입만 차단, 청산은 허용)
+        if abs(self.position.size) < 1e-12:  # 포지션이 없을 때만 체크 (진입 시도)
+            in_cooldown, cooldown_reason = self.is_in_stoploss_cooldown()
+            if in_cooldown:
+                error_msg = f"거래 불가: {cooldown_reason}"
+                self._log_audit("ORDER_REJECTED_STOPLOSS_COOLDOWN", {"side": side, "quantity": quantity, "reason": cooldown_reason})
+                raise ValueError(error_msg)
 
         original_qty = quantity
         quantity = self._adjust_quantity(quantity)
@@ -1314,6 +1398,41 @@ class LiveContext:
         quantity = self._adjust_quantity(quantity)
         
         initial_pos_size = self.position.size
+        
+        # 시작 시 포지션 확인: 이미 목표 포지션에 도달했는지 확인
+        expected_pos_change = float(quantity) if side == "BUY" else -float(quantity)
+        target_pos = initial_pos_size + expected_pos_change
+        
+        # 이미 충분한 포지션이 있는지 확인 (chase order가 이미 체결되었을 수 있음)
+        # BUY인 경우: 현재 포지션이 목표 포지션 이상이면 이미 체결됨
+        # SELL인 경우: 현재 포지션이 목표 포지션 이하이면 이미 체결됨
+        if side == "BUY" and self.position.size >= target_pos - 1e-9:
+            print(f"✅ Chase Order 이미 체결됨 (포지션 확인: {initial_pos_size:+.4f} → {self.position.size:+.4f}, 목표: {target_pos:+.4f})")
+            return {
+                "status": "ALREADY_FILLED",
+                "_reason": reason,
+                "_order_type": "CHASE_LIMIT",
+                "_chase_attempts": 0,
+                "_initial_pos_size": initial_pos_size,
+                "_all_order_ids": [],
+                "_chase_fills": [],
+                "side": side,
+                "executedQty": str(float(original_qty)),
+            }
+        elif side == "SELL" and self.position.size <= target_pos + 1e-9:
+            print(f"✅ Chase Order 이미 체결됨 (포지션 확인: {initial_pos_size:+.4f} → {self.position.size:+.4f}, 목표: {target_pos:+.4f})")
+            return {
+                "status": "ALREADY_FILLED",
+                "_reason": reason,
+                "_order_type": "CHASE_LIMIT",
+                "_chase_attempts": 0,
+                "_initial_pos_size": initial_pos_size,
+                "_all_order_ids": [],
+                "_chase_fills": [],
+                "side": side,
+                "executedQty": str(float(original_qty)),
+            }
+        
         total_executed_qty = Decimal("0")
         last_response: dict[str, Any] | None = None
         
@@ -1321,9 +1440,29 @@ class LiveContext:
         chase_fills: list[dict[str, Any]] = []
 
         for attempt in range(self._chase_max_attempts):
-            pos_change = abs(self.position.size - initial_pos_size)
-            if pos_change >= float(quantity) - 1e-9:
-                print(f"✅ Chase Order 이미 체결됨 (포지션 확인: {initial_pos_size:.4f} → {self.position.size:.4f})")
+            # 루프 중에도 포지션 확인 (이전 체크와 동일한 로직)
+            if side == "BUY" and self.position.size >= target_pos - 1e-9:
+                print(f"✅ Chase Order 이미 체결됨 (포지션 확인: {initial_pos_size:+.4f} → {self.position.size:+.4f}, 목표: {target_pos:+.4f})")
+                if last_response:
+                    last_response["_initial_pos_size"] = initial_pos_size
+                    last_response["_all_order_ids"] = chase_order_ids
+                    last_response["_chase_fills"] = chase_fills
+                    last_response.setdefault("side", side)
+                    last_response.setdefault("executedQty", str(float(original_qty)))
+                    return last_response
+                return {
+                    "status": "FILLED",
+                    "_reason": reason,
+                    "_order_type": "CHASE_LIMIT",
+                    "_chase_attempts": attempt,
+                    "_initial_pos_size": initial_pos_size,
+                    "_all_order_ids": chase_order_ids,
+                    "_chase_fills": chase_fills,
+                    "side": side,
+                    "executedQty": str(float(original_qty)),
+                }
+            elif side == "SELL" and self.position.size <= target_pos + 1e-9:
+                print(f"✅ Chase Order 이미 체결됨 (포지션 확인: {initial_pos_size:+.4f} → {self.position.size:+.4f}, 목표: {target_pos:+.4f})")
                 if last_response:
                     last_response["_initial_pos_size"] = initial_pos_size
                     last_response["_all_order_ids"] = chase_order_ids
@@ -1652,6 +1791,90 @@ class LiveContext:
         self._current_price = price
         if self.position.size != 0 and self.position.entry_price != 0:
             self.position.unrealized_pnl = self.position.size * (price - self.position.entry_price)
+
+    def _get_candle_interval_seconds(self) -> int:
+        """캔들 간격을 초 단위로 반환.
+        
+        Returns:
+            캔들 간격 (초)
+        """
+        interval_str = self.candle_interval.lower()
+        if interval_str.endswith("m"):
+            return int(interval_str[:-1]) * 60
+        elif interval_str.endswith("h"):
+            return int(interval_str[:-1]) * 3600
+        elif interval_str.endswith("d"):
+            return int(interval_str[:-1]) * 86400
+        else:
+            # 기본값: 5분
+            return 300
+    
+    def is_in_stoploss_cooldown(self, bar_timestamp: int | None = None) -> tuple[bool, str]:
+        """StopLoss cooldown 중인지 확인.
+        
+        Args:
+            bar_timestamp: 현재 봉의 timestamp (None이면 마지막 봉 timestamp 사용)
+            
+        Returns:
+            (cooldown 중 여부, 사유)
+        """
+        if self.risk_manager.config.stoploss_cooldown_candles <= 0:
+            return False, ""
+        
+        if self._stoploss_cooldown_until_bar_timestamp is None:
+            return False, ""
+        
+        check_timestamp = bar_timestamp if bar_timestamp is not None else self._last_bar_timestamp
+        if check_timestamp is None:
+            # 봉 timestamp가 없으면 cooldown이 활성화되어 있으면 True 반환
+            return True, "StopLoss cooldown 중 (봉 timestamp 없음)"
+        
+        if check_timestamp < self._stoploss_cooldown_until_bar_timestamp:
+            remaining_candles = (self._stoploss_cooldown_until_bar_timestamp - check_timestamp) // (self._get_candle_interval_seconds() * 1000)
+            return True, f"StopLoss cooldown 중 (남은 캔들: 약 {remaining_candles}개)"
+        
+        # cooldown 종료
+        if self._stoploss_cooldown_until_bar_timestamp > 0:
+            print(f"✅ StopLoss cooldown 종료, 거래 재개 가능")
+            self._stoploss_cooldown_until_bar_timestamp = None
+        
+        return False, ""
+    
+    def on_new_bar(self, bar_timestamp: int) -> None:
+        """새 봉이 시작될 때 호출 (cooldown 업데이트용).
+        
+        Args:
+            bar_timestamp: 새 봉의 timestamp
+        """
+        self._last_bar_timestamp = bar_timestamp
+        
+        # cooldown 종료 확인
+        if self._stoploss_cooldown_until_bar_timestamp is not None:
+            if bar_timestamp >= self._stoploss_cooldown_until_bar_timestamp:
+                cooldown_candles = self.risk_manager.config.stoploss_cooldown_candles
+                
+                # 시스템 로그 출력
+                self._logger.info(
+                    f"STOPLOSS_COOLDOWN_ENDED | symbol={self.symbol}, bar_timestamp={bar_timestamp}, "
+                    f"cooldown_candles={cooldown_candles}"
+                )
+                
+                print(f"✅ StopLoss cooldown 종료, 거래 재개 가능")
+                self._stoploss_cooldown_until_bar_timestamp = None
+                
+                self._log_audit("STOPLOSS_COOLDOWN_ENDED", {
+                    "bar_timestamp": bar_timestamp,
+                    "cooldown_candles": cooldown_candles,
+                })
+                
+                # Slack 알림 전송
+                if self.notifier:
+                    cooldown_text = (
+                        f"*✅ StopLoss Cooldown 종료* ({self.env}) {self.symbol}\n"
+                        f"- 거래 재개 가능\n"
+                        f"- Cooldown 기간: {cooldown_candles}개 캔들 완료"
+                    )
+                    asyncio.create_task(self._send_notification_safe(cooldown_text, "good"))
 
     def _log_audit(self, action: str, data: dict[str, Any]) -> None:
         """감사 로그 기록.
