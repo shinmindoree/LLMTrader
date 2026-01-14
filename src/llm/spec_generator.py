@@ -98,7 +98,10 @@ class SpecGenerator:
         """
         configs: list[IndicatorConfig] = []
 
-        for indicator_name in intent_result.extracted_indicators:
+        # extracted_indicators 우선 사용, 없으면 required_indicators 사용
+        indicators = intent_result.extracted_indicators or intent_result.required_indicators
+
+        for indicator_name in indicators:
             spec = self.indicator_registry.get_spec(indicator_name)
             if not spec:
                 continue
@@ -127,21 +130,32 @@ class SpecGenerator:
 
         entry_conditions = intent_result.entry_conditions
 
-        # 롱 진입 규칙
-        if "long" in entry_conditions:
-            condition = entry_conditions["long"]
-            if condition and condition.strip():
-                rules.append(
-                    Rule(condition=condition, action="entry", position_type="long")
-                )
+        # 기존 방식: entry_conditions 사용
+        if entry_conditions:
+            # 롱 진입 규칙
+            if "long" in entry_conditions:
+                condition = entry_conditions["long"]
+                if condition and condition.strip():
+                    rules.append(
+                        Rule(condition=condition, action="entry", position_type="long")
+                    )
 
-        # 숏 진입 규칙
-        if "short" in entry_conditions:
-            condition = entry_conditions["short"]
-            if condition and condition.strip():
-                rules.append(
-                    Rule(condition=condition, action="entry", position_type="short")
+            # 숏 진입 규칙
+            if "short" in entry_conditions:
+                condition = entry_conditions["short"]
+                if condition and condition.strip():
+                    rules.append(
+                        Rule(condition=condition, action="entry", position_type="short")
+                    )
+        # 새로운 방식: entry_conditions가 비어있을 때 entry_logic_description 사용
+        elif intent_result.entry_logic_description and intent_result.entry_logic_description.strip():
+            rules.append(
+                Rule(
+                    condition=intent_result.entry_logic_description,
+                    action="entry",
+                    position_type="long"
                 )
+            )
 
         return rules
 
@@ -158,21 +172,32 @@ class SpecGenerator:
 
         exit_conditions = intent_result.exit_conditions
 
-        # 롱 청산 규칙
-        if "long" in exit_conditions:
-            condition = exit_conditions["long"]
-            if condition and condition.strip():
-                rules.append(
-                    Rule(condition=condition, action="exit", position_type="long")
-                )
+        # 기존 방식: exit_conditions 사용
+        if exit_conditions:
+            # 롱 청산 규칙
+            if "long" in exit_conditions:
+                condition = exit_conditions["long"]
+                if condition and condition.strip():
+                    rules.append(
+                        Rule(condition=condition, action="exit", position_type="long")
+                    )
 
-        # 숏 청산 규칙
-        if "short" in exit_conditions:
-            condition = exit_conditions["short"]
-            if condition and condition.strip():
-                rules.append(
-                    Rule(condition=condition, action="exit", position_type="short")
+            # 숏 청산 규칙
+            if "short" in exit_conditions:
+                condition = exit_conditions["short"]
+                if condition and condition.strip():
+                    rules.append(
+                        Rule(condition=condition, action="exit", position_type="short")
+                    )
+        # 새로운 방식: exit_conditions가 비어있을 때 exit_logic_description 사용
+        elif intent_result.exit_logic_description and intent_result.exit_logic_description.strip():
+            rules.append(
+                Rule(
+                    condition=intent_result.exit_logic_description,
+                    action="exit",
+                    position_type="long"
                 )
+            )
 
         return rules
 

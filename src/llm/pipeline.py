@@ -24,6 +24,7 @@ class GenerationResult:
     spec: StrategySpec | None = None
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    user_message: str | None = None
 
 
 class StrategyGenerationPipeline:
@@ -70,6 +71,10 @@ class StrategyGenerationPipeline:
         try:
             intent_result = await self.intent_parser.parse(user_prompt)
             result.intent_result = intent_result
+            
+            # user_message 처리
+            if intent_result.user_message:
+                result.user_message = intent_result.user_message
 
             # 의도 타입 확인
             if intent_result.intent_type == IntentType.OFF_TOPIC:

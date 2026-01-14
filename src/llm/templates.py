@@ -78,9 +78,19 @@ class {class_name}(Strategy):
         if not bool(bar.get("is_new_bar", True)):
             return
         
-{{trading_logic}}
+        # ===== 5. 리스크 관리 가드 =====
+        {{risk_guard}}
         
-        # ===== 5. prev_rsi 갱신 (필요한 경우) =====
+        # ===== 6. LLM Generated: 지표 호출 =====
+{{INDICATOR_CALLS}}
+        
+        # ===== 7. LLM Generated: 진입 로직 =====
+{{ENTRY_LOGIC}}
+        
+        # ===== 8. LLM Generated: 청산 로직 =====
+{{EXIT_LOGIC}}
+        
+        # ===== 9. prev_rsi 갱신 (필요한 경우) =====
 {{prev_indicator_update}}
 '''
 

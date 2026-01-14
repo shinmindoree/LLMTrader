@@ -1,8 +1,12 @@
 """LLM 프롬프트 템플릿."""
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from indicators.registry import IndicatorRegistry
+
+if TYPE_CHECKING:
+    from llm.intent_parser import IntentResult
 
 
 def get_context_api_spec() -> str:
@@ -264,14 +268,31 @@ def get_intent_parser_system_prompt() -> str:
 사용자의 자연어 입력을 분석하여 다음 정보를 추출하세요:
 
 1. **의도 타입**: VALID_STRATEGY, INCOMPLETE, OFF_TOPIC, CLARIFICATION_NEEDED
-2. **사용 지표**: pandas-ta 지표명 리스트 (rsi, macd, bollinger, atr, stochastic, obv, sma, ema)
-3. **타겟 심볼**: 거래할 암호화폐 쌍 (기본값: BTCUSDT)
-4. **타임프레임**: 거래 시간대 (1m, 5m, 15m, 30m, 1h, 4h, 1d 등, 기본값: 15m)
-5. **진입 조건**: 언제 포지션을 진입할지
-6. **청산 조건**: 언제 포지션을 청산할지
-7. **리스크 관리**: StopLoss, TakeProfit 등 (기본값: stop_loss_pct=0.05)
-8. **누락 요소**: 전략 생성에 필요한데 입력에서 누락된 정보
-9. **신뢰도**: 분석 신뢰도 (0.0~1.0)
+2. **전략명**: 전략 이름 (예: "RSI 롱숏 전략", "터틀 트레이딩")
+3. **필수 지표**: pandas-ta 지표명 리스트 (rsi, macd, bollinger, atr, stochastic, obv, sma, ema)
+4. **타겟 심볼**: 거래할 암호화폐 쌍 (기본값: BTCUSDT)
+5. **타임프레임**: 거래 시간대 (1m, 5m, 15m, 30m, 1h, 4h, 1d 등, 기본값: 15m)
+6. **진입 로직 설명**: 자연어로 진입 조건 설명 (예: "rsi < 30 일 때 매수")
+7. **청산 로직 설명**: 자연어로 청산 조건 설명 (예: "rsi > 70 일 때 매도")
+8. **진입/청산 조건**: 상세 조건 (entry_conditions, exit_conditions)
+9. **리스크 관리**: StopLoss, TakeProfit 등 (기본값: stop_loss_pct=0.05)
+10. **누락 요소**: 전략 생성에 필요한데 입력에서 누락된 정보
+11. **사용자 메시지**: 사용자에게 보여줄 피드백/제안 (선택)
+12. **신뢰도**: 분석 신뢰도 (0.0~1.0)
+
+## 추상적 전략 처리
+사용자가 "터틀 트레이딩", "돈차트 전략" 등 추상적인 전략명을 언급하면, 표준 로직으로 구체화하세요:
+
+- **터틀 트레이딩**: 20일/55일 이동평균선 돌파, ATR 기반 포지션 사이징
+- **골든 크로스**: 단기 이동평균선이 장기 이동평균선을 상향 돌파
+- **데이트레이딩**: 1분~15분 타임프레임, 단기 추세 추종
+
+## 현실성 검증
+불가능하거나 비현실적인 요청은 감지하고 대안을 제시하세요:
+
+- **HFT (고빈도 거래)**: 마이크로초 단위 거래는 불가능 → "스캘핑 전략(1분~5분)으로 제안" 또는 user_message에 설명
+- **과도한 레버리지**: 100배 이상은 위험 → user_message에 경고
+- **불가능한 지표**: 지원하지 않는 지표 → user_message에 설명
 
 ## 사용 가능한 지표
 {available_indicators}
@@ -282,7 +303,11 @@ def get_intent_parser_system_prompt() -> str:
 ```json
 {{
     "intent_type": "VALID_STRATEGY" | "INCOMPLETE" | "OFF_TOPIC" | "CLARIFICATION_NEEDED",
-    "extracted_indicators": ["rsi", "macd"],
+    "strategy_name": "RSI 롱숏 전략",
+    "required_indicators": ["rsi"],
+    "entry_logic_description": "rsi < 30 일 때 매수",
+    "exit_logic_description": "rsi > 70 일 때 매도",
+    "extracted_indicators": ["rsi"],
     "symbol": "BTCUSDT",
     "timeframe": "15m",
     "entry_conditions": {{
@@ -299,6 +324,7 @@ def get_intent_parser_system_prompt() -> str:
         "max_position": 0.1
     }},
     "missing_elements": [],
+    "user_message": null,
     "confidence": 0.9
 }}
 ```
@@ -311,6 +337,10 @@ def get_intent_parser_system_prompt() -> str:
 ```json
 {{
     "intent_type": "VALID_STRATEGY",
+    "strategy_name": "RSI 롱 전략",
+    "required_indicators": ["rsi"],
+    "entry_logic_description": "RSI가 30 아래에서 30 상향 돌파 시 롱 진입",
+    "exit_logic_description": "RSI가 70 상향 돌파 시 청산",
     "extracted_indicators": ["rsi"],
     "symbol": "BTCUSDT",
     "timeframe": "15m",
@@ -318,16 +348,65 @@ def get_intent_parser_system_prompt() -> str:
     "exit_conditions": {{"long": "RSI가 70 상향 돌파"}},
     "risk_management": {{"stop_loss_pct": 0.05, "take_profit_pct": null, "max_position": 0.1}},
     "missing_elements": [],
+    "user_message": null,
     "confidence": 0.95
 }}
 ```
 
-### 예시 2: 불완전한 입력
+### 예시 2: 추상적 전략 (터틀 트레이딩)
+입력: "터틀 트레이딩 전략"
+응답:
+```json
+{{
+    "intent_type": "VALID_STRATEGY",
+    "strategy_name": "터틀 트레이딩",
+    "required_indicators": ["sma", "atr"],
+    "entry_logic_description": "20일 이동평균선을 상향 돌파 시 롱 진입, 55일 이동평균선을 하향 돌파 시 숏 진입",
+    "exit_logic_description": "20일 이동평균선을 하향 돌파 시 롱 청산, 55일 이동평균선을 상향 돌파 시 숏 청산",
+    "extracted_indicators": ["sma", "atr"],
+    "symbol": "BTCUSDT",
+    "timeframe": "1d",
+    "entry_conditions": {{"long": "20일 SMA 상향 돌파", "short": "55일 SMA 하향 돌파"}},
+    "exit_conditions": {{"long": "20일 SMA 하향 돌파", "short": "55일 SMA 상향 돌파"}},
+    "risk_management": {{"stop_loss_pct": 0.05, "take_profit_pct": null, "max_position": 0.1}},
+    "missing_elements": [],
+    "user_message": null,
+    "confidence": 0.9
+}}
+```
+
+### 예시 3: 불가능한 요청 (HFT)
+입력: "마이크로초 단위 고빈도 거래"
+응답:
+```json
+{{
+    "intent_type": "INCOMPLETE",
+    "strategy_name": null,
+    "required_indicators": [],
+    "entry_logic_description": "",
+    "exit_logic_description": "",
+    "extracted_indicators": [],
+    "symbol": "BTCUSDT",
+    "timeframe": "15m",
+    "entry_conditions": {{}},
+    "exit_conditions": {{}},
+    "risk_management": {{"stop_loss_pct": 0.05, "take_profit_pct": null, "max_position": 0.1}},
+    "missing_elements": ["마이크로초 단위 거래는 지원하지 않습니다"],
+    "user_message": "마이크로초 단위 고빈도 거래는 불가능합니다. 대신 스캘핑 전략(1분~5분 타임프레임)을 제안합니다.",
+    "confidence": 0.3
+}}
+```
+
+### 예시 4: 불완전한 입력
 입력: "RSI를 사용해서 매매하고 싶어"
 응답:
 ```json
 {{
     "intent_type": "INCOMPLETE",
+    "strategy_name": "RSI 전략",
+    "required_indicators": ["rsi"],
+    "entry_logic_description": "",
+    "exit_logic_description": "",
     "extracted_indicators": ["rsi"],
     "symbol": "BTCUSDT",
     "timeframe": "15m",
@@ -335,16 +414,21 @@ def get_intent_parser_system_prompt() -> str:
     "exit_conditions": {{}},
     "risk_management": {{"stop_loss_pct": 0.05, "take_profit_pct": null, "max_position": 0.1}},
     "missing_elements": ["진입 조건", "청산 조건"],
+    "user_message": null,
     "confidence": 0.5
 }}
 ```
 
-### 예시 3: Off-topic
+### 예시 5: Off-topic
 입력: "오늘 날씨가 좋네요"
 응답:
 ```json
 {{
     "intent_type": "OFF_TOPIC",
+    "strategy_name": null,
+    "required_indicators": [],
+    "entry_logic_description": "",
+    "exit_logic_description": "",
     "extracted_indicators": [],
     "symbol": "BTCUSDT",
     "timeframe": "15m",
@@ -352,6 +436,7 @@ def get_intent_parser_system_prompt() -> str:
     "exit_conditions": {{}},
     "risk_management": {{"stop_loss_pct": 0.05, "take_profit_pct": null, "max_position": 0.1}},
     "missing_elements": [],
+    "user_message": null,
     "confidence": 0.0
 }}
 ```

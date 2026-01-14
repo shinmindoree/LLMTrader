@@ -175,14 +175,14 @@ class CodeGenerator:
         
         return "\n".join(indented_lines) if indented_lines else ""
 
-    def _generate_trading_logic(self, spec: StrategySpec) -> str:
-        """트레이딩 로직 코드 생성.
+    def _generate_entry_logic(self, spec: StrategySpec) -> str:
+        """진입 로직 코드 생성.
 
         Args:
             spec: 전략 명세
 
         Returns:
-            트레이딩 로직 코드 (8칸 인덴트 포함)
+            진입 로직 코드 (8칸 인덴트 포함)
         """
         lines: list[str] = []
 
@@ -225,6 +225,27 @@ class CodeGenerator:
                 lines.append("        if qty >= self.min_quantity:")
                 lines.append('            ctx.sell(qty, reason="Entry Short")')
 
+        # 템플릿에서 {{ ENTRY_LOGIC }} 앞에 8칸 인덴트가 있으므로 각 줄에 8칸 인덴트 추가
+        indented_lines = []
+        for line in lines:
+            if line.strip():
+                indented_lines.append("        " + line)
+            else:
+                indented_lines.append("")
+        
+        return "\n".join(indented_lines) if indented_lines else "        # 진입 로직"
+
+    def _generate_exit_logic(self, spec: StrategySpec) -> str:
+        """청산 로직 코드 생성.
+
+        Args:
+            spec: 전략 명세
+
+        Returns:
+            청산 로직 코드 (8칸 인덴트 포함)
+        """
+        lines: list[str] = []
+
         # 청산 규칙
         for rule in spec.exit_rules:
             if rule.position_type == "long":
@@ -254,7 +275,7 @@ class CodeGenerator:
                 lines.append("    self.is_closing = True")
                 lines.append('    ctx.close_position(reason="Exit Short")')
 
-        # 템플릿에서 {{trading_logic}} 앞에 8칸 인덴트가 있으므로 각 줄에 8칸 인덴트 추가
+        # 템플릿에서 {{ EXIT_LOGIC }} 앞에 8칸 인덴트가 있으므로 각 줄에 8칸 인덴트 추가
         indented_lines = []
         for line in lines:
             if line.strip():
@@ -262,7 +283,7 @@ class CodeGenerator:
             else:
                 indented_lines.append("")
         
-        return "\n".join(indented_lines) if indented_lines else "        # 트레이딩 로직"
+        return "\n".join(indented_lines) if indented_lines else "        # 청산 로직"
 
     def _generate_stop_loss_logic(self, spec: StrategySpec) -> str:
         """StopLoss 로직 코드 생성.
@@ -344,18 +365,19 @@ class CodeGenerator:
         stop_loss_logic = self._generate_stop_loss_logic(spec)
         risk_guard = self._generate_risk_guard(spec)
         indicator_calls = self._generate_indicator_calls(spec)
-        trading_logic = self._generate_trading_logic(spec)
+        entry_logic = self._generate_entry_logic(spec)
+        exit_logic = self._generate_exit_logic(spec)
         prev_indicator_update = self._generate_prev_indicator_update(spec)
-
-        # 트레이딩 로직 구성: 가드 코드 -> 지표 호출 -> 트레이딩 로직
-        full_trading_logic = f"{risk_guard}\n{indicator_calls}\n\n{trading_logic}"
 
         # 템플릿 포맷팅
         # init_params는 이미 8칸 인덴트가 포함되어 있음 (_generate_init_params에서 추가)
         code = template.format(
             init_params=init_params,
             stop_loss_logic=stop_loss_logic,
-            trading_logic=full_trading_logic,
+            risk_guard=risk_guard,
+            INDICATOR_CALLS=indicator_calls,
+            ENTRY_LOGIC=entry_logic,
+            EXIT_LOGIC=exit_logic,
             prev_indicator_update=prev_indicator_update,
         )
 

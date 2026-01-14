@@ -28,6 +28,10 @@ class IntentResult:
     """의도 분석 결과."""
 
     intent_type: IntentType
+    strategy_name: str | None = None
+    required_indicators: list[str] = field(default_factory=list)
+    entry_logic_description: str = ""
+    exit_logic_description: str = ""
     extracted_indicators: list[str] = field(default_factory=list)
     symbol: str = "BTCUSDT"
     timeframe: str = "15m"
@@ -35,6 +39,7 @@ class IntentResult:
     exit_conditions: dict[str, str] = field(default_factory=dict)
     risk_management: dict[str, Any] = field(default_factory=dict)
     missing_elements: list[str] = field(default_factory=list)
+    user_message: str | None = None
     confidence: float = 0.0
     raw_response: str | None = None
 
@@ -155,6 +160,10 @@ class IntentParser:
         validated_indicators = [
             ind for ind in extracted_indicators if ind in self.available_indicators
         ]
+        required_indicators = data.get("required_indicators", extracted_indicators)
+        validated_required_indicators = [
+            ind for ind in required_indicators if ind in self.available_indicators
+        ]
 
         # 기본값 설정
         risk_management = data.get("risk_management", {})
@@ -171,6 +180,10 @@ class IntentParser:
 
         return IntentResult(
             intent_type=intent_type,
+            strategy_name=data.get("strategy_name"),
+            required_indicators=validated_required_indicators if validated_required_indicators else validated_indicators,
+            entry_logic_description=data.get("entry_logic_description", ""),
+            exit_logic_description=data.get("exit_logic_description", ""),
             extracted_indicators=validated_indicators,
             symbol=data.get("symbol", "BTCUSDT"),
             timeframe=data.get("timeframe", "15m"),
@@ -178,6 +191,7 @@ class IntentParser:
             exit_conditions=data.get("exit_conditions", {}),
             risk_management=risk_management,
             missing_elements=data.get("missing_elements", []),
+            user_message=data.get("user_message"),
             confidence=float(data.get("confidence", 0.0)),
             raw_response=response_text,
         )
