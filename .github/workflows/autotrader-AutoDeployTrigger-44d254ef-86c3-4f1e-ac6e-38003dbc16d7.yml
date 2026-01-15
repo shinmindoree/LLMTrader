@@ -5,7 +5,7 @@ on:
   # Automatically trigger it when detected changes in repo
   push:
     branches: 
-      [ websocket ]
+      [ dev ]
     paths:
     - '**'
     - '.github/workflows/autotrader-AutoDeployTrigger-44d254ef-86c3-4f1e-ac6e-38003dbc16d7.yml'
