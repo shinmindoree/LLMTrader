@@ -65,7 +65,7 @@ strategy_class = next(
 ### run_live_trading.py
 
 ```bash
-uv run python scripts/run_live_trading.py rsi_ultra_quick_test_strategy.py \
+uv run python scripts/run_live_trading.py rsi_long_short_strategy.py \
   --symbol BTCUSDT \
   --leverage 5 \
   --max-position 1.0 \
@@ -105,4 +105,3 @@ uv run python scripts/check_realtime_btcusdt_rsi.py --watch
 
 - Do not prompt for input in Docker—always support `--yes`.
 - Do not hardcode symbol or leverage—use CLI args.
-

@@ -57,20 +57,42 @@ class StrategyContext(Protocol):
     @property
     def position_entry_price(self) -> float: ...
     
-    def buy(self, quantity: float) -> None: ...
+    def buy(
+        self,
+        quantity: float,
+        price: float | None = None,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+    ) -> None: ...
     
-    def sell(self, quantity: float) -> None: ...
+    def sell(
+        self,
+        quantity: float,
+        price: float | None = None,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+    ) -> None: ...
     
-    def close_position(self) -> None: ...
+    def close_position(
+        self,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+    ) -> None: ...
+
+    def calc_entry_quantity(self, entry_pct: float | None = None, price: float | None = None) -> float: ...
+    
+    def enter_long(self, reason: str | None = None, entry_pct: float | None = None) -> None: ...
+    
+    def enter_short(self, reason: str | None = None, entry_pct: float | None = None) -> None: ...
     
     def get_indicator(self, name: str, period: int) -> float: ...
+
+    def register_indicator(self, name: str, func: Callable[..., Any]) -> None: ...
 ```
 
-**Supported Indicators:**
-- `"rsi"` — Wilder RSI from closed bar prices
-- `"rsi_rt"` — Real-time RSI (includes current tick price)
-- `"sma"` — Simple moving average
-- `"ema"` — Exponential moving average
+**Indicators (builtin + custom):**
+- builtin 지표는 TA-Lib 함수명으로 바로 호출한다. 예: `ctx.get_indicator("RSI", period=14)`
+- custom 지표는 전략에서 `initialize()` 시점에 `ctx.register_indicator(name, func)`로 등록한다.
 
 ---
 
@@ -79,13 +101,16 @@ class StrategyContext(Protocol):
 ### RSI Crossover Detection
 
 ```python
+def initialize(self, ctx):
+    pass
+
 def on_bar(self, ctx, bar):
-    rsi = ctx.get_indicator("rsi", 14)
+    rsi = ctx.get_indicator("RSI", period=14)
     
     if self.prev_rsi is not None:
         # Entry: RSI crosses above 30
         if self.prev_rsi < 30 <= rsi and ctx.position_size == 0:
-            ctx.buy(qty)
+            ctx.enter_long(reason=f"RSI cross ({self.prev_rsi:.1f} -> {rsi:.1f})")
         
         # Exit: RSI crosses above 70
         if self.prev_rsi < 70 <= rsi and ctx.position_size > 0:
@@ -95,38 +120,17 @@ def on_bar(self, ctx, bar):
         self.prev_rsi = rsi
 ```
 
-### Tick-Based Stop-Loss
+### StopLoss Handling
 
-```python
-class MyStrategy(Strategy):
-    run_on_tick = True  # Engine calls on_bar every tick
-    
-    def on_bar(self, ctx, bar):
-        # Stop-loss uses real-time price
-        if ctx.position_size > 0:
-            entry = ctx.position_entry_price
-            if ctx.current_price <= entry - self.stop_loss:
-                ctx.close_position()
-                return
-        
-        # RSI logic only on new bar
-        if bar.get("is_new_bar"):
-            self._check_rsi_signals(ctx, bar)
-```
+StopLoss는 시스템(Context/Risk)에서 처리합니다. 전략은 진입/청산 신호만 관리하고,
+StopLoss 트리거는 시스템 설정으로 통일합니다.
 
 ### Automatic Position Sizing
 
 ```python
-from decimal import Decimal, ROUND_DOWN
-
 def on_bar(self, ctx, bar):
     if ctx.position_size == 0 and should_enter:
-        equity = ctx.balance + ctx.unrealized_pnl
-        notional = equity * self.leverage * self.max_position * 0.98
-        raw_qty = Decimal(str(notional / ctx.current_price))
-        qty = float((raw_qty / self.qty_step).to_integral_value(ROUND_DOWN) * self.qty_step)
-        if qty >= self.min_qty:
-            ctx.buy(qty)
+        ctx.enter_long(reason="entry signal")
 ```
 
 ---
@@ -141,6 +145,5 @@ def on_bar(self, ctx, bar):
 
 ### Don'ts
 
-- Do not use `ctx.get_indicator("rsi", period)` with current tick price—use `"rsi_rt"`.
+- Do not assume indicators are tick-based; indicator values are calculated from closed-bar history.
 - Do not assume `on_bar` is called exactly once per minute—tick mode may call more often.
-

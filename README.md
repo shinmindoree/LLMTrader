@@ -1,6 +1,6 @@
 # LLMTrader
 
-바이낸스 선물 **라이브 트레이딩(테스트넷/메인넷)** 실행을 위한 프로젝트입니다.
+바이낸스 선물 **백테스트 + 라이브 트레이딩(테스트넷/메인넷)** 실행을 위한 프로젝트입니다.
 
 ## 요구사항
 - Python 3.11+
@@ -27,6 +27,20 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 uv sync --extra dev
 ```
 
+### (선택) TA-Lib 기반 builtin 인디케이터 사용
+
+이 프로젝트의 builtin 인디케이터는 TA-Lib 함수명을 통해 호출됩니다(예: `RSI`, `EMA`, `MACD`).
+
+1) TA-Lib 라이브러리 설치 (macOS 예시)
+```bash
+brew install ta-lib
+```
+
+2) Python 패키지 설치
+```bash
+uv sync --extra talib
+```
+
 ### 웹 UI 실행 (권장)
 ```bash
 uv run streamlit run streamlit_app.py
@@ -34,19 +48,8 @@ uv run streamlit run streamlit_app.py
 
 브라우저에서 `http://localhost:8501`로 접속하면 웹 UI가 열립니다.
 
-### API 서버 실행 (선택)
-```bash
-uv run uvicorn llmtrader.main:app --reload
-```
-
-## 헬스체크
-- `GET /healthz` → `{"status": "ok"}`
-- `GET /status` → `{"env": "...", "binance_base_url": "..."}` (민감정보 없음)
-
-## API 엔드포인트
-- `POST /api/order` - 주문 생성
-- `POST /api/order/cancel` - 주문 취소
-- `POST /api/klines` - 캔들 데이터 조회
+### API 서버
+현재 저장소에는 FastAPI 기반 API 서버가 포함되어 있지 않습니다(추후 추가 예정).
 
 ## 주요 기능
 
@@ -59,6 +62,8 @@ uv run python scripts/run_live_trading.py my_strategy.py \
   --max-position 0.5 \
   --daily-loss-limit 500
 ```
+
+전략 파일을 새로 만들 때는 `indicator_strategy_template.py`를 복사해서 시작하면 됩니다.
 
 **⚠️ 경고**: 
 - 반드시 **테스트넷 API**를 사용하세요 (`BINANCE_BASE_URL=https://testnet.binancefuture.com`)
@@ -74,27 +79,26 @@ uv run python scripts/run_live_trading.py my_strategy.py \
 - 감사 로그 (모든 주문 기록)
 
 ## 테스트
-```bash
-uv run pytest
-```
+- 아직 `pytest` 기반 테스트 스위트는 구성되어 있지 않습니다.
+- 대신 `scripts/smoke_live_constraints.py`, `scripts/min_order_test.py`, `scripts/check_time_sync.py`로 스모크/헬스체크를 수행할 수 있습니다.
 
 ## 프로젝트 구조
 
 ```
 LLMTrader/
-├── src/llmtrader/
-│   ├── api/           # FastAPI 라우터
-│   ├── binance/       # 바이낸스 API 클라이언트
-│   ├── live/          # 라이브 트레이딩 엔진
-│   │   ├── context.py # 라이브 트레이딩 컨텍스트
-│   │   ├── engine.py  # 라이브 트레이딩 엔진
-│   │   ├── price_feed.py # 가격 피드(REST 폴링)
-│   │   └── risk.py    # 리스크 관리 모듈
-│   └── strategy/      # 전략 인터페이스
+├── src/
+│   ├── binance/       # 바이낸스 REST/WS 클라이언트
+│   ├── live/          # 라이브 트레이딩 엔진 (LiveContext/Engine/PriceFeed/Risk)
+│   ├── backtest/      # 백테스트 엔진 (Context/Engine/DataFetcher)
+│   ├── strategy/      # 전략 인터페이스 (Strategy / StrategyContext)
+│   ├── indicators/    # 지표 계산(RSI/SMA/EMA 등)
+│   ├── common/        # 공통 모듈(리스크 설정/검증 등)
+│   ├── notifications/ # Slack 알림 등
+│   └── settings.py    # 환경변수(.env) 설정 로더
 ├── pages/             # Streamlit 페이지
 │   └── 4_🔴_라이브_트레이딩.py
 ├── scripts/           # 실행 스크립트
-└── tests/             # 테스트
+└── *.py               # 샘플 전략 파일 등
 ```
 
 ## 개발 로드맵

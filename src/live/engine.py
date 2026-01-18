@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Any
 
 from live.context import LiveContext
-from indicators.rsi import rsi_wilder_from_closes
 from live.price_feed import PriceFeed
 from live.logger import get_logger
 from strategy.base import Strategy
@@ -22,6 +21,7 @@ class LiveTradingEngine:
         context: LiveContext,
         price_feed: PriceFeed,
         log_interval: int | None = None,
+        indicator_config: dict[str, Any] | None = None,
     ) -> None:
         """라이브 트레이딩 엔진 초기화.
 
@@ -30,6 +30,7 @@ class LiveTradingEngine:
             context: 라이브 트레이딩 컨텍스트
             price_feed: 가격 피드
             log_interval: 로그 출력 주기 (초). None 또는 0이면 캔들 마감 시에만 저장
+            indicator_config: 로그용 지표 설정
         """
         self.strategy = strategy
         self.ctx = context
@@ -44,13 +45,12 @@ class LiveTradingEngine:
         self._start_time: float = 0.0
         self._logger = get_logger("llmtrader.live")
         self.log_interval: int | None = log_interval if log_interval and log_interval > 0 else None
+        self._indicator_config = dict(indicator_config or {})
+        if hasattr(self.ctx, "set_indicator_config"):
+            self.ctx.set_indicator_config(self._indicator_config)
         self._last_log_time: float = 0.0
         self._book_ticker_stream: BinanceBookTickerStream | None = None
         self._book_ticker_task: asyncio.Task[None] | None = None
-
-    @staticmethod
-    def _compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:
-        return rsi_wilder_from_closes(list(closes), int(period))
 
     async def start(self) -> None:
         """라이브 트레이딩 시작."""
@@ -81,23 +81,76 @@ class LiveTradingEngine:
                 symbol=self.price_feed.symbol,
             )
         
-        try:
-            strat_period = getattr(self.strategy, "rsi_period", 14)
-            rsi_period = int(strat_period) if strat_period else 14
-        except Exception:  # noqa: BLE001
-            rsi_period = 14
-
         seed_limit = 1000
-        try:
-            history = await self.price_feed.fetch_closed_closes(limit=seed_limit)
-            for _, close in history:
-                self.ctx.update_price(float(close))
-            if history:
-                self._current_bar_timestamp = int(history[-1][0])
-                self._last_bar_timestamp = self._current_bar_timestamp
-                self._current_bar_close = float(history[-1][1])
-        except Exception:  # noqa: BLE001
-            pass
+        history: list[dict[str, float | int]] = []
+        last_seed_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                history = await self.price_feed.fetch_closed_ohlcv(limit=seed_limit)
+                break
+            except Exception as e:  # noqa: BLE001
+                last_seed_error = e
+                self._logger.log_error(
+                    error_type="HISTORY_SEED_FAILED",
+                    message=f"attempt={attempt + 1}/3 {type(e).__name__}: {e}",
+                    symbol=self.price_feed.symbol,
+                    candle_interval=self.price_feed.candle_interval,
+                    seed_limit=seed_limit,
+                )
+                await asyncio.sleep(1.5 * (attempt + 1))
+
+        if not history:
+            detail = f"{type(last_seed_error).__name__}: {last_seed_error}" if last_seed_error else "empty"
+            raise RuntimeError(
+                "초기 지표 계산을 위한 캔들 히스토리 시딩에 실패했습니다. "
+                f"RSI 등 지표가 nan으로 남아 트레이딩이 정상 동작하지 않습니다. ({detail})"
+            )
+
+        for item in history:
+            self.ctx.update_bar(
+                float(item["open"]),
+                float(item["high"]),
+                float(item["low"]),
+                float(item["close"]),
+                float(item["volume"]),
+            )
+        self._current_bar_timestamp = int(history[-1]["timestamp"])
+        self._last_bar_timestamp = self._current_bar_timestamp
+        self._current_bar_close = float(history[-1]["close"])
+
+        self._logger.info(
+            "히스토리 시딩 완료",
+            symbol=self.price_feed.symbol,
+            candle_interval=self.price_feed.candle_interval,
+            bars=len(history),
+            first_bar_timestamp=int(history[0]["timestamp"]),
+            last_bar_timestamp=int(history[-1]["timestamp"]),
+        )
+
+        if not self._initialized:
+            try:
+                self.ctx.set_strategy_meta(self.strategy)
+            except Exception:  # noqa: BLE001
+                pass
+            if hasattr(self.ctx, "get_indicator_config"):
+                self._indicator_config = self.ctx.get_indicator_config()
+            self.strategy.initialize(self.ctx)
+            self._initialized = True
+
+        # 시딩 직후 바로 지표가 유효해야 한다(라이브 재시작 시점 요구사항).
+        initial_indicators = self.ctx.get_indicator_values(self._indicator_config)
+        self._logger.info(
+            "시작 지표 스냅샷",
+            symbol=self.price_feed.symbol,
+            candle_interval=self.price_feed.candle_interval,
+            indicators=initial_indicators,
+        )
+        for name, value in (initial_indicators or {}).items():
+            if isinstance(value, float) and (value != value):  # NaN check without importing math
+                raise RuntimeError(
+                    f"시작 시점 지표 '{name}' 값이 nan 입니다. "
+                    "TA-Lib 설치/환경(uv) 및 히스토리 시딩을 확인하세요."
+                )
         
         self._running = True
 
@@ -143,8 +196,12 @@ class LiveTradingEngine:
         """
         last_price = float(tick["price"])
         self.ctx.mark_price(last_price)
+        self.ctx.check_stoploss()
 
         bar_ts = int(tick.get("bar_timestamp", 0))
+        bar_open = float(tick.get("bar_open", self._current_bar_close or last_price))
+        bar_high = float(tick.get("bar_high", self._current_bar_close or last_price))
+        bar_low = float(tick.get("bar_low", self._current_bar_close or last_price))
         bar_close = float(tick.get("bar_close", self._current_bar_close or last_price))
 
         if bar_ts:
@@ -157,21 +214,23 @@ class LiveTradingEngine:
                 self.ctx.set_strategy_meta(self.strategy)
             except Exception:  # noqa: BLE001
                 pass
+            if hasattr(self.ctx, "get_indicator_config"):
+                self._indicator_config = self.ctx.get_indicator_config()
             self.strategy.initialize(self.ctx)
             self._initialized = True
 
         is_new_bar = bool(tick.get("is_new_bar", False))
         if is_new_bar and bar_ts and (self._last_bar_timestamp != bar_ts):
-            self.ctx.update_price(bar_close)
+            self.ctx.update_bar(bar_open, bar_high, bar_low, bar_close, float(tick.get("volume", 0)))
             self.ctx.mark_price(last_price)
             # 새 봉 시작 시 cooldown 업데이트
             self.ctx.on_new_bar(bar_ts)
 
             bar = {
                 "timestamp": bar_ts,
-                "open": bar_close,
-                "high": bar_close,
-                "low": bar_close,
+                "open": bar_open,
+                "high": bar_high,
+                "low": bar_low,
                 "close": bar_close,
                 "volume": tick.get("volume", 0),
                 "is_new_bar": True,
@@ -247,15 +306,7 @@ class LiveTradingEngine:
             timestamp: 타임스탬프
             bar_timestamp: 현재 봉 타임스탬프 (kline open time, ms)
         """
-        closes = list(self.ctx._price_history)
-    
-        strat_period = getattr(self.strategy, "rsi_period", 14)
-        try:
-            strat_period_int = int(strat_period)
-        except Exception:  # noqa: BLE001
-            strat_period_int = 14
-        rsi_p = self._compute_rsi_from_closes(closes, period=strat_period_int)
-        rsi_rt_p = self._compute_rsi_from_closes(closes + [float(self.ctx.current_price)], period=strat_period_int)
+        indicator_values = self.ctx.get_indicator_values(self._indicator_config)
 
         snapshot = {
             "timestamp": timestamp,
@@ -275,9 +326,7 @@ class LiveTradingEngine:
             "num_pending_orders": len(self.ctx.pending_orders),
             "num_filled_orders": len(self.ctx.filled_orders),
             "bar_close": self._current_bar_close,
-            "rsi_period": strat_period_int,
-            "rsi_p": rsi_p,
-            "rsi_rt_p": rsi_rt_p,
+            "indicators": indicator_values,
         }
         self.snapshots.append(snapshot)
 
@@ -285,12 +334,10 @@ class LiveTradingEngine:
             symbol=self.price_feed.symbol,
             bar_time=snapshot["bar_datetime"],
             price=snapshot["price"],
-            rsi=snapshot["rsi_p"],
-            rsi_rt=snapshot["rsi_rt_p"],
+            indicators=indicator_values,
             position=snapshot["position_size"],
             balance=snapshot["balance"],
             pnl=snapshot["unrealized_pnl"],
-            rsi_period=snapshot["rsi_period"],
             bar_close=snapshot["bar_close"],
             total_equity=snapshot["total_equity"],
         )

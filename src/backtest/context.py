@@ -1,9 +1,10 @@
 """백테스트용 컨텍스트."""
 
+from collections.abc import Callable
 from typing import Any
 
-from indicators.rsi import rsi_wilder_from_closes
 from backtest.risk import BacktestRiskManager
+from indicators.builtin import compute as compute_builtin_indicator
 from strategy.context import StrategyContext
 
 
@@ -42,6 +43,12 @@ class BacktestContext:
         self.trades: list[dict[str, Any]] = []
         self.orders: list[dict[str, Any]] = []
         self._closes: list[float] = []
+        self._opens: list[float] = []
+        self._highs: list[float] = []
+        self._lows: list[float] = []
+        self._volumes: list[float] = []
+        self._indicator_registry: dict[str, Callable[..., Any]] = {}
+        self._indicator_error_logged: set[str] = set()
     
     @property
     def current_price(self) -> float:
@@ -96,14 +103,109 @@ class BacktestContext:
         
         if self.position.size != 0 and self.position.entry_price != 0:
             self.position.unrealized_pnl = (price - self.position.entry_price) * self.position.size
+
+    def check_stoploss(self) -> bool:
+        """StopLoss 조건 확인 후 필요 시 청산.
+
+        Returns:
+            StopLoss가 트리거되어 청산을 수행했는지 여부
+        """
+        if abs(self.position.size) < 1e-12:
+            return False
+        stop_loss_pct = self.risk_manager.config.stop_loss_pct
+        if stop_loss_pct <= 0:
+            return False
+        entry_balance = float(self.position.entry_balance or 0.0)
+        if entry_balance <= 0:
+            return False
+        current_pnl_pct = float(self.position.unrealized_pnl) / entry_balance
+        if current_pnl_pct <= -stop_loss_pct:
+            position_type = "Long" if self.position.size > 0 else "Short"
+            reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct * 100:.2f}% of entry balance)"
+            self.close_position(reason=reason_msg, exit_reason="STOP_LOSS")
+            return True
+        return False
+
+    def calc_entry_quantity(self, entry_pct: float | None = None, price: float | None = None) -> float:
+        """시스템 설정 기반으로 진입 수량 계산."""
+        use_price = float(price if price is not None else self._current_price)
+        if use_price <= 0:
+            return 0.0
+        equity = float(self.total_equity)
+        if equity <= 0:
+            return 0.0
+        max_position = float(self.risk_manager.config.max_position_size)
+        max_order = float(self.risk_manager.config.max_order_size)
+        pct = float(entry_pct) if entry_pct is not None else min(max_position, max_order)
+        if pct <= 0:
+            return 0.0
+        notional = equity * float(self.leverage) * pct
+        qty = notional / use_price
+        return max(0.0, qty)
+
+    def enter_long(self, reason: str | None = None, entry_pct: float | None = None) -> None:
+        """시스템 리스크 설정 기반으로 롱 진입."""
+        if abs(self.position.size) > 1e-12:
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self.buy(qty, reason=reason)
+
+    def enter_short(self, reason: str | None = None, entry_pct: float | None = None) -> None:
+        """시스템 리스크 설정 기반으로 숏 진입."""
+        if abs(self.position.size) > 1e-12:
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self.sell(qty, reason=reason)
     
-    def update_bar(self, close: float) -> None:
-        """새 캔들이 닫힐 때 호출 (지표 계산용)."""
-        self._closes.append(close)
-        if len(self._closes) > 500:
-            self._closes = self._closes[-500:]
+    def update_bar(
+        self, open_price: float, high_price: float, low_price: float, close_price: float, volume: float = 0.0
+    ) -> None:
+        """새 캔들이 닫힐 때 호출 (지표 계산용 OHLCV 히스토리 업데이트)."""
+        self._opens.append(float(open_price))
+        self._highs.append(float(high_price))
+        self._lows.append(float(low_price))
+        self._closes.append(float(close_price))
+        self._volumes.append(float(volume))
+
+        max_len = 500
+        if len(self._closes) > max_len:
+            self._opens = self._opens[-max_len:]
+            self._highs = self._highs[-max_len:]
+            self._lows = self._lows[-max_len:]
+            self._closes = self._closes[-max_len:]
+            self._volumes = self._volumes[-max_len:]
+
+    def _get_builtin_indicator_inputs(self) -> dict[str, list[float]]:
+        closes = list(self._closes)
+        n = len(closes)
+        if len(self._opens) != n or len(self._highs) != n or len(self._lows) != n or len(self._volumes) != n:
+            return {
+                "open": closes,
+                "high": closes,
+                "low": closes,
+                "close": closes,
+                "volume": [0.0] * n,
+            }
+        return {
+            "open": list(self._opens),
+            "high": list(self._highs),
+            "low": list(self._lows),
+            "close": closes,
+            "volume": list(self._volumes),
+        }
     
-    def buy(self, quantity: float, price: float | None = None, reason: str = "") -> None:
+    def buy(
+        self,
+        quantity: float,
+        price: float | None = None,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
         """매수 주문 (시장가 체결 시뮬레이션).
         
         - 포지션이 없으면: 롱 포지션 진입
@@ -139,7 +241,8 @@ class BacktestContext:
                 "price": price,
                 "pnl": pnl,
                 "commission": commission,
-                "reason": reason,
+                "reason": reason or "",
+                "exit_reason": exit_reason,
                 "timestamp": self._current_timestamp,
                 "position_size_usdt": position_size_usdt,
                 "entry_price": self.position.entry_price if self.position.size != 0 else price,
@@ -180,7 +283,8 @@ class BacktestContext:
             "quantity": quantity,
             "price": price,
             "commission": commission,
-            "reason": reason,
+            "reason": reason or "",
+            "exit_reason": exit_reason,
             "timestamp": self._current_timestamp,
             "position_size_usdt": position_size_usdt,
             "entry_price": self.position.entry_price,
@@ -193,7 +297,14 @@ class BacktestContext:
             "price": price,
         })
     
-    def sell(self, quantity: float, price: float | None = None, reason: str = "") -> None:
+    def sell(
+        self,
+        quantity: float,
+        price: float | None = None,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
         """매도 주문 (시장가 체결 시뮬레이션).
         
         - 포지션이 없으면: 숏 포지션 진입
@@ -229,7 +340,8 @@ class BacktestContext:
                 "price": price,
                 "pnl": pnl,
                 "commission": commission,
-                "reason": reason,
+                "reason": reason or "",
+                "exit_reason": exit_reason,
                 "timestamp": self._current_timestamp,
                 "position_size_usdt": position_size_usdt,
                 "entry_price": self.position.entry_price if abs(self.position.size) > 1e-12 else price,
@@ -270,7 +382,8 @@ class BacktestContext:
             "quantity": quantity,
             "price": price,
             "commission": commission,
-            "reason": reason,
+            "reason": reason or "",
+            "exit_reason": exit_reason,
             "timestamp": self._current_timestamp,
             "position_size_usdt": position_size_usdt,
             "entry_price": self.position.entry_price if self.position.size != 0 else price,
@@ -283,18 +396,28 @@ class BacktestContext:
             "price": price,
         })
     
-    def close_position(self, reason: str = "") -> None:
+    def close_position(
+        self,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
         """포지션 전체 청산 (롱/숏 모두 지원)."""
         if self.position.size == 0:
             return
         
         quantity = abs(self.position.size)
         if self.position.size > 0:
-            self.sell(quantity, reason=reason)
+            self.sell(quantity, reason=reason, exit_reason=exit_reason)
         else:
-            self.buy(quantity, reason=reason)
+            self.buy(quantity, reason=reason, exit_reason=exit_reason)
     
-    def close_position_at_price(self, price: float, reason: str = "") -> None:
+    def close_position_at_price(
+        self,
+        price: float,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+    ) -> None:
         """포지션 전체 청산 (롱/숏 모두 지원) - 지정 가격으로 체결.
         
         Args:
@@ -306,53 +429,50 @@ class BacktestContext:
         
         quantity = abs(self.position.size)
         if self.position.size > 0:
-            self.sell(quantity, price=price, reason=reason)
+            self.sell(quantity, price=price, reason=reason, exit_reason=exit_reason)
         else:
-            self.buy(quantity, price=price, reason=reason)
+            self.buy(quantity, price=price, reason=reason, exit_reason=exit_reason)
     
+    def register_indicator(self, name: str, func: Callable[..., Any]) -> None:
+        """지표 계산 함수 등록."""
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("indicator name is required")
+        if not callable(func):
+            raise ValueError(f"indicator '{name}' must be callable")
+        self._indicator_registry[normalized.lower()] = func
+
     def get_indicator(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """지표 조회.
         
         Args:
-            name: 지표 이름 (예: 'sma', 'rsi', 'ema', 'rsi_rt')
+            name: 지표 이름
             *args: 위치 인자
             **kwargs: 키워드 인자
         
         Returns:
             지표 값
         """
-        if name == "sma":
-            period = args[0] if args else kwargs.get("period", 20)
-            if len(self._price_history) < period:
-                return self._current_price if self._current_price > 0 else 0.0
-            return sum(self._price_history[-period:]) / period
-        
-        elif name == "ema":
-            period = args[0] if args else kwargs.get("period", 20)
-            if len(self._price_history) < period:
-                return self._current_price if self._current_price > 0 else 0.0
-            prices = self._price_history[-period:]
-            multiplier = 2 / (period + 1)
-            ema = prices[0]
-            for price in prices[1:]:
-                ema = (price - ema) * multiplier + ema
-            return ema
-        
-        elif name == "rsi":
-            period = args[0] if args else kwargs.get("period", 14)
-            if len(self._closes) < period + 1:
-                return 50.0
-            return rsi_wilder_from_closes(self._closes, int(period))
-        
-        elif name == "rsi_rt":
-            period = args[0] if args else kwargs.get("period", 14)
-            if len(self._closes) < period:
-                return 50.0
-            closes = list(self._closes) + [float(self._current_price)]
-            return rsi_wilder_from_closes(closes, int(period))
-        
-        return 0.0
-    
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("indicator name is required")
+
+        func = self._indicator_registry.get(normalized.lower())
+        if func:
+            return func(self, *args, **kwargs)
+
+        if args:
+            if len(args) == 1 and "period" not in kwargs and "timeperiod" not in kwargs:
+                kwargs["period"] = args[0]
+            else:
+                raise TypeError("builtin indicator params must be passed as keywords (or single period)")
+
+        return compute_builtin_indicator(
+            normalized,
+            self._get_builtin_indicator_inputs(),
+            **kwargs,
+        )
+
     def get_open_orders(self) -> list[dict[str, Any]]:
         """미체결 주문 목록."""
         return []

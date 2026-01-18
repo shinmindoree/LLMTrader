@@ -1,14 +1,16 @@
 """라이브 트레이딩 컨텍스트."""
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+import math
 import time
 from typing import Any
 
 from binance.client import BinanceHTTPClient
 from binance.user_stream import BinanceUserStream
-from indicators.rsi import rsi_wilder_from_closes
+from indicators.builtin import compute as compute_builtin_indicator
 from live.risk import LiveRiskManager
 from live.logger import get_logger
 from notifications.slack import SlackNotifier
@@ -36,6 +38,7 @@ class LiveContext:
         leverage: int = 1,
         env: str = "local",
         notifier: SlackNotifier | None = None,
+        indicator_config: dict[str, Any] | None = None,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -52,10 +55,11 @@ class LiveContext:
         self.env = env
         self.notifier = notifier
         self._logger = get_logger("llmtrader.live")
-
-        self.strategy_rsi_period: int | None = None
-        self.strategy_entry_rsi: float | None = None
-        self.strategy_exit_rsi: float | None = None
+        self.strategy_meta: dict[str, Any] = {}
+        self._indicator_config: dict[str, Any] = dict(indicator_config or {})
+        self._indicator_registry: dict[str, Callable[..., Any]] = {}
+        self._indicator_error_logged: set[str] = set()
+        self._indicator_nan_logged: set[str] = set()
         
         self.candle_interval: str = "1m"
 
@@ -98,6 +102,10 @@ class LiveContext:
         self.position = LivePosition()
         self._current_price: float = 0.0
         self._price_history: list[float] = []
+        self._open_history: list[float] = []
+        self._high_history: list[float] = []
+        self._low_history: list[float] = []
+        self._volume_history: list[float] = []
         
         self.pending_orders: dict[int, dict[str, Any]] = {}
         self.filled_orders: list[dict[str, Any]] = []
@@ -114,6 +122,98 @@ class LiveContext:
         self._best_ask: Decimal | None = None
         
         self.audit_log: list[dict[str, Any]] = []
+
+    def register_indicator(self, name: str, func: Callable[..., Any]) -> None:
+        """지표 계산 함수 등록(또는 오버라이드).
+
+        - builtin: TA-Lib 기반(`indicators.builtin`)으로 제공되는 인디케이터(수천개 확장 가능)
+        - custom: 사용자가 하드코딩한 계산 로직을 전략에서 등록해 사용하는 인디케이터
+        """
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("indicator name is required")
+        if not callable(func):
+            raise ValueError(f"indicator '{name}' must be callable")
+        self._indicator_registry[normalized.lower()] = func
+
+    def _get_builtin_indicator_inputs(self) -> dict[str, list[float]]:
+        """TA-Lib abstract API 입력용 OHLCV 시퀀스 반환."""
+        closes = list(self._price_history)
+        n = len(closes)
+        if (
+            len(self._open_history) != n
+            or len(self._high_history) != n
+            or len(self._low_history) != n
+            or len(self._volume_history) != n
+        ):
+            # 과거 데이터가 close만 존재하는 경우(시딩/호환): close로 대체
+            return {
+                "open": closes,
+                "high": closes,
+                "low": closes,
+                "close": closes,
+                "volume": [0.0] * n,
+            }
+        return {
+            "open": list(self._open_history),
+            "high": list(self._high_history),
+            "low": list(self._low_history),
+            "close": closes,
+            "volume": list(self._volume_history),
+        }
+
+    def get_indicator_values(self, indicator_config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """지표 설정(dict)에 따라 현재 지표 값을 계산해 반환.
+
+        Args:
+            indicator_config: {"rsi": {"period": 14}, "ema": {"period": 20}} 형태의 설정.
+                None이면 컨텍스트의 `_indicator_config`를 사용.
+
+        Returns:
+            {"rsi": 55.3, "ema": 88012.3, ...}
+        """
+        config = indicator_config if indicator_config is not None else self._indicator_config
+        values: dict[str, Any] = {}
+        for name, params in (config or {}).items():
+            if isinstance(params, dict):
+                kwargs = dict(params)
+            else:
+                kwargs = {}
+            try:
+                value = self.get_indicator(name, **kwargs)
+                if isinstance(value, float) and not math.isfinite(value):
+                    if name not in self._indicator_nan_logged:
+                        self._indicator_nan_logged.add(name)
+                        self._logger.warning(
+                            "INDICATOR_NOT_READY (nan)",
+                            symbol=self.symbol,
+                            indicator=name,
+                            bars=len(self._price_history),
+                            params=kwargs,
+                        )
+                elif isinstance(value, dict):
+                    if any(isinstance(v, float) and not math.isfinite(v) for v in value.values()):
+                        if name not in self._indicator_nan_logged:
+                            self._indicator_nan_logged.add(name)
+                            self._logger.warning(
+                                "INDICATOR_NOT_READY (nan)",
+                                symbol=self.symbol,
+                                indicator=name,
+                                bars=len(self._price_history),
+                                params=kwargs,
+                            )
+                values[name] = value
+            except Exception as exc:  # noqa: BLE001
+                if name not in self._indicator_error_logged:
+                    self._indicator_error_logged.add(name)
+                    self._logger.log_error(
+                        error_type="INDICATOR_ERROR",
+                        message=str(exc),
+                        symbol=self.symbol,
+                        indicator=name,
+                    )
+                values[name] = float("nan")
+        return values
 
     @property
     def current_price(self) -> float:
@@ -656,7 +756,14 @@ class LiveContext:
         """
         return self.open_orders
 
-    def buy(self, quantity: float, price: float | None = None, reason: str | None = None, use_chase: bool | None = None) -> None:
+    def buy(
+        self,
+        quantity: float,
+        price: float | None = None,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
         """매수 주문.
 
         Args:
@@ -676,12 +783,19 @@ class LiveContext:
 
         should_chase = use_chase if use_chase is not None else self._chase_enabled
         if should_chase and price is None:
-            task = asyncio.create_task(self._place_chase_order("BUY", quantity, reason=reason))
+            task = asyncio.create_task(self._place_chase_order("BUY", quantity, reason=reason, exit_reason=exit_reason))
         else:
-            task = asyncio.create_task(self._place_order("BUY", quantity, price, reason=reason))
+            task = asyncio.create_task(self._place_order("BUY", quantity, price, reason=reason, exit_reason=exit_reason))
         task.add_done_callback(self._handle_order_result)
 
-    def sell(self, quantity: float, price: float | None = None, reason: str | None = None, use_chase: bool | None = None) -> None:
+    def sell(
+        self,
+        quantity: float,
+        price: float | None = None,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
         """매도 주문.
 
         Args:
@@ -701,12 +815,17 @@ class LiveContext:
 
         should_chase = use_chase if use_chase is not None else self._chase_enabled
         if should_chase and price is None:
-            task = asyncio.create_task(self._place_chase_order("SELL", quantity, reason=reason))
+            task = asyncio.create_task(self._place_chase_order("SELL", quantity, reason=reason, exit_reason=exit_reason))
         else:
-            task = asyncio.create_task(self._place_order("SELL", quantity, price, reason=reason))
+            task = asyncio.create_task(self._place_order("SELL", quantity, price, reason=reason, exit_reason=exit_reason))
         task.add_done_callback(self._handle_order_result)
 
-    def close_position(self, reason: str | None = None, use_chase: bool | None = None) -> None:
+    def close_position(
+        self,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
         """현재 포지션 전체 청산.
         
         Args:
@@ -723,11 +842,16 @@ class LiveContext:
             return
         
         if self.position.size > 0:
-            self.sell(abs(self.position.size), reason=reason, use_chase=use_chase)
+            self.sell(abs(self.position.size), reason=reason, exit_reason=exit_reason, use_chase=use_chase)
         else:
-            self.buy(abs(self.position.size), reason=reason, use_chase=use_chase)
+            self.buy(abs(self.position.size), reason=reason, exit_reason=exit_reason, use_chase=use_chase)
 
-    def close_position_at_price(self, price: float, reason: str | None = None) -> None:
+    def close_position_at_price(
+        self,
+        price: float,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+    ) -> None:
         """포지션 전체 청산 (지정가).
         
         Args:
@@ -744,9 +868,9 @@ class LiveContext:
             return
         
         if self.position.size > 0:
-            self.sell(abs(self.position.size), price=price, reason=reason, use_chase=False)
+            self.sell(abs(self.position.size), price=price, reason=reason, exit_reason=exit_reason, use_chase=False)
         else:
-            self.buy(abs(self.position.size), price=price, reason=reason, use_chase=False)
+            self.buy(abs(self.position.size), price=price, reason=reason, exit_reason=exit_reason, use_chase=False)
 
     def configure_chase_order(
         self,
@@ -786,21 +910,32 @@ class LiveContext:
         Args:
             strategy: Strategy 인스턴스(duck typing)
         """
-        try:
-            p = getattr(strategy, "rsi_period", None)
-            self.strategy_rsi_period = int(p) if p is not None else None
-        except Exception:  # noqa: BLE001
-            self.strategy_rsi_period = None
-        try:
-            v = getattr(strategy, "entry_rsi", None)
-            self.strategy_entry_rsi = float(v) if v is not None else None
-        except Exception:  # noqa: BLE001
-            self.strategy_entry_rsi = None
-        try:
-            v = getattr(strategy, "exit_rsi", None)
-            self.strategy_exit_rsi = float(v) if v is not None else None
-        except Exception:  # noqa: BLE001
-            self.strategy_exit_rsi = None
+        self.strategy_meta = {}
+        params = getattr(strategy, "params", None)
+        if isinstance(params, dict):
+            self.strategy_meta.update(params)
+        meta = getattr(strategy, "meta", None)
+        if isinstance(meta, dict):
+            self.strategy_meta.update(meta)
+        metadata = getattr(strategy, "metadata", None)
+        if isinstance(metadata, dict):
+            self.strategy_meta.update(metadata)
+
+        indicator_config = getattr(strategy, "indicator_config", None)
+        if isinstance(indicator_config, dict):
+            if not self._indicator_config:
+                self._indicator_config = dict(indicator_config)
+            else:
+                for key, value in indicator_config.items():
+                    self._indicator_config.setdefault(key, value)
+
+    def set_indicator_config(self, indicator_config: dict[str, Any] | None) -> None:
+        """지표 설정 저장."""
+        self._indicator_config = dict(indicator_config or {})
+
+    def get_indicator_config(self) -> dict[str, Any]:
+        """현재 지표 설정 반환."""
+        return dict(self._indicator_config)
 
     def _handle_order_result(self, task: asyncio.Task) -> None:
         """주문 결과 처리 콜백.
@@ -836,6 +971,7 @@ class LiveContext:
                 pass
         
         reason = result.get("_reason", None)
+        exit_reason = result.get("_exit_reason", None)
         initial_pos = result.get("_initial_pos_size")
         before_pos = float(initial_pos if initial_pos is not None else result.get("_snapshot_pos_size", self.position.size))
         before_entry = float(result.get("_snapshot_entry_price", self.position.entry_price if self.position.size != 0 else 0.0))
@@ -960,12 +1096,7 @@ class LiveContext:
             notional = executed_qty_float * parsed_avg_price
             final_commission = notional * commission_rate
 
-        p = self.strategy_rsi_period or 14
-        rsi_p = float(self.get_indicator("rsi", p))
-        rsi_rt_p = float(self.get_indicator("rsi_rt", p))
-
-        entry_thr = self.strategy_entry_rsi
-        exit_thr = self.strategy_exit_rsi
+        indicator_values = self.get_indicator_values()
 
         event: str | None = None
         if abs(before_pos) < 1e-12 and abs(after_pos) >= 1e-12:
@@ -981,7 +1112,8 @@ class LiveContext:
         exit_price = parsed_avg_price
         
         # StopLoss로 청산된 경우 cooldown 시작
-        if event == "EXIT" and reason and "StopLoss" in reason:
+        is_stoploss_exit = exit_reason == "STOP_LOSS" or (reason and "StopLoss" in reason)
+        if event == "EXIT" and is_stoploss_exit:
             cooldown_candles = self.risk_manager.config.stoploss_cooldown_candles
             if cooldown_candles > 0:
                 # 현재 봉부터 cooldown_candles 개의 봉 동안 거래 중단
@@ -1071,9 +1203,7 @@ class LiveContext:
             position_before_usd=before_pos_usd,
             position_after_usd=after_pos_usd,
             price=last_now,
-            rsi=rsi_p,
-            rsi_rt=rsi_rt_p,
-            rsi_period=p,
+            indicators=indicator_values,
             pnl=pnl_exit,
             commission=final_commission,
             reason=reason,
@@ -1098,11 +1228,8 @@ class LiveContext:
                 "commission_asset": commission_asset,
                 "commission_rate": commission_rate,
                 "commission_rate_pct": commission_rate_pct,
-                "rsi_period": p,
-                "rsi_p": rsi_p,
-                "rsi_rt_p": rsi_rt_p,
-                "entry_rsi": entry_thr,
-                "exit_rsi": exit_thr,
+                "indicators": indicator_values,
+                "strategy_meta": self.strategy_meta if self.strategy_meta else None,
                 "event": event,
                 "pnl_exit_est": pnl_exit,
                 "pnl_exit_after_fee": pnl_exit - final_commission if pnl_exit is not None else None,
@@ -1112,16 +1239,25 @@ class LiveContext:
         if self.notifier and event in {"ENTRY", "EXIT"}:
             max_position_pct = self.risk_manager.config.max_position_size * 100
             
-            text = (
+            pnl_indicator = ""
+            if event == "EXIT" and pnl_exit is not None:
+                pnl_after_fee = pnl_exit - final_commission
+                if pnl_after_fee > 0:
+                    pnl_indicator = "🟢 W\n"
+                elif pnl_after_fee < 0:
+                    pnl_indicator = "🔴 L\n"
+            
+            text = pnl_indicator + (
                 f"*{event}* ({self.env}) {self.symbol}\n"
                 f"- orderId: {order_id}\n"
                 f"- side: {side}\n"
                 f"- type: {order_type_display}\n"
                 f"- pos: {before_pos:+.4f} -> {after_pos:+.4f}\n"
-                + (f"- thresholds: entry={entry_thr}, exit={exit_thr}\n" if entry_thr is not None or exit_thr is not None else "")
             )
             text += f"- candle-interval: {self.candle_interval}\n"
             text += f"- commission: {final_commission:.4f} {commission_asset} (rate={commission_rate_pct:.2f}%)\n"
+            if self.strategy_meta:
+                text += f"- strategy-meta: {self.strategy_meta}\n"
             
             if event == "EXIT" and pnl_exit is not None:
                 pnl_after_fee = pnl_exit - final_commission
@@ -1223,6 +1359,7 @@ class LiveContext:
         quantity: float,
         price: float | None = None,
         reason: str | None = None,
+        exit_reason: str | None = None,
     ) -> dict[str, Any]:
         """주문 실행.
 
@@ -1323,6 +1460,7 @@ class LiveContext:
             )
 
             response["_reason"] = reason
+            response["_exit_reason"] = exit_reason
             response["_snapshot_pos_size"] = snapshot_pos_size
             response["_snapshot_entry_price"] = snapshot_entry_price
 
@@ -1361,6 +1499,7 @@ class LiveContext:
         side: str,
         quantity: float,
         reason: str | None = None,
+        exit_reason: str | None = None,
     ) -> dict[str, Any]:
         """Chase Order 실행 - 지정가로 시도하고 미체결 시 가격을 추적하여 재주문.
 
@@ -1403,6 +1542,7 @@ class LiveContext:
             return {
                 "status": "ALREADY_FILLED",
                 "_reason": reason,
+                "_exit_reason": exit_reason,
                 "_order_type": "CHASE_LIMIT",
                 "_chase_attempts": 0,
                 "_initial_pos_size": initial_pos_size,
@@ -1416,6 +1556,7 @@ class LiveContext:
             return {
                 "status": "ALREADY_FILLED",
                 "_reason": reason,
+                "_exit_reason": exit_reason,
                 "_order_type": "CHASE_LIMIT",
                 "_chase_attempts": 0,
                 "_initial_pos_size": initial_pos_size,
@@ -1439,12 +1580,14 @@ class LiveContext:
                     last_response["_initial_pos_size"] = initial_pos_size
                     last_response["_all_order_ids"] = chase_order_ids
                     last_response["_chase_fills"] = chase_fills
+                    last_response.setdefault("_exit_reason", exit_reason)
                     last_response.setdefault("side", side)
                     last_response.setdefault("executedQty", str(float(original_qty)))
                     return last_response
                 return {
                     "status": "FILLED",
                     "_reason": reason,
+                    "_exit_reason": exit_reason,
                     "_order_type": "CHASE_LIMIT",
                     "_chase_attempts": attempt,
                     "_initial_pos_size": initial_pos_size,
@@ -1459,12 +1602,14 @@ class LiveContext:
                     last_response["_initial_pos_size"] = initial_pos_size
                     last_response["_all_order_ids"] = chase_order_ids
                     last_response["_chase_fills"] = chase_fills
+                    last_response.setdefault("_exit_reason", exit_reason)
                     last_response.setdefault("side", side)
                     last_response.setdefault("executedQty", str(float(original_qty)))
                     return last_response
                 return {
                     "status": "FILLED",
                     "_reason": reason,
+                    "_exit_reason": exit_reason,
                     "_order_type": "CHASE_LIMIT",
                     "_chase_attempts": attempt,
                     "_initial_pos_size": initial_pos_size,
@@ -1537,6 +1682,7 @@ class LiveContext:
 
                 if order_status == "FILLED":
                     response["_reason"] = reason
+                    response["_exit_reason"] = exit_reason
                     response["_snapshot_pos_size"] = snapshot_pos_size
                     response["_snapshot_entry_price"] = snapshot_entry_price
                     response["_chase_attempts"] = attempt + 1
@@ -1565,6 +1711,7 @@ class LiveContext:
 
                         if current_status == "FILLED":
                             order_info["_reason"] = reason
+                            order_info["_exit_reason"] = exit_reason
                             order_info["_snapshot_pos_size"] = snapshot_pos_size
                             order_info["_snapshot_entry_price"] = snapshot_entry_price
                             order_info["_chase_attempts"] = attempt + 1
@@ -1619,6 +1766,7 @@ class LiveContext:
             return {
                 "status": "FILLED",
                 "_reason": reason,
+                "_exit_reason": exit_reason,
                 "_order_type": "CHASE_LIMIT",
                 "_chase_attempts": self._chase_max_attempts,
                 "_initial_pos_size": initial_pos_size,
@@ -1634,6 +1782,7 @@ class LiveContext:
             return {
                 "status": "FILLED",
                 "_reason": reason,
+                "_exit_reason": exit_reason,
                 "_order_type": "CHASE_LIMIT",
                 "_chase_attempts": self._chase_max_attempts,
                 "_initial_pos_size": initial_pos_size,
@@ -1657,6 +1806,7 @@ class LiveContext:
                 return {
                     "status": "FILLED",
                     "_reason": reason,
+                    "_exit_reason": exit_reason,
                     "_order_type": "CHASE_LIMIT",
                     "_chase_attempts": self._chase_max_attempts,
                     "_initial_pos_size": initial_pos_size,
@@ -1665,7 +1815,7 @@ class LiveContext:
                     "side": side,
                     "executedQty": str(float(original_qty)),
                 }
-            response = await self._place_order(side, float(adjusted_remaining), price=None, reason=reason)
+            response = await self._place_order(side, float(adjusted_remaining), price=None, reason=reason, exit_reason=exit_reason)
             response["_initial_pos_size"] = initial_pos_size
             response["_all_order_ids"] = chase_order_ids + [response.get("orderId")]
             response["_chase_fills"] = chase_fills
@@ -1735,54 +1885,142 @@ class LiveContext:
         Returns:
             지표 값
         """
-        if name == "sma":
-            period = args[0] if args else kwargs.get("period", 20)
-            if len(self._price_history) < period:
-                return self._current_price
-            return sum(self._price_history[-period:]) / period
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("indicator name is required")
 
-        elif name == "ema":
-            period = args[0] if args else kwargs.get("period", 20)
-            if len(self._price_history) < period:
-                return self._current_price
-            prices = self._price_history[-period:]
-            multiplier = 2 / (period + 1)
-            ema = prices[0]
-            for price in prices[1:]:
-                ema = (price - ema) * multiplier + ema
-            return ema
+        func = self._indicator_registry.get(normalized.lower())
+        if func:
+            return func(self, *args, **kwargs)
 
-        elif name == "rsi":
-            period = args[0] if args else kwargs.get("period", 14)
-            return rsi_wilder_from_closes(list(self._price_history), int(period))
+        if args:
+            if len(args) == 1 and "period" not in kwargs and "timeperiod" not in kwargs:
+                kwargs["period"] = args[0]
+            else:
+                raise TypeError("builtin indicator params must be passed as keywords (or single period)")
 
-        elif name == "rsi_rt":
-            period = args[0] if args else kwargs.get("period", 14)
-            closes = list(self._price_history) + [float(self._current_price)]
-            return rsi_wilder_from_closes(closes, int(period))
+        return compute_builtin_indicator(
+            normalized,
+            self._get_builtin_indicator_inputs(),
+            **kwargs,
+        )
 
-        return 0.0
+    def update_bar(self, open_price: float, high_price: float, low_price: float, close_price: float, volume: float = 0.0) -> None:
+        """닫힌 봉(OHLCV) 히스토리 업데이트.
 
-    def update_price(self, price: float) -> None:
-        """현재 가격 업데이트.
-
-        Args:
-            price: 새 가격
+        TA-Lib builtin 인디케이터 계산을 위해 closed-bar 기준 OHLCV 시퀀스를 유지한다.
         """
-        self._current_price = price
-        self._price_history.append(price)
-        if len(self._price_history) > 1000:
-            self._price_history = self._price_history[-1000:]
+        self._current_price = float(close_price)
+        self._price_history.append(float(close_price))
+        self._open_history.append(float(open_price))
+        self._high_history.append(float(high_price))
+        self._low_history.append(float(low_price))
+        self._volume_history.append(float(volume))
+
+        max_len = 1000
+        if len(self._price_history) > max_len:
+            self._price_history = self._price_history[-max_len:]
+            self._open_history = self._open_history[-max_len:]
+            self._high_history = self._high_history[-max_len:]
+            self._low_history = self._low_history[-max_len:]
+            self._volume_history = self._volume_history[-max_len:]
 
         # 미실현 손익 업데이트
         if self.position.size != 0 and self.position.entry_price != 0:
-            self.position.unrealized_pnl = self.position.size * (price - self.position.entry_price)
+            self.position.unrealized_pnl = self.position.size * (self._current_price - self.position.entry_price)
+
+    def update_price(self, price: float) -> None:
+        """호환용: close only 업데이트(OHLCV가 없을 때)."""
+        p = float(price)
+        self.update_bar(p, p, p, p, volume=0.0)
 
     def mark_price(self, price: float) -> None:
         """현재가(Last/Mark) 업데이트만 수행."""
         self._current_price = price
         if self.position.size != 0 and self.position.entry_price != 0:
             self.position.unrealized_pnl = self.position.size * (price - self.position.entry_price)
+
+    def check_stoploss(self) -> bool:
+        """StopLoss 조건 확인 후 필요 시 청산.
+
+        Returns:
+            StopLoss가 트리거되어 청산을 시도했는지 여부
+        """
+        if self._order_inflight:
+            return False
+        if abs(self.position.size) < 1e-12:
+            return False
+        stop_loss_pct = self.risk_manager.config.stop_loss_pct
+        if stop_loss_pct <= 0:
+            return False
+        entry_balance = float(self.position.entry_balance or 0.0)
+        if entry_balance <= 0:
+            return False
+        current_pnl_pct = float(self.position.unrealized_pnl) / entry_balance
+        if current_pnl_pct <= -stop_loss_pct:
+            position_type = "Long" if self.position.size > 0 else "Short"
+            reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct * 100:.2f}% of entry balance)"
+            self.close_position(reason=reason_msg, exit_reason="STOP_LOSS", use_chase=False)
+            return True
+        return False
+
+    def calc_entry_quantity(self, entry_pct: float | None = None, price: float | None = None) -> float:
+        """시스템 설정 기반으로 진입 수량 계산.
+
+        Args:
+            entry_pct: 진입 비중 (None이면 max_position_size/max_order_size 중 작은 값 사용)
+            price: 기준 가격 (None이면 현재가)
+
+        Returns:
+            계산된 수량 (0이면 진입 불가)
+        """
+        use_price = float(price if price is not None else self._current_price)
+        if use_price <= 0:
+            return 0.0
+        equity = float(self.total_equity)
+        if equity <= 0:
+            return 0.0
+        max_position = float(self.risk_manager.config.max_position_size)
+        max_order = float(self.risk_manager.config.max_order_size)
+        pct = float(entry_pct) if entry_pct is not None else min(max_position, max_order)
+        if pct <= 0:
+            return 0.0
+        notional = equity * float(self.leverage) * pct
+        raw_qty = notional / use_price
+        adjusted_qty = float(self._adjust_quantity(raw_qty))
+        if self.min_qty is not None and Decimal(str(adjusted_qty)) < self.min_qty:
+            adjusted_qty = float(self.min_qty)
+        if self.max_qty is not None and Decimal(str(adjusted_qty)) > self.max_qty:
+            adjusted_qty = float(self.max_qty)
+        return max(0.0, adjusted_qty)
+
+    def enter_long(
+        self,
+        reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        """시스템 리스크 설정 기반으로 롱 진입."""
+        if abs(self.position.size) > 1e-12:
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self.buy(qty, reason=reason, use_chase=use_chase)
+
+    def enter_short(
+        self,
+        reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        """시스템 리스크 설정 기반으로 숏 진입."""
+        if abs(self.position.size) > 1e-12:
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self.sell(qty, reason=reason, use_chase=use_chase)
 
     def _get_candle_interval_seconds(self) -> int:
         """캔들 간격을 초 단위로 반환.

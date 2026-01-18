@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", type=str, required=True, help="시작 날짜 (YYYY-MM-DD)")
     parser.add_argument("--end-date", type=str, required=True, help="종료 날짜 (YYYY-MM-DD)")
     parser.add_argument("--commission", type=float, default=0.0004, help="수수료율 (기본 0.0004 = 0.04%%)")
+    parser.add_argument(
+        "--stop-loss-pct",
+        type=float,
+        default=0.05,
+        help="StopLoss 비율 (0.0~1.0, 예: 0.05 = 5%, 기본: 0.05)",
+    )
     return parser.parse_args()
 
 
@@ -87,6 +93,7 @@ async def main():
     print(f"초기 자산: ${args.initial_balance:,.2f}")
     print(f"기간: {args.start_date} ~ {args.end_date}")
     print(f"수수료율: {args.commission * 100:.4f}%")
+    print(f"StopLoss 비율: {args.stop_loss_pct * 100:.1f}%")
     print("=" * 80)
     print()
     
@@ -122,6 +129,7 @@ async def main():
             max_leverage=float(args.leverage),
             max_position_size=args.max_position,
             max_order_size=args.max_position,
+            stop_loss_pct=args.stop_loss_pct,
         )
         risk_manager = BacktestRiskManager(risk_config)
         
@@ -136,12 +144,8 @@ async def main():
         
         # 전략 로드
         strategy_class = load_strategy_class(args.strategy_file)
-        # 전략 인스턴스 생성 시 max_position 파라미터 전달
-        try:
-            strategy = strategy_class(max_position=args.max_position)
-        except TypeError:
-            # max_position 파라미터를 지원하지 않는 전략의 경우 기본값 사용
-            strategy = strategy_class()
+        # 전략 인스턴스 생성 (전략 파라미터는 전략 코드 내부 기본값 사용)
+        strategy = strategy_class()
         
         # 백테스트 엔진 생성 및 실행
         engine = BacktestEngine(strategy, ctx, klines)
@@ -160,4 +164,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

@@ -34,7 +34,11 @@ class PriceFeed:
         self._callbacks: list[Callable[[dict[str, Any]], None]] = []
         self._last_price: float = 0.0
         self._last_emitted_timestamp: int | None = None
+        self._last_emitted_open: float = 0.0
+        self._last_emitted_high: float = 0.0
+        self._last_emitted_low: float = 0.0
         self._last_emitted_close: float = 0.0
+        self._last_emitted_volume: float = 0.0
         self._stream: BinanceMarketStream | None = None
 
     @property
@@ -58,8 +62,13 @@ class PriceFeed:
         Returns:
             (timestamp_ms, close) 리스트. timestamp는 kline open time.
         """
+        if limit <= 0:
+            return []
+
+        # Binance Klines limit는 환경에 따라 상한이 있으므로 보수적으로 1000으로 캡.
+        request_limit = min(int(limit) + 1, 1000)
         klines = await self.client.fetch_klines(
-            symbol=self.symbol, interval=self.candle_interval, limit=limit + 1
+            symbol=self.symbol, interval=self.candle_interval, limit=request_limit
         )
         if not klines:
             return []
@@ -74,6 +83,49 @@ class PriceFeed:
             except Exception:  # noqa: BLE001
                 continue
             out.append((ts, close))
+        return out
+
+    async def fetch_closed_ohlcv(self, limit: int = 200) -> list[dict[str, float | int]]:
+        """최근 닫힌 봉 OHLCV 히스토리 조회.
+
+        TA-Lib 기반 builtin 인디케이터(예: ATR/ADX 등) 계산을 위해 open/high/low/close/volume을 시딩할 때 사용.
+
+        Returns:
+            {"timestamp": open_time_ms, "open": ..., "high": ..., "low": ..., "close": ..., "volume": ...} 리스트
+        """
+        if limit <= 0:
+            return []
+
+        # Binance Klines limit는 환경에 따라 상한이 있으므로 보수적으로 1000으로 캡.
+        request_limit = min(int(limit) + 1, 1000)
+        klines = await self.client.fetch_klines(
+            symbol=self.symbol, interval=self.candle_interval, limit=request_limit
+        )
+        if not klines:
+            return []
+
+        closed = klines[:-1] if len(klines) > 1 else klines
+        out: list[dict[str, float | int]] = []
+        for k in closed:
+            try:
+                ts = int(k[0])
+                open_price = float(k[1])
+                high_price = float(k[2])
+                low_price = float(k[3])
+                close_price = float(k[4])
+                volume = float(k[5])
+            except Exception:  # noqa: BLE001
+                continue
+            out.append(
+                {
+                    "timestamp": ts,
+                    "open": open_price,
+                    "high": high_price,
+                    "low": low_price,
+                    "close": close_price,
+                    "volume": volume,
+                }
+            )
         return out
 
     async def _handle_websocket_message(self, data: dict[str, Any]) -> None:
@@ -106,7 +158,10 @@ class PriceFeed:
             # Kline 데이터 파싱
             try:
                 bar_ts = int(k["t"])  # Kline Open Time (ms)
-                bar_close = float(k["c"])  # Close Price
+                bar_open = float(k["o"])
+                bar_high = float(k["h"])
+                bar_low = float(k["l"])
+                bar_close = float(k["c"])
                 current_price = float(k["c"])  # 현재가 = close price
                 is_closed = bool(k["x"])  # Is this kline closed?
                 volume = float(k.get("v", 0))  # Volume
@@ -117,7 +172,11 @@ class PriceFeed:
             # bar_ts가 과거로 되돌아가는 경우(노드/캐시 흔들림) 마지막 값으로 고정
             if self._last_emitted_timestamp is not None and bar_ts < self._last_emitted_timestamp:
                 bar_ts = self._last_emitted_timestamp
+                bar_open = self._last_emitted_open
+                bar_high = self._last_emitted_high
+                bar_low = self._last_emitted_low
                 bar_close = self._last_emitted_close
+                volume = self._last_emitted_volume
 
             self._last_price = current_price
 
@@ -128,12 +187,19 @@ class PriceFeed:
 
             if is_new_bar:
                 self._last_emitted_timestamp = bar_ts
+                self._last_emitted_open = bar_open
+                self._last_emitted_high = bar_high
+                self._last_emitted_low = bar_low
                 self._last_emitted_close = bar_close
+                self._last_emitted_volume = volume
 
             # tick 데이터 생성
             tick = {
                 "timestamp": bar_ts,  # Kline Open Time을 timestamp로 사용
                 "bar_timestamp": bar_ts,
+                "bar_open": bar_open,
+                "bar_high": bar_high,
+                "bar_low": bar_low,
                 "bar_close": bar_close,
                 "price": current_price,
                 "volume": volume,

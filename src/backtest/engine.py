@@ -44,11 +44,6 @@ class BacktestEngine:
             
             is_new_bar = prev_bar_timestamp != open_time
             
-            if is_new_bar:
-                if prev_bar_timestamp is not None and i > 0:
-                    prev_close = float(self.klines[i-1][4])
-                    self.ctx.update_bar(prev_close)
-            
             position_size_before = self.ctx.position_size
             if abs(position_size_before) > 1e-12:
                 # 실시간 PnL 기반 stoploss 체크를 위해 캔들 내부 가격 변동 시뮬레이션
@@ -57,6 +52,9 @@ class BacktestEngine:
                 if position_size_before > 0:
                     # Open 가격 체크
                     self.ctx.update_price(open_price, timestamp=open_time)
+                    if self.ctx.check_stoploss():
+                        prev_bar_timestamp = open_time
+                        continue
                     bar_stoploss = {
                         "timestamp": open_time,
                         "bar_timestamp": open_time,
@@ -78,6 +76,9 @@ class BacktestEngine:
                     # Low 가격 체크 (롱 포지션에서 가장 불리한 가격)
                     if low_price < open_price:
                         self.ctx.update_price(low_price, timestamp=close_time)
+                        if self.ctx.check_stoploss():
+                            prev_bar_timestamp = open_time
+                            continue
                         bar_stoploss = {
                             "timestamp": close_time,
                             "bar_timestamp": open_time,
@@ -99,6 +100,9 @@ class BacktestEngine:
                 elif position_size_before < 0:
                     # Open 가격 체크
                     self.ctx.update_price(open_price, timestamp=open_time)
+                    if self.ctx.check_stoploss():
+                        prev_bar_timestamp = open_time
+                        continue
                     bar_stoploss = {
                         "timestamp": open_time,
                         "bar_timestamp": open_time,
@@ -120,6 +124,9 @@ class BacktestEngine:
                     # High 가격 체크 (숏 포지션에서 가장 불리한 가격)
                     if high_price > open_price:
                         self.ctx.update_price(high_price, timestamp=close_time)
+                        if self.ctx.check_stoploss():
+                            prev_bar_timestamp = open_time
+                            continue
                         bar_stoploss = {
                             "timestamp": close_time,
                             "bar_timestamp": open_time,
@@ -139,6 +146,12 @@ class BacktestEngine:
                             continue
             
             self.ctx.update_price(close_price, timestamp=close_time)
+            if self.ctx.check_stoploss():
+                prev_bar_timestamp = open_time
+                continue
+
+            if is_new_bar:
+                self.ctx.update_bar(open_price, high_price, low_price, close_price, volume)
             
             bar = {
                 "timestamp": close_time,
@@ -155,9 +168,6 @@ class BacktestEngine:
             
             self.strategy.on_bar(self.ctx, bar)
             
-            if is_new_bar:
-                self.ctx.update_bar(close_price)
-            
             prev_bar_timestamp = open_time
             
             progress = (i + 1) / len(self.klines) * 100
@@ -166,10 +176,6 @@ class BacktestEngine:
             
             if len(self.klines) > 10 and (i + 1) % (len(self.klines) // 10 + 1) == 0:
                 print(f"   진행 중... {progress:.1f}%")
-        
-        if self.klines:
-            last_close = float(self.klines[-1][4])
-            self.ctx.update_bar(last_close)
         
         self.strategy.finalize(self.ctx)
         

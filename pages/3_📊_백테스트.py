@@ -1,7 +1,6 @@
 """백테스트 페이지."""
 
 import asyncio
-import inspect
 import importlib.util
 import json
 import sys
@@ -65,64 +64,6 @@ selected_file = st.selectbox(
 
 st.divider()
 
-# 전략 기본값 추출 함수
-def get_strategy_defaults(strategy_file: Path) -> dict[str, Any]:
-    """전략 클래스의 기본값 추출."""
-    defaults = {
-        "stop_loss_pct": None,
-        "stop_loss_usd": None,
-        "has_stop_loss_pct": False,
-        "has_stop_loss_usd": False,
-    }
-    
-    try:
-        spec = importlib.util.spec_from_file_location("temp_strategy", strategy_file)
-        if not spec or not spec.loader:
-            return defaults
-        
-        module = importlib.util.module_from_spec(spec)
-        # 고유한 모듈 이름 사용 (여러 번 로드 방지)
-        module_name = f"temp_strategy_{id(spec)}"
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        
-        # Strategy 클래스 찾기
-        strategy_class = None
-        for name in dir(module):
-            obj = getattr(module, name)
-            if isinstance(obj, type) and name.endswith("Strategy") and name != "Strategy":
-                strategy_class = obj
-                break
-        
-        if strategy_class:
-            sig = inspect.signature(strategy_class.__init__)
-            params = sig.parameters
-            
-            if "stop_loss_pct" in params:
-                defaults["has_stop_loss_pct"] = True
-                param = params["stop_loss_pct"]
-                if param.default != inspect.Parameter.empty:
-                    defaults["stop_loss_pct"] = param.default
-            
-            if "stop_loss_usd" in params:
-                defaults["has_stop_loss_usd"] = True
-                param = params["stop_loss_usd"]
-                if param.default != inspect.Parameter.empty:
-                    defaults["stop_loss_usd"] = param.default
-        
-        # 모듈 정리
-        if module_name in sys.modules:
-            del sys.modules[module_name]
-    except Exception:
-        pass  # 전략 로드 실패 시 기본값 반환
-    
-    return defaults
-
-# 전략 기본값 추출
-strategy_defaults = get_strategy_defaults(selected_file)
-
-st.divider()
-
 # 설정
 st.subheader("2️⃣ 거래 설정")
 
@@ -161,91 +102,16 @@ st.divider()
 # StopLoss 설정
 st.subheader("🛡️ StopLoss 설정")
 
-# 전략이 지원하는 StopLoss 타입 확인
-has_pct = strategy_defaults["has_stop_loss_pct"]
-has_usd = strategy_defaults["has_stop_loss_usd"]
-
-if has_pct or has_usd:
-    # 전략이 지원하는 타입 중 선택 (둘 다 지원하면 선택 가능)
-    if has_pct and has_usd:
-        stop_loss_type = st.radio(
-            "StopLoss 기준",
-            options=["퍼센트 (%)", "USDT"],
-            index=0,  # 기본값: 퍼센트
-            horizontal=True,
-            key="stop_loss_type"
-        )
-    elif has_pct:
-        stop_loss_type = "퍼센트 (%)"
-        st.info("이 전략은 StopLoss를 퍼센트(%) 기준으로 지원합니다.")
-    else:
-        stop_loss_type = "USDT"
-        st.info("이 전략은 StopLoss를 USDT 기준으로 지원합니다.")
-    
-    # StopLoss 값 입력
-    col_stop1, col_stop2 = st.columns(2)
-    
-    with col_stop1:
-        if stop_loss_type == "퍼센트 (%)":
-            default_pct = strategy_defaults["stop_loss_pct"]
-            if default_pct is not None:
-                # 소수(0.05)를 퍼센트(5.0)로 변환
-                default_pct_display = default_pct * 100 if default_pct < 1.0 else default_pct
-            else:
-                default_pct_display = 5.0
-            
-            stop_loss_value = st.number_input(
-                "StopLoss (%)",
-                min_value=0.1,
-                max_value=50.0,
-                value=float(default_pct_display),
-                step=0.1,
-                format="%.1f",
-                help="총 자산(Equity) 대비 손실 비율",
-                key="stop_loss_pct_input"
-            )
-            stop_loss_pct = stop_loss_value / 100.0  # 퍼센트를 소수로 변환
-            stop_loss_usd = None
-        else:
-            default_usd = strategy_defaults["stop_loss_usd"]
-            if default_usd is None:
-                default_usd = 500.0
-            
-            stop_loss_value = st.number_input(
-                "StopLoss (USDT)",
-                min_value=1.0,
-                max_value=10000.0,
-                value=float(default_usd),
-                step=10.0,
-                format="%.2f",
-                help="진입가 대비 최대 손실 금액",
-                key="stop_loss_usd_input"
-            )
-            stop_loss_usd = stop_loss_value
-            stop_loss_pct = None
-    
-    with col_stop2:
-        st.markdown("**전략 기본값 정보**")
-        if strategy_defaults["stop_loss_pct"] is not None:
-            pct_val = strategy_defaults["stop_loss_pct"]
-            pct_display = pct_val * 100 if pct_val < 1.0 else pct_val
-            st.caption(f"기본값: {pct_display:.1f}%")
-        if strategy_defaults["stop_loss_usd"] is not None:
-            st.caption(f"기본값: ${strategy_defaults['stop_loss_usd']:.2f}")
-        if strategy_defaults["stop_loss_pct"] is None and strategy_defaults["stop_loss_usd"] is None:
-            st.caption("전략에 StopLoss 기본값이 없습니다.")
-else:
-    st.info("⚠️ 이 전략은 StopLoss 파라미터를 지원하지 않습니다. 전략 파일에 stop_loss_pct 또는 stop_loss_usd 파라미터를 추가하세요.")
-    stop_loss_pct = None
-    stop_loss_usd = None
-    stop_loss_value = None
-    stop_loss_type = None
-
-# 변수 초기화 (함수에서 참조하기 위해)
-if 'stop_loss_pct' not in locals():
-    stop_loss_pct = None
-if 'stop_loss_usd' not in locals():
-    stop_loss_usd = None
+stop_loss_value = st.number_input(
+    "StopLoss (%)",
+    min_value=0.1,
+    max_value=50.0,
+    value=5.0,
+    step=0.1,
+    format="%.1f",
+    help="포지션 진입 시점 balance 대비 손실률",
+)
+stop_loss_pct = stop_loss_value / 100.0
 
 st.divider()
 
@@ -270,11 +136,7 @@ with summary_col4:
     days = (end_date - start_date).days
     st.metric("기간", f"{days}일")
     st.metric("시작일", start_date.strftime("%Y-%m-%d"))
-    if stop_loss_type:
-        if stop_loss_type == "퍼센트 (%)":
-            st.metric("StopLoss", f"{stop_loss_value:.1f}%")
-        else:
-            st.metric("StopLoss", f"${stop_loss_value:.2f}")
+    st.metric("StopLoss", f"{stop_loss_value:.1f}%")
 
 st.divider()
 
@@ -320,6 +182,7 @@ async def run_backtest_async() -> dict[str, Any]:
             max_leverage=float(leverage),
             max_position_size=max_position,
             max_order_size=max_position,
+            stop_loss_pct=stop_loss_pct,
         )
         risk_manager = BacktestRiskManager(risk_config)
         
@@ -352,36 +215,11 @@ async def run_backtest_async() -> dict[str, Any]:
         if not strategy_class:
             return {"error": f"전략 클래스를 찾을 수 없습니다: {selected_file}", "klines": klines}
         
-        # 전략 파라미터 확인
-        strategy_sig = inspect.signature(strategy_class.__init__)
-        strategy_params = strategy_sig.parameters
-        
-        # 전략 인스턴스 생성 시 파라미터 전달 (지원하는 것만)
-        strategy_kwargs = {}
-        
-        # max_position 파라미터
-        if "max_position" in strategy_params:
-            strategy_kwargs["max_position"] = max_position
-        
-        # StopLoss 파라미터 override (전략이 지원하는 경우만)
-        if stop_loss_pct is not None and "stop_loss_pct" in strategy_params:
-            strategy_kwargs["stop_loss_pct"] = stop_loss_pct
-        
-        if stop_loss_usd is not None and "stop_loss_usd" in strategy_params:
-            strategy_kwargs["stop_loss_usd"] = stop_loss_usd
-        
-        # 전략 인스턴스 생성
+        # 전략 인스턴스 생성 (전략 파라미터는 전략 코드 내부 기본값 사용)
         try:
-            if strategy_kwargs:
-                strategy = strategy_class(**strategy_kwargs)
-            else:
-                strategy = strategy_class()
+            strategy = strategy_class()
         except TypeError as e:
-            # 파라미터 오류 시 기본값으로 생성
-            try:
-                strategy = strategy_class()
-            except Exception as e2:
-                return {"error": f"전략 인스턴스 생성 실패: {e2}", "klines": klines}
+            return {"error": f"전략 인스턴스 생성 실패: {e}", "klines": klines}
         
         # 백테스트 엔진 생성 및 실행
         backtest_progress_bar = st.progress(0, text="🚀 백테스트 실행 중... 0%")
@@ -460,9 +298,10 @@ if "backtest_results" in st.session_state:
         for trade in trades:
             pnl = trade.get("pnl")
             reason = trade.get("reason", "")
+            exit_reason = trade.get("exit_reason")
             
             # StopLoss로 인한 청산인지 확인 (pnl이 있는 exit 거래만 카운트)
-            if pnl is not None and "StopLoss" in reason:
+            if pnl is not None and (exit_reason == "STOP_LOSS" or "StopLoss" in reason):
                 stoploss_exit_count += 1
             
             if pnl is not None:
@@ -1038,4 +877,3 @@ with st.expander("자주 묻는 질문"):
     ### Q: 백테스트 속도는?
     A: 데이터 수집 시간과 캔들 개수에 비례합니다. 긴 기간(예: 1년)은 몇 분이 걸릴 수 있습니다.
     """)
-

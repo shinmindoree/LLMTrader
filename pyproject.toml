@@ -5,13 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "llmtrader"
 version = "0.1.0"
-description = "LLM 기반 바이낸스 선물 자동 트레이딩 시스템"
+description = "바이낸스 선물 자동 트레이딩 시스템"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "LLMTrader Team" }]
 dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
     "pydantic>=2.8.0",
     "pydantic-settings>=2.3.0",
     "httpx>=0.27.0",
@@ -21,6 +19,8 @@ dependencies = [
     "typer>=0.12.0",
     "streamlit>=1.30.0",
     "plotly>=5.0.0",
+    "numpy>=1.26.0",
+    "TA-Lib>=0.4.28",
 ]
 
 [project.optional-dependencies]
@@ -67,5 +67,3 @@ warn_unused_configs = true
 strict_equality = true
 check_untyped_defs = true
 plugins = []
-
-

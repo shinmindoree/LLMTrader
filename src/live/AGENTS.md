@@ -5,24 +5,26 @@
 This is the **core business logic** module for live trading execution on Binance Futures.
 
 **Dependencies:**
-- `llmtrader.binance.client` — HTTP client for API calls
-- `llmtrader.strategy.base` — Strategy interface
-- `llmtrader.indicators.rsi` — Wilder RSI calculation
-- `llmtrader.notifications.slack` — Order notifications
+- `binance.client` — HTTP client for API calls
+- `strategy.base` — Strategy interface
+- `strategy.context` — StrategyContext protocol
+- `indicators.*` — Indicator calculations (strategy-registered)
+- `notifications.slack` — Order notifications
+- `common.risk` / `live.risk` — Risk config & live risk manager
 
 **Files:**
 - `context.py` — LiveContext: position/balance management, order execution
 - `engine.py` — LiveTradingEngine: main loop, price feed subscription, strategy dispatch
-- `price_feed.py` — PriceFeed: REST polling for real-time prices and closed bars
-- `risk.py` — RiskConfig/RiskManager: order size, position limits, daily loss
+- `price_feed.py` — PriceFeed: WebSocket kline stream -> tick/new-bar events
+- `risk.py` — LiveRiskManager: daily loss, cooldown, consecutive losses
 
 ---
 
 ## Tech Stack & Constraints
 
 - **Async-only:** All methods interacting with Binance must be `async`.
-- **No external state:** Position/balance fetched from exchange on each cycle.
-- **RSI Method:** Use `rsi_wilder_from_closes()` exclusively.
+- **Event-driven state:** Account/orders updated via User Stream with REST fallback when disconnected.
+- **Indicator Registry:** Live module does not assume indicator types; strategies register them.
 
 ---
 
@@ -87,7 +89,7 @@ uv run python scripts/smoke_live_constraints.py --symbol BTCUSDT --leverage 5
 ### Do's
 
 - Always fetch `walletBalance` (not `availableBalance`) for equity calculation.
-- Include `last` (real-time price) and `rsi_rt` in order logs.
+- Include `last` (real-time price) and configured indicator values in order logs.
 - Calculate estimated PnL on EXIT and include in Slack notification.
 - Use `is_new_bar` flag to separate bar-based signals from tick-based stop-loss.
 
@@ -95,6 +97,5 @@ uv run python scripts/smoke_live_constraints.py --symbol BTCUSDT --leverage 5
 
 - Do not use `position_entry_price` from local state—re-fetch from exchange if critical.
 - Do not assume `ctx.balance` equals available margin (it's wallet balance).
-- Do not skip seeding `price_history` at startup (RSI will be 50.0 otherwise).
+- Do not skip seeding `price_history` at startup (indicators will be unstable otherwise).
 - Do not call `strategy.on_bar()` on every tick unless `strategy.run_on_tick = True`.
-

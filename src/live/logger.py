@@ -127,23 +127,49 @@ class SimpleLogger:
             msg += f", symbol={symbol}"
         self.error(msg, **extra)
 
+    @staticmethod
+    def _format_indicator_value(value: Any) -> str:
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, dict):
+            inner = ", ".join(
+                f"{key}={SimpleLogger._format_indicator_value(val)}" for key, val in value.items()
+            )
+            return "{" + inner + "}"
+        if isinstance(value, (list, tuple)):
+            inner = ", ".join(SimpleLogger._format_indicator_value(val) for val in value)
+            return "[" + inner + "]"
+        return str(value)
+
+    @classmethod
+    def _format_indicators(cls, indicators: dict[str, Any] | None) -> str:
+        if not indicators:
+            return ""
+        parts = [f"{name}={cls._format_indicator_value(value)}" for name, value in indicators.items()]
+        return ", ".join(parts)
+
     def log_tick(
         self,
         symbol: str,
         bar_time: str,
         price: float,
-        rsi: float,
-        rsi_rt: float,
         position: float,
         balance: float,
         pnl: float,
+        indicators: dict[str, Any] | None = None,
         **extra: Any,
     ) -> None:
         """틱 데이터 로그."""
-        self.info(
-            f"TICK | symbol={symbol}, bar_time={bar_time}, price={price:,.2f}, rsi={rsi:.2f}, rsi_rt={rsi_rt:.2f}, position={position:.4f}, balance={balance:,.2f}, pnl={pnl:,.2f}",
-            **extra,
+        msg = (
+            f"TICK | symbol={symbol}, bar_time={bar_time}, price={price:,.2f}"
+            f", position={position:.4f}, balance={balance:,.2f}, pnl={pnl:,.2f}"
         )
+        indicator_str = self._format_indicators(indicators)
+        if indicator_str:
+            msg += f", indicators={indicator_str}"
+        self.info(msg, **extra)
 
     def log_order_filled(
         self,
@@ -156,9 +182,7 @@ class SimpleLogger:
         position_before_usd: float,
         position_after_usd: float,
         price: float,
-        rsi: float,
-        rsi_rt: float,
-        rsi_period: int,
+        indicators: dict[str, Any] | None = None,
         pnl: float | None = None,
         commission: float | None = None,
         reason: str | None = None,
@@ -173,8 +197,10 @@ class SimpleLogger:
             f", pos={position_before:+.4f}->{position_after:+.4f}"
             f", pos_usd=${position_before_usd:,.2f}->${position_after_usd:,.2f}"
             f", price={price:,.2f}"
-            f", rsi({rsi_period})={rsi:.2f}, rsi_rt={rsi_rt:.2f}"
         )
+        indicator_str = self._format_indicators(indicators)
+        if indicator_str:
+            msg += f", indicators={indicator_str}"
         if pnl is not None:
             pnl_after_fee = pnl - (commission or 0)
             msg += f", pnl={pnl:+.2f}, pnl_after_fee={pnl_after_fee:+.2f}"

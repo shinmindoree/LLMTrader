@@ -1,8 +1,8 @@
-"""테스트넷 실시간 BTCUSDT 현재가 + RSI(14) 확인 스크립트.
+"""테스트넷 실시간 BTCUSDT 현재가 + RSI 확인 스크립트.
 
 출력:
 - 현재가(Last Price): /fapi/v1/ticker/price
- - 최근 닫힌 1분봉 close 목록 기반 RSI(14)
+ - 최근 닫힌 봉 close 목록 기반 TA-Lib RSI
 """
 
 from __future__ import annotations
@@ -22,24 +22,19 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 from binance.client import BinanceHTTPClient
-from indicators.rsi import rsi_wilder_from_closes
+from indicators.builtin import compute as compute_builtin_indicator
 from settings import get_settings
 
 
 def compute_rsi_from_closes(closes: list[float], period: int = 14) -> float:
-    """Wilder(RMA) 방식 RSI 계산(바이낸스/TradingView 기본 RSI와 동일 계열)."""
-    return rsi_wilder_from_closes(list(closes), int(period))
-
-
-def compute_realtime_rsi(closed_closes: list[float], last_price: float, period: int = 14) -> float:
-    """실시간 RSI(=진행 중인 봉의 가격을 마지막 종가처럼 반영).
-
-    - closed_closes: 닫힌 봉들의 종가 리스트
-    - last_price: 현재 실시간 가격(Last Price)
-    """
-    if not closed_closes:
-        return 50.0
-    return compute_rsi_from_closes(closed_closes + [last_price], period=period)
+    inputs = {
+        "open": list(closes),
+        "high": list(closes),
+        "low": list(closes),
+        "close": list(closes),
+        "volume": [0.0] * len(closes),
+    }
+    return float(compute_builtin_indicator("RSI", inputs, period=int(period)))
 
 
 app = typer.Typer(add_completion=False)
@@ -54,7 +49,6 @@ def main(
     watch: bool = typer.Option(False, "--watch", help="1초마다 실시간 로그 출력(무한 루프)"),
     every: float = typer.Option(1.0, "--every", help="watch 모드 로그 주기(초)"),
     count: int = typer.Option(0, "--count", help="watch 모드에서 출력 횟수(0이면 무한)"),
-    realtime_rsi: bool = typer.Option(True, "--realtime-rsi/--no-realtime-rsi", help="실시간 RSI(진행중 봉 반영)도 함께 출력"),
 ) -> None:
     """테스트넷에서 현재가 + RSI를 출력합니다."""
     asyncio.run(
@@ -66,7 +60,6 @@ def main(
             watch=watch,
             every=every,
             count=count,
-            realtime_rsi=realtime_rsi,
         )
     )
 
@@ -79,7 +72,6 @@ async def _run(
     watch: bool,
     every: float,
     count: int,
-    realtime_rsi: bool,
 ) -> None:
     s = get_settings()
     client = BinanceHTTPClient(
@@ -149,7 +141,6 @@ async def _run(
 
         if not watch:
             last_price = await client.fetch_ticker_price(symbol)
-            rsi_rt = compute_realtime_rsi(cached["closed_closes"], last_price, period=period) if realtime_rsi else None
             now_local = datetime.now().isoformat(timespec="seconds")
             open_dt = (
                 datetime.fromtimestamp(cached["bar_open_ts"] / 1000).isoformat(timespec="seconds")
@@ -173,8 +164,6 @@ async def _run(
                 typer.echo(f"last_closed_close : {close_dt}")
             typer.echo(f"last_closed_price : {cached['bar_close_price']:,.2f}")
             typer.echo(f"rsi({period})      : {cached['rsi']:.2f}")
-            if realtime_rsi and rsi_rt is not None:
-                typer.echo(f"rsi_rt({period})   : {rsi_rt:.2f}  (using last price as forming candle)")
             typer.echo("=" * 80)
             return
 
@@ -199,15 +188,12 @@ async def _run(
                 if cached["bar_open_ts"]
                 else ""
             )
-            rsi_rt = compute_realtime_rsi(cached["closed_closes"], last_price, period=period) if realtime_rsi else None
             msg = (
                 f"[{now_local}] "
                 f"(bar={bar_dt}) "
                 f"last={last_price:,.2f} "
                 f"rsi({period})={cached['rsi']:.2f} "
             )
-            if realtime_rsi and rsi_rt is not None:
-                msg += f"rsi_rt({period})={rsi_rt:.2f} "
             msg += f"bar_close={cached['bar_close_price']:,.2f}"
             typer.echo(msg)
 
@@ -221,5 +207,4 @@ async def _run(
 
 if __name__ == "__main__":
     app()
-
 
