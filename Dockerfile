@@ -7,6 +7,8 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 WORKDIR /app
 COPY . /app
 
+ENV PYTHONPATH=/app/src
+
 RUN pip install --no-cache-dir uv
 RUN uv sync
 

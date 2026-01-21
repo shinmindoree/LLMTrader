@@ -21,16 +21,7 @@ from __future__ import annotations
 
 import importlib
 import math
-import sys
-from pathlib import Path
 from typing import Any
-
-# 전략 파일을 단독 실행/로드할 때도 `src/` 임포트가 되도록 보정.
-# (run_live_trading.py가 이미 sys.path에 src를 추가하지만, 다른 실행 경로 대비)
-project_root = Path(__file__).parent
-src_path = project_root / "src"
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
 
 from strategy.base import Strategy
 from strategy.context import StrategyContext
@@ -203,7 +194,7 @@ class IndicatorLongShortStrategyTemplate(Strategy):
             self.is_closing = False
 
         # ===== 미체결 주문 가드(라이브 전용) =====
-        open_orders = getattr(ctx, "get_open_orders", lambda: [])()
+        open_orders = ctx.get_open_orders()
         if open_orders:
             return
 

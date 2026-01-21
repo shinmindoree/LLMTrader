@@ -82,3 +82,11 @@ class StrategyContext(Protocol):
     def register_indicator(self, name: str, func: Callable[..., Any]) -> None:
         """커스텀 지표 등록."""
         ...
+
+    def get_open_orders(self) -> list[dict[str, Any]]:
+        """현재 미체결 주문 목록.
+
+        - 라이브 트레이딩에서는 실제 거래소 미체결 주문을 반환한다.
+        - 백테스트에서는 항상 빈 리스트를 반환한다.
+        """
+        ...

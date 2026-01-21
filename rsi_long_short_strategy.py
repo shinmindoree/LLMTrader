@@ -1,13 +1,5 @@
 import math
-import sys
-from pathlib import Path
 from typing import Any
-
-# src 디렉토리를 Python 경로에 추가
-project_root = Path(__file__).parent
-src_path = project_root / "src"
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
 
 from strategy.base import Strategy
 from strategy.context import StrategyContext
@@ -79,7 +71,7 @@ class RsiLongShortStrategy(Strategy):
             self.is_closing = False
 
         # ===== 미체결 주문 가드 =====
-        open_orders = getattr(ctx, "get_open_orders", lambda: [])()
+        open_orders = ctx.get_open_orders()
         if open_orders:
             return
 
