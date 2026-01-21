@@ -55,6 +55,7 @@ class LiveContext:
         self.env = env
         self.notifier = notifier
         self._logger = get_logger("llmtrader.live")
+        self.strategy_name: str | None = None
         self.strategy_meta: dict[str, Any] = {}
         self._indicator_config: dict[str, Any] = dict(indicator_config or {})
         self._indicator_registry: dict[str, Callable[..., Any]] = {}
@@ -910,6 +911,7 @@ class LiveContext:
         Args:
             strategy: Strategy 인스턴스(duck typing)
         """
+        self.strategy_name = getattr(getattr(strategy, "__class__", None), "__name__", None)
         self.strategy_meta = {}
         params = getattr(strategy, "params", None)
         if isinstance(params, dict):
@@ -920,6 +922,8 @@ class LiveContext:
         metadata = getattr(strategy, "metadata", None)
         if isinstance(metadata, dict):
             self.strategy_meta.update(metadata)
+        if self.strategy_name and "strategy" not in self.strategy_meta:
+            self.strategy_meta["strategy"] = self.strategy_name
 
         indicator_config = getattr(strategy, "indicator_config", None)
         if isinstance(indicator_config, dict):
@@ -1232,7 +1236,7 @@ class LiveContext:
                 "strategy_meta": self.strategy_meta if self.strategy_meta else None,
                 "event": event,
                 "pnl_exit_est": pnl_exit,
-                "pnl_exit_after_fee": pnl_exit - final_commission if pnl_exit is not None else None,
+                "pnl_exit_after_fee": pnl_exit - (final_commission * 2) if pnl_exit is not None else None,
             },
         )
 
@@ -1241,7 +1245,7 @@ class LiveContext:
             
             pnl_indicator = ""
             if event == "EXIT" and pnl_exit is not None:
-                pnl_after_fee = pnl_exit - final_commission
+                pnl_after_fee = pnl_exit - (final_commission * 2)
                 if pnl_after_fee > 0:
                     pnl_indicator = "🟢 W\n"
                 elif pnl_after_fee < 0:
@@ -1260,7 +1264,7 @@ class LiveContext:
                 text += f"- strategy-meta: {self.strategy_meta}\n"
             
             if event == "EXIT" and pnl_exit is not None:
-                pnl_after_fee = pnl_exit - final_commission
+                pnl_after_fee = pnl_exit - (final_commission * 2)
                 text += f"- pnl (before fee): {pnl_exit:+.2f} (est, using last price)\n"
                 text += f"- pnl (after fee): {pnl_after_fee:+.2f} (est)\n"
             if reason:
@@ -1287,6 +1291,14 @@ class LiveContext:
         if not self.notifier.webhook_url or not self.notifier.webhook_url.strip():
             print("⚠️ Slack 알림 실패: webhook_url이 비어있습니다")
             return
+
+        strategy_name = self.strategy_name or (
+            str(self.strategy_meta.get("strategy")) if self.strategy_meta.get("strategy") else None
+        )
+        if strategy_name:
+            header = f"*{strategy_name}*\n"
+            if not text.startswith(header):
+                text = header + text
         
         try:
             await asyncio.wait_for(self.notifier.send(text, color=color), timeout=5.0)
