@@ -57,13 +57,25 @@ uv run streamlit run streamlit_app.py
 ```bash
 # 실제 테스트넷에서 자동 트레이딩
 uv run python scripts/run_live_trading.py my_strategy.py \
-  --symbol BTCUSDT \
-  --leverage 1 \
-  --max-position 0.5 \
-  --daily-loss-limit 500
+  --streams '[{"symbol":"BTCUSDT","interval":"1m","leverage":1,"max_position":0.5,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}]'
 ```
 
 전략 파일을 새로 만들 때는 `indicator_strategy_template.py`를 복사해서 시작하면 됩니다.
+
+#### (실험적) 포트폴리오 모드: 멀티 심볼/멀티 타임프레임
+
+`--streams`로 심볼/캔들봉 간격 페어(스트림)를 지정하면, 하나의 전략으로 여러 스트림을 동시에 운용할 수 있습니다.
+
+- 스트림은 `(symbol, interval)` 조합 기준 **최대 5개**까지 지원합니다.
+- 스트림 1개면 싱글 모드처럼 동작하고, 2개 이상이면 포트폴리오 모드로 동작합니다.
+- 포트폴리오 모드에서도 전략 코드는 심볼을 하드코딩할 필요가 없습니다. 각 스트림 이벤트마다 `ctx.buy()`/`ctx.sell()`이 해당 스트림의 심볼로 주문을 냅니다.
+- 거래 설정(레버리지/최대포지션/손실한도/StopLoss 등)은 스트림 항목에 함께 지정합니다.
+
+```bash
+uv run python scripts/run_live_trading.py my_strategy.py \
+  --streams '[{"symbol":"BTCUSDT","interval":"1m","leverage":10,"max_position":0.2,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}, {"symbol":"ETHUSDT","interval":"5m","leverage":10,"max_position":0.2,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}]' \
+  --yes
+```
 
 **⚠️ 경고**: 
 - 반드시 **테스트넷 API**를 사용하세요 (`BINANCE_BASE_URL=https://testnet.binancefuture.com`)

@@ -39,6 +39,7 @@ class LiveContext:
         env: str = "local",
         notifier: SlackNotifier | None = None,
         indicator_config: dict[str, Any] | None = None,
+        risk_reporter: Callable[[float], None] | None = None,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -61,6 +62,7 @@ class LiveContext:
         self._indicator_registry: dict[str, Callable[..., Any]] = {}
         self._indicator_error_logged: set[str] = set()
         self._indicator_nan_logged: set[str] = set()
+        self._risk_reporter = risk_reporter
         
         self.candle_interval: str = "1m"
 
@@ -327,6 +329,19 @@ class LiveContext:
         self._last_trade_check_time = now
         self._user_stream_task = asyncio.create_task(self._user_stream.start())
         self._user_stream_task.add_done_callback(self._handle_user_stream_task_result)
+
+    def attach_user_stream(self) -> None:
+        """외부(UserStreamHub 등)에서 구동하는 User Stream을 이 컨텍스트에 연결한다.
+
+        - 포트폴리오 모드에서 User Stream을 1개만 유지하기 위해 사용한다.
+        - 내부적으로는 '유저 스트림이 활성화된 상태'로 플래그만 세팅한다.
+        """
+        self._use_user_stream = True
+        self._user_stream_connected = True
+        now = time.time()
+        self._last_user_stream_account_update = now
+        self._last_reconcile_time = now
+        self._last_trade_check_time = now
 
     async def stop_user_stream(self) -> None:
         """유저데이터 스트림 중지."""
@@ -773,6 +788,16 @@ class LiveContext:
             reason: 주문 사유
             use_chase: Chase Order 사용 여부 (None이면 _chase_enabled 설정 따름)
         """
+        # StopLoss cooldown 중에는 "진입" 주문을 조용히 무시(전략이 매 봉마다 진입을 시도해도 로그 스팸 방지)
+        if abs(self.position.size) < 1e-12:
+            in_cooldown, cooldown_reason = self.is_in_stoploss_cooldown()
+            if in_cooldown:
+                self._log_audit(
+                    "ORDER_REJECTED_STOPLOSS_COOLDOWN",
+                    {"side": "BUY", "quantity": quantity, "reason": cooldown_reason},
+                )
+                return
+
         if self._order_inflight:
             if (time.time() - self._last_order_started_at) > 5.0:
                 print("⚠️ order_inflight timeout: releasing lock")
@@ -805,6 +830,16 @@ class LiveContext:
             reason: 주문 사유
             use_chase: Chase Order 사용 여부 (None이면 _chase_enabled 설정 따름)
         """
+        # StopLoss cooldown 중에는 "진입" 주문을 조용히 무시(전략이 매 봉마다 진입을 시도해도 로그 스팸 방지)
+        if abs(self.position.size) < 1e-12:
+            in_cooldown, cooldown_reason = self.is_in_stoploss_cooldown()
+            if in_cooldown:
+                self._log_audit(
+                    "ORDER_REJECTED_STOPLOSS_COOLDOWN",
+                    {"side": "SELL", "quantity": quantity, "reason": cooldown_reason},
+                )
+                return
+
         if self._order_inflight:
             if (time.time() - self._last_order_started_at) > 5.0:
                 print("⚠️ order_inflight timeout: releasing lock")
@@ -952,6 +987,11 @@ class LiveContext:
             after_task = asyncio.create_task(self._after_order_filled(result))
             after_task.add_done_callback(lambda _t: self._release_order_inflight())
         except Exception as e:
+            # StopLoss cooldown은 이미 START/END 로그로 사용자에게 알려주므로,
+            # 매 봉마다 진입 시도로 인해 "주문 실패" 로그가 폭증하는 것을 방지한다.
+            if isinstance(e, ValueError) and "거래 불가: StopLoss cooldown" in str(e):
+                self._release_order_inflight()
+                return
             print(f"❌ 주문 실패: {e}")
             self._release_order_inflight()
 
@@ -1191,6 +1231,19 @@ class LiveContext:
                     })
                     pnl_exit = None
 
+        # 리스크 관리자에 손익 반영 (EXIT 시점)
+        if event == "EXIT" and pnl_exit is not None:
+            pnl_after_fee = pnl_exit - (final_commission * 2)
+            try:
+                self.risk_manager.record_trade(pnl_after_fee)
+            except Exception:  # noqa: BLE001
+                pass
+            if self._risk_reporter is not None:
+                try:
+                    self._risk_reporter(pnl_after_fee)
+                except Exception:  # noqa: BLE001
+                    pass
+
         now = datetime.now().isoformat(timespec="seconds")
         last_now = float(self.current_price)
         
@@ -1383,12 +1436,6 @@ class LiveContext:
         Returns:
             주문 응답
         """
-        can_trade, risk_reason = self.risk_manager.can_trade()
-        if not can_trade:
-            error_msg = f"거래 불가: {risk_reason}"
-            self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
-            raise ValueError(error_msg)
-        
         # StopLoss cooldown 체크 (포지션 진입만 차단, 청산은 허용)
         if abs(self.position.size) < 1e-12:  # 포지션이 없을 때만 체크 (진입 시도)
             in_cooldown, cooldown_reason = self.is_in_stoploss_cooldown()
@@ -1431,6 +1478,14 @@ class LiveContext:
         new_position_size = self.position.size + (float(quantity) if side == "BUY" else -float(quantity))
 
         is_reducing_order = abs(new_position_size) < abs(self.position.size) - 1e-12
+
+        # ReduceOnly(청산/감축) 주문은 항상 허용: 리스크의 "거래 중단" 상태에서도 EXIT는 가능해야 함.
+        if not is_reducing_order:
+            can_trade, risk_reason = self.risk_manager.can_trade()
+            if not can_trade:
+                error_msg = f"거래 불가: {risk_reason}"
+                self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
+                raise ValueError(error_msg)
 
         if not is_reducing_order:
             order_value = float(quantity) * self._current_price
@@ -1523,12 +1578,6 @@ class LiveContext:
         Returns:
             주문 응답 (모든 orderId 포함)
         """
-        can_trade, risk_reason = self.risk_manager.can_trade()
-        if not can_trade:
-            error_msg = f"거래 불가: {risk_reason}"
-            self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
-            raise ValueError(error_msg)
-
         # StopLoss cooldown 체크 (포지션 진입만 차단, 청산은 허용)
         if abs(self.position.size) < 1e-12:
             in_cooldown, cooldown_reason = self.is_in_stoploss_cooldown()
@@ -1541,10 +1590,16 @@ class LiveContext:
         quantity = self._adjust_quantity(quantity)
         
         initial_pos_size = self.position.size
-        
-        # 시작 시 포지션 확인: 이미 목표 포지션에 도달했는지 확인
         expected_pos_change = float(quantity) if side == "BUY" else -float(quantity)
         target_pos = initial_pos_size + expected_pos_change
+        is_reducing_order = abs(target_pos) < abs(initial_pos_size) - 1e-12
+
+        if not is_reducing_order:
+            can_trade, risk_reason = self.risk_manager.can_trade()
+            if not can_trade:
+                error_msg = f"거래 불가: {risk_reason}"
+                self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
+                raise ValueError(error_msg)
         
         # 이미 충분한 포지션이 있는지 확인 (chase order가 이미 체결되었을 수 있음)
         # BUY인 경우: 현재 포지션이 목표 포지션 이상이면 이미 체결됨

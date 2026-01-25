@@ -20,14 +20,18 @@ if str(src_path) not in sys.path:
 from binance.client import BinanceHTTPClient
 from common.risk import RiskConfig
 from live.context import LiveContext
-from live.engine import LiveTradingEngine
+from live.indicator_context import CandleStreamIndicatorContext
+from live.portfolio_context import PortfolioContext
+from live.portfolio_engine import PortfolioLiveTradingEngine
 from live.price_feed import PriceFeed
 from live.risk import LiveRiskManager
+from live.user_stream_hub import UserStreamHub
 from notifications.slack import SlackNotifier
 from settings import get_settings
 
 
 app = typer.Typer(add_completion=False)
+MAX_CANDLE_STREAMS = 5
 
 
 def load_strategy_class(strategy_file: Path):
@@ -82,27 +86,175 @@ def _build_strategy(strategy_class: type, params: dict[str, Any]):
         raise typer.BadParameter(f"전략 파라미터가 생성자와 일치하지 않습니다: {exc}") from exc
 
 
+def _parse_json_list(raw_value: str, label: str) -> list[Any]:
+    value = (raw_value or "").strip()
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"{label} JSON 파싱 실패: {exc}") from exc
+    if not isinstance(data, list):
+        raise typer.BadParameter(f"{label}는 JSON 리스트여야 합니다.")
+    return data
+
+
+def _parse_interval_seconds(interval: str) -> int:
+    s = interval.strip().lower()
+    if not s:
+        return 0
+    try:
+        if s.endswith("m"):
+            return int(s[:-1]) * 60
+        if s.endswith("h"):
+            return int(s[:-1]) * 3600
+        if s.endswith("d"):
+            return int(s[:-1]) * 86400
+        if s.endswith("w"):
+            return int(s[:-1]) * 7 * 86400
+    except ValueError:
+        return 0
+    return 0
+
+
+def _extract_strategy_stream_config(strategy: Any) -> list[dict[str, Any]]:
+    """전략에서 streams 선언을 추출한다(없으면 빈 값).
+
+    포트폴리오 모드에서도 전략 코드가 심볼을 하드코딩하지 않도록,
+    외부 설정(스트림 리스트)로 동작하도록 한다.
+    """
+    streams: list[dict[str, Any]] = []
+
+    meta = getattr(strategy, "meta", None)
+    if isinstance(meta, dict):
+        meta_streams = meta.get("streams") or meta.get("candle_streams")
+        if isinstance(meta_streams, list):
+            for item in meta_streams:
+                if isinstance(item, dict):
+                    streams.append(dict(item))
+
+    streams_attr = getattr(strategy, "streams", None)
+    if isinstance(streams_attr, list):
+        for item in streams_attr:
+            if isinstance(item, dict):
+                streams.append(dict(item))
+
+    streams_attr_legacy = getattr(strategy, "candle_streams", None)
+    if isinstance(streams_attr_legacy, list):
+        for item in streams_attr_legacy:
+            if isinstance(item, dict):
+                streams.append(dict(item))
+
+    return streams
+
+
+def _normalize_streams(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for it in items:
+        symbol = str(it.get("symbol") or it.get("s") or "").strip().upper()
+        interval = str(it.get("interval") or it.get("candle_interval") or it.get("timeframe") or "").strip()
+        if not symbol or not interval:
+            continue
+        out.append((symbol, interval))
+    # unique + stable order
+    seen: set[tuple[str, str]] = set()
+    deduped: list[tuple[str, str]] = []
+    for s, i in out:
+        key = (s, i)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
+def _normalize_stream_configs(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """스트림 설정을 표준화한다.
+
+    각 항목은 최소한 symbol/interval을 포함해야 하며, 나머지 거래 설정은 기본값으로 채운다.
+    """
+    out: list[dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        symbol = str(it.get("symbol") or it.get("s") or "").strip().upper()
+        interval = str(it.get("interval") or it.get("candle_interval") or it.get("timeframe") or "").strip()
+        if not symbol or not interval:
+            continue
+
+        cfg: dict[str, Any] = {
+            "symbol": symbol,
+            "interval": interval,
+            "leverage": int(it.get("leverage", 1)),
+            "max_position": float(it.get("max_position", it.get("max_position_size", 0.5))),
+            "daily_loss_limit": float(it.get("daily_loss_limit", 500.0)),
+            "max_consecutive_losses": int(it.get("max_consecutive_losses", 0)),
+            "stoploss_cooldown_candles": int(it.get("stoploss_cooldown_candles", 0)),
+            "stop_loss_pct": float(it.get("stop_loss_pct", 0.05)),
+        }
+        out.append(cfg)
+
+    # unique (symbol, interval) by first occurrence
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for cfg in out:
+        key = (str(cfg["symbol"]), str(cfg["interval"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(cfg)
+    return deduped
+
+
+def _validate_symbol_settings_consistency(streams: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """동일 심볼이 여러 interval에 나타날 경우, 거래 설정이 충돌하지 않도록 검증한다."""
+    per_symbol: dict[str, dict[str, Any]] = {}
+    for cfg in streams:
+        symbol = str(cfg["symbol"])
+        leverage = int(cfg["leverage"])
+        max_position = float(cfg["max_position"])
+        daily_loss_limit = float(cfg["daily_loss_limit"])
+        max_consecutive_losses = int(cfg["max_consecutive_losses"])
+        stoploss_cooldown_candles = int(cfg["stoploss_cooldown_candles"])
+        stop_loss_pct = float(cfg["stop_loss_pct"])
+
+        existing = per_symbol.get(symbol)
+        current = {
+            "symbol": symbol,
+            "leverage": leverage,
+            "max_position": max_position,
+            "daily_loss_limit": daily_loss_limit,
+            "max_consecutive_losses": max_consecutive_losses,
+            "stoploss_cooldown_candles": stoploss_cooldown_candles,
+            "stop_loss_pct": stop_loss_pct,
+        }
+        if existing is None:
+            per_symbol[symbol] = current
+            continue
+
+        # leverage/max_position 등은 심볼 단위로 적용되므로, 여러 스트림에서 값이 다르면 혼란/오동작 가능.
+        for key in (
+            "leverage",
+            "max_position",
+            "daily_loss_limit",
+            "max_consecutive_losses",
+            "stoploss_cooldown_candles",
+            "stop_loss_pct",
+        ):
+            if existing.get(key) != current.get(key):
+                raise typer.BadParameter(
+                    f"동일 심볼({symbol})에 대해 스트림별 거래 설정이 다릅니다: "
+                    f"{key} {existing.get(key)} != {current.get(key)}. "
+                    "같은 심볼은 동일한 거래 설정을 사용하도록 맞춰주세요."
+                )
+    return per_symbol
+
+
 @app.command()
 def main(
     strategy_file: Path = typer.Argument(..., help="전략 파일 경로"),
-    symbol: str = typer.Option("BTCUSDT", help="거래 심볼"),
-    leverage: int = typer.Option(
-        int(os.getenv("LEVERAGE", "1")),
-        help="레버리지 (기본: 1). 환경 변수 LEVERAGE로도 설정 가능",
-    ),
-    candle_interval: str = typer.Option(
-        os.getenv("CANDLE_INTERVAL", "1m"),
-        help="캔들 봉 간격 (예: 1m, 5m, 15m). 환경 변수 CANDLE_INTERVAL로도 설정 가능",
-    ),
-    max_position: float = typer.Option(
-        float(os.getenv("MAX_POSITION", "0.5")),
-        help="최대 포지션 크기 (자산 대비, 기본: 0.5). 환경 변수 MAX_POSITION로도 설정 가능",
-    ),
-    daily_loss_limit: float = typer.Option(500.0, help="일일 손실 한도 (USDT)"),
-    max_consecutive_losses: int = typer.Option(
-        0,
-        help="최대 연속 손실 횟수 (0이면 비활성화)",
-    ),
     strategy_params: str = typer.Option(
         os.getenv("STRATEGY_PARAMS", ""),
         help='전략 파라미터 JSON 문자열 (예: {"rsi_period": 2})',
@@ -123,13 +275,12 @@ def main(
         int(os.getenv("LOG_INTERVAL", "0")),
         help="로그 출력 주기 (초). 0이면 캔들 마감 시에만 저장 (기본: 0). 환경 변수 LOG_INTERVAL로도 설정 가능",
     ),
-    stoploss_cooldown_candles: int = typer.Option(
-        int(os.getenv("STOPLOSS_COOLDOWN_CANDLES", "0")),
-        help="StopLoss 청산 후 거래 중단 캔들 수 (0이면 비활성화, 기본: 0). 환경 변수 STOPLOSS_COOLDOWN_CANDLES로도 설정 가능",
-    ),
-    stop_loss_pct: float = typer.Option(
-        float(os.getenv("STOP_LOSS_PCT", "0.05")),
-        help="StopLoss 비율 (0.0~1.0, 예: 0.05 = 5%, 기본: 0.05). 환경 변수 STOP_LOSS_PCT로도 설정 가능",
+    streams: str = typer.Option(
+        os.getenv("STREAMS", ""),
+        help=(
+            "거래 스트림(심볼+캔들간격 페어) JSON 리스트. "
+            '예: [{"symbol":"BTCUSDT","interval":"1m","leverage":10,"max_position":0.2,"daily_loss_limit":500,"stop_loss_pct":0.05}]'
+        ),
     ),
     yes: bool = typer.Option(
         False,
@@ -146,47 +297,29 @@ def main(
     asyncio.run(
         _run(
             strategy_file=strategy_file,
-            symbol=symbol,
-            leverage=leverage,
-            candle_interval=candle_interval,
-            max_position=max_position,
-            daily_loss_limit=daily_loss_limit,
-            max_consecutive_losses=max_consecutive_losses,
             log_interval=log_interval,
-            stoploss_cooldown_candles=stoploss_cooldown_candles,
-            stop_loss_pct=stop_loss_pct,
             yes=yes,
             strategy=strategy,
             strategy_params=strategy_params_data,
             indicator_config=indicator_config_data,
+            streams=streams,
         )
     )
 
 
 async def _run(
     strategy_file: Path,
-    symbol: str,
-    leverage: int,
-    candle_interval: str,
-    max_position: float,
-    daily_loss_limit: float,
-    max_consecutive_losses: int,
     log_interval: int,
-    stoploss_cooldown_candles: int,
-    stop_loss_pct: float,
     yes: bool,
     strategy: Any,
     strategy_params: dict[str, Any],
     indicator_config: dict[str, Any],
+    streams: str,
 ) -> None:
     print("=" * 80)
     print("🚀 라이브 트레이딩 시작")
     print("=" * 80)
     print(f"전략 파일: {strategy_file}")
-    print(f"심볼: {symbol}")
-    print(f"레버리지: {leverage}x")
-    print(f"최대 포지션: {max_position * 100}% (자산 대비)")
-    print(f"캔들 봉 간격: {candle_interval}")
     if strategy_params:
         print(f"전략 파라미터: {json.dumps(strategy_params, ensure_ascii=True)}")
     else:
@@ -195,16 +328,6 @@ async def _run(
         print(f"지표 설정: {json.dumps(indicator_config, ensure_ascii=True)}")
     else:
         print("지표 설정: 기본값")
-    print(f"일일 손실 한도: ${daily_loss_limit}")
-    if max_consecutive_losses > 0:
-        print(f"최대 연속 손실: {max_consecutive_losses}회")
-    else:
-        print("최대 연속 손실: 비활성화")
-    if stoploss_cooldown_candles > 0:
-        print(f"StopLoss Cooldown: {stoploss_cooldown_candles}개 캔들")
-    else:
-        print("StopLoss Cooldown: 비활성화")
-    print(f"StopLoss 비율: {stop_loss_pct * 100:.1f}%")
     print("=" * 80)
     print()
 
@@ -233,45 +356,137 @@ async def _run(
         base_url=settings.binance.base_url,
     )
 
-    # 리스크 관리자 생성
-    risk_config = RiskConfig(
-        max_leverage=float(leverage),
-        max_position_size=max_position,
-        # 단일 주문 한도는 기본적으로 "최대 포지션 한도"와 동일하게 둔다.
-        # 사용자가 --max-position 1.0 으로 설정해 "최대한 진입"을 원할 때,
-        # 기본 max_order_size=0.5 때문에 주문이 거절되는 혼란을 방지한다.
-        max_order_size=max_position,
-        daily_loss_limit=daily_loss_limit,
-        max_consecutive_losses=max_consecutive_losses,
-        stoploss_cooldown_candles=stoploss_cooldown_candles,
-        stop_loss_pct=stop_loss_pct,
-    )
-    risk_manager = LiveRiskManager(risk_config)
-
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
-    # 컨텍스트 생성
-    ctx = LiveContext(
-        client=client,
-        risk_manager=risk_manager,
-        symbol=symbol,
-        leverage=leverage,
-        env=settings.env,
-        notifier=notifier,
-        indicator_config=indicator_config,
+    # ===== 스트림 설정 추출/검증 =====
+    cli_stream_items = _parse_json_list(streams, "streams")
+    cli_stream_dicts = [it for it in cli_stream_items if isinstance(it, dict)]
+    strategy_streams = _extract_strategy_stream_config(strategy)
+    stream_dicts = cli_stream_dicts if cli_stream_dicts else strategy_streams
+    stream_configs = _normalize_stream_configs(stream_dicts)
+
+    if not stream_configs:
+        raise typer.BadParameter("--streams가 비어있습니다. 최소 1개 스트림을 설정하세요.")
+
+    normalized_streams = [(str(cfg["symbol"]), str(cfg["interval"])) for cfg in stream_configs]
+    if len(normalized_streams) > MAX_CANDLE_STREAMS:
+        pretty = ", ".join(f"{s}@{i}" for s, i in normalized_streams)
+        raise typer.BadParameter(
+            f"요청한 캔들 스트림 {len(normalized_streams)}개는 지원하지 않습니다. "
+            f"현재 시스템 한도는 {MAX_CANDLE_STREAMS}개입니다. (요청: {pretty})"
+        )
+
+    streams_pretty = ", ".join(f"{s}@{i}" for s, i in normalized_streams)
+    print(f"거래 스트림 ({len(normalized_streams)}/{MAX_CANDLE_STREAMS}): {streams_pretty}")
+    print(f"모드: {'싱글(1개 스트림)' if len(normalized_streams) == 1 else '포트폴리오(2개+ 스트림)'}")
+    print()
+
+    # ===== 심볼별 거래 설정 검증/정리 =====
+    symbol_settings = _validate_symbol_settings_consistency(stream_configs)
+    symbols = sorted(symbol_settings.keys())
+    print("거래 설정(심볼별):")
+    for sym in symbols:
+        s = symbol_settings[sym]
+        print(
+            f"- {sym}: interval(s)={', '.join(sorted({itv for ss, itv in normalized_streams if ss == sym}))}, "
+            f"leverage={int(s['leverage'])}x, max_position={float(s['max_position']) * 100:.1f}%, "
+            f"daily_loss_limit=${float(s['daily_loss_limit']):.0f}, "
+            f"max_consecutive_losses={int(s['max_consecutive_losses'])}, "
+            f"stop_loss_pct={float(s['stop_loss_pct']) * 100:.2f}%, "
+            f"stoploss_cooldown_candles={int(s['stoploss_cooldown_candles'])}"
+        )
+    print()
+
+    # ===== 엔진 생성 =====
+    log_interval_value = log_interval if log_interval > 0 else None
+
+    # 포트폴리오 리스크(합산) 용도: 가장 보수적인 설정으로 구성(필요 시 향후 별도 옵션으로 분리)
+    min_daily_loss = min(float(s["daily_loss_limit"]) for s in symbol_settings.values())
+    portfolio_max_consecutive = (
+        0
+        if any(int(s["max_consecutive_losses"]) <= 0 for s in symbol_settings.values())
+        else min(int(s["max_consecutive_losses"]) for s in symbol_settings.values())
+    )
+    portfolio_max_leverage = max(float(s["leverage"]) for s in symbol_settings.values())
+    portfolio_max_position = max(float(s["max_position"]) for s in symbol_settings.values())
+    portfolio_stoploss_cooldown = max(int(s["stoploss_cooldown_candles"]) for s in symbol_settings.values())
+    portfolio_stop_loss_pct = max(float(s["stop_loss_pct"]) for s in symbol_settings.values())
+    portfolio_risk_config = RiskConfig(
+        max_leverage=portfolio_max_leverage,
+        max_position_size=portfolio_max_position,
+        max_order_size=portfolio_max_position,
+        daily_loss_limit=min_daily_loss,
+        max_consecutive_losses=portfolio_max_consecutive,
+        stoploss_cooldown_candles=portfolio_stoploss_cooldown,
+        stop_loss_pct=portfolio_stop_loss_pct,
+    )
+    portfolio_risk_manager = LiveRiskManager(portfolio_risk_config)
+
+    trade_contexts: dict[str, LiveContext] = {}
+    for sym in symbols:
+        s = symbol_settings[sym]
+        leverage = int(s["leverage"])
+        max_position = float(s["max_position"])
+        daily_loss_limit = float(s["daily_loss_limit"])
+        max_consecutive_losses = int(s["max_consecutive_losses"])
+        stoploss_cooldown_candles = int(s["stoploss_cooldown_candles"])
+        stop_loss_pct = float(s["stop_loss_pct"])
+
+        symbol_risk_config = RiskConfig(
+            max_leverage=float(leverage),
+            max_position_size=max_position,
+            max_order_size=max_position,
+            daily_loss_limit=daily_loss_limit,
+            max_consecutive_losses=max_consecutive_losses,
+            stoploss_cooldown_candles=stoploss_cooldown_candles,
+            stop_loss_pct=stop_loss_pct,
+        )
+        symbol_risk_manager = LiveRiskManager(symbol_risk_config)
+        ctx = LiveContext(
+            client=client,
+            risk_manager=symbol_risk_manager,
+            symbol=sym,
+            leverage=leverage,
+            env=settings.env,
+            notifier=notifier,
+            indicator_config=indicator_config,
+            risk_reporter=portfolio_risk_manager.record_trade,
+        )
+        trade_contexts[sym] = ctx
+
+    stream_contexts: dict[tuple[str, str], CandleStreamIndicatorContext] = {}
+    price_feeds: dict[tuple[str, str], PriceFeed] = {}
+    for sym, itv in normalized_streams:
+        key = (sym, itv)
+        stream_contexts[key] = CandleStreamIndicatorContext(symbol=sym, interval=itv)
+        price_feeds[key] = PriceFeed(client, sym, candle_interval=itv)
+
+    # trade interval: 심볼별로 가장 빠른(초가 작은) interval을 선택(StopLoss/로그용)
+    trade_intervals: dict[str, str] = {}
+    for sym in symbols:
+        intervals = [itv for s, itv in normalized_streams if s == sym]
+        intervals_sorted = sorted(intervals, key=_parse_interval_seconds)
+        trade_intervals[sym] = intervals_sorted[0] if intervals_sorted else intervals[0]
+
+    user_stream_hub = UserStreamHub(client)
+    primary_symbol = normalized_streams[0][0]
+    portfolio_ctx = PortfolioContext(
+        primary_symbol=primary_symbol,
+        trade_contexts=trade_contexts,
+        stream_contexts=stream_contexts,
+        portfolio_risk_manager=portfolio_risk_manager,
+        portfolio_multiplier=float(max(1, len(symbols))),
     )
 
-    # 가격 피드 생성
-    price_feed = PriceFeed(client, symbol, candle_interval=candle_interval)
-
-    # 엔진 생성
-    log_interval_value = log_interval if log_interval > 0 else None
-    engine = LiveTradingEngine(
-        strategy,
-        ctx,
-        price_feed,
+    engine: Any = PortfolioLiveTradingEngine(
+        strategy=strategy,
+        portfolio_ctx=portfolio_ctx,
+        price_feeds=price_feeds,
+        stream_contexts=stream_contexts,
+        trade_contexts=trade_contexts,
+        trade_intervals=trade_intervals,
+        user_stream_hub=user_stream_hub,
         log_interval=log_interval_value,
-        indicator_config=indicator_config,
     )
 
     # 시그널 핸들러 설정

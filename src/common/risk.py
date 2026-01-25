@@ -11,7 +11,6 @@ class RiskConfig:
         max_leverage: float = 10.0,
         max_position_size: float = 1.0,
         daily_loss_limit: float = 1000.0,
-        cooldown_after_loss: int = 300,
         max_consecutive_losses: int = 3,
         max_order_size: float = 0.5,
         stoploss_cooldown_candles: int = 0,
@@ -23,7 +22,6 @@ class RiskConfig:
             max_leverage: 최대 레버리지 배수
             max_position_size: 최대 포지션 크기 (자산 대비)
             daily_loss_limit: 일일 손실 한도 (USDT)
-            cooldown_after_loss: 손실 후 쿨다운 시간 (초)
             max_consecutive_losses: 최대 연속 손실 횟수
             max_order_size: 단일 주문 최대 크기 (자산 대비)
             stoploss_cooldown_candles: StopLoss 청산 후 거래 중단 캔들 수 (0이면 비활성화)
@@ -32,7 +30,6 @@ class RiskConfig:
         self.max_leverage = max_leverage
         self.max_position_size = max_position_size
         self.daily_loss_limit = daily_loss_limit
-        self.cooldown_after_loss = cooldown_after_loss
         self.max_consecutive_losses = max_consecutive_losses
         self.max_order_size = max_order_size
         self.stoploss_cooldown_candles = stoploss_cooldown_candles
@@ -125,4 +122,3 @@ class BaseRiskManager:
             return False, f"레버리지 초과 (최대: {self.config.max_leverage}x)"
 
         return True, "OK"
-

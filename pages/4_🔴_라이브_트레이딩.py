@@ -1,5 +1,6 @@
 """라이브 트레이딩 페이지."""
 
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -30,7 +31,7 @@ Streamlit UI에서는 장시간 실행되는 프로세스를 지원하지 않습
 아래 명령어로 터미널에서 실행하세요:
 
 ```bash
-uv run python scripts/run_live_trading.py <전략파일> --symbol BTCUSDT --leverage 1
+uv run python scripts/run_live_trading.py <전략파일> --streams '[{"symbol":"BTCUSDT","interval":"1m","leverage":1,"max_position":0.5,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}]'
 ```
 
 Slack 알림(선택):
@@ -58,43 +59,84 @@ selected_file = st.selectbox(
 # 설정
 st.subheader("2️⃣ 거래 설정")
 
-col1, col2 = st.columns(2)
+st.info("심볼/캔들봉 간격(스트림)을 최대 5개까지 설정합니다. 1개면 싱글, 2개 이상이면 포트폴리오 모드로 동작합니다.")
 
-with col1:
-    symbol = st.text_input("심볼", value="BTCUSDT")
-    leverage = st.number_input("레버리지", min_value=1, max_value=20, value=1, step=1)
-    candle_interval = st.selectbox(
-        "캔들 봉 간격",
-        options=["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"],
-        index=0,  # 기본값: 1m
-    )
+max_streams = 5
+num_streams = st.number_input(
+    "스트림 개수",
+    min_value=1,
+    max_value=max_streams,
+    value=1,
+    step=1,
+    help="운영할 (심볼, 캔들봉 간격) 페어 개수",
+)
 
-with col2:
-    max_position = st.slider("최대 포지션 크기 (%)", min_value=10, max_value=100, value=50, step=10) / 100
-    daily_loss_limit = st.number_input("일일 손실 한도 (USDT)", min_value=100.0, value=500.0, step=50.0)
-    max_consecutive_losses = st.number_input(
-        "최대 연속 손실 횟수 (0이면 비활성화)",
-        min_value=0,
-        max_value=10,
-        value=0,
-        step=1,
-    )
-    stop_loss_pct = st.number_input(
-        "StopLoss 비율 (%)",
-        min_value=0.1,
-        max_value=50.0,
-        value=5.0,
-        step=0.1,
-        help="포지션 진입 시점 balance 대비 손실률. 예: 5.0 = 5% 손실 시 청산",
-    ) / 100.0
-    stoploss_cooldown_candles = st.number_input(
-        "StopLoss Cooldown 캔들 수 (0이면 비활성화)",
-        min_value=0,
-        max_value=100,
-        value=0,
-        step=1,
-        help="StopLoss로 청산 발생 시 지정한 캔들 수만큼 거래 중단",
-    )
+interval_options = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]
+streams_payload: list[dict[str, object]] = []
+
+for i in range(int(num_streams)):
+    st.markdown(f"**스트림 {i + 1}**")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        stream_symbol = st.text_input("심볼", value="BTCUSDT" if i == 0 else "", key=f"stream_symbol_{i}").strip().upper()
+        leverage = st.number_input("레버리지", min_value=1, max_value=20, value=1, step=1, key=f"stream_leverage_{i}")
+    with c2:
+        candle_interval = st.selectbox("캔들 봉 간격", options=interval_options, index=0, key=f"stream_interval_{i}")
+        max_position = st.slider(
+            "최대 포지션(%)",
+            min_value=1,
+            max_value=100,
+            value=50,
+            step=1,
+            key=f"stream_max_position_{i}",
+        ) / 100.0
+    with c3:
+        daily_loss_limit = st.number_input(
+            "일일 손실 한도(USDT)",
+            min_value=0.0,
+            value=500.0,
+            step=50.0,
+            key=f"stream_daily_loss_{i}",
+        )
+        max_consecutive_losses = st.number_input(
+            "최대 연속 손실(0=off)",
+            min_value=0,
+            max_value=100,
+            value=0,
+            step=1,
+            key=f"stream_max_consecutive_{i}",
+        )
+    with c4:
+        stop_loss_pct = st.number_input(
+            "StopLoss(%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=5.0,
+            step=0.1,
+            key=f"stream_stop_loss_pct_{i}",
+        ) / 100.0
+        stoploss_cooldown_candles = st.number_input(
+            "StopLoss Cooldown(캔들)",
+            min_value=0,
+            max_value=1000,
+            value=0,
+            step=1,
+            key=f"stream_stoploss_cooldown_{i}",
+        )
+
+    if stream_symbol:
+        streams_payload.append(
+            {
+                "symbol": stream_symbol,
+                "interval": candle_interval,
+                "leverage": int(leverage),
+                "max_position": float(max_position),
+                "daily_loss_limit": float(daily_loss_limit),
+                "max_consecutive_losses": int(max_consecutive_losses),
+                "stop_loss_pct": float(stop_loss_pct),
+                "stoploss_cooldown_candles": int(stoploss_cooldown_candles),
+            }
+        )
 
 # 로그 출력 주기 설정
 st.divider()
@@ -120,48 +162,21 @@ log_interval = log_interval_display if log_interval_display > 0 else None
 
 st.divider()
 
-# 리스크 관리 요약
-st.subheader("3️⃣ 리스크 관리 요약")
-
-risk_col1, risk_col2, risk_col3, risk_col4 = st.columns(4)
-
-with risk_col1:
-    st.metric("레버리지", f"{leverage}x")
-    st.metric("최대 포지션", f"{max_position * 100:.0f}%")
-
-with risk_col2:
-    st.metric("일일 손실 한도", f"${daily_loss_limit:,.0f}")
-    st.metric("연속 손실 제한", "비활성화" if max_consecutive_losses == 0 else f"{max_consecutive_losses}회")
-
-with risk_col3:
-    st.metric("캔들 봉 간격", candle_interval)
-
-with risk_col4:
-    st.metric("쿨다운 시간", "300초 (5분)")
-    st.metric("주문 크기 제한", "50% (자산 대비)")
-    st.metric("StopLoss 비율", f"{stop_loss_pct * 100:.1f}%")
-    if stoploss_cooldown_candles > 0:
-        st.metric("StopLoss Cooldown", f"{stoploss_cooldown_candles}개 캔들")
-    else:
-        st.metric("StopLoss Cooldown", "비활성화")
+# 설정 요약
+st.subheader("3️⃣ 설정 요약")
+st.write(f"스트림 수: {len(streams_payload)}/{max_streams} (1개=싱글, 2개+=포트폴리오)")
 
 st.divider()
 
 # 명령어 생성
 command_parts = [
     f"uv run python scripts/run_live_trading.py {selected_file}",
-    f"--symbol {symbol}",
-    f"--leverage {leverage}",
-    f"--candle-interval {candle_interval}",
-    f"--max-position {max_position}",
-    f"--daily-loss-limit {daily_loss_limit}",
-    f"--max-consecutive-losses {max_consecutive_losses}",
-    f"--stop-loss-pct {stop_loss_pct}",
-    f"--stoploss-cooldown-candles {stoploss_cooldown_candles}",
 ]
 
 if log_interval is not None:
     command_parts.append(f"--log-interval {log_interval}")
+
+command_parts.append(f"--streams '{json.dumps(streams_payload, ensure_ascii=True)}'")
 
 command = " ".join(command_parts)
 
@@ -293,4 +308,3 @@ with st.expander("자주 묻는 질문"):
     ### Q: 리스크 한도에 걸리면?
     A: 자동으로 거래가 중지되고 로그에 기록됩니다.
     """)
-

@@ -66,12 +66,7 @@ strategy_class = next(
 
 ```bash
 uv run python scripts/run_live_trading.py rsi_long_short_strategy.py \
-  --symbol BTCUSDT \
-  --leverage 5 \
-  --max-position 1.0 \
-  --daily-loss-limit 500 \
-  --max-consecutive-losses 0 \
-  --candle-interval 1m \
+  --streams '[{"symbol":"BTCUSDT","interval":"1m","leverage":5,"max_position":1.0,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}]' \
   --yes
 ```
 

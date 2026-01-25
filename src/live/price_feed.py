@@ -195,6 +195,8 @@ class PriceFeed:
 
             # tick 데이터 생성
             tick = {
+                "symbol": self.symbol,
+                "interval": self.candle_interval,
                 "timestamp": bar_ts,  # Kline Open Time을 timestamp로 사용
                 "bar_timestamp": bar_ts,
                 "bar_open": bar_open,
