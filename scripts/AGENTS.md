@@ -65,7 +65,7 @@ strategy_class = next(
 ### run_live_trading.py
 
 ```bash
-uv run python scripts/run_live_trading.py rsi_long_short_strategy.py \
+uv run python scripts/run_live_trading.py scripts/strategies/rsi_long_short_strategy.py \
   --streams '[{"symbol":"BTCUSDT","interval":"1m","leverage":5,"max_position":1.0,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}]' \
   --yes
 ```

@@ -5,7 +5,7 @@
 - RSI뿐 아니라 다른 인디케이터 기반 전략도 같은 뼈대(guard → 지표조회 → 신호판단 → 상태업데이트)로 생성
 
 사용법:
-1) 이 파일을 복사해서 `my_strategy.py`로 저장
+1) 이 파일을 복사해서 `scripts/strategies/my_strategy.py`로 저장
 2) 클래스 이름을 `SomethingStrategy` 형태로 변경 (loader가 `*Strategy` 클래스를 찾음)
 3) builtin 인디케이터를 쓸 경우 `INDICATOR_NAME`만 바꾸고 `ctx.get_indicator(...)`로 호출
 4) custom 인디케이터를 쓸 경우 `initialize()`에서 `ctx.register_indicator(name, func)`로 등록

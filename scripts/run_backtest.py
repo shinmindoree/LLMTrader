@@ -65,9 +65,19 @@ def load_strategy_class(strategy_file: Path):
     raise ValueError(f"전략 클래스를 찾을 수 없습니다: {strategy_file}")
 
 
+def resolve_strategy_path(strategy_file: Path) -> Path:
+    if strategy_file.exists():
+        return strategy_file
+    candidate = (project_root / "scripts/strategies" / strategy_file).resolve()
+    if candidate.exists():
+        return candidate
+    return strategy_file
+
+
 async def main():
     """메인 함수."""
     args = parse_args()
+    args.strategy_file = resolve_strategy_path(args.strategy_file)
     
     # 날짜 파싱
     try:

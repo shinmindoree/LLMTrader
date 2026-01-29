@@ -43,7 +43,7 @@ st.divider()
 # 전략 파일 선택
 st.subheader("1️⃣ 전략 선택")
 
-strategy_files = list(Path(".").glob("*_strategy.py"))
+strategy_files = list(Path("scripts/strategies").glob("*_strategy.py"))
 strategy_files = [p for p in strategy_files if p.name != "generated_strategy.py"]
 
 if not strategy_files:

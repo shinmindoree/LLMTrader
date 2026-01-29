@@ -14,8 +14,8 @@
 - `indicator_strategy_template.py`의 구조(guard → 지표조회 → 신호판단 → 상태업데이트)를 따른다.
 
 실행 예시:
-- 라이브: `uv run python scripts/run_live_trading.py auto_tp_sl_manager_strategy.py --strategy-params '{"knn_k":8}'`
-- 백테스트: `uv run python scripts/run_backtest.py auto_tp_sl_manager_strategy.py --start-date 2024-01-01 --end-date 2024-06-01`
+- 라이브: `uv run python scripts/run_live_trading.py scripts/strategies/auto_tp_sl_manager_strategy.py --strategy-params '{"knn_k":8}'`
+- 백테스트: `uv run python scripts/run_backtest.py scripts/strategies/auto_tp_sl_manager_strategy.py --start-date 2024-01-01 --end-date 2024-06-01`
 """
 
 from __future__ import annotations

@@ -40,6 +40,7 @@ class LiveContext:
         notifier: SlackNotifier | None = None,
         indicator_config: dict[str, Any] | None = None,
         risk_reporter: Callable[[float], None] | None = None,
+        audit_hook: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -63,6 +64,7 @@ class LiveContext:
         self._indicator_error_logged: set[str] = set()
         self._indicator_nan_logged: set[str] = set()
         self._risk_reporter = risk_reporter
+        self._audit_hook = audit_hook
         
         self.candle_interval: str = "1m"
 
@@ -2180,8 +2182,16 @@ class LiveContext:
             action: 액션 타입
             data: 로그 데이터
         """
-        self.audit_log.append({
+        entry = {
             "timestamp": datetime.now().isoformat(),
+            "symbol": self.symbol,
             "action": action,
             "data": data,
-        })
+        }
+        self.audit_log.append(entry)
+        if self._audit_hook:
+            try:
+                self._audit_hook(action, entry)
+            except Exception:  # noqa: BLE001
+                # Audit hook must never break trading execution.
+                pass

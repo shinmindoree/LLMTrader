@@ -54,6 +54,15 @@ def load_strategy_class(strategy_file: Path):
     raise ValueError(f"전략 클래스를 찾을 수 없습니다: {strategy_file}")
 
 
+def resolve_strategy_path(strategy_file: Path) -> Path:
+    if strategy_file.exists():
+        return strategy_file
+    candidate = (project_root / "scripts/strategies" / strategy_file).resolve()
+    if candidate.exists():
+        return candidate
+    return strategy_file
+
+
 def _load_json_dict(raw_value: str, file_path: Path | None, label: str) -> dict[str, Any]:
     data: dict[str, Any] = {}
     if file_path:
@@ -291,6 +300,7 @@ def main(
     strategy_params_data = _load_json_dict(strategy_params, strategy_params_file, "전략 파라미터")
     indicator_config_data = _load_json_dict(indicator_config, indicator_config_file, "지표 설정")
 
+    strategy_file = resolve_strategy_path(strategy_file)
     strategy_class = load_strategy_class(strategy_file)
     strategy = _build_strategy(strategy_class, strategy_params_data)
 

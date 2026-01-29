@@ -56,7 +56,7 @@ uv run streamlit run streamlit_app.py
 ### 라이브 트레이딩 (⚠️)
 ```bash
 # 실제 테스트넷에서 자동 트레이딩
-uv run python scripts/run_live_trading.py my_strategy.py \
+uv run python scripts/run_live_trading.py scripts/strategies/my_strategy.py \
   --streams '[{"symbol":"BTCUSDT","interval":"1m","leverage":1,"max_position":0.5,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}]'
 ```
 
@@ -72,7 +72,7 @@ uv run python scripts/run_live_trading.py my_strategy.py \
 - 거래 설정(레버리지/최대포지션/손실한도/StopLoss 등)은 스트림 항목에 함께 지정합니다.
 
 ```bash
-uv run python scripts/run_live_trading.py my_strategy.py \
+uv run python scripts/run_live_trading.py scripts/strategies/my_strategy.py \
   --streams '[{"symbol":"BTCUSDT","interval":"1m","leverage":10,"max_position":0.2,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}, {"symbol":"ETHUSDT","interval":"5m","leverage":10,"max_position":0.2,"daily_loss_limit":500,"max_consecutive_losses":0,"stop_loss_pct":0.05,"stoploss_cooldown_candles":0}]' \
   --yes
 ```

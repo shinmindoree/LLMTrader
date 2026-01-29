@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     """애플리케이션 전역 설정."""
 
     env: str = Field(default="local", alias="ENV")
+    database_url: str = Field(
+        default="postgresql+asyncpg://llmtrader:llmtrader@localhost:5432/llmtrader",
+        alias="DATABASE_URL",
+    )
+    admin_token: str = Field(default="dev-admin-token", alias="ADMIN_TOKEN")
+    strategy_dirs: str = Field(default="scripts/strategies", alias="STRATEGY_DIRS")
+    runner_poll_interval_ms: int = Field(default=500, alias="RUNNER_POLL_INTERVAL_MS")
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
 
@@ -40,4 +47,3 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """설정을 캐싱해 로드한다."""
     return Settings()
-
