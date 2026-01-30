@@ -1,6 +1,12 @@
 name: Deploy relay to Azure Container Apps (dev)
 
 on:
+  push:
+    branches:
+      - dev
+    paths:
+      - relay/**
+      - infra/Dockerfile.relay
   workflow_dispatch:
 
 jobs:
