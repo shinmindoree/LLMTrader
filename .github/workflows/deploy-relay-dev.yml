@@ -1,14 +1,6 @@
 name: Deploy relay to Azure Container Apps (dev)
 
 on:
-  push:
-    branches: [ dev ]
-    paths:
-      - relay/**
-      - infra/Dockerfile.relay
-      - pyproject.toml
-      - uv.lock
-      - .github/workflows/deploy-relay-dev.yml
   workflow_dispatch:
 
 jobs:
