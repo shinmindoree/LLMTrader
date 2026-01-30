@@ -1,0 +1,42 @@
+name: Deploy relay to Azure Container Apps (dev)
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - relay/**
+      - infra/Dockerfile.relay
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/deploy-relay-dev.yml
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.RELAY_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.RELAY_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.RELAY_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          dockerfilePath: infra/Dockerfile.relay
+          registryUrl: llmautotraderacr.azurecr.io
+          registryUsername: ${{ secrets.RELAY_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.RELAY_REGISTRY_PASSWORD }}
+          containerAppName: llmautotrader-relay
+          resourceGroup: llmautotrader
+          imageToBuild: llmautotraderacr.azurecr.io/relay:${{ github.sha }}

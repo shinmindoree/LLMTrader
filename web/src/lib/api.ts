@@ -1,4 +1,13 @@
-import type { Job, JobEvent, JobType, Order, StopAllResponse, StrategyInfo, Trade } from "@/lib/types";
+import type {
+  Job,
+  JobEvent,
+  JobType,
+  Order,
+  StopAllResponse,
+  StrategyGenerationResponse,
+  StrategyInfo,
+  Trade,
+} from "@/lib/types";
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -15,6 +24,19 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function listStrategies(): Promise<StrategyInfo[]> {
   return json<StrategyInfo[]>("/api/backend/api/strategies");
+}
+
+export async function generateStrategy(
+  userPrompt: string,
+  strategyName?: string,
+): Promise<StrategyGenerationResponse> {
+  return json<StrategyGenerationResponse>("/api/backend/api/strategies/generate", {
+    method: "POST",
+    body: JSON.stringify({
+      user_prompt: userPrompt,
+      strategy_name: strategyName?.trim() ? strategyName.trim() : undefined,
+    }),
+  });
 }
 
 export async function listJobs(options?: { type?: JobType; limit?: number }): Promise<Job[]> {

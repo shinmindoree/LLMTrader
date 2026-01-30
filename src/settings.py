@@ -30,6 +30,7 @@ class RelayServerSettings(BaseSettings):
     """LLM 중계(프록시) 서버 설정."""
 
     url: str = Field(default="", alias="RELAY_SERVER_URL")
+    api_key: str = Field(default="", alias="RELAY_API_KEY")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

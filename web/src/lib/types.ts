@@ -10,6 +10,12 @@ export type JobStatus =
 
 export type StrategyInfo = { name: string; path: string };
 
+export type StrategyGenerationResponse = {
+  code: string;
+  model_used: string | null;
+  path: string;
+};
+
 export type Job = {
   job_id: string;
   type: JobType;

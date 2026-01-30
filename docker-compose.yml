@@ -60,7 +60,7 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
       STRATEGY_DIRS: ${STRATEGY_DIRS:-scripts/strategies}
     volumes:
-      - ./scripts/strategies:/app/scripts/strategies:ro
+      - ./scripts/strategies:/app/scripts/strategies:rw
     ports:
       - "${API_PORT_HOST:-8000}:8000"
     depends_on:

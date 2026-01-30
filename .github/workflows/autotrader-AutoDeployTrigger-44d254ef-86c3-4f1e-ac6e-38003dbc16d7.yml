@@ -1,23 +1,28 @@
-name: Trigger auto deployment for autotrader and relay
+name: Trigger auto deployment for autotrader
 
+# When this action will be executed
 on:
+  # Automatically trigger it when detected changes in repo
   push:
-    branches: [dev]
-    paths:
-      - "**"
-      - ".github/workflows/autotrader-AutoDeployTrigger-44d254ef-86c3-4f1e-ac6e-38003dbc16d7.yml"
-  workflow_dispatch:
+    branches: 
+      [ dev ]
+    paths-ignore:
+    - relay/**
+    - infra/Dockerfile.relay
+
+  # Allow manual trigger 
+  workflow_dispatch:      
 
 jobs:
-  deploy-autotrader:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
+    permissions: 
+      id-token: write #This is required for requesting the OIDC JWT Token
+      contents: read #Required when GH token is used to authenticate with private repo
 
     steps:
       - name: Checkout to the branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
 
       - name: Azure Login
         uses: azure/login@v2
@@ -26,43 +31,18 @@ jobs:
           tenant-id: ${{ secrets.AUTOTRADER_AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AUTOTRADER_AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push autotrader image
+      - name: Build and push container image to registry
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
-          dockerfilePath: ./Dockerfile
+          _dockerfilePathKey_: _dockerfilePath_
+          _targetLabelKey_: _targetLabel_
           registryUrl: autotraderbinance.azurecr.io
           registryUsername: ${{ secrets.AUTOTRADER_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.AUTOTRADER_REGISTRY_PASSWORD }}
           containerAppName: autotrader
           resourceGroup: autotrader
           imageToBuild: autotraderbinance.azurecr.io/autotrader:${{ github.sha }}
+          _buildArgumentsKey_: |
+            _buildArgumentsValues_
 
-  deploy-relay:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Checkout to the branch
-        uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AUTOTRADER_AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AUTOTRADER_AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AUTOTRADER_AZURE_SUBSCRIPTION_ID }}
-
-      - name: Build and push relay image
-        uses: azure/container-apps-deploy-action@v2
-        with:
-          appSourcePath: ${{ github.workspace }}
-          dockerfilePath: ./infra/Dockerfile.relay
-          registryUrl: llmautotraderacr.azurecr.io
-          registryUsername: ${{ secrets.LLMAUTOTRADER_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.LLMAUTOTRADER_REGISTRY_PASSWORD }}
-          containerAppName: llmautotrader-relay
-          resourceGroup: llmautotrader
-          imageToBuild: llmautotraderacr.azurecr.io/llmautotrader-relay:${{ github.sha }}

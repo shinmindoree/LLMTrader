@@ -35,6 +35,9 @@ class LLMClient:
                 raise ValueError(
                     "RELAY_SERVER_URL 환경 변수가 설정되지 않았습니다. .env 파일에 RELAY_SERVER_URL을 설정해주세요."
                 )
+            self.api_key = settings.relay_server.api_key
+        else:
+            self.api_key = ""
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = 3
@@ -72,9 +75,14 @@ class LLMClient:
         for attempt in range(self.max_retries):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    headers = {}
+                    if self.api_key:
+                        headers["X-API-Key"] = self.api_key
+                        headers["Authorization"] = f"Bearer {self.api_key}"
                     response = await client.post(
                         f"{self.base_url}/generate",
                         json={"user_prompt": user_prompt.strip()},
+                        headers=headers,
                     )
                     response.raise_for_status()
 

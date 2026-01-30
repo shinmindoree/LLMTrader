@@ -14,6 +14,17 @@ class StrategyInfo(BaseModel):
     path: str
 
 
+class StrategyGenerateRequest(BaseModel):
+    user_prompt: str
+    strategy_name: str | None = None
+
+
+class StrategyGenerateResponse(BaseModel):
+    path: str
+    code: str
+    model_used: str | None = None
+
+
 class JobCreateRequest(BaseModel):
     type: JobType
     strategy_path: str

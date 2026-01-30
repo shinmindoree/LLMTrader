@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import re
+import subprocess
+import sys
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +33,7 @@ from control.repo import (
     stop_all_jobs,
 )
 from settings import get_settings
+from llm.client import LLMClient
 
 from api.deps import require_admin
 from api.schemas import (
@@ -39,6 +45,8 @@ from api.schemas import (
     StopResponse,
     StopAllResponse,
     StrategyInfo,
+    StrategyGenerateRequest,
+    StrategyGenerateResponse,
     TradeResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
@@ -80,6 +88,111 @@ def _strategy_dirs() -> list[Path]:
     parts = [p.strip() for p in (settings.strategy_dirs or ".").split(",") if p.strip()]
     root = _repo_root()
     return [(root / p).resolve() for p in parts]
+
+
+def _sanitize_strategy_filename(raw_name: str | None) -> str:
+    raw = (raw_name or "").strip()
+    if raw.endswith(".py"):
+        raw = raw[:-3]
+    raw = raw.replace("/", "_").replace("\\", "_")
+    base = re.sub(r"[^A-Za-z0-9_]+", "_", raw).strip("_")
+    if not base:
+        base = f"generated_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    if not base.endswith("_strategy"):
+        base = f"{base}_strategy"
+    if base == "generated_strategy":
+        base = f"generated_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_strategy"
+    return f"{base}.py"
+
+
+def _unique_strategy_path(base_dir: Path, filename: str) -> Path:
+    stem = filename[:-3] if filename.endswith(".py") else filename
+    if not stem.endswith("_strategy"):
+        stem = f"{stem}_strategy"
+    candidate = base_dir / f"{stem}.py"
+    if not candidate.exists():
+        return candidate
+    base = stem[: -len("_strategy")]
+    for idx in range(2, 1000):
+        alt = base_dir / f"{base}_{idx}_strategy.py"
+        if not alt.exists():
+            return alt
+    raise HTTPException(status_code=409, detail="Could not allocate a unique strategy filename")
+
+
+def _strip_code_fences(content: str) -> str:
+    text = content.strip()
+    if "```" not in text:
+        return _strip_first_line_lang_tag(text)
+    parts = text.split("```")
+    if len(parts) >= 3:
+        return _strip_first_line_lang_tag(parts[1].strip())
+    return _strip_first_line_lang_tag(text)
+
+
+def _strip_first_line_lang_tag(content: str) -> str:
+    lines = content.splitlines()
+    if not lines:
+        return content
+    first = lines[0].strip().lower()
+    if first in ("python", "py", "python3"):
+        return "\n".join(lines[1:]).lstrip("\n")
+    return content
+
+
+def _verify_strategy_load(strategy_path: Path, repo_root: Path) -> None:
+    src_path = repo_root / "src"
+    if str(src_path) not in sys.path:
+        sys.path.insert(0, str(src_path))
+    module_name = f"strategy_verify_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, strategy_path)
+    if not spec or not spec.loader:
+        raise ValueError(f"Failed to load strategy file: {strategy_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    strategy_class = None
+    for name in dir(module):
+        obj = getattr(module, name)
+        if (
+            isinstance(obj, type)
+            and name.endswith("Strategy")
+            and name != "Strategy"
+        ):
+            strategy_class = obj
+            break
+    if strategy_class is None:
+        raise ValueError(f"No *Strategy class found in {strategy_path}")
+    strategy_class()
+
+
+def _verify_strategy_backtest(strategy_path: Path, repo_root: Path) -> None:
+    rel = strategy_path.relative_to(repo_root)
+    cmd = [
+        "uv",
+        "run",
+        "python",
+        "scripts/run_backtest.py",
+        str(rel),
+        "--symbol",
+        "BTCUSDT",
+        "--candle-interval",
+        "1h",
+        "--start-date",
+        "2024-06-01",
+        "--end-date",
+        "2024-06-03",
+    ]
+    result = subprocess.run(
+        cmd,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr or result.stdout or ""
+        raise ValueError(f"Backtest failed: {stderr[:2000]}")
 
 
 def create_app() -> FastAPI:
@@ -125,6 +238,62 @@ def create_app() -> FastAPI:
         for p in files:
             out.append(StrategyInfo(name=p.name, path=str(p.relative_to(root))))
         return out
+
+    @app.post(
+        "/api/strategies/generate",
+        response_model=StrategyGenerateResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def generate_strategy(body: StrategyGenerateRequest) -> StrategyGenerateResponse:
+        prompt = (body.user_prompt or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
+
+        dirs = _strategy_dirs()
+        if not dirs:
+            raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
+
+        base_dir = dirs[0]
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to prepare strategy dir: {exc}") from exc
+
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        result = await client.generate_strategy(prompt)
+        if not result.success or not result.code:
+            raise HTTPException(status_code=502, detail=result.error or "LLM generation failed")
+
+        code = _strip_code_fences(result.code)
+        filename = _sanitize_strategy_filename(body.strategy_name)
+        final_target = _unique_strategy_path(base_dir, filename)
+        repo_root = _repo_root()
+        temp_path = base_dir / f"_verify_{uuid.uuid4().hex}_strategy.py"
+
+        try:
+            temp_path.write_text(code, encoding="utf-8")
+            _verify_strategy_load(temp_path, repo_root)
+            _verify_strategy_backtest(temp_path, repo_root)
+        except ValueError as exc:
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
+
+        try:
+            final_target.write_text(code, encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Failed to write strategy file: {exc}") from exc
+        temp_path.unlink(missing_ok=True)
+
+        relative_path = str(final_target.relative_to(repo_root))
+        return StrategyGenerateResponse(path=relative_path, code=code, model_used=result.model_used)
 
     @app.post("/api/jobs", response_model=JobResponse, dependencies=[Depends(require_admin)])
     async def create_job_api(
