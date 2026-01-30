@@ -8,7 +8,7 @@ _SKILL_PATH = _REPO_ROOT / ".cursor" / "skills" / "indicator-strategy" / "SKILL.
 
 STRATEGY_SYSTEM_PROMPT_FALLBACK = """You generate a single Python file for a trading strategy. The file must be loadable by a runner that discovers a class whose name ends with "Strategy".
 
-Rules:
+Rules::
 - Output ONLY the contents of one new file: scripts/strategies/{name}_strategy.py (file path is logical; emit only the code, no markdown code fences).
 - File name: snake_case, suffix _strategy.py. Class name: PascalCase ending with "Strategy" (e.g. RsiOversoldBounceLongStrategy).
 - Imports: from strategy.base import Strategy; from strategy.context import StrategyContext.
