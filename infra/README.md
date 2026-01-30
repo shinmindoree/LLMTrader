@@ -51,3 +51,9 @@ You'll also typically set:
 ```bash
 docker compose down
 ```
+
+## Relay (LLM proxy) on Azure Container Apps
+
+LLM 전략 생성 프록시: Docker 빌드, 환경 변수, Container Apps 배포 절차는 [docs/relay-container-apps.md](docs/relay-container-apps.md) 참고.
+
+**맥북 + Portal 배포 (az login 불가 환경)**: [docs/relay-azure-portal-deploy-guide.md](docs/relay-azure-portal-deploy-guide.md) 에 단계별 가이드 정리.

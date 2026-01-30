@@ -26,6 +26,14 @@ class SlackSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+class RelayServerSettings(BaseSettings):
+    """LLM 중계(프록시) 서버 설정."""
+
+    url: str = Field(default="", alias="RELAY_SERVER_URL")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
 class Settings(BaseSettings):
     """애플리케이션 전역 설정."""
 
@@ -39,6 +47,7 @@ class Settings(BaseSettings):
     runner_poll_interval_ms: int = Field(default=500, alias="RUNNER_POLL_INTERVAL_MS")
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
+    relay_server: RelayServerSettings = Field(default_factory=RelayServerSettings)
 
     model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
 
