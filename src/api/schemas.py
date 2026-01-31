@@ -14,15 +14,32 @@ class StrategyInfo(BaseModel):
     path: str
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
 class StrategyGenerateRequest(BaseModel):
     user_prompt: str
     strategy_name: str | None = None
+    messages: list[ChatMessage] | None = None
 
 
 class StrategyGenerateResponse(BaseModel):
-    path: str
+    path: str | None = None
     code: str
     model_used: str | None = None
+    summary: str | None = None
+    backtest_ok: bool = False
+
+
+class StrategySaveRequest(BaseModel):
+    code: str
+    strategy_name: str | None = None
+
+
+class StrategySaveResponse(BaseModel):
+    path: str
 
 
 class JobCreateRequest(BaseModel):

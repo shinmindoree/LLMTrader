@@ -10,6 +10,7 @@ import { jobDetailPath } from "@/lib/routes";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobEventsConsole } from "@/app/jobs/[jobId]/JobEventsConsole";
+import { TradeAnalysis } from "@/components/TradeAnalysis";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -24,12 +25,6 @@ function formatDateTime(value: string | null): string {
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return value;
   return dt.toLocaleString();
-}
-
-function formatPnl(pnl: number | null): string {
-  if (pnl === null) return "-";
-  const formatted = pnl.toFixed(2);
-  return pnl >= 0 ? `+${formatted}` : formatted;
 }
 
 export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
@@ -168,6 +163,8 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
         </details>
       ) : null}
 
+      {job ? <TradeAnalysis job={job} liveTrades={trades} /> : null}
+
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         {validJobId && jobId ? <JobEventsConsole jobId={jobId} /> : null}
         <div className="space-y-4">
@@ -201,45 +198,6 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
                         </td>
                         <td className="px-4 py-2 text-[#d1d4dc]">{o.order_type}</td>
                         <td className="px-4 py-2 text-[#868993]">{o.status}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-          <div className="rounded border border-[#2a2e39] bg-[#1e222d]">
-            <div className="border-b border-[#2a2e39] bg-[#131722] px-4 py-2 text-xs font-medium text-[#d1d4dc]">
-              Trades ({trades.length})
-            </div>
-            <div className="max-h-[300px] overflow-auto">
-              {trades.length === 0 ? (
-                <div className="px-4 py-8 text-center text-xs text-[#868993]">No trades</div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-[#131722]">
-                    <tr className="border-b border-[#2a2e39]">
-                      <th className="px-4 py-2 text-left text-[#868993]">Symbol</th>
-                      <th className="px-4 py-2 text-left text-[#868993]">Qty</th>
-                      <th className="px-4 py-2 text-left text-[#868993]">Price</th>
-                      <th className="px-4 py-2 text-left text-[#868993]">PnL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.map((t) => (
-                      <tr key={t.trade_id} className="border-b border-[#2a2e39]">
-                        <td className="px-4 py-2 text-[#d1d4dc]">{t.symbol}</td>
-                        <td className="px-4 py-2 text-[#d1d4dc]">{t.quantity?.toFixed(4) ?? "-"}</td>
-                        <td className="px-4 py-2 text-[#d1d4dc]">
-                          {t.price?.toFixed(2) ?? "-"}
-                        </td>
-                        <td
-                          className={`px-4 py-2 font-medium ${
-                            (t.realized_pnl ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
-                          }`}
-                        >
-                          {formatPnl(t.realized_pnl)}
-                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -1,7 +1,10 @@
 """LLM 클라이언트 - 중계 서버와의 통신 인터페이스."""
 
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -57,20 +60,29 @@ class LLMClient:
         except Exception:
             return False
 
-    async def generate_strategy(self, user_prompt: str) -> StrategyGenerationResult:
+    async def generate_strategy(
+        self,
+        user_prompt: str,
+        messages: list[dict[str, str]] | None = None,
+    ) -> StrategyGenerationResult:
         """전략 코드 생성 요청.
 
         Args:
-            user_prompt: 사용자의 자연어 전략 설명
+            user_prompt: 사용자의 자연어 전략 설명 (단일 턴 시 사용)
+            messages: 멀티턴 대화 목록 [{"role": "user"|"assistant", "content": "..."}]
 
         Returns:
             StrategyGenerationResult
         """
-        if not user_prompt or not user_prompt.strip():
+        if not messages and (not user_prompt or not user_prompt.strip()):
             return StrategyGenerationResult(
                 success=False,
                 error="user_prompt가 비어있습니다.",
             )
+
+        payload: dict[str, Any] = {"user_prompt": (user_prompt or "").strip()}
+        if messages:
+            payload["messages"] = messages
 
         for attempt in range(self.max_retries):
             try:
@@ -81,7 +93,7 @@ class LLMClient:
                         headers["Authorization"] = f"Bearer {self.api_key}"
                     response = await client.post(
                         f"{self.base_url}/generate",
-                        json={"user_prompt": user_prompt.strip()},
+                        json=payload,
                         headers=headers,
                     )
                     response.raise_for_status()
@@ -164,3 +176,65 @@ class LLMClient:
             success=False,
             error="최대 재시도 횟수 초과",
         )
+
+    async def summarize_strategy(self, code: str) -> str | None:
+        """전략 코드 요약 요청.
+
+        Args:
+            code: 전략 Python 코드
+
+        Returns:
+            요약 문자열 또는 실패 시 None
+        """
+        if not code or not code.strip():
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                headers = {}
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                response = await client.post(
+                    f"{self.base_url}/summarize",
+                    json={"code": code.strip()},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("summary") or None
+        except Exception:
+            return None
+
+    async def generate_strategy_stream(
+        self,
+        user_prompt: str,
+        messages: list[dict[str, str]] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """전략 코드 생성 스트리밍. Yields {'token': str} or {'done': True} or {'error': str}."""
+        payload: dict[str, Any] = {"user_prompt": (user_prompt or "").strip()}
+        if messages:
+            payload["messages"] = messages
+        headers = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/generate/stream",
+                    json=payload,
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            try:
+                                data = json.loads(line[6:])
+                                yield data
+                                if data.get("done") or data.get("error"):
+                                    return
+                            except json.JSONDecodeError:
+                                pass
+        except Exception as e:
+            yield {"error": str(e)}

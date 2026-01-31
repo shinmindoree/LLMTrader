@@ -13,8 +13,12 @@ export type StrategyInfo = { name: string; path: string };
 export type StrategyGenerationResponse = {
   code: string;
   model_used: string | null;
-  path: string;
+  path: string | null;
+  summary: string | null;
+  backtest_ok: boolean;
 };
+
+export type StrategySaveResponse = { path: string };
 
 export type Job = {
   job_id: string;

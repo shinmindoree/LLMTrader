@@ -6,6 +6,7 @@ import type {
   StopAllResponse,
   StrategyGenerationResponse,
   StrategyInfo,
+  StrategySaveResponse,
   Trade,
 } from "@/lib/types";
 
@@ -29,14 +30,114 @@ export async function listStrategies(): Promise<StrategyInfo[]> {
 export async function generateStrategy(
   userPrompt: string,
   strategyName?: string,
+  messages?: { role: string; content: string }[],
 ): Promise<StrategyGenerationResponse> {
+  const body: Record<string, unknown> = {
+    user_prompt: userPrompt,
+    strategy_name: strategyName?.trim() ? strategyName.trim() : undefined,
+  };
+  if (messages && messages.length > 0) {
+    body.messages = messages;
+  }
   return json<StrategyGenerationResponse>("/api/backend/api/strategies/generate", {
     method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function saveStrategy(
+  code: string,
+  strategyName?: string,
+): Promise<StrategySaveResponse> {
+  return json<StrategySaveResponse>("/api/backend/api/strategies/save", {
+    method: "POST",
     body: JSON.stringify({
-      user_prompt: userPrompt,
+      code,
       strategy_name: strategyName?.trim() ? strategyName.trim() : undefined,
     }),
   });
+}
+
+export type GenerateStreamCallbacks = {
+  onToken: (token: string) => void;
+  onDone: (payload: {
+    code?: string;
+    summary?: string | null;
+    backtest_ok?: boolean;
+    error?: string;
+  }) => void;
+};
+
+export async function generateStrategyStream(
+  userPrompt: string,
+  callbacks: GenerateStreamCallbacks,
+  strategyName?: string,
+  messages?: { role: string; content: string }[],
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    user_prompt: userPrompt,
+    strategy_name: strategyName?.trim() ? strategyName.trim() : undefined,
+  };
+  if (messages && messages.length > 0) {
+    body.messages = messages;
+  }
+  const res = await fetch("/api/backend/api/strategies/generate/stream", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    callbacks.onDone({ error: `${res.status} ${res.statusText}: ${text}` });
+    return;
+  }
+  const reader = res.body?.getReader();
+  if (!reader) {
+    callbacks.onDone({ error: "No response body" });
+    return;
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
+          if (typeof data.token === "string") {
+            callbacks.onToken(data.token);
+          }
+          if (data.done === true) {
+            callbacks.onDone({
+              code: typeof data.code === "string" ? data.code : undefined,
+              summary:
+                data.summary !== undefined && data.summary !== null
+                  ? String(data.summary)
+                  : null,
+              backtest_ok: data.backtest_ok === true,
+              error: typeof data.error === "string" ? data.error : undefined,
+            });
+            return;
+          }
+          if (typeof data.error === "string") {
+            callbacks.onDone({ error: data.error });
+            return;
+          }
+        } catch {
+          // skip malformed line
+        }
+      }
+    }
+    callbacks.onDone({ error: "Stream ended without done" });
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export async function listJobs(options?: { type?: JobType; limit?: number }): Promise<Job[]> {

@@ -47,6 +47,8 @@ from api.schemas import (
     StrategyInfo,
     StrategyGenerateRequest,
     StrategyGenerateResponse,
+    StrategySaveRequest,
+    StrategySaveResponse,
     TradeResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
@@ -246,7 +248,8 @@ def create_app() -> FastAPI:
     )
     async def generate_strategy(body: StrategyGenerateRequest) -> StrategyGenerateResponse:
         prompt = (body.user_prompt or "").strip()
-        if not prompt:
+        messages = body.messages
+        if not messages and not prompt:
             raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
 
         dirs = _strategy_dirs()
@@ -264,11 +267,125 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        result = await client.generate_strategy(prompt)
+        if messages:
+            openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+            result = await client.generate_strategy("", messages=openai_messages)
+        else:
+            result = await client.generate_strategy(prompt)
         if not result.success or not result.code:
             raise HTTPException(status_code=502, detail=result.error or "LLM generation failed")
 
         code = _strip_code_fences(result.code)
+        repo_root = _repo_root()
+        temp_path = base_dir / f"_verify_{uuid.uuid4().hex}_strategy.py"
+
+        try:
+            temp_path.write_text(code, encoding="utf-8")
+            _verify_strategy_load(temp_path, repo_root)
+            _verify_strategy_backtest(temp_path, repo_root)
+        except ValueError as exc:
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001
+            temp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
+
+        temp_path.unlink(missing_ok=True)
+        summary = await client.summarize_strategy(code)
+        return StrategyGenerateResponse(
+            path=None,
+            code=code,
+            model_used=result.model_used,
+            summary=summary,
+            backtest_ok=True,
+        )
+
+    async def _generate_stream_events(body: StrategyGenerateRequest):
+        prompt = (body.user_prompt or "").strip()
+        messages = body.messages
+        if not messages and not prompt:
+            yield f"data: {json.dumps({'error': 'user_prompt must be non-empty'})}\n\n"
+            return
+        dirs = _strategy_dirs()
+        if not dirs:
+            yield f"data: {json.dumps({'error': 'STRATEGY_DIRS is not configured'})}\n\n"
+            return
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            return
+        base_dir = dirs[0]
+        repo_root = _repo_root()
+        code_acc: list[str] = []
+        try:
+            if messages:
+                openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+                stream = client.generate_strategy_stream("", messages=openai_messages)
+            else:
+                stream = client.generate_strategy_stream(prompt)
+            async for event in stream:
+                if "error" in event:
+                    yield f"data: {json.dumps(event)}\n\n"
+                    return
+                if "token" in event:
+                    code_acc.append(event["token"])
+                    yield f"data: {json.dumps({'token': event['token']})}\n\n"
+                if event.get("done"):
+                    break
+        except Exception as exc:  # noqa: BLE001
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            return
+        code = _strip_code_fences("".join(code_acc))
+        if not code:
+            yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
+            return
+        temp_path = base_dir / f"_verify_{uuid.uuid4().hex}_strategy.py"
+        try:
+            temp_path.write_text(code, encoding="utf-8")
+            _verify_strategy_load(temp_path, repo_root)
+            _verify_strategy_backtest(temp_path, repo_root)
+        except ValueError as exc:
+            temp_path.unlink(missing_ok=True)
+            yield f"data: {json.dumps({'done': True, 'error': str(exc), 'code': code})}\n\n"
+            return
+        except Exception as exc:  # noqa: BLE001
+            temp_path.unlink(missing_ok=True)
+            yield f"data: {json.dumps({'done': True, 'error': str(exc), 'code': code})}\n\n"
+            return
+        temp_path.unlink(missing_ok=True)
+        summary = await client.summarize_strategy(code)
+        yield f"data: {json.dumps({'done': True, 'code': code, 'summary': summary, 'backtest_ok': True})}\n\n"
+
+    @app.post("/api/strategies/generate/stream")
+    async def generate_strategy_stream_endpoint(body: StrategyGenerateRequest):
+        return StreamingResponse(
+            _generate_stream_events(body),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post(
+        "/api/strategies/save",
+        response_model=StrategySaveResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def save_strategy(body: StrategySaveRequest) -> StrategySaveResponse:
+        code = (body.code or "").strip()
+        if not code:
+            raise HTTPException(status_code=422, detail="code must be non-empty")
+
+        dirs = _strategy_dirs()
+        if not dirs:
+            raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
+
+        base_dir = dirs[0]
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to prepare strategy dir: {exc}") from exc
+
+        code = _strip_code_fences(code)
         filename = _sanitize_strategy_filename(body.strategy_name)
         final_target = _unique_strategy_path(base_dir, filename)
         repo_root = _repo_root()
@@ -293,7 +410,7 @@ def create_app() -> FastAPI:
         temp_path.unlink(missing_ok=True)
 
         relative_path = str(final_target.relative_to(repo_root))
-        return StrategyGenerateResponse(path=relative_path, code=code, model_used=result.model_used)
+        return StrategySaveResponse(path=relative_path)
 
     @app.post("/api/jobs", response_model=JobResponse, dependencies=[Depends(require_admin)])
     async def create_job_api(

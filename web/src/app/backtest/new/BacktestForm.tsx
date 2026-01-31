@@ -49,6 +49,13 @@ export function BacktestForm({
   const [endDate, setEndDate] = useState(() => formatDateInputValue(now));
   const [error, setError] = useState<string | null>(null);
 
+  const openDatePicker = (event: React.FocusEvent<HTMLInputElement> | React.MouseEvent<HTMLInputElement>) => {
+    const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+    }
+  };
+
   const onSubmit = async () => {
     setError(null);
     try {
@@ -139,6 +146,8 @@ export function BacktestForm({
             type="date"
             value={startDate}
             max={endDate}
+            onFocus={openDatePicker}
+            onClick={openDatePicker}
             onChange={(e) => setStartDate(e.target.value)}
           />
         </label>
@@ -150,6 +159,8 @@ export function BacktestForm({
             value={endDate}
             min={startDate}
             max={formatDateInputValue(new Date())}
+            onFocus={openDatePicker}
+            onClick={openDatePicker}
             onChange={(e) => setEndDate(e.target.value)}
           />
         </label>
