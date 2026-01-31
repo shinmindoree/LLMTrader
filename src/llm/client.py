@@ -205,6 +205,36 @@ class LLMClient:
         except Exception:
             return None
 
+    async def strategy_chat(
+        self,
+        code: str,
+        summary: str | None,
+        messages: list[dict[str, str]],
+    ) -> str | None:
+        """전략에 대한 질문/설명 요청. 코드 생성 없이 텍스트만 반환."""
+        if not code or not code.strip() or not messages:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                headers = {}
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                response = await client.post(
+                    f"{self.base_url}/strategy/chat",
+                    json={
+                        "code": code.strip(),
+                        "summary": summary,
+                        "messages": messages,
+                    },
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("content") or None
+        except Exception:
+            return None
+
     async def generate_strategy_stream(
         self,
         user_prompt: str,

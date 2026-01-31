@@ -51,6 +51,8 @@ from api.schemas import (
     StrategyInfo,
     StrategyGenerateRequest,
     StrategyGenerateResponse,
+    StrategyChatRequest,
+    StrategyChatResponse,
     StrategySaveRequest,
     StrategySaveResponse,
     TradeResponse,
@@ -368,6 +370,27 @@ def create_app() -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post(
+        "/api/strategies/chat",
+        response_model=StrategyChatResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def strategy_chat(body: StrategyChatRequest) -> StrategyChatResponse:
+        code = (body.code or "").strip()
+        if not code:
+            raise HTTPException(status_code=422, detail="code must be non-empty")
+        if not body.messages:
+            raise HTTPException(status_code=422, detail="messages must be non-empty")
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        openai_messages = [{"role": m.role, "content": m.content} for m in body.messages]
+        content = await client.strategy_chat(code, body.summary, openai_messages)
+        if content is None:
+            raise HTTPException(status_code=502, detail="Strategy chat failed")
+        return StrategyChatResponse(content=content)
 
     @app.post(
         "/api/strategies/save",

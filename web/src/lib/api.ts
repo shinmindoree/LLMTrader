@@ -60,6 +60,21 @@ export async function saveStrategy(
   });
 }
 
+export async function strategyChat(
+  code: string,
+  summary: string | null,
+  messages: { role: string; content: string }[],
+): Promise<{ content: string }> {
+  return json<{ content: string }>("/api/backend/api/strategies/chat", {
+    method: "POST",
+    body: JSON.stringify({
+      code,
+      summary: summary ?? undefined,
+      messages,
+    }),
+  });
+}
+
 export type GenerateStreamCallbacks = {
   onToken: (token: string) => void;
   onDone: (payload: {

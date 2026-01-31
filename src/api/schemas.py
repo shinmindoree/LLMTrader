@@ -42,6 +42,16 @@ class StrategySaveResponse(BaseModel):
     path: str
 
 
+class StrategyChatRequest(BaseModel):
+    code: str
+    summary: str | None = None
+    messages: list[ChatMessage]
+
+
+class StrategyChatResponse(BaseModel):
+    content: str
+
+
 class JobCreateRequest(BaseModel):
     type: JobType
     strategy_path: str

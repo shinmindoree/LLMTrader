@@ -2,8 +2,33 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { generateStrategyStream, listStrategies, saveStrategy } from "@/lib/api";
+import {
+  generateStrategyStream,
+  listStrategies,
+  saveStrategy,
+  strategyChat,
+} from "@/lib/api";
 import type { StrategyInfo } from "@/lib/types";
+
+const MODIFY_KEYWORDS =
+  /수정|바꿔|변경|추가해|제거|고쳐|change|modify|update|add|remove|바꿔줘|수정해줘|변경해줘|다시\s*만들|재생성|regenerate/i;
+
+function isModifyIntent(text: string): boolean {
+  return MODIFY_KEYWORDS.test(text.trim());
+}
+
+function getLastCodeAndSummary(messages: ChatMessage[]): {
+  code: string;
+  summary: string | null;
+} | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && m.content && !m.textOnly) {
+      return { code: m.content, summary: m.summary ?? null };
+    }
+  }
+  return null;
+}
 
 type ChatMessage = {
   id: string;
@@ -13,6 +38,7 @@ type ChatMessage = {
   path?: string | null;
   summary?: string | null;
   backtest_ok?: boolean;
+  textOnly?: boolean;
 };
 
 const createId = () =>
@@ -69,25 +95,22 @@ export default function StrategiesPage() {
     const nextMessages = [...chatMessages, userMessage];
     setChatMessages(nextMessages);
 
-    const useMultiturn = nextMessages.length > 1;
-    const messagesToSend = useMultiturn
-      ? nextMessages.map((m) => ({ role: m.role, content: m.content }))
-      : undefined;
+    const lastCodeSummary = getLastCodeAndSummary(nextMessages);
+    const isFirstTurn = !lastCodeSummary;
+    const isModify = lastCodeSummary && isModifyIntent(trimmed);
 
-    const assistantId = createId();
-    const assistantMessage: ChatMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      model: null,
-      path: null,
-      summary: null,
-      backtest_ok: false,
-    };
-    setChatMessages((prev) => [...prev, assistantMessage]);
-
-    try {
-      await generateStrategyStream(
+    const doGenerate = () => {
+      const useMultiturn = nextMessages.length > 1;
+      const messagesToSend = useMultiturn
+        ? nextMessages.map((m) => ({
+            role: m.role,
+            content:
+              m.role === "assistant" && (m.summary != null || m.textOnly)
+                ? (m.summary ?? m.content)
+                : m.content,
+          }))
+        : undefined;
+      return generateStrategyStream(
         trimmed,
         {
           onToken(token) {
@@ -127,9 +150,58 @@ export default function StrategiesPage() {
         undefined,
         messagesToSend,
       );
+    };
+
+    const assistantId = createId();
+    const assistantMessage: ChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      model: null,
+      path: null,
+      summary: null,
+      backtest_ok: false,
+      textOnly: false,
+    };
+
+    if (isFirstTurn || isModify) {
+      setChatMessages((prev) => [...prev, assistantMessage]);
+      try {
+        await doGenerate();
+      } catch (e) {
+        setChatError(String(e));
+        setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        setIsSending(false);
+      }
+      return;
+    }
+
+    setChatMessages((prev) => [...prev, { ...assistantMessage, textOnly: true }]);
+    try {
+      const chatMessagesForApi = nextMessages.map((m) => ({
+        role: m.role,
+        content:
+          m.role === "assistant" && (m.summary != null || m.textOnly)
+            ? (m.summary ?? m.content)
+            : m.content,
+      }));
+      const res = await strategyChat(
+        lastCodeSummary.code,
+        lastCodeSummary.summary,
+        chatMessagesForApi,
+      );
+      setChatMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+        return [
+          ...prev.slice(0, -1),
+          { ...last, content: res.content, textOnly: true },
+        ];
+      });
     } catch (e) {
       setChatError(String(e));
       setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
+    } finally {
       setIsSending(false);
     }
   };
@@ -258,43 +330,49 @@ export default function StrategiesPage() {
                     ) : null}
                   </div>
                   {message.role === "assistant" ? (
-                    <>
-                      {message.summary ? (
-                        <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
-                          {message.summary}
-                        </p>
-                      ) : null}
-                      <details className="mt-2">
-                        <summary className="cursor-pointer text-xs text-[#868993]">
-                          Code
-                        </summary>
-                        <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-[#d1d4dc]">
-                          {message.content}
-                        </pre>
-                      </details>
-                      {message.backtest_ok ? (
-                        <p className="mt-2 text-xs text-[#26a69a]">
-                          Backtest passed. Strategy runs correctly.
-                        </p>
-                      ) : null}
-                      {message.content &&
-                      !message.path &&
-                      chatMessages.filter((m) => m.role === "assistant").pop()?.id ===
-                        message.id ? (
-                        <button
-                          type="button"
-                          className="mt-2 rounded border border-[#2962ff] px-3 py-1 text-xs text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
-                          onClick={() => void handleSaveClick(message.id, message.content)}
-                          disabled={savingId !== null}
-                        >
-                          Save strategy
-                        </button>
-                      ) : null}
-                      <div className="mt-2 space-y-1 text-xs text-[#868993]">
-                        {message.path ? <div>Saved: {message.path}</div> : null}
-                        {message.model ? <div>Model: {message.model}</div> : null}
-                      </div>
-                    </>
+                    message.textOnly ? (
+                      <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
+                        {message.content}
+                      </p>
+                    ) : (
+                      <>
+                        {message.summary ? (
+                          <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
+                            {message.summary}
+                          </p>
+                        ) : null}
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs text-[#868993]">
+                            Code
+                          </summary>
+                          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-[#d1d4dc]">
+                            {message.content}
+                          </pre>
+                        </details>
+                        {message.backtest_ok ? (
+                          <p className="mt-2 text-xs text-[#26a69a]">
+                            Backtest passed. Strategy runs correctly.
+                          </p>
+                        ) : null}
+                        {message.content &&
+                        !message.path &&
+                        chatMessages.filter((m) => m.role === "assistant").pop()?.id ===
+                          message.id ? (
+                          <button
+                            type="button"
+                            className="mt-2 rounded border border-[#2962ff] px-3 py-1 text-xs text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
+                            onClick={() => void handleSaveClick(message.id, message.content)}
+                            disabled={savingId !== null}
+                          >
+                            Save strategy
+                          </button>
+                        ) : null}
+                        <div className="mt-2 space-y-1 text-xs text-[#868993]">
+                          {message.path ? <div>Saved: {message.path}</div> : null}
+                          {message.model ? <div>Model: {message.model}</div> : null}
+                        </div>
+                      </>
+                    )
                   ) : (
                     <p className="mt-2 text-sm text-[#d1d4dc]">{message.content}</p>
                   )}
