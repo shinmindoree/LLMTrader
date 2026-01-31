@@ -29,7 +29,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#131722]`}>
         <header className="sticky top-0 z-50 h-14 border-b border-[#2a2e39] bg-[#1e222d]/90 backdrop-blur">
-          <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+          <div className="flex h-14 w-full items-center justify-between px-4">
             <Link
               aria-label="Go to home"
               className="flex items-center gap-2 rounded px-2 py-1 hover:bg-[#2a2e39] transition-colors"
@@ -48,7 +48,7 @@ export default function RootLayout({
             </nav>
           </div>
         </header>
-        <div className="mx-auto flex max-w-6xl">
+        <div className="flex w-full">
           <aside className="hidden w-56 shrink-0 border-r border-[#2a2e39] bg-[#131722] md:block">
             <div className="sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto">
               <SidebarNav />

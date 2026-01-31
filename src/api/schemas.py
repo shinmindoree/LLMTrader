@@ -80,6 +80,15 @@ class StopAllResponse(BaseModel):
     stop_requested_running: int
 
 
+class DeleteResponse(BaseModel):
+    ok: bool
+
+
+class DeleteAllResponse(BaseModel):
+    deleted: int
+    skipped_active: int
+
+
 class OrderResponse(BaseModel):
     order_id: int
     symbol: str

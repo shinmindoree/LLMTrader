@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { FocusEvent, MouseEvent } from "react";
 
 import { createJob } from "@/lib/api";
 import type { Job, StrategyInfo } from "@/lib/types";
@@ -49,7 +50,7 @@ export function BacktestForm({
   const [endDate, setEndDate] = useState(() => formatDateInputValue(now));
   const [error, setError] = useState<string | null>(null);
 
-  const openDatePicker = (event: React.FocusEvent<HTMLInputElement> | React.MouseEvent<HTMLInputElement>) => {
+  const openDatePicker = (event: FocusEvent<HTMLInputElement> | MouseEvent<HTMLInputElement>) => {
     const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
     if (typeof input.showPicker === "function") {
       input.showPicker();

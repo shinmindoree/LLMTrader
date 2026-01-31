@@ -28,7 +28,7 @@ export default function JobRedirectPage() {
   }, [jobId, validJobId, router]);
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
+    <main className="w-full px-6 py-10">
       {!validJobId ? (
         <div className="rounded border border-[#2a2e39] bg-[#1e222d] p-4 text-sm text-[#d1d4dc]">
           Invalid job id: <span className="font-mono text-[#868993]">{String(jobId)}</span>

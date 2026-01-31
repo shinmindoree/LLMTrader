@@ -1,4 +1,6 @@
 import type {
+  DeleteAllResponse,
+  DeleteResponse,
   Job,
   JobEvent,
   JobType,
@@ -160,6 +162,15 @@ export async function stopJob(jobId: string): Promise<{ ok: boolean }> {
 export async function stopAllJobs(type?: JobType): Promise<StopAllResponse> {
   const suffix = type ? `?type=${encodeURIComponent(type)}` : "";
   return json<StopAllResponse>(`/api/backend/api/jobs/stop-all${suffix}`, { method: "POST" });
+}
+
+export async function deleteJob(jobId: string): Promise<DeleteResponse> {
+  return json<DeleteResponse>(`/api/backend/api/jobs/${jobId}`, { method: "DELETE" });
+}
+
+export async function deleteAllJobs(type?: JobType): Promise<DeleteAllResponse> {
+  const suffix = type ? `?type=${encodeURIComponent(type)}` : "";
+  return json<DeleteAllResponse>(`/api/backend/api/jobs${suffix}`, { method: "DELETE" });
 }
 
 export async function listEvents(jobId: string, afterEventId = 0): Promise<JobEvent[]> {

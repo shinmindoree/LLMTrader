@@ -11,6 +11,7 @@ import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobEventsConsole } from "@/app/jobs/[jobId]/JobEventsConsole";
 import { TradeAnalysis } from "@/components/TradeAnalysis";
+import { JobProgressGauge } from "@/components/JobProgressGauge";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -69,7 +70,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
   const mismatchedType = Boolean(expectedType && job && job.type !== expectedType);
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
+    <main className="w-full px-6 py-10">
       {error ? (
         <p className="mb-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
           {error}
@@ -133,6 +134,8 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
           Run in progress. Results will appear here once it finishes.
         </div>
       ) : null}
+
+      {job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
       {job && finished && job.result && isRecord(job.result) ? (
         <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">

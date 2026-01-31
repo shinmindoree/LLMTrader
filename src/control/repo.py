@@ -4,12 +4,16 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.enums import EventKind, JobStatus, JobType
 from control.models import Job, JobEvent, Order, Trade
+
+ACTIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.STOP_REQUESTED}
+FINISHED_STATUSES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
+ACTIVE_STATUS_VALUES = {str(s) for s in ACTIVE_STATUSES}
 
 
 async def create_job(
@@ -41,6 +45,37 @@ async def list_jobs(
         stmt = stmt.where(Job.type == job_type)
     result = await session.execute(stmt.order_by(Job.created_at.desc()).limit(limit))
     return list(result.scalars().all())
+
+
+async def delete_job(session: AsyncSession, job_id: uuid.UUID) -> tuple[bool, JobStatus | None]:
+    job = await get_job(session, job_id)
+    if not job:
+        return False, None
+    status_value = str(job.status)
+    if status_value in ACTIVE_STATUS_VALUES:
+        return False, JobStatus(status_value)
+    await session.execute(delete(Job).where(Job.job_id == job_id))
+    return True, JobStatus(status_value)
+
+
+async def delete_jobs(
+    session: AsyncSession,
+    *,
+    job_type: JobType | None = None,
+) -> dict[str, int]:
+    active_stmt = select(func.count()).select_from(Job).where(Job.status.in_(ACTIVE_STATUSES))
+    if job_type is not None:
+        active_stmt = active_stmt.where(Job.type == job_type)
+    active_count = int((await session.execute(active_stmt)).scalar_one() or 0)
+
+    delete_stmt = delete(Job).where(Job.status.in_(FINISHED_STATUSES))
+    if job_type is not None:
+        delete_stmt = delete_stmt.where(Job.type == job_type)
+    res = await session.execute(delete_stmt)
+    return {
+        "deleted": int(res.rowcount or 0),
+        "skipped_active": active_count,
+    }
 
 
 async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner_restart") -> dict[str, int]:

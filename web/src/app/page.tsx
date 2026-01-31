@@ -25,7 +25,7 @@ export default function Home() {
   };
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
+    <main className="w-full px-6 py-10">
       <h1 className="text-2xl font-semibold text-[#d1d4dc]">LLMTrader Dashboard</h1>
       <p className="mt-2 text-sm text-[#868993]">Backtest + Live Trading 운영 콘솔</p>
 

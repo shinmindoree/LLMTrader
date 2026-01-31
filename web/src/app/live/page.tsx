@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { listJobs, listStrategies, stopAllJobs } from "@/lib/api";
-import type { Job, StrategyInfo } from "@/lib/types";
+import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
+import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { jobDetailPath } from "@/lib/routes";
 import { LiveForm } from "./new/LiveForm";
+
+const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
 export default function LiveJobsPage() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
@@ -45,6 +47,56 @@ export default function LiveJobsPage() {
     refresh();
   };
 
+  const onDeleteJob = async (job: Job) => {
+    if (busy) return;
+    if (!FINISHED_STATUSES.has(job.status)) {
+      setError("RUNNING/PENDING/STOP_REQUESTED 상태의 잡은 삭제할 수 없습니다.");
+      return;
+    }
+    const ok = confirm(
+      "이 Live 잡을 삭제할까요?\n\n삭제 시 관련 이벤트/주문/트레이드 기록도 함께 제거됩니다.",
+    );
+    if (!ok) return;
+
+    try {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      await deleteJob(job.job_id);
+      setLatestJob((prev) => (prev?.job_id === job.job_id ? null : prev));
+      setNotice("잡 삭제 완료.");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDeleteAll = async () => {
+    if (busy) return;
+    const ok = confirm(
+      "LIVE 잡 전체를 삭제할까요?\n\n- 완료된 잡(SUCCEEDED/FAILED/STOPPED)만 삭제됩니다.\n- RUNNING/PENDING/STOP_REQUESTED는 삭제되지 않습니다.",
+    );
+    if (!ok) return;
+
+    try {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      const res = await deleteAllJobs("LIVE");
+      setLatestJob((prev) =>
+        prev && FINISHED_STATUSES.has(prev.status) ? null : prev,
+      );
+      setNotice(`삭제 완료: deleted=${res.deleted}, skipped_active=${res.skipped_active}`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onStopAll = async () => {
     if (busy) return;
     const ok = confirm(
@@ -69,7 +121,7 @@ export default function LiveJobsPage() {
   };
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
+    <main className="w-full px-6 py-10">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-[#d1d4dc]">Live</h1>
@@ -85,6 +137,14 @@ export default function LiveJobsPage() {
             type="button"
           >
             Refresh
+          </button>
+          <button
+            className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#2d1f1f] hover:border-[#ef5350] disabled:opacity-60 transition-colors"
+            disabled={busy}
+            onClick={onDeleteAll}
+            type="button"
+          >
+            Delete All
           </button>
           <button
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#2d1f1f] hover:border-[#ef5350] disabled:opacity-60 transition-colors"
@@ -160,7 +220,17 @@ export default function LiveJobsPage() {
                   >
                     {j.strategy_path}
                   </Link>
-                  <JobStatusBadge status={j.status} />
+                  <div className="flex items-center gap-2">
+                    <JobStatusBadge status={j.status} />
+                    <button
+                      className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#d1d4dc] hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50 transition-colors"
+                      disabled={busy || !FINISHED_STATUSES.has(j.status)}
+                      onClick={() => onDeleteJob(j)}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-1 text-xs text-[#868993]">
                   {new Date(j.created_at).toLocaleString()}

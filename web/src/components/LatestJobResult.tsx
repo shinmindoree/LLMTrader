@@ -7,6 +7,7 @@ import { getJob, listJobs } from "@/lib/api";
 import type { Job, JobStatus, JobType } from "@/lib/types";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
+import { JobProgressGauge } from "@/components/JobProgressGauge";
 import { jobDetailPath } from "@/lib/routes";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
@@ -106,6 +107,8 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
             Run in progress. Results will appear here once it finishes.
           </div>
         ) : null}
+
+        {job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
         {job && finished && job.result && isRecord(job.result) ? (
           <JobResultSummary type={job.type} result={job.result} />

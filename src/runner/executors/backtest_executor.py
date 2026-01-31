@@ -87,6 +87,8 @@ async def run_backtest(
         engine = BacktestEngine(strategy=strategy, context=ctx, klines=klines, progress_callback=progress_cb)
         results = await asyncio.to_thread(engine.run)
 
+        sink.emit(kind=EventKind.PROGRESS, message="BACKTEST_PROGRESS", payload={"pct": 100.0})
+
         # Attach trades for UI (summary only; large lists can be paged later)
         results["num_trades"] = len(ctx.trades)
         results["finished_at"] = datetime.now().isoformat()

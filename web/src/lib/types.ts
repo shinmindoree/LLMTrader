@@ -38,6 +38,15 @@ export type StopAllResponse = {
   stop_requested_running: number;
 };
 
+export type DeleteResponse = {
+  ok: boolean;
+};
+
+export type DeleteAllResponse = {
+  deleted: number;
+  skipped_active: number;
+};
+
 export type JobEvent = {
   event_id: number;
   job_id: string;

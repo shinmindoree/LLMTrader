@@ -24,6 +24,8 @@ from control.models import Job
 from control.repo import (
     append_event,
     create_job,
+    delete_job,
+    delete_jobs,
     get_job,
     list_events,
     list_jobs,
@@ -38,6 +40,8 @@ from llm.client import LLMClient
 from api.deps import require_admin
 from api.schemas import (
     HealthResponse,
+    DeleteAllResponse,
+    DeleteResponse,
     JobCreateRequest,
     JobEventResponse,
     JobResponse,
@@ -484,12 +488,34 @@ def create_app() -> FastAPI:
         await session.commit()
         return StopAllResponse(**counts)
 
+    @app.delete("/api/jobs", response_model=DeleteAllResponse, dependencies=[Depends(require_admin)])
+    async def delete_all(
+        job_type: JobType | None = Query(default=None, alias="type"),
+        session: AsyncSession = Depends(_db_session),
+    ) -> DeleteAllResponse:
+        counts = await delete_jobs(session, job_type=job_type)
+        await session.commit()
+        return DeleteAllResponse(**counts)
+
     @app.get("/api/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require_admin)])
     async def job_detail(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> JobResponse:
         job = await get_job(session, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Not found")
         return _job_to_response(job)
+
+    @app.delete("/api/jobs/{job_id}", response_model=DeleteResponse, dependencies=[Depends(require_admin)])
+    async def delete_single_job(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> DeleteResponse:
+        deleted, status = await delete_job(session, job_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        if not deleted:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Cannot delete active job", "status": str(status)},
+            )
+        await session.commit()
+        return DeleteResponse(ok=True)
 
     @app.post("/api/jobs/{job_id}/stop", response_model=StopResponse, dependencies=[Depends(require_admin)])
     async def stop_job(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> StopResponse:

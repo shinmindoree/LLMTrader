@@ -29,10 +29,14 @@ export default function StrategiesPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [strategyName, setStrategyName] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [saveModal, setSaveModal] = useState<{
+    messageId: string;
+    code: string;
+    name: string;
+  } | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -120,7 +124,7 @@ export default function StrategiesPage() {
             setIsSending(false);
           },
         },
-        strategyName,
+        undefined,
         messagesToSend,
       );
     } catch (e) {
@@ -130,18 +134,21 @@ export default function StrategiesPage() {
     }
   };
 
-  const handleSave = async (messageId: string, code: string) => {
-    if (savingId) return;
-    setSavingId(messageId);
+  const handleSaveClick = (messageId: string, code: string) => {
+    setSaveModal({ messageId, code, name: "" });
+  };
+
+  const handleSaveConfirm = async () => {
+    if (!saveModal || savingId) return;
+    setSavingId(saveModal.messageId);
     setChatError(null);
     try {
-      const result = await saveStrategy(code, strategyName);
-      setChatMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? { ...m, path: result.path } : m)),
-      );
+      await saveStrategy(saveModal.code, saveModal.name.trim() || undefined);
       listStrategies()
         .then(setItems)
         .catch((e) => setError(String(e)));
+      setChatMessages([]);
+      setSaveModal(null);
       setActiveTab("list");
     } catch (e) {
       setChatError(String(e));
@@ -161,7 +168,6 @@ export default function StrategiesPage() {
     setChatMessages([]);
     setChatError(null);
     setPrompt("");
-    setStrategyName("");
   };
 
   const handleCopy = async (content: string, id: string) => {
@@ -180,7 +186,7 @@ export default function StrategiesPage() {
   };
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
+    <main className="w-full px-6 py-10">
       <h1 className="text-xl font-semibold text-[#d1d4dc]">Strategies</h1>
       <div className="mt-4 flex gap-1 border-b border-[#2a2e39]">
         <button
@@ -208,39 +214,28 @@ export default function StrategiesPage() {
       </div>
 
       {activeTab === "chat" ? (
-      <section className="mt-0 flex min-h-[60vh] flex-col rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d] p-6">
-        <div className="flex flex-shrink-0 flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-[#d1d4dc]">Strategy Chat</h2>
-            <p className="mt-1 text-sm text-[#868993]">
-              Describe a strategy in plain language and generate a Python draft.
-            </p>
-          </div>
-          <button
-            className="rounded border border-[#2a2e39] px-3 py-1 text-xs text-[#d1d4dc] transition hover:border-[#2962ff] hover:text-white"
-            onClick={handleClear}
-            type="button"
-          >
-            Clear
-          </button>
-        </div>
-
-        {chatError ? (
-          <p className="mt-4 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-            {chatError}
-          </p>
-        ) : null}
-
-        <div
-          ref={chatScrollRef}
-          className="mt-4 min-h-0 flex-1 overflow-y-auto rounded border border-[#2a2e39] bg-[#131722] p-4"
-        >
-          {chatMessages.length === 0 ? (
-            <div className="text-sm text-[#868993]">
-              No messages yet. Start with a short strategy description.
+      <section className="mt-0 flex min-h-[60vh] flex-col rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d]">
+        {chatMessages.length > 0 ? (
+          <>
+            <div className="flex flex-shrink-0 justify-end px-4 pt-3">
+              <button
+                type="button"
+                className="rounded border border-[#2a2e39] px-3 py-1 text-xs text-[#868993] transition hover:border-[#2962ff] hover:text-white"
+                onClick={handleClear}
+              >
+                Clear
+              </button>
             </div>
-          ) : (
-            <div className="space-y-3">
+            {chatError ? (
+              <p className="mx-4 mt-2 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
+                {chatError}
+              </p>
+            ) : null}
+            <div
+              ref={chatScrollRef}
+              className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+            >
+              <div className="mx-auto max-w-3xl space-y-4">
               {chatMessages.map((message) => (
                 <div
                   key={message.id}
@@ -289,10 +284,10 @@ export default function StrategiesPage() {
                         <button
                           type="button"
                           className="mt-2 rounded border border-[#2962ff] px-3 py-1 text-xs text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
-                          onClick={() => void handleSave(message.id, message.content)}
+                          onClick={() => void handleSaveClick(message.id, message.content)}
                           disabled={savingId !== null}
                         >
-                          {savingId === message.id ? "Saving..." : "Save strategy"}
+                          Save strategy
                         </button>
                       ) : null}
                       <div className="mt-2 space-y-1 text-xs text-[#868993]">
@@ -305,39 +300,105 @@ export default function StrategiesPage() {
                   )}
                 </div>
               ))}
+              </div>
             </div>
-          )}
-        </div>
-
-        <form className="mt-4 flex-shrink-0" onSubmit={handleSubmit}>
-          <div className="flex flex-col gap-3 md:flex-row">
-            <div className="flex flex-1 flex-col gap-2">
-              <input
-                className="rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:border-[#2962ff] focus:outline-none"
-                onChange={(event) => setStrategyName(event.target.value)}
-                placeholder="Optional file name (e.g. rsi_reversal)"
-                value={strategyName}
-              />
-              <textarea
-                className="min-h-[110px] resize-none rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:border-[#2962ff] focus:outline-none"
-                onChange={(event) => setPrompt(event.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="e.g. Buy when RSI crosses above 30, sell at 70, 1h candles."
-                value={prompt}
-              />
-            </div>
-            <div className="flex flex-col gap-2 md:w-44">
-              <button
-                className="rounded bg-[#2962ff] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!prompt.trim() || isSending}
-                type="submit"
+            <div className="flex-shrink-0 border-t border-[#2a2e39] px-4 py-4">
+              <form
+                className="mx-auto max-w-3xl flex gap-2 rounded-xl border border-[#2a2e39] bg-[#131722] p-2"
+                onSubmit={handleSubmit}
               >
-                {isSending ? "Generating..." : "Generate"}
-              </button>
-              <div className="text-xs text-[#868993]">Enter to send, Shift+Enter for new line.</div>
+                <textarea
+                  className="min-h-[44px] max-h-[200px] flex-1 resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Describe your strategy..."
+                  value={prompt}
+                  rows={1}
+                />
+                <button
+                  className="rounded-lg bg-[#2962ff] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!prompt.trim() || isSending}
+                  type="submit"
+                >
+                  {isSending ? "..." : "Generate"}
+                </button>
+              </form>
+            </div>
+          </>
+        ) : (
+          <>
+            {chatError ? (
+              <p className="mx-4 mt-4 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
+                {chatError}
+              </p>
+            ) : null}
+            <div className="flex flex-1 flex-col items-center justify-center px-4 py-12">
+              <form
+                className="w-full max-w-2xl"
+                onSubmit={handleSubmit}
+              >
+                <div className="rounded-2xl border border-[#2a2e39] bg-[#131722] p-3 shadow-lg">
+                  <textarea
+                    className="min-h-[120px] w-full resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
+                    onChange={(e) => setPrompt(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Describe your strategy in plain language. e.g. Buy when RSI crosses above 30, sell at 70, 1h candles."
+                    value={prompt}
+                  />
+                  <div className="flex justify-end pt-2">
+                    <button
+                      className="rounded-lg bg-[#2962ff] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!prompt.trim() || isSending}
+                      type="submit"
+                    >
+                      {isSending ? "Generating..." : "Generate"}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </>
+        )}
+
+        {saveModal ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="w-full max-w-md rounded-xl border border-[#2a2e39] bg-[#1e222d] p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-[#d1d4dc]">Save strategy</h3>
+              <p className="mt-1 text-sm text-[#868993]">
+                Enter a name for this strategy file (optional).
+              </p>
+              <input
+                className="mt-4 w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:border-[#2962ff] focus:outline-none"
+                onChange={(e) =>
+                  setSaveModal((prev) => (prev ? { ...prev, name: e.target.value } : null))
+                }
+                placeholder="e.g. rsi_reversal"
+                value={saveModal.name}
+              />
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-[#2a2e39] px-4 py-2 text-sm text-[#d1d4dc] transition hover:bg-[#2a2e39]"
+                  onClick={() => setSaveModal(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-[#2962ff] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:opacity-60"
+                  disabled={savingId !== null}
+                  onClick={() => void handleSaveConfirm()}
+                >
+                  {savingId ? "Saving..." : "Save"}
+                </button>
+              </div>
             </div>
           </div>
-        </form>
+        ) : null}
       </section>
       ) : (
       <section className="mt-0 rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d] p-6">
@@ -352,14 +413,13 @@ export default function StrategiesPage() {
             No strategies found.
           </div>
         ) : (
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-6 flex flex-col gap-2">
             {items.map((s) => (
               <div
                 key={s.path}
-                className="rounded-lg border border-[#2a2e39] bg-[#131722] p-5 transition-colors hover:border-[#2962ff] hover:bg-[#252936]"
+                className="rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 transition-colors hover:border-[#2962ff] hover:bg-[#252936]"
               >
                 <div className="font-medium text-[#d1d4dc]">{s.name}</div>
-                <div className="mt-1 font-mono text-xs text-[#868993]">{s.path}</div>
               </div>
             ))}
           </div>
