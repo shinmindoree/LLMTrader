@@ -1,0 +1,40 @@
+# 로컬 개발용: 볼륨 마운트 + 핫 리로드
+# docker compose --profile full up 시 이 파일이 자동으로 병합됩니다.
+# API/Web/Runner 코드 변경 시 이미지 재빌드 없이 반영됩니다. (Runner는 restart 필요)
+
+name: llmtrader
+
+services:
+  api:
+    volumes:
+      - ./scripts/strategies:/app/scripts/strategies:rw
+      - ./src:/app/src:rw
+    command: ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-exclude", ".verify_tmp/*", "--reload-exclude", "scripts/strategies/*"]
+
+  web:
+    volumes:
+      - ./web:/app/web
+      - web_node_modules:/app/web/node_modules
+    environment:
+      API_ORIGIN: http://api:8000
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      NODE_ENV: development
+    command: ["sh", "-c", "npm install && npm run dev -- -p 3000"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  runner:
+    volumes:
+      - ./scripts/strategies:/app/scripts/strategies:ro
+      - ./src:/app/src:rw
+
+volumes:
+  web_node_modules:

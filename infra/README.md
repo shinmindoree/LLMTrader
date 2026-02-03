@@ -41,6 +41,15 @@ docker compose --profile full up -d
 
 Web will be available on `http://localhost:3000` and API on `http://localhost:8000`.
 
+### 로컬 개발: 볼륨 마운트 + 핫 리로드
+
+`docker-compose.override.yml`이 있으면 `docker compose --profile full up` 시 자동으로 병합됩니다.
+
+- **API**: `./src`가 마운트되고 uvicorn `--reload`로 실행됩니다. `src/` 코드 수정 시 재빌드 없이 자동 반영됩니다.
+- **Web**: `./web`이 마운트되고 `npm run dev`로 실행됩니다. Next.js HMR로 프론트 변경 시 즉시 반영됩니다.
+
+이미지를 한 번 빌드한 뒤에는 API/Web 코드만 수정해도 변경사항을 바로 확인할 수 있습니다.
+
 You'll also typically set:
 
 - `DATABASE_URL` (recommended)

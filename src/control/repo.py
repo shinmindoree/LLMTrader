@@ -116,6 +116,26 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
             .values(status=JobStatus.FAILED, ended_at=now, updated_at=now, error=f"Orphaned job ({reason})")
         )
 
+    for job_id in running_ids:
+        job = await get_job(session, job_id)
+        if job and job.type == JobType.LIVE:
+            trades = await list_trades(session, job_id=job_id)
+            net_profit = sum((t.realized_pnl or 0) for t in trades)
+            total_commission = sum((t.commission or 0) for t in trades)
+            result_json: dict[str, Any] = {
+                "summary": {
+                    "initial_equity": None,
+                    "final_equity": None,
+                    "total_return_pct": None,
+                    "num_trades": len(trades),
+                    "net_profit": net_profit,
+                    "total_commission": total_commission,
+                }
+            }
+            await session.execute(
+                update(Job).where(Job.job_id == job_id).values(result_json=result_json, updated_at=now)
+            )
+
     res_stop_requested = None
     if stop_requested_ids:
         res_stop_requested = await session.execute(

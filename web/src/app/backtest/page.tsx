@@ -160,17 +160,6 @@ export default function BacktestJobsPage() {
       {notice ? (
         <div className="mt-4 rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-3 text-sm text-[#d1d4dc]">
           {notice}
-          {latestJob ? (
-            <>
-              {" "}
-              <Link
-                className="text-[#2962ff] hover:underline"
-                href={jobDetailPath("BACKTEST", latestJob.job_id)}
-              >
-                Open run details
-              </Link>
-            </>
-          ) : null}
         </div>
       ) : null}
 

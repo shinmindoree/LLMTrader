@@ -29,6 +29,14 @@ export async function listStrategies(): Promise<StrategyInfo[]> {
   return json<StrategyInfo[]>("/api/backend/api/strategies");
 }
 
+export async function deleteStrategy(path: string): Promise<DeleteResponse> {
+  const params = new URLSearchParams();
+  params.set("path", path);
+  return json<DeleteResponse>(`/api/backend/api/strategies?${params.toString()}`, {
+    method: "DELETE",
+  });
+}
+
 export async function generateStrategy(
   userPrompt: string,
   strategyName?: string,

@@ -1,6 +1,6 @@
 "use client";
 
-import type { JobType } from "@/lib/types";
+import type { JobType, Trade } from "@/lib/types";
 
 type MetricTone = "neutral" | "positive" | "negative";
 type Metric = { label: string; value: string; tone?: MetricTone };
@@ -45,11 +45,14 @@ type TradeStats = {
   totalTrades: number;
 };
 
-function computeBacktestTradeStats(trades: unknown): TradeStats | null {
-  if (!Array.isArray(trades)) return null;
-  const pnls = trades
+function pnlsFromTrades(trades: unknown): number[] {
+  if (!Array.isArray(trades)) return [];
+  return trades
     .map((t) => (isRecord(t) ? asNumber(t.pnl) : null))
     .filter((p): p is number => p !== null);
+}
+
+function computeTradeStatsFromPnls(pnls: number[]): TradeStats | null {
   if (pnls.length === 0) return null;
 
   let wins = 0;
@@ -97,6 +100,10 @@ function computeBacktestTradeStats(trades: unknown): TradeStats | null {
     maxConsecutiveLosses,
     totalTrades,
   };
+}
+
+function computeBacktestTradeStats(trades: unknown): TradeStats | null {
+  return computeTradeStatsFromPnls(pnlsFromTrades(trades));
 }
 
 function BacktestResultSummary({ result }: { result: Record<string, unknown> }) {
@@ -184,18 +191,47 @@ function BacktestResultSummary({ result }: { result: Record<string, unknown> }) 
   );
 }
 
-function LiveResultSummary({ result }: { result: Record<string, unknown> }) {
+function LiveResultSummary({
+  result,
+  liveTrades,
+}: {
+  result: Record<string, unknown>;
+  liveTrades: Trade[];
+}) {
   const summary = isRecord(result.summary) ? (result.summary as Record<string, unknown>) : result;
-  const initialEquity = asNumber(summary.initial_equity);
-  const finalEquity = asNumber(summary.final_equity);
-  const totalReturnPct = asNumber(summary.total_return_pct);
-  const maxDrawdownPct = asNumber(summary.max_drawdown_pct);
-  const filledOrders = asNumber(summary.num_filled_orders);
+  const summaryInitialEquity = asNumber(summary.initial_equity);
+  const summaryFinalEquity = asNumber(summary.final_equity);
+  const summaryReturnPct = asNumber(summary.total_return_pct);
+  const summaryNetProfit = asNumber(summary.net_profit);
+  const summaryTotalCommission = asNumber(summary.total_commission);
+  const summaryNumTrades = asNumber(summary.num_trades);
+
+  const netProfit =
+    liveTrades.length > 0
+      ? liveTrades.reduce((s, t) => s + (t.realized_pnl ?? 0), 0)
+      : (summaryNetProfit ?? 0);
+  const totalCommission =
+    liveTrades.length > 0
+      ? liveTrades.reduce((s, t) => s + (t.commission ?? 0), 0)
+      : (summaryTotalCommission ?? 0);
+  const numTrades = liveTrades.length > 0 ? liveTrades.length : (summaryNumTrades ?? 0);
+  const pnls = liveTrades
+    .map((t) => t.realized_pnl)
+    .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p));
+  const initialEquity = summaryInitialEquity;
+  const finalEquity =
+    summaryFinalEquity ??
+    (initialEquity !== null ? initialEquity + netProfit - totalCommission : null);
+  const totalReturnPct =
+    summaryReturnPct ??
+    (initialEquity != null && initialEquity > 0 && finalEquity !== null
+      ? ((finalEquity - initialEquity) / initialEquity) * 100
+      : null);
 
   const metrics: Metric[] = [];
   if (totalReturnPct !== null) {
     metrics.push({
-      label: "Total Return",
+      label: "Return",
       value: `${formatNumber(totalReturnPct)}%`,
       tone: totalReturnPct >= 0 ? "positive" : "negative",
     });
@@ -206,48 +242,43 @@ function LiveResultSummary({ result }: { result: Record<string, unknown> }) {
   if (finalEquity !== null) {
     metrics.push({ label: "Final Equity", value: `${formatNumber(finalEquity)} USDT` });
   }
-  if (maxDrawdownPct !== null) {
-    metrics.push({ label: "Max Drawdown", value: `${formatNumber(maxDrawdownPct)}%`, tone: "negative" });
+  metrics.push({
+    label: "Net Profit",
+    value: formatSigned(netProfit, "USDT"),
+    tone: netProfit >= 0 ? "positive" : "negative",
+  });
+  metrics.push({ label: "Total Trades", value: `${numTrades}` });
+  metrics.push({
+    label: "Total Commission",
+    value: `${formatNumber(totalCommission)} USDT`,
+    tone: "negative",
+  });
+  if (numTrades > 0) {
+    metrics.push({
+      label: "Avg Profit / Trade",
+      value: formatSigned(netProfit / numTrades, "USDT"),
+      tone: netProfit >= 0 ? "positive" : "negative",
+    });
   }
 
-  const symbols = isRecord(summary.symbols) ? summary.symbols : null;
-  const symbolRows = symbols
-    ? Object.entries(symbols).map(([symbol, info]) => {
-        const record = isRecord(info) ? info : {};
-        return {
-          symbol,
-          positionSize: asNumber(record.position_size),
-          unrealizedPnl: asNumber(record.unrealized_pnl),
-          filledOrders: asNumber(record.num_filled_orders),
-        };
-      })
+  const tradeStats = computeTradeStatsFromPnls(pnls);
+  const statsMetrics: Metric[] = tradeStats
+    ? [
+        { label: "Win Rate", value: `${formatNumber(tradeStats.winRatePct, 1)}%` },
+        {
+          label: "Profit Factor",
+          value: tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor),
+        },
+        tradeStats.maxProfit !== null
+          ? { label: "Max Profit", value: formatSigned(tradeStats.maxProfit, "USDT"), tone: "positive" }
+          : { label: "Max Profit", value: "-", tone: "neutral" },
+        tradeStats.maxLoss !== null
+          ? { label: "Max Loss", value: formatSigned(tradeStats.maxLoss, "USDT"), tone: "negative" }
+          : { label: "Max Loss", value: "-", tone: "neutral" },
+        { label: "Max Consecutive Wins", value: `${tradeStats.maxConsecutiveWins}` },
+        { label: "Max Consecutive Losses", value: `${tradeStats.maxConsecutiveLosses}` },
+      ]
     : [];
-  const derivedFilledOrders =
-    filledOrders ?? (symbolRows.length ? symbolRows.reduce((sum, row) => sum + (row.filledOrders ?? 0), 0) : null);
-  if (derivedFilledOrders !== null) {
-    metrics.push({ label: "Filled Orders", value: `${derivedFilledOrders}` });
-  }
-
-  const riskStatus = isRecord(summary.risk_status) ? summary.risk_status : null;
-  const riskMetrics: Metric[] = [];
-  if (riskStatus && isRecord(riskStatus)) {
-    const dailyPnl = asNumber(riskStatus.daily_pnl);
-    const consecutiveLosses = asNumber(riskStatus.consecutive_losses);
-    const isInCooldown = riskStatus.is_in_cooldown;
-    if (dailyPnl !== null) {
-      riskMetrics.push({
-        label: "Daily PnL",
-        value: formatSigned(dailyPnl, "USDT"),
-        tone: dailyPnl >= 0 ? "positive" : "negative",
-      });
-    }
-    if (consecutiveLosses !== null) {
-      riskMetrics.push({ label: "Consecutive Losses", value: `${consecutiveLosses}` });
-    }
-    if (typeof isInCooldown === "boolean") {
-      riskMetrics.push({ label: "Cooldown", value: isInCooldown ? "On" : "Off" });
-    }
-  }
 
   return (
     <div className="mt-4 space-y-4">
@@ -258,61 +289,32 @@ function LiveResultSummary({ result }: { result: Record<string, unknown> }) {
           ))}
         </div>
       ) : null}
-      {riskMetrics.length ? (
+      {statsMetrics.length ? (
         <div>
-          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Risk Status</div>
+          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Trade Stats</div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {riskMetrics.map((metric) => (
+            {statsMetrics.map((metric) => (
               <MetricCard key={metric.label} {...metric} />
             ))}
           </div>
-        </div>
-      ) : null}
-      {symbolRows.length ? (
-        <div className="rounded border border-[#2a2e39] bg-[#131722]">
-          <div className="border-b border-[#2a2e39] px-4 py-2 text-xs font-medium text-[#d1d4dc]">
-            Symbols
-          </div>
-          <table className="w-full text-xs">
-            <thead className="bg-[#131722]">
-              <tr className="border-b border-[#2a2e39] text-left text-[#868993]">
-                <th className="px-4 py-2">Symbol</th>
-                <th className="px-4 py-2">Position</th>
-                <th className="px-4 py-2">Unrealized PnL</th>
-                <th className="px-4 py-2">Filled Orders</th>
-              </tr>
-            </thead>
-            <tbody>
-              {symbolRows.map((row) => (
-                <tr key={row.symbol} className="border-b border-[#2a2e39]">
-                  <td className="px-4 py-2 text-[#d1d4dc]">{row.symbol}</td>
-                  <td className="px-4 py-2 text-[#d1d4dc]">
-                    {row.positionSize !== null ? formatNumber(row.positionSize, 4) : "-"}
-                  </td>
-                  <td
-                    className={`px-4 py-2 font-medium ${
-                      (row.unrealizedPnl ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
-                    }`}
-                  >
-                    {row.unrealizedPnl !== null ? formatSigned(row.unrealizedPnl, "USDT") : "-"}
-                  </td>
-                  <td className="px-4 py-2 text-[#d1d4dc]">
-                    {row.filledOrders !== null ? row.filledOrders : "-"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       ) : null}
     </div>
   );
 }
 
-export function JobResultSummary({ type, result }: { type: JobType; result: Record<string, unknown> }) {
+export function JobResultSummary({
+  type,
+  result,
+  liveTrades,
+}: {
+  type: JobType;
+  result: Record<string, unknown>;
+  liveTrades?: Trade[];
+}) {
   return type === "BACKTEST" ? (
     <BacktestResultSummary result={result} />
   ) : (
-    <LiveResultSummary result={result} />
+    <LiveResultSummary result={result} liveTrades={liveTrades ?? []} />
   );
 }

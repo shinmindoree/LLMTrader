@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { getJob, listOrders, listTrades, stopJob } from "@/lib/api";
-import type { Job, JobStatus, JobType, Order, Trade } from "@/lib/types";
+import { getJob, listTrades, stopJob } from "@/lib/api";
+import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { jobDetailPath } from "@/lib/routes";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
@@ -34,7 +34,6 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
   const jobId = Array.isArray(raw) ? raw[0] : raw;
   const validJobId = typeof jobId === "string" && isUuid(jobId);
   const [job, setJob] = useState<Job | null>(null);
-  const [orders, setOrders] = useState<Order[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,7 +47,6 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
   useEffect(() => {
     if (!validJobId || !jobId) return;
     const tick = () => {
-      listOrders(jobId).then(setOrders).catch(() => {});
       listTrades(jobId).then(setTrades).catch(() => {});
       getJob(jobId).then(setJob).catch(() => {});
     };
@@ -137,10 +135,15 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
       {job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
-      {job && finished && job.result && isRecord(job.result) ? (
+      {(job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
+      (job?.type === "LIVE" && (trades.length > 0 || (finished && job.result && isRecord(job.result)))) ? (
         <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
           <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Trade Result Summary</div>
-          <JobResultSummary type={job.type} result={job.result} />
+          <JobResultSummary
+            type={job!.type}
+            result={job!.result && isRecord(job!.result) ? job!.result : {}}
+            liveTrades={job!.type === "LIVE" ? trades : undefined}
+          />
         </section>
       ) : null}
 
@@ -151,7 +154,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
         </div>
       ) : null}
 
-      {job && finished && !job.result ? (
+      {job && finished && !job.result && !(job.type === "LIVE" && trades.length > 0) ? (
         <div className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4 text-xs text-[#868993]">
           No result payload found for this run.
         </div>
@@ -168,48 +171,11 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
       {job ? <TradeAnalysis job={job} liveTrades={trades} /> : null}
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
-        {validJobId && jobId ? <JobEventsConsole jobId={jobId} /> : null}
-        <div className="space-y-4">
-          <div className="rounded border border-[#2a2e39] bg-[#1e222d]">
-            <div className="border-b border-[#2a2e39] bg-[#131722] px-4 py-2 text-xs font-medium text-[#d1d4dc]">
-              Orders ({orders.length})
-            </div>
-            <div className="max-h-[300px] overflow-auto">
-              {orders.length === 0 ? (
-                <div className="px-4 py-8 text-center text-xs text-[#868993]">No orders</div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-[#131722]">
-                    <tr className="border-b border-[#2a2e39]">
-                      <th className="px-4 py-2 text-left text-[#868993]">Symbol</th>
-                      <th className="px-4 py-2 text-left text-[#868993]">Side</th>
-                      <th className="px-4 py-2 text-left text-[#868993]">Type</th>
-                      <th className="px-4 py-2 text-left text-[#868993]">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((o) => (
-                      <tr key={o.order_id} className="border-b border-[#2a2e39]">
-                        <td className="px-4 py-2 text-[#d1d4dc]">{o.symbol}</td>
-                        <td
-                          className={`px-4 py-2 ${
-                            o.side === "BUY" ? "text-[#26a69a]" : "text-[#ef5350]"
-                          }`}
-                        >
-                          {o.side}
-                        </td>
-                        <td className="px-4 py-2 text-[#d1d4dc]">{o.order_type}</td>
-                        <td className="px-4 py-2 text-[#868993]">{o.status}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
+      {job?.type === "LIVE" && validJobId && jobId ? (
+        <div className="mt-6">
+          <JobEventsConsole jobId={jobId} />
         </div>
-      </div>
+      ) : null}
     </main>
   );
 }

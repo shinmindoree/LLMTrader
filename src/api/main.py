@@ -91,6 +91,20 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _verify_tmp_dir() -> Path:
+    d = _repo_root() / ".verify_tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _cleanup_verify_temp(temp_path: Path) -> None:
+    temp_path.unlink(missing_ok=True)
+    pycache_dir = temp_path.parent / "__pycache__"
+    if pycache_dir.is_dir():
+        for f in pycache_dir.glob(f"{temp_path.stem}.cpython-*.pyc"):
+            f.unlink(missing_ok=True)
+
+
 def _strategy_dirs() -> list[Path]:
     settings = get_settings()
     parts = [p.strip() for p in (settings.strategy_dirs or ".").split(",") if p.strip()]
@@ -247,6 +261,28 @@ def create_app() -> FastAPI:
             out.append(StrategyInfo(name=p.name, path=str(p.relative_to(root))))
         return out
 
+    @app.delete(
+        "/api/strategies",
+        response_model=DeleteResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def delete_strategy(path: str = Query(..., alias="path")) -> DeleteResponse:
+        root = _repo_root()
+        dirs = _strategy_dirs()
+        try:
+            target = validate_strategy_path(
+                repo_root=root,
+                strategy_dirs=dirs,
+                strategy_path=path,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            target.unlink()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to delete file: {exc}") from exc
+        return DeleteResponse(ok=True)
+
     @app.post(
         "/api/strategies/generate",
         response_model=StrategyGenerateResponse,
@@ -261,12 +297,6 @@ def create_app() -> FastAPI:
         dirs = _strategy_dirs()
         if not dirs:
             raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
-
-        base_dir = dirs[0]
-        try:
-            base_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Failed to prepare strategy dir: {exc}") from exc
 
         try:
             client = LLMClient()
@@ -283,20 +313,20 @@ def create_app() -> FastAPI:
 
         code = _strip_code_fences(result.code)
         repo_root = _repo_root()
-        temp_path = base_dir / f"_verify_{uuid.uuid4().hex}_strategy.py"
+        temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
 
         try:
             temp_path.write_text(code, encoding="utf-8")
             _verify_strategy_load(temp_path, repo_root)
             _verify_strategy_backtest(temp_path, repo_root)
         except ValueError as exc:
-            temp_path.unlink(missing_ok=True)
+            _cleanup_verify_temp(temp_path)
             raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
         except Exception as exc:  # noqa: BLE001
-            temp_path.unlink(missing_ok=True)
+            _cleanup_verify_temp(temp_path)
             raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
 
-        temp_path.unlink(missing_ok=True)
+        _cleanup_verify_temp(temp_path)
         summary = await client.summarize_strategy(code)
         return StrategyGenerateResponse(
             path=None,
@@ -321,7 +351,6 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
-        base_dir = dirs[0]
         repo_root = _repo_root()
         code_acc: list[str] = []
         try:
@@ -346,20 +375,20 @@ def create_app() -> FastAPI:
         if not code:
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
             return
-        temp_path = base_dir / f"_verify_{uuid.uuid4().hex}_strategy.py"
+        temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
         try:
             temp_path.write_text(code, encoding="utf-8")
             _verify_strategy_load(temp_path, repo_root)
             _verify_strategy_backtest(temp_path, repo_root)
         except ValueError as exc:
-            temp_path.unlink(missing_ok=True)
+            _cleanup_verify_temp(temp_path)
             yield f"data: {json.dumps({'done': True, 'error': str(exc), 'code': code})}\n\n"
             return
         except Exception as exc:  # noqa: BLE001
-            temp_path.unlink(missing_ok=True)
+            _cleanup_verify_temp(temp_path)
             yield f"data: {json.dumps({'done': True, 'error': str(exc), 'code': code})}\n\n"
             return
-        temp_path.unlink(missing_ok=True)
+        _cleanup_verify_temp(temp_path)
         summary = await client.summarize_strategy(code)
         yield f"data: {json.dumps({'done': True, 'code': code, 'summary': summary, 'backtest_ok': True})}\n\n"
 
@@ -416,25 +445,25 @@ def create_app() -> FastAPI:
         filename = _sanitize_strategy_filename(body.strategy_name)
         final_target = _unique_strategy_path(base_dir, filename)
         repo_root = _repo_root()
-        temp_path = base_dir / f"_verify_{uuid.uuid4().hex}_strategy.py"
+        temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
 
         try:
             temp_path.write_text(code, encoding="utf-8")
             _verify_strategy_load(temp_path, repo_root)
             _verify_strategy_backtest(temp_path, repo_root)
         except ValueError as exc:
-            temp_path.unlink(missing_ok=True)
+            _cleanup_verify_temp(temp_path)
             raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
         except Exception as exc:  # noqa: BLE001
-            temp_path.unlink(missing_ok=True)
+            _cleanup_verify_temp(temp_path)
             raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
 
         try:
             final_target.write_text(code, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
-            temp_path.unlink(missing_ok=True)
+            _cleanup_verify_temp(temp_path)
             raise HTTPException(status_code=500, detail=f"Failed to write strategy file: {exc}") from exc
-        temp_path.unlink(missing_ok=True)
+        _cleanup_verify_temp(temp_path)
 
         relative_path = str(final_target.relative_to(repo_root))
         return StrategySaveResponse(path=relative_path)

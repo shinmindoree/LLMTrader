@@ -472,6 +472,7 @@ class LiveContext:
                         "realized_pnl": trade.get("realizedPnl"),
                         "commission": trade.get("commission"),
                         "time": trade.get("time"),
+                        "trade": trade,
                     })
                 
                 if len(self._processed_trade_ids) > 10000:
@@ -511,6 +512,7 @@ class LiveContext:
                         "side": trade.get("side"),
                         "price": trade.get("price"),
                         "qty": trade.get("qty"),
+                        "trade": trade,
                     })
             
             self._last_trade_check_time = time.time()
@@ -564,11 +566,18 @@ class LiveContext:
                     "before_pos": before_pos,
                     "after_pos_api": after_pos_api,
                 })
-                
+
+                reason = result.get("_reason")
+                exit_reason = result.get("_exit_reason")
                 for trade in matched_trades:
                     trade_id = trade.get("id")
                     if trade_id:
                         self._processed_trade_ids.add(trade_id)
+                    self._log_audit("TRADE_RECORDED", {
+                        "trade": trade,
+                        "reason": reason,
+                        "exit_reason": exit_reason,
+                    })
             else:
                 self._log_audit("ORDER_VERIFY_NO_MATCH", {
                     "order_ids": list(order_ids_to_check),

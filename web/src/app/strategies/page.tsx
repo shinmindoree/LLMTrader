@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  deleteStrategy,
   generateStrategyStream,
   listStrategies,
   saveStrategy,
@@ -58,6 +59,8 @@ export default function StrategiesPage() {
   const [isSending, setIsSending] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [deletingPath, setDeletingPath] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [saveModal, setSaveModal] = useState<{
     messageId: string;
     code: string;
@@ -254,6 +257,23 @@ export default function StrategiesPage() {
       }, 1500);
     } catch {
       setCopiedId(null);
+    }
+  };
+
+  const handleDeleteClick = (path: string) => {
+    setDeletingPath(path);
+    setDeleteError(null);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deletingPath) return;
+    try {
+      await deleteStrategy(deletingPath);
+      setItems((prev) => prev.filter((s) => s.path !== deletingPath));
+      setDeletingPath(null);
+      setDeleteError(null);
+    } catch (e) {
+      setDeleteError(String(e));
     }
   };
 
@@ -486,6 +506,11 @@ export default function StrategiesPage() {
             {error}
           </p>
         ) : null}
+        {deleteError && deletingPath ? (
+          <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
+            {deleteError}
+          </p>
+        ) : null}
         {items.length === 0 && !error ? (
           <div className="mt-6 rounded border border-[#2a2e39] bg-[#131722] px-4 py-8 text-center text-sm text-[#868993]">
             No strategies found.
@@ -495,13 +520,59 @@ export default function StrategiesPage() {
             {items.map((s) => (
               <div
                 key={s.path}
-                className="rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 transition-colors hover:border-[#2962ff] hover:bg-[#252936]"
+                className="flex items-center justify-between gap-3 rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 transition-colors hover:border-[#2962ff] hover:bg-[#252936]"
               >
-                <div className="font-medium text-[#d1d4dc]">{s.name}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-[#d1d4dc]">{s.name}</div>
+                  <div className="truncate text-xs text-[#868993]">{s.path}</div>
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 rounded border border-[#ef5350]/50 px-3 py-1.5 text-xs text-[#ef5350] transition hover:border-[#ef5350] hover:bg-[#ef5350]/10"
+                  onClick={() => handleDeleteClick(s.path)}
+                >
+                  삭제
+                </button>
               </div>
             ))}
           </div>
         )}
+        {deletingPath ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="w-full max-w-md rounded-xl border border-[#2a2e39] bg-[#1e222d] p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-[#d1d4dc]">전략 삭제</h3>
+              <p className="mt-1 text-sm text-[#868993]">
+                이 전략 파일을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
+              </p>
+              <p className="mt-2 truncate rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 font-mono text-xs text-[#d1d4dc]">
+                {deletingPath}
+              </p>
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-[#2a2e39] px-4 py-2 text-sm text-[#d1d4dc] transition hover:bg-[#2a2e39]"
+                  onClick={() => {
+                    setDeletingPath(null);
+                    setDeleteError(null);
+                  }}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-[#ef5350] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#d32f2f]"
+                  onClick={() => void handleDeleteConfirm()}
+                >
+                  삭제
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
       )}
     </main>

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { getJob, listJobs } from "@/lib/api";
@@ -8,7 +7,7 @@ import type { Job, JobStatus, JobType } from "@/lib/types";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobProgressGauge } from "@/components/JobProgressGauge";
-import { jobDetailPath } from "@/lib/routes";
+import { TradeAnalysis } from "@/components/TradeAnalysis";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -114,6 +113,10 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
           <JobResultSummary type={job.type} result={job.result} />
         ) : null}
 
+        {job && finished && job.type === "BACKTEST" ? (
+          <TradeAnalysis job={job} liveTrades={[]} />
+        ) : null}
+
         {job && finished && job.result && !isRecord(job.result) ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             Result payload is not structured for summary. See raw payload below.
@@ -123,15 +126,6 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
         {job && finished && !job.result ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             No result payload found for this run.
-          </div>
-        ) : null}
-
-        {job ? (
-          <div className="mt-4 flex items-center gap-3 text-xs text-[#868993]">
-            <Link className="text-[#2962ff] hover:underline" href={jobDetailPath(job.type, job.job_id)}>
-              Open run details
-            </Link>
-            <span className="font-mono">{job.job_id}</span>
           </div>
         ) : null}
 

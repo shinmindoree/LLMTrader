@@ -97,21 +97,31 @@ function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
       parseTimestamp(raw?.time) ??
       parseTimestamp(raw?.tradeTime) ??
       parseTimestamp(raw?.T);
+    const quantity = t.quantity ?? null;
+    const price = t.price ?? null;
+    const positionSizeUsdt =
+      quantity !== null && price !== null ? quantity * price : null;
+    const isExit = derivedSide === "SELL" && t.realized_pnl != null;
+    const reasonFromRaw = raw ? asString(raw.reason) : null;
+    const exitReasonFromRaw = raw ? asString(raw.exit_reason) : null;
+    const reason =
+      reasonFromRaw ?? exitReasonFromRaw ?? (derivedSide === "BUY" ? "Entry Long" : "Exit Long");
+    const exitReason = exitReasonFromRaw ?? (isExit ? "Exit Long" : null);
     return {
       id: t.trade_id,
       timestamp,
       timeLabel: formatDateTime(timestamp),
       symbol: t.symbol ?? null,
       side: derivedSide,
-      quantity: t.quantity ?? null,
-      price: t.price ?? null,
+      quantity,
+      price,
       pnl: t.realized_pnl ?? null,
       commission: t.commission ?? null,
-      positionSizeUsdt: null,
+      positionSizeUsdt,
       entryPrice: null,
       balanceAfter: null,
-      reason: null,
-      exitReason: null,
+      reason,
+      exitReason,
     } satisfies NormalizedTrade;
   });
 }
@@ -343,6 +353,16 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   const finalEquity =
     initialEquity !== null ? initialEquity + totalPnl - totalCommission : null;
 
+  const backtestSymbol = useMemo(() => {
+    if (job.type !== "BACKTEST" || !job.config) return null;
+    const cfg = job.config as Record<string, unknown>;
+    const sym = asString(cfg.symbol);
+    if (sym) return sym;
+    const streams = Array.isArray(cfg.streams) ? cfg.streams : [];
+    const first = streams[0];
+    return isRecord(first) ? asString(first.symbol) : null;
+  }, [job.type, job.config]);
+
   if (!sortedTrades.length) {
     return (
       <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
@@ -399,15 +419,16 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 <tr className="border-b border-[#2a2e39] text-left text-[#868993]">
                   <th className="px-4 py-2">#</th>
                   <th className="px-4 py-2">Time</th>
-                  <th className="px-4 py-2">Side</th>
-                  <th className="px-4 py-2">Qty</th>
+                  <th className="px-4 py-2">Symbol</th>
                   <th className="px-4 py-2">Price</th>
-                  <th className="px-4 py-2">Position (USDT)</th>
-                  <th className="px-4 py-2">Entry Price</th>
+                  <th className="px-4 py-2">Side</th>
+                  <th className="px-4 py-2">Entry/Exit</th>
+                  <th className="px-4 py-2">Position(Qty)</th>
+                  <th className="px-4 py-2">Position(USDT)</th>
                   <th className="px-4 py-2">PnL</th>
                   <th className="px-4 py-2">Commission</th>
                   <th className="px-4 py-2">Equity Change</th>
-                  <th className="px-4 py-2">Balance</th>
+                  <th className="px-4 py-2">Equity</th>
                   <th className="px-4 py-2">Reason</th>
                 </tr>
               </thead>
@@ -416,6 +437,12 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                   <tr key={`bt-${t.id}`} className="border-b border-[#2a2e39]">
                     <td className="px-4 py-2 text-[#868993]">{idx + 1}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">
+                      {t.symbol ?? backtestSymbol ?? "-"}
+                    </td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">
+                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
+                    </td>
                     <td
                       className={`px-4 py-2 font-medium ${
                         t.side === "BUY" ? "text-[#26a69a]" : "text-[#ef5350]"
@@ -424,16 +451,13 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                       {t.side ?? "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
+                      {t.side === "BUY" ? "Entry" : "Exit"}
+                    </td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.quantity !== null ? formatNumber(t.quantity, 6) : "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.positionSizeUsdt !== null ? formatNumber(t.positionSizeUsdt, 2) : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.entryPrice !== null ? formatNumber(t.entryPrice, 2) : "-"}
                     </td>
                     <td
                       className={`px-4 py-2 font-medium ${
@@ -465,13 +489,16 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                   <th className="px-4 py-2">#</th>
                   <th className="px-4 py-2">Time</th>
                   <th className="px-4 py-2">Symbol</th>
-                  <th className="px-4 py-2">Side</th>
-                  <th className="px-4 py-2">Qty</th>
                   <th className="px-4 py-2">Price</th>
+                  <th className="px-4 py-2">Side</th>
+                  <th className="px-4 py-2">Entry/Exit</th>
+                  <th className="px-4 py-2">Position(Qty)</th>
+                  <th className="px-4 py-2">Position(USDT)</th>
                   <th className="px-4 py-2">PnL</th>
                   <th className="px-4 py-2">Commission</th>
                   <th className="px-4 py-2">Equity Change</th>
                   <th className="px-4 py-2">Equity</th>
+                  <th className="px-4 py-2">Reason</th>
                 </tr>
               </thead>
               <tbody>
@@ -480,6 +507,9 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                     <td className="px-4 py-2 text-[#868993]">{idx + 1}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">{t.symbol ?? "-"}</td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">
+                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
+                    </td>
                     <td
                       className={`px-4 py-2 font-medium ${
                         t.side === "BUY" ? "text-[#26a69a]" : t.side === "SELL" ? "text-[#ef5350]" : "text-[#d1d4dc]"
@@ -488,10 +518,13 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                       {t.side ?? "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
+                      {t.side === "BUY" ? "Entry" : "Exit"}
+                    </td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.quantity !== null ? formatNumber(t.quantity, 6) : "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
+                      {t.positionSizeUsdt !== null ? formatNumber(t.positionSizeUsdt, 2) : "-"}
                     </td>
                     <td
                       className={`px-4 py-2 font-medium ${
@@ -508,6 +541,9 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.balanceAfter !== null ? formatNumber(t.balanceAfter, 2) : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-[#868993]">
+                      {t.exitReason ? `${t.exitReason}` : t.reason ?? "-"}
                     </td>
                   </tr>
                 ))}

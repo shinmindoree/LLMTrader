@@ -103,8 +103,12 @@ class DbEventSink:
         if isinstance(inner, dict) and symbol:
             trade = inner.get("trade")
             if isinstance(trade, dict):
+                reason = inner.get("reason")
+                exit_reason = inner.get("exit_reason")
                 asyncio.create_task(
-                    self.record_trade_from_user_trade(trade, symbol=symbol),
+                    self.record_trade_from_user_trade(
+                        trade, symbol=symbol, reason=reason, exit_reason=exit_reason
+                    ),
                     name=f"record-trade:{self._job_id}",
                 )
 
@@ -142,7 +146,14 @@ class DbEventSink:
             )
             await session.commit()
 
-    async def record_trade_from_user_trade(self, trade: dict[str, Any], *, symbol: str) -> None:
+    async def record_trade_from_user_trade(
+        self,
+        trade: dict[str, Any],
+        *,
+        symbol: str,
+        reason: Any = None,
+        exit_reason: Any = None,
+    ) -> None:
         try:
             trade_id = int(trade.get("id"))
         except (TypeError, ValueError):
@@ -153,6 +164,12 @@ class DbEventSink:
         price = float(trade.get("price")) if trade.get("price") is not None else None
         realized_pnl = float(trade.get("realizedPnl")) if trade.get("realizedPnl") is not None else None
         commission = float(trade.get("commission")) if trade.get("commission") is not None else None
+
+        raw_json = dict(trade)
+        if reason is not None:
+            raw_json["reason"] = reason
+        if exit_reason is not None:
+            raw_json["exit_reason"] = exit_reason
 
         async with self._session_maker() as session:
             await insert_trade(
@@ -165,7 +182,7 @@ class DbEventSink:
                 price=price,
                 realized_pnl=realized_pnl,
                 commission=commission,
-                raw_json=trade,
+                raw_json=raw_json,
             )
             await session.commit()
 
