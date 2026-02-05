@@ -36,10 +36,16 @@ jobs:
         with:
           appSourcePath: ${{ github.workspace }}
           dockerfilePath: ./Dockerfile
-          targetLabel: latest
           registryUrl: autotraderbinance.azurecr.io
           registryUsername: ${{ secrets.AUTOTRADER_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.AUTOTRADER_REGISTRY_PASSWORD }}
           containerAppName: autotrader
           resourceGroup: autotrader
           imageToBuild: autotraderbinance.azurecr.io/autotrader:${{ github.sha }}
+
+      - name: Update Container App with latest image
+        run: |
+          az containerapp update \
+            --name autotrader \
+            --resource-group autotrader \
+            --image autotraderbinance.azurecr.io/autotrader:${{ github.sha }}
