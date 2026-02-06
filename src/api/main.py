@@ -166,6 +166,7 @@ def _strip_first_line_lang_tag(content: str) -> str:
 
 _INTAKE_ALLOWED_STATUSES = {"READY", "NEEDS_CLARIFICATION", "UNSUPPORTED_CAPABILITY", "OUT_OF_SCOPE"}
 _INTAKE_ALLOWED_INTENTS = {"OUT_OF_SCOPE", "STRATEGY_CREATE", "STRATEGY_MODIFY", "STRATEGY_QA"}
+_MAX_AUTO_REPAIR_ATTEMPTS = 2
 
 
 def _normalize_intake_payload(raw: dict[str, Any]) -> StrategyIntakeResponse:
@@ -306,6 +307,69 @@ def _verify_strategy_backtest(strategy_path: Path, repo_root: Path) -> None:
         raise ValueError(f"Backtest failed: {stderr[:2000]}")
 
 
+def _verify_code_once(code: str, repo_root: Path) -> None:
+    temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
+    try:
+        temp_path.write_text(code, encoding="utf-8")
+        _verify_strategy_load(temp_path, repo_root)
+        _verify_strategy_backtest(temp_path, repo_root)
+    finally:
+        _cleanup_verify_temp(temp_path)
+
+
+async def _verify_with_auto_repair(
+    *,
+    client: LLMClient,
+    initial_code: str,
+    prompt: str,
+    messages: list[dict[str, str]] | None,
+    repo_root: Path,
+) -> tuple[str, int]:
+    code = _strip_code_fences(initial_code)
+    if not code:
+        raise HTTPException(status_code=502, detail="LLM returned empty code")
+
+    repair_attempts = 0
+    while True:
+        try:
+            _verify_code_once(code, repo_root)
+            return code, repair_attempts
+        except Exception as exc:  # noqa: BLE001
+            verification_error = str(exc)
+            if repair_attempts >= _MAX_AUTO_REPAIR_ATTEMPTS:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Strategy verification failed after auto-repair attempts: "
+                        f"{verification_error}"
+                    ),
+                ) from exc
+
+            repair = await client.repair_strategy(
+                code=code,
+                verification_error=verification_error,
+                user_prompt=prompt,
+                messages=messages,
+            )
+            if not repair.success or not repair.code:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Strategy verification failed and auto-repair could not fix it: "
+                        f"{verification_error} / repair_error={repair.error or 'unknown'}"
+                    ),
+                ) from exc
+
+            repaired_code = _strip_code_fences(repair.code)
+            if not repaired_code:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Auto-repair returned empty code",
+                ) from exc
+            code = repaired_code
+            repair_attempts += 1
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
@@ -423,22 +487,14 @@ def create_app() -> FastAPI:
         if not result.success or not result.code:
             raise HTTPException(status_code=502, detail=result.error or "LLM generation failed")
 
-        code = _strip_code_fences(result.code)
         repo_root = _repo_root()
-        temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
-
-        try:
-            temp_path.write_text(code, encoding="utf-8")
-            _verify_strategy_load(temp_path, repo_root)
-            _verify_strategy_backtest(temp_path, repo_root)
-        except ValueError as exc:
-            _cleanup_verify_temp(temp_path)
-            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
-        except Exception as exc:  # noqa: BLE001
-            _cleanup_verify_temp(temp_path)
-            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
-
-        _cleanup_verify_temp(temp_path)
+        code, repair_attempts = await _verify_with_auto_repair(
+            client=client,
+            initial_code=result.code,
+            prompt=prompt,
+            messages=openai_messages,
+            repo_root=repo_root,
+        )
         summary = await client.summarize_strategy(code)
         return StrategyGenerateResponse(
             path=None,
@@ -446,6 +502,8 @@ def create_app() -> FastAPI:
             model_used=result.model_used,
             summary=summary,
             backtest_ok=True,
+            repaired=repair_attempts > 0,
+            repair_attempts=repair_attempts,
         )
 
     async def _generate_stream_events(body: StrategyGenerateRequest):
@@ -493,22 +551,33 @@ def create_app() -> FastAPI:
         if not code:
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
             return
-        temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
         try:
-            temp_path.write_text(code, encoding="utf-8")
-            _verify_strategy_load(temp_path, repo_root)
-            _verify_strategy_backtest(temp_path, repo_root)
-        except ValueError as exc:
-            _cleanup_verify_temp(temp_path)
-            yield f"data: {json.dumps({'done': True, 'error': str(exc), 'code': code})}\n\n"
+            code, repair_attempts = await _verify_with_auto_repair(
+                client=client,
+                initial_code=code,
+                prompt=prompt,
+                messages=openai_messages,
+                repo_root=repo_root,
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+            yield f"data: {json.dumps({'done': True, 'error': detail, 'code': code})}\n\n"
             return
-        except Exception as exc:  # noqa: BLE001
-            _cleanup_verify_temp(temp_path)
-            yield f"data: {json.dumps({'done': True, 'error': str(exc), 'code': code})}\n\n"
-            return
-        _cleanup_verify_temp(temp_path)
         summary = await client.summarize_strategy(code)
-        yield f"data: {json.dumps({'done': True, 'code': code, 'summary': summary, 'backtest_ok': True})}\n\n"
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "done": True,
+                    "code": code,
+                    "summary": summary,
+                    "backtest_ok": True,
+                    "repaired": repair_attempts > 0,
+                    "repair_attempts": repair_attempts,
+                }
+            )
+            + "\n\n"
+        )
 
     @app.post("/api/strategies/generate/stream")
     async def generate_strategy_stream_endpoint(body: StrategyGenerateRequest):

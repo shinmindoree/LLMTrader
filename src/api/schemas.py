@@ -55,6 +55,8 @@ class StrategyGenerateResponse(BaseModel):
     model_used: str | None = None
     summary: str | None = None
     backtest_ok: bool = False
+    repaired: bool = False
+    repair_attempts: int = 0
 
 
 class StrategySaveRequest(BaseModel):

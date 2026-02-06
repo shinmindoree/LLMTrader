@@ -16,6 +16,8 @@ export type StrategyGenerationResponse = {
   path: string | null;
   summary: string | null;
   backtest_ok: boolean;
+  repaired: boolean;
+  repair_attempts: number;
 };
 
 export type StrategyIntakeResponse = {

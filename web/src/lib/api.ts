@@ -106,6 +106,8 @@ export type GenerateStreamCallbacks = {
     code?: string;
     summary?: string | null;
     backtest_ok?: boolean;
+    repaired?: boolean;
+    repair_attempts?: number;
     error?: string;
   }) => void;
 };
@@ -163,6 +165,9 @@ export async function generateStrategyStream(
                   ? String(data.summary)
                   : null,
               backtest_ok: data.backtest_ok === true,
+              repaired: data.repaired === true,
+              repair_attempts:
+                typeof data.repair_attempts === "number" ? Number(data.repair_attempts) : 0,
               error: typeof data.error === "string" ? data.error : undefined,
             });
             return;

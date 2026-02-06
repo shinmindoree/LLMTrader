@@ -5,10 +5,34 @@ import { useState } from "react";
 import { createJob } from "@/lib/api";
 import type { Job, StrategyInfo } from "@/lib/types";
 
+const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
+const LIVE_INTERVALS = ["1m", "5m", "15m", "1h"] as const;
+
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
   );
+}
+
+function loadExecutionDefaults(): { symbol: string; interval: string; applied: boolean } {
+  if (typeof window === "undefined") {
+    return { symbol: "BTCUSDT", interval: "1m", applied: false };
+  }
+  try {
+    const raw = window.localStorage.getItem(EXECUTION_DEFAULTS_KEY);
+    if (!raw) return { symbol: "BTCUSDT", interval: "1m", applied: false };
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const symbol = typeof data.symbol === "string" && data.symbol.trim()
+      ? data.symbol.trim().toUpperCase()
+      : "BTCUSDT";
+    const intervalCandidate = typeof data.interval === "string" ? data.interval.trim() : "";
+    const interval = LIVE_INTERVALS.includes(intervalCandidate as (typeof LIVE_INTERVALS)[number])
+      ? intervalCandidate
+      : "1m";
+    return { symbol, interval, applied: true };
+  } catch {
+    return { symbol: "BTCUSDT", interval: "1m", applied: false };
+  }
 }
 
 export function LiveForm({
@@ -18,9 +42,10 @@ export function LiveForm({
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
 }) {
+  const defaults = loadExecutionDefaults();
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
-  const [symbol, setSymbol] = useState("BTCUSDT");
-  const [interval, setInterval] = useState("1m");
+  const [symbol, setSymbol] = useState(defaults.symbol);
+  const [interval, setInterval] = useState(defaults.interval);
   const [leverage, setLeverage] = useState(1);
   const [maxPosition, setMaxPosition] = useState(0.5);
   const [dailyLossLimit, setDailyLossLimit] = useState(500);
@@ -69,6 +94,11 @@ export function LiveForm({
         전략 생성 프롬프트에 거래 설정(심볼/간격/레버리지 등)을 적었더라도, 실제 실행에는 이 폼의 값이
         우선 적용됩니다.
       </p>
+      {defaults.applied ? (
+        <p className="mb-4 text-xs text-[#868993]">
+          최근 전략 입력에서 추출한 기본값을 반영했습니다. 필요하면 아래에서 변경하세요.
+        </p>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">Strategy</div>
@@ -99,7 +129,7 @@ export function LiveForm({
             value={interval}
             onChange={(e) => setInterval(e.target.value)}
           >
-            {["1m", "5m", "15m", "1h"].map((itv) => (
+            {LIVE_INTERVALS.map((itv) => (
               <option key={itv} value={itv} className="bg-[#131722]">
                 {itv}
               </option>

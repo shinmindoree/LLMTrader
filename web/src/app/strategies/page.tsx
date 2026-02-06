@@ -59,6 +59,32 @@ function formatIntakeGuidance(intake: StrategyIntakeResponse): string {
   return lines.join("\n");
 }
 
+const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
+
+function persistExecutionDefaults(spec: StrategyIntakeResponse["normalized_spec"] | null | undefined): void {
+  if (!spec || typeof window === "undefined") {
+    return;
+  }
+  const symbol = typeof spec.symbol === "string" ? spec.symbol.trim().toUpperCase() : "";
+  const interval = typeof spec.timeframe === "string" ? spec.timeframe.trim() : "";
+  if (!symbol && !interval) {
+    return;
+  }
+  try {
+    const prevRaw = window.localStorage.getItem(EXECUTION_DEFAULTS_KEY);
+    const prev = prevRaw ? (JSON.parse(prevRaw) as Record<string, unknown>) : {};
+    const next: Record<string, unknown> = {
+      ...prev,
+      updated_at: new Date().toISOString(),
+    };
+    if (symbol) next.symbol = symbol;
+    if (interval) next.interval = interval;
+    window.localStorage.setItem(EXECUTION_DEFAULTS_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -67,6 +93,8 @@ type ChatMessage = {
   path?: string | null;
   summary?: string | null;
   backtest_ok?: boolean;
+  repaired?: boolean;
+  repair_attempts?: number;
   textOnly?: boolean;
 };
 
@@ -130,7 +158,10 @@ export default function StrategiesPage() {
     const isFirstTurn = !lastCodeSummary;
     const isModify = lastCodeSummary && isModifyIntent(trimmed);
 
-    const doGenerate = (messagesToSend?: { role: string; content: string }[]) => {
+    const doGenerate = (
+      messagesToSend?: { role: string; content: string }[],
+      intakeSpec?: StrategyIntakeResponse["normalized_spec"] | null,
+    ) => {
       return generateStrategyStream(
         trimmed,
         {
@@ -148,6 +179,7 @@ export default function StrategiesPage() {
                 prev.filter((m) => m.id !== assistantId),
               );
             } else {
+              persistExecutionDefaults(intakeSpec);
               setChatMessages((prev) => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== "assistant" || last.id !== assistantId) return prev;
@@ -158,6 +190,8 @@ export default function StrategiesPage() {
                     content: payload.code ?? last.content,
                     summary: payload.summary ?? null,
                     backtest_ok: payload.backtest_ok ?? false,
+                    repaired: payload.repaired ?? false,
+                    repair_attempts: payload.repair_attempts ?? 0,
                   },
                 ];
               });
@@ -182,6 +216,8 @@ export default function StrategiesPage() {
       path: null,
       summary: null,
       backtest_ok: false,
+      repaired: false,
+      repair_attempts: 0,
       textOnly: false,
     };
 
@@ -200,7 +236,7 @@ export default function StrategiesPage() {
           setIsSending(false);
           return;
         }
-        await doGenerate(messagesToSend);
+        await doGenerate(messagesToSend, intake.normalized_spec);
       } catch (e) {
         setChatError(String(e));
         setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
@@ -396,6 +432,11 @@ export default function StrategiesPage() {
                         {message.backtest_ok ? (
                           <p className="mt-2 text-xs text-[#26a69a]">
                             Backtest passed. Strategy runs correctly.
+                          </p>
+                        ) : null}
+                        {message.repaired ? (
+                          <p className="mt-1 text-xs text-[#f9a825]">
+                            자동 수정 후 검증 통과 ({message.repair_attempts ?? 0}회 시도)
                           </p>
                         ) : null}
                         {message.content &&

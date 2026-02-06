@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from relay.auth import require_api_key
 from relay.azure_openai import chat_completion, chat_completion_messages, chat_completion_stream
 from relay.config import get_config
-from relay.prompts import build_intake_system_prompt, build_system_prompt
+from relay.prompts import build_intake_system_prompt, build_repair_system_prompt, build_system_prompt
 
 
 app = FastAPI(title="LLMTrader Relay", version="0.1.0")
@@ -43,6 +43,18 @@ class IntakeResponse(BaseModel):
     unsupported_requirements: list[str]
     clarification_questions: list[str]
     assumptions: list[str]
+
+
+class RepairRequest(BaseModel):
+    code: str
+    verification_error: str
+    user_prompt: str | None = None
+    messages: list[ChatMessage] | None = None
+
+
+class RepairResponse(BaseModel):
+    code: str
+    model_used: str | None = None
 
 
 class SummarizeRequest(BaseModel):
@@ -336,6 +348,67 @@ async def intake(
 
     payload = _extract_json_object(content) or {}
     return _sanitize_intake_response(payload, prompt=prompt, messages=messages)
+
+
+@app.post("/repair", response_model=RepairResponse)
+async def repair(
+    body: RepairRequest,
+    _: None = Depends(require_api_key),
+) -> RepairResponse:
+    code = (body.code or "").strip()
+    verification_error = (body.verification_error or "").strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="code must be non-empty")
+    if not verification_error:
+        raise HTTPException(status_code=422, detail="verification_error must be non-empty")
+
+    config = get_config()
+    if not config.is_azure_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Azure OpenAI not configured (missing env vars)",
+        )
+
+    prompt_parts = [
+        "Fix the strategy code based on the verification failure below.",
+        "",
+        f"Verification error:\n{verification_error}",
+    ]
+    if body.user_prompt and body.user_prompt.strip():
+        prompt_parts.extend(["", f"Original user request:\n{body.user_prompt.strip()}"])
+    if body.messages:
+        compact_msgs = [
+            {"role": m.role, "content": m.content}
+            for m in body.messages
+            if str(m.content or "").strip()
+        ]
+        if compact_msgs:
+            prompt_parts.extend(
+                [
+                    "",
+                    "Conversation context (JSON):",
+                    json.dumps(compact_msgs, ensure_ascii=False),
+                ]
+            )
+    prompt_parts.extend(["", "Current code:", code])
+    repair_user_content = "\n".join(prompt_parts)
+
+    try:
+        content, model_used = chat_completion(
+            config,
+            system_content=build_repair_system_prompt(),
+            user_content=repair_user_content,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Azure OpenAI call failed: {e!s}",
+        ) from e
+
+    if not content or not content.strip():
+        raise HTTPException(status_code=502, detail="Empty completion from model")
+
+    return RepairResponse(code=content.strip(), model_used=model_used)
 
 
 @app.post("/summarize", response_model=SummarizeResponse)

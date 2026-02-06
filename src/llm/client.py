@@ -21,6 +21,16 @@ class StrategyGenerationResult:
     model_used: str | None = None
 
 
+@dataclass
+class StrategyRepairResult:
+    """전략 수정 결과."""
+
+    success: bool
+    code: str | None = None
+    error: str | None = None
+    model_used: str | None = None
+
+
 class LLMClient:
     """LLM 클라이언트 - 중계 서버와 통신."""
 
@@ -266,6 +276,56 @@ class LLMClient:
         except Exception:
             return None
         return None
+
+    async def repair_strategy(
+        self,
+        code: str,
+        verification_error: str,
+        user_prompt: str | None = None,
+        messages: list[dict[str, str]] | None = None,
+    ) -> StrategyRepairResult:
+        """검증 실패 코드를 자동 수정 요청."""
+        if not code or not code.strip():
+            return StrategyRepairResult(success=False, error="code가 비어있습니다.")
+        if not verification_error or not verification_error.strip():
+            return StrategyRepairResult(success=False, error="verification_error가 비어있습니다.")
+
+        payload: dict[str, Any] = {
+            "code": code.strip(),
+            "verification_error": verification_error.strip(),
+            "user_prompt": (user_prompt or "").strip() or None,
+        }
+        if messages:
+            payload["messages"] = messages
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                headers = {}
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                response = await client.post(
+                    f"{self.base_url}/repair",
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                fixed_code = data.get("code")
+                model_used = data.get("model_used")
+                if not fixed_code:
+                    return StrategyRepairResult(
+                        success=False,
+                        error="서버 응답에 code가 없습니다.",
+                        model_used=model_used,
+                    )
+                return StrategyRepairResult(
+                    success=True,
+                    code=fixed_code,
+                    model_used=model_used,
+                )
+        except Exception as e:
+            return StrategyRepairResult(success=False, error=f"자동 수정 실패: {e}")
 
     async def generate_strategy_stream(
         self,

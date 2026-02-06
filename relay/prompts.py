@@ -59,6 +59,20 @@ Rules:
 - Output valid JSON only. No markdown."""
 
 
+REPAIR_SYSTEM_PROMPT = """You fix Python trading strategy code so that it can be loaded and backtested.
+
+Requirements:
+- Output ONLY raw Python code for one strategy file. No markdown fences.
+- Keep compatibility with runner expectations:
+  - class name must end with "Strategy"
+  - inherit Strategy
+  - valid initialize/on_bar signatures
+- Preserve the user's original strategy intent as much as possible.
+- Use only available runtime capabilities from current project context.
+- If helper functions are required, keep them consistent with template-based strategy format.
+- Return syntactically valid and executable code only."""
+
+
 def _load_template_and_skill() -> tuple[str | None, str | None]:
     template = None
     skill = None
@@ -92,3 +106,7 @@ def build_system_prompt() -> str:
 
 def build_intake_system_prompt() -> str:
     return INTAKE_SYSTEM_PROMPT
+
+
+def build_repair_system_prompt() -> str:
+    return REPAIR_SYSTEM_PROMPT
