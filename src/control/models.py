@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -105,3 +105,35 @@ class Trade(Base):
     )
     raw_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+
+class StrategyQualityLog(Base):
+    __tablename__ = "strategy_quality_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+
+    pipeline_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    endpoint: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    user_prompt_len: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    message_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    intent: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    missing_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    unsupported_requirements: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    development_requirements: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+
+    generation_attempted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    generation_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verification_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    repaired: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    repair_attempts: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    meta_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

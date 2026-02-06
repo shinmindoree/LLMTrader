@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.enums import EventKind, JobStatus, JobType
-from control.models import Job, JobEvent, Order, Trade
+from control.models import Job, JobEvent, Order, StrategyQualityLog, Trade
 
 ACTIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.STOP_REQUESTED}
 FINISHED_STATUSES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
@@ -349,6 +349,71 @@ async def list_events(
         .order_by(JobEvent.event_id.asc())
         .limit(limit)
     )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def create_strategy_quality_log(
+    session: AsyncSession,
+    *,
+    request_id: uuid.UUID,
+    pipeline_version: str,
+    endpoint: str,
+    user_prompt_len: int,
+    message_count: int,
+    intent: str | None,
+    status: str | None,
+    missing_fields: list[str],
+    unsupported_requirements: list[str],
+    development_requirements: list[str],
+    generation_attempted: bool | None,
+    generation_success: bool | None,
+    verification_passed: bool | None,
+    repaired: bool | None,
+    repair_attempts: int,
+    model_used: str | None,
+    error_stage: str | None,
+    error_message: str | None,
+    duration_ms: int,
+    meta_json: dict[str, Any] | None = None,
+) -> StrategyQualityLog:
+    row = StrategyQualityLog(
+        request_id=request_id,
+        pipeline_version=pipeline_version,
+        endpoint=endpoint,
+        user_prompt_len=max(0, int(user_prompt_len)),
+        message_count=max(0, int(message_count)),
+        intent=intent,
+        status=status,
+        missing_fields=missing_fields,
+        unsupported_requirements=unsupported_requirements,
+        development_requirements=development_requirements,
+        generation_attempted=generation_attempted,
+        generation_success=generation_success,
+        verification_passed=verification_passed,
+        repaired=repaired,
+        repair_attempts=max(0, int(repair_attempts)),
+        model_used=model_used,
+        error_stage=error_stage,
+        error_message=error_message,
+        duration_ms=max(0, int(duration_ms)),
+        meta_json=meta_json,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_strategy_quality_logs(
+    session: AsyncSession,
+    *,
+    since: datetime | None = None,
+    limit: int = 5000,
+) -> list[StrategyQualityLog]:
+    stmt: Select[tuple[StrategyQualityLog]] = select(StrategyQualityLog).order_by(StrategyQualityLog.ts.desc())
+    if since is not None:
+        stmt = stmt.where(StrategyQualityLog.ts >= since)
+    stmt = stmt.limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   deleteStrategy,
   getStrategyCapabilities,
+  getStrategyQualitySummary,
   generateStrategyStream,
   intakeStrategy,
   listStrategies,
@@ -15,6 +16,7 @@ import type {
   StrategyCapabilitiesResponse,
   StrategyInfo,
   StrategyIntakeResponse,
+  StrategyQualitySummaryResponse,
 } from "@/lib/types";
 
 const MODIFY_KEYWORDS =
@@ -76,6 +78,11 @@ function formatIntakeGuidance(intake: StrategyIntakeResponse): string {
   return lines.join("\n");
 }
 
+function formatRatio(value: number | null | undefined): string {
+  const num = typeof value === "number" ? value : 0;
+  return `${(num * 100).toFixed(1)}%`;
+}
+
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
 
 function persistExecutionDefaults(spec: StrategyIntakeResponse["normalized_spec"] | null | undefined): void {
@@ -128,6 +135,8 @@ export default function StrategiesPage() {
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<StrategyCapabilitiesResponse | null>(null);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [qualitySummary, setQualitySummary] = useState<StrategyQualitySummaryResponse | null>(null);
+  const [qualityError, setQualityError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -143,6 +152,12 @@ export default function StrategiesPage() {
   } | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
+  const refreshQualitySummary = useCallback(() => {
+    getStrategyQualitySummary(7)
+      .then(setQualitySummary)
+      .catch((e) => setQualityError(String(e)));
+  }, []);
+
   useEffect(() => {
     listStrategies()
       .then(setItems)
@@ -154,6 +169,10 @@ export default function StrategiesPage() {
       .then(setCapabilities)
       .catch((e) => setCapabilityError(String(e)));
   }, []);
+
+  useEffect(() => {
+    refreshQualitySummary();
+  }, [refreshQualitySummary]);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -224,6 +243,7 @@ export default function StrategiesPage() {
                 .then(setItems)
                 .catch((e) => setError(String(e)));
             }
+            refreshQualitySummary();
             setIsSending(false);
           },
         },
@@ -259,6 +279,7 @@ export default function StrategiesPage() {
             return [...prev.slice(0, -1), { ...last, content: guidance, textOnly: true }];
           });
           setIsSending(false);
+          refreshQualitySummary();
           return;
         }
         await doGenerate(messagesToSend, intake.normalized_spec);
@@ -426,6 +447,42 @@ export default function StrategiesPage() {
                     외부 연동 없이는 미지원 범주: {capabilities.unsupported_categories.join(", ")}
                   </p>
                 ) : null}
+                <div className="mt-3 rounded border border-[#2a2e39] bg-[#131722] p-3">
+                  <h3 className="text-xs font-semibold text-[#d1d4dc]">최근 7일 품질 지표</h3>
+                  {qualityError ? (
+                    <p className="mt-2 text-xs text-[#ef5350]">품질 지표 조회 실패: {qualityError}</p>
+                  ) : qualitySummary ? (
+                    <>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                        <span className="rounded border border-[#2a2e39] px-2 py-1 text-[#9aa0ad]">
+                          요청 {qualitySummary.total_requests}
+                        </span>
+                        <span className="rounded border border-[#2a2e39] px-2 py-1 text-[#9aa0ad]">
+                          생성 성공률 {formatRatio(qualitySummary.generation_success_rate)}
+                        </span>
+                        <span className="rounded border border-[#2a2e39] px-2 py-1 text-[#9aa0ad]">
+                          보완질문 비율 {formatRatio(qualitySummary.clarification_rate)}
+                        </span>
+                        <span className="rounded border border-[#2a2e39] px-2 py-1 text-[#9aa0ad]">
+                          미지원 비율 {formatRatio(qualitySummary.unsupported_rate)}
+                        </span>
+                        <span className="rounded border border-[#2a2e39] px-2 py-1 text-[#9aa0ad]">
+                          자동수정 비율 {formatRatio(qualitySummary.auto_repair_rate)}
+                        </span>
+                      </div>
+                      {qualitySummary.top_error_stages.length > 0 ? (
+                        <p className="mt-2 text-xs text-[#f9a825]">
+                          주요 실패 단계:{" "}
+                          {qualitySummary.top_error_stages
+                            .map((item) => `${item.name}(${item.count})`)
+                            .join(", ")}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="mt-2 text-xs text-[#868993]">품질 지표를 불러오는 중...</p>
+                  )}
+                </div>
               </>
             ) : (
               <p className="mt-2 text-xs text-[#868993]">capability 정보를 불러오는 중...</p>

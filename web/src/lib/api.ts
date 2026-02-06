@@ -11,6 +11,7 @@ import type {
   StrategyGenerationResponse,
   StrategyIntakeResponse,
   StrategyInfo,
+  StrategyQualitySummaryResponse,
   StrategySaveResponse,
   Trade,
 } from "@/lib/types";
@@ -58,6 +59,12 @@ export async function intakeStrategy(
 
 export async function getStrategyCapabilities(): Promise<StrategyCapabilitiesResponse> {
   return json<StrategyCapabilitiesResponse>("/api/backend/api/strategies/capabilities");
+}
+
+export async function getStrategyQualitySummary(days = 7): Promise<StrategyQualitySummaryResponse> {
+  return json<StrategyQualitySummaryResponse>(
+    `/api/backend/api/strategies/quality/summary?days=${encodeURIComponent(String(days))}`,
+  );
 }
 
 export async function generateStrategy(

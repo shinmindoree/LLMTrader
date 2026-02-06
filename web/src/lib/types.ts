@@ -46,6 +46,30 @@ export type StrategyCapabilitiesResponse = {
   summary_lines: string[];
 };
 
+export type CountItem = {
+  name: string;
+  count: number;
+};
+
+export type StrategyQualitySummaryResponse = {
+  window_days: number;
+  total_requests: number;
+  intake_only_requests: number;
+  generate_requests: number;
+  generation_success_count: number;
+  generation_failure_count: number;
+  ready_rate: number;
+  clarification_rate: number;
+  unsupported_rate: number;
+  out_of_scope_rate: number;
+  generation_success_rate: number;
+  auto_repair_rate: number;
+  avg_repair_attempts: number;
+  top_missing_fields: CountItem[];
+  top_unsupported_requirements: CountItem[];
+  top_error_stages: CountItem[];
+};
+
 export type StrategySaveResponse = { path: string };
 
 export type Job = {

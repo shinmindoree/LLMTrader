@@ -6,9 +6,11 @@ import json
 import re
 import subprocess
 import sys
+import time
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,12 +26,14 @@ from control.models import Job
 from control.repo import (
     append_event,
     create_job,
+    create_strategy_quality_log,
     delete_job,
     delete_jobs,
     get_job,
     list_events,
     list_jobs,
     list_orders,
+    list_strategy_quality_logs,
     list_trades,
     request_stop,
     stop_all_jobs,
@@ -41,6 +45,7 @@ from api.deps import require_admin
 from api.job_policy import evaluate_job_policy
 from api.schemas import (
     HealthResponse,
+    CountItem,
     DeleteAllResponse,
     DeleteResponse,
     JobPolicyCheckRequest,
@@ -55,6 +60,7 @@ from api.schemas import (
     StrategyIntakeRequest,
     StrategyIntakeResponse,
     StrategyCapabilityResponse,
+    StrategyQualitySummaryResponse,
     StrategyGenerateRequest,
     StrategyGenerateResponse,
     StrategyChatRequest,
@@ -401,6 +407,64 @@ def create_app() -> FastAPI:
         async with session_maker() as session:
             yield session
 
+    strategy_pipeline_version = "multi-agent-v1"
+
+    def _rate(num: int, den: int) -> float:
+        if den <= 0:
+            return 0.0
+        return round(float(num) / float(den), 4)
+
+    def _top_counts(counter: Counter[str], limit: int = 5) -> list[CountItem]:
+        return [CountItem(name=name, count=count) for name, count in counter.most_common(limit)]
+
+    async def _record_strategy_quality(
+        *,
+        request_id: uuid.UUID,
+        endpoint: str,
+        user_prompt_len: int,
+        message_count: int,
+        intake: StrategyIntakeResponse | None = None,
+        generation_attempted: bool | None = None,
+        generation_success: bool | None = None,
+        verification_passed: bool | None = None,
+        repaired: bool | None = None,
+        repair_attempts: int = 0,
+        model_used: str | None = None,
+        error_stage: str | None = None,
+        error_message: str | None = None,
+        duration_ms: int = 0,
+        meta_json: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            async with session_maker() as session:
+                await create_strategy_quality_log(
+                    session,
+                    request_id=request_id,
+                    pipeline_version=strategy_pipeline_version,
+                    endpoint=endpoint,
+                    user_prompt_len=max(0, int(user_prompt_len)),
+                    message_count=max(0, int(message_count)),
+                    intent=(intake.intent if intake else None),
+                    status=(intake.status if intake else None),
+                    missing_fields=list(intake.missing_fields) if intake else [],
+                    unsupported_requirements=list(intake.unsupported_requirements) if intake else [],
+                    development_requirements=list(intake.development_requirements) if intake else [],
+                    generation_attempted=generation_attempted,
+                    generation_success=generation_success,
+                    verification_passed=verification_passed,
+                    repaired=repaired,
+                    repair_attempts=max(0, int(repair_attempts)),
+                    model_used=model_used,
+                    error_stage=error_stage,
+                    error_message=(str(error_message)[:2000] if error_message else None),
+                    duration_ms=max(0, int(duration_ms)),
+                    meta_json=meta_json,
+                )
+                await session.commit()
+        except Exception:
+            # Quality logging must never break main workflow.
+            return
+
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         try:
@@ -452,14 +516,39 @@ def create_app() -> FastAPI:
         messages = body.messages
         if not messages and not prompt:
             raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
+        request_id = uuid.uuid4()
+        started_at = time.perf_counter()
+        message_count = len(messages or [])
 
         try:
             client = LLMClient()
         except ValueError as exc:
+            await _record_strategy_quality(
+                request_id=request_id,
+                endpoint="intake",
+                user_prompt_len=len(prompt),
+                message_count=message_count,
+                generation_attempted=False,
+                generation_success=False,
+                error_stage="client_init",
+                error_message=str(exc),
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+            )
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
-        return await _run_intake(client, prompt, openai_messages)
+        intake = await _run_intake(client, prompt, openai_messages)
+        await _record_strategy_quality(
+            request_id=request_id,
+            endpoint="intake",
+            user_prompt_len=len(prompt),
+            message_count=message_count,
+            intake=intake,
+            generation_attempted=False,
+            generation_success=False,
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+        )
+        return intake
 
     @app.get(
         "/api/strategies/capabilities",
@@ -494,6 +583,74 @@ def create_app() -> FastAPI:
             summary_lines=_to_str_list(payload.get("summary_lines")),
         )
 
+    @app.get(
+        "/api/strategies/quality/summary",
+        response_model=StrategyQualitySummaryResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def strategy_quality_summary(
+        days: int = Query(default=7, ge=1, le=90),
+        limit: int = Query(default=5000, ge=100, le=20000),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StrategyQualitySummaryResponse:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        rows = await list_strategy_quality_logs(session, since=since, limit=limit)
+
+        total_requests = len(rows)
+        intake_only_requests = sum(1 for r in rows if r.endpoint == "intake")
+        generate_rows = [r for r in rows if r.endpoint in {"generate", "generate_stream"}]
+        generate_requests = len(generate_rows)
+        generation_success_count = sum(1 for r in generate_rows if r.generation_success is True)
+        generation_failure_count = sum(
+            1 for r in generate_rows if r.generation_attempted is True and r.generation_success is False
+        )
+        repaired_count = sum(1 for r in generate_rows if r.repaired is True)
+        total_repair_attempts = sum(int(r.repair_attempts or 0) for r in generate_rows)
+
+        ready_count = sum(1 for r in rows if str(r.status or "").upper() == "READY")
+        clarification_count = sum(1 for r in rows if str(r.status or "").upper() == "NEEDS_CLARIFICATION")
+        unsupported_count = sum(1 for r in rows if str(r.status or "").upper() == "UNSUPPORTED_CAPABILITY")
+        out_of_scope_count = sum(1 for r in rows if str(r.status or "").upper() == "OUT_OF_SCOPE")
+
+        missing_counter: Counter[str] = Counter()
+        unsupported_req_counter: Counter[str] = Counter()
+        error_stage_counter: Counter[str] = Counter()
+
+        for row in rows:
+            for item in (row.missing_fields or []):
+                key = str(item).strip()
+                if key:
+                    missing_counter[key] += 1
+            for item in (row.unsupported_requirements or []):
+                key = str(item).strip()
+                if key:
+                    unsupported_req_counter[key] += 1
+            if row.error_stage:
+                key = str(row.error_stage).strip()
+                if key:
+                    error_stage_counter[key] += 1
+
+        return StrategyQualitySummaryResponse(
+            window_days=days,
+            total_requests=total_requests,
+            intake_only_requests=intake_only_requests,
+            generate_requests=generate_requests,
+            generation_success_count=generation_success_count,
+            generation_failure_count=generation_failure_count,
+            ready_rate=_rate(ready_count, total_requests),
+            clarification_rate=_rate(clarification_count, total_requests),
+            unsupported_rate=_rate(unsupported_count, total_requests),
+            out_of_scope_rate=_rate(out_of_scope_count, total_requests),
+            generation_success_rate=_rate(generation_success_count, generate_requests),
+            auto_repair_rate=_rate(repaired_count, generate_requests),
+            avg_repair_attempts=round(total_repair_attempts / generate_requests, 4)
+            if generate_requests
+            else 0.0,
+            top_missing_fields=_top_counts(missing_counter, limit=5),
+            top_unsupported_requirements=_top_counts(unsupported_req_counter, limit=5),
+            top_error_stages=_top_counts(error_stage_counter, limit=5),
+        )
+
     @app.post(
         "/api/strategies/generate",
         response_model=StrategyGenerateResponse,
@@ -504,66 +661,237 @@ def create_app() -> FastAPI:
         messages = body.messages
         if not messages and not prompt:
             raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
-
-        dirs = _strategy_dirs()
-        if not dirs:
-            raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
+        request_id = uuid.uuid4()
+        started_at = time.perf_counter()
+        message_count = len(messages or [])
+        quality_logged = False
+        intake: StrategyIntakeResponse | None = None
 
         try:
-            client = LLMClient()
-        except ValueError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            dirs = _strategy_dirs()
+            if not dirs:
+                await _record_strategy_quality(
+                    request_id=request_id,
+                    endpoint="generate",
+                    user_prompt_len=len(prompt),
+                    message_count=message_count,
+                    generation_attempted=False,
+                    generation_success=False,
+                    error_stage="strategy_dirs",
+                    error_message="STRATEGY_DIRS is not configured",
+                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                )
+                quality_logged = True
+                raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
 
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
-        intake = await _run_intake(client, prompt, openai_messages)
-        if intake.status != "READY":
-            raise HTTPException(status_code=422, detail=intake.model_dump())
+            try:
+                client = LLMClient()
+            except ValueError as exc:
+                await _record_strategy_quality(
+                    request_id=request_id,
+                    endpoint="generate",
+                    user_prompt_len=len(prompt),
+                    message_count=message_count,
+                    generation_attempted=False,
+                    generation_success=False,
+                    error_stage="client_init",
+                    error_message=str(exc),
+                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                )
+                quality_logged = True
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        if messages:
-            result = await client.generate_strategy("", messages=openai_messages)
-        else:
-            result = await client.generate_strategy(prompt)
-        if not result.success or not result.code:
-            raise HTTPException(status_code=502, detail=result.error or "LLM generation failed")
+            openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+            intake = await _run_intake(client, prompt, openai_messages)
+            if intake.status != "READY":
+                await _record_strategy_quality(
+                    request_id=request_id,
+                    endpoint="generate",
+                    user_prompt_len=len(prompt),
+                    message_count=message_count,
+                    intake=intake,
+                    generation_attempted=False,
+                    generation_success=False,
+                    error_stage="intake_blocked",
+                    error_message=intake.user_message,
+                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                )
+                quality_logged = True
+                raise HTTPException(status_code=422, detail=intake.model_dump())
 
-        repo_root = _repo_root()
-        code, repair_attempts = await _verify_with_auto_repair(
-            client=client,
-            initial_code=result.code,
-            prompt=prompt,
-            messages=openai_messages,
-            repo_root=repo_root,
-        )
-        summary = await client.summarize_strategy(code)
-        return StrategyGenerateResponse(
-            path=None,
-            code=code,
-            model_used=result.model_used,
-            summary=summary,
-            backtest_ok=True,
-            repaired=repair_attempts > 0,
-            repair_attempts=repair_attempts,
-        )
+            if messages:
+                result = await client.generate_strategy("", messages=openai_messages)
+            else:
+                result = await client.generate_strategy(prompt)
+            if not result.success or not result.code:
+                await _record_strategy_quality(
+                    request_id=request_id,
+                    endpoint="generate",
+                    user_prompt_len=len(prompt),
+                    message_count=message_count,
+                    intake=intake,
+                    generation_attempted=True,
+                    generation_success=False,
+                    verification_passed=False,
+                    error_stage="model_generation",
+                    error_message=result.error or "LLM generation failed",
+                    model_used=result.model_used,
+                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                )
+                quality_logged = True
+                raise HTTPException(status_code=502, detail=result.error or "LLM generation failed")
+
+            repo_root = _repo_root()
+            try:
+                code, repair_attempts = await _verify_with_auto_repair(
+                    client=client,
+                    initial_code=result.code,
+                    prompt=prompt,
+                    messages=openai_messages,
+                    repo_root=repo_root,
+                )
+            except HTTPException as exc:
+                await _record_strategy_quality(
+                    request_id=request_id,
+                    endpoint="generate",
+                    user_prompt_len=len(prompt),
+                    message_count=message_count,
+                    intake=intake,
+                    generation_attempted=True,
+                    generation_success=False,
+                    verification_passed=False,
+                    error_stage="verification",
+                    error_message=str(exc.detail),
+                    model_used=result.model_used,
+                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                )
+                quality_logged = True
+                raise
+
+            summary = await client.summarize_strategy(code)
+            response = StrategyGenerateResponse(
+                path=None,
+                code=code,
+                model_used=result.model_used,
+                summary=summary,
+                backtest_ok=True,
+                repaired=repair_attempts > 0,
+                repair_attempts=repair_attempts,
+            )
+            await _record_strategy_quality(
+                request_id=request_id,
+                endpoint="generate",
+                user_prompt_len=len(prompt),
+                message_count=message_count,
+                intake=intake,
+                generation_attempted=True,
+                generation_success=True,
+                verification_passed=True,
+                repaired=repair_attempts > 0,
+                repair_attempts=repair_attempts,
+                model_used=result.model_used,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+            )
+            quality_logged = True
+            return response
+        except Exception as exc:
+            if not quality_logged:
+                await _record_strategy_quality(
+                    request_id=request_id,
+                    endpoint="generate",
+                    user_prompt_len=len(prompt),
+                    message_count=message_count,
+                    intake=intake,
+                    generation_attempted=(intake is not None and intake.status == "READY"),
+                    generation_success=False,
+                    verification_passed=False,
+                    error_stage="unhandled",
+                    error_message=str(exc),
+                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                )
+            raise
 
     async def _generate_stream_events(body: StrategyGenerateRequest):
         prompt = (body.user_prompt or "").strip()
         messages = body.messages
+        request_id = uuid.uuid4()
+        started_at = time.perf_counter()
+        message_count = len(messages or [])
+        intake: StrategyIntakeResponse | None = None
+        quality_logged = False
+
+        async def _log_once(
+            *,
+            generation_attempted: bool | None,
+            generation_success: bool | None,
+            verification_passed: bool | None = None,
+            repaired: bool | None = None,
+            repair_attempts: int = 0,
+            error_stage: str | None = None,
+            error_message: str | None = None,
+            model_used: str | None = None,
+        ) -> None:
+            nonlocal quality_logged
+            if quality_logged:
+                return
+            await _record_strategy_quality(
+                request_id=request_id,
+                endpoint="generate_stream",
+                user_prompt_len=len(prompt),
+                message_count=message_count,
+                intake=intake,
+                generation_attempted=generation_attempted,
+                generation_success=generation_success,
+                verification_passed=verification_passed,
+                repaired=repaired,
+                repair_attempts=repair_attempts,
+                model_used=model_used,
+                error_stage=error_stage,
+                error_message=error_message,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+            )
+            quality_logged = True
+
         if not messages and not prompt:
+            await _log_once(
+                generation_attempted=False,
+                generation_success=False,
+                error_stage="invalid_input",
+                error_message="user_prompt must be non-empty",
+            )
             yield f"data: {json.dumps({'error': 'user_prompt must be non-empty'})}\n\n"
             return
         dirs = _strategy_dirs()
         if not dirs:
+            await _log_once(
+                generation_attempted=False,
+                generation_success=False,
+                error_stage="strategy_dirs",
+                error_message="STRATEGY_DIRS is not configured",
+            )
             yield f"data: {json.dumps({'error': 'STRATEGY_DIRS is not configured'})}\n\n"
             return
         try:
             client = LLMClient()
         except ValueError as exc:
+            await _log_once(
+                generation_attempted=False,
+                generation_success=False,
+                error_stage="client_init",
+                error_message=str(exc),
+            )
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
 
         openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
         intake = await _run_intake(client, prompt, openai_messages)
         if intake.status != "READY":
+            await _log_once(
+                generation_attempted=False,
+                generation_success=False,
+                error_stage="intake_blocked",
+                error_message=intake.user_message,
+            )
             yield f"data: {json.dumps({'done': True, 'error': intake.user_message})}\n\n"
             return
 
@@ -576,6 +904,13 @@ def create_app() -> FastAPI:
                 stream = client.generate_strategy_stream(prompt)
             async for event in stream:
                 if "error" in event:
+                    await _log_once(
+                        generation_attempted=True,
+                        generation_success=False,
+                        verification_passed=False,
+                        error_stage="stream_generation",
+                        error_message=str(event.get("error")),
+                    )
                     yield f"data: {json.dumps(event)}\n\n"
                     return
                 if "token" in event:
@@ -584,10 +919,24 @@ def create_app() -> FastAPI:
                 if event.get("done"):
                     break
         except Exception as exc:  # noqa: BLE001
+            await _log_once(
+                generation_attempted=True,
+                generation_success=False,
+                verification_passed=False,
+                error_stage="stream_exception",
+                error_message=str(exc),
+            )
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
         code = _strip_code_fences("".join(code_acc))
         if not code:
+            await _log_once(
+                generation_attempted=True,
+                generation_success=False,
+                verification_passed=False,
+                error_stage="empty_code",
+                error_message="Empty code from stream",
+            )
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
             return
         try:
@@ -600,9 +949,23 @@ def create_app() -> FastAPI:
             )
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+            await _log_once(
+                generation_attempted=True,
+                generation_success=False,
+                verification_passed=False,
+                error_stage="verification",
+                error_message=detail,
+            )
             yield f"data: {json.dumps({'done': True, 'error': detail, 'code': code})}\n\n"
             return
         summary = await client.summarize_strategy(code)
+        await _log_once(
+            generation_attempted=True,
+            generation_success=True,
+            verification_passed=True,
+            repaired=repair_attempts > 0,
+            repair_attempts=repair_attempts,
+        )
         yield (
             "data: "
             + json.dumps(

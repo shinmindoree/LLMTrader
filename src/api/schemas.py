@@ -58,6 +58,33 @@ class StrategyCapabilityResponse(BaseModel):
     summary_lines: list[str] = Field(default_factory=list)
 
 
+class CountItem(BaseModel):
+    name: str
+    count: int
+
+
+class StrategyQualitySummaryResponse(BaseModel):
+    window_days: int
+    total_requests: int
+    intake_only_requests: int
+    generate_requests: int
+    generation_success_count: int
+    generation_failure_count: int
+
+    ready_rate: float
+    clarification_rate: float
+    unsupported_rate: float
+    out_of_scope_rate: float
+
+    generation_success_rate: float
+    auto_repair_rate: float
+    avg_repair_attempts: float
+
+    top_missing_fields: list[CountItem] = Field(default_factory=list)
+    top_unsupported_requirements: list[CountItem] = Field(default_factory=list)
+    top_error_stages: list[CountItem] = Field(default_factory=list)
+
+
 class StrategyGenerateResponse(BaseModel):
     path: str | None = None
     code: str
