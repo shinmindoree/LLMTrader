@@ -51,6 +51,7 @@ from api.schemas import (
     StrategyInfo,
     StrategyIntakeRequest,
     StrategyIntakeResponse,
+    StrategyCapabilityResponse,
     StrategyGenerateRequest,
     StrategyGenerateResponse,
     StrategyChatRequest,
@@ -454,6 +455,39 @@ def create_app() -> FastAPI:
 
         openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
         return await _run_intake(client, prompt, openai_messages)
+
+    @app.get(
+        "/api/strategies/capabilities",
+        response_model=StrategyCapabilityResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def strategy_capabilities() -> StrategyCapabilityResponse:
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        payload = await client.strategy_capabilities()
+        if not payload:
+            raise HTTPException(status_code=502, detail="Failed to fetch strategy capabilities")
+
+        def _to_str_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            out: list[str] = []
+            for item in value:
+                s = str(item).strip()
+                if s:
+                    out.append(s)
+            return out
+
+        return StrategyCapabilityResponse(
+            supported_data_sources=_to_str_list(payload.get("supported_data_sources")),
+            supported_indicator_scopes=_to_str_list(payload.get("supported_indicator_scopes")),
+            supported_context_methods=_to_str_list(payload.get("supported_context_methods")),
+            unsupported_categories=_to_str_list(payload.get("unsupported_categories")),
+            summary_lines=_to_str_list(payload.get("summary_lines")),
+        )
 
     @app.post(
         "/api/strategies/generate",

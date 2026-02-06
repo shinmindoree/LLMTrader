@@ -12,6 +12,14 @@ from pydantic import BaseModel
 
 from relay.auth import require_api_key
 from relay.azure_openai import chat_completion, chat_completion_messages, chat_completion_stream
+from relay.capability_registry import (
+    SUPPORTED_CONTEXT_METHODS,
+    SUPPORTED_DATA_SOURCES,
+    SUPPORTED_INDICATOR_SCOPES,
+    UNSUPPORTED_CAPABILITY_RULES,
+    capability_summary_lines,
+    detect_unsupported_requirements,
+)
 from relay.config import get_config
 from relay.prompts import build_intake_system_prompt, build_repair_system_prompt, build_system_prompt
 
@@ -57,6 +65,14 @@ class RepairResponse(BaseModel):
     model_used: str | None = None
 
 
+class CapabilityResponse(BaseModel):
+    supported_data_sources: list[str]
+    supported_indicator_scopes: list[str]
+    supported_context_methods: list[str]
+    unsupported_categories: list[str]
+    summary_lines: list[str]
+
+
 class SummarizeRequest(BaseModel):
     code: str
 
@@ -96,12 +112,6 @@ _GENERIC_REQUEST_PATTERNS = [
     r"^전략\s*생성",
     r"^전략\s*만들",
     r"strategy\s*(please|generate|create)?\s*$",
-]
-_EXTERNAL_REQUIREMENT_PATTERNS: list[tuple[list[str], str]] = [
-    (["트윗", "twitter", "tweet", "x.com", "elon"], "실시간 소셜 데이터 수집/연동 파이프라인이 필요합니다."),
-    (["news", "뉴스", "headline"], "외부 뉴스 데이터 수집/연동 파이프라인이 필요합니다."),
-    (["sentiment", "감성", "nlp"], "외부 감성분석 파이프라인 연동이 필요합니다."),
-    (["onchain", "온체인"], "온체인 데이터 수집/연동 파이프라인이 필요합니다."),
 ]
 _MISSING_FIELD_QUESTIONS = {
     "symbol": "어떤 심볼로 거래할까요? (예: BTCUSDT)",
@@ -203,10 +213,9 @@ def _sanitize_intake_response(
     conversation_text = " ".join(
         [prompt] + [str(m.content or "") for m in messages]
     ).lower()
-    for keywords, note in _EXTERNAL_REQUIREMENT_PATTERNS:
-        if any(keyword in conversation_text for keyword in keywords):
-            if note not in unsupported:
-                unsupported.append(note)
+    for note in detect_unsupported_requirements(conversation_text):
+        if note not in unsupported:
+            unsupported.append(note)
 
     if intent == "STRATEGY_CREATE":
         if not normalized_spec.get("entry_logic") and "entry_logic" not in missing_fields:
@@ -242,6 +251,10 @@ def _sanitize_intake_response(
             user_message = "전략 생성 전에 몇 가지 정보가 더 필요합니다."
         else:
             user_message = "요청이 명확하여 전략 생성을 진행할 수 있습니다."
+    if status == "UNSUPPORTED_CAPABILITY":
+        for line in capability_summary_lines():
+            if line not in assumptions:
+                assumptions.append(line)
 
     return IntakeResponse(
         intent=intent,
@@ -263,6 +276,19 @@ def _strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         "Strategy code:\n"
         f"{code}\n\n"
         f"Summary:\n{summary or 'N/A'}"
+    )
+
+
+@app.get("/capabilities", response_model=CapabilityResponse)
+async def capabilities(
+    _: None = Depends(require_api_key),
+) -> CapabilityResponse:
+    return CapabilityResponse(
+        supported_data_sources=list(SUPPORTED_DATA_SOURCES),
+        supported_indicator_scopes=list(SUPPORTED_INDICATOR_SCOPES),
+        supported_context_methods=list(SUPPORTED_CONTEXT_METHODS),
+        unsupported_categories=[r.name for r in UNSUPPORTED_CAPABILITY_RULES],
+        summary_lines=capability_summary_lines(),
     )
 
 

@@ -6,6 +6,7 @@ import type {
   JobType,
   Order,
   StopAllResponse,
+  StrategyCapabilitiesResponse,
   StrategyGenerationResponse,
   StrategyIntakeResponse,
   StrategyInfo,
@@ -52,6 +53,10 @@ export async function intakeStrategy(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export async function getStrategyCapabilities(): Promise<StrategyCapabilitiesResponse> {
+  return json<StrategyCapabilitiesResponse>("/api/backend/api/strategies/capabilities");
 }
 
 export async function generateStrategy(

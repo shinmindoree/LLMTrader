@@ -277,6 +277,26 @@ class LLMClient:
             return None
         return None
 
+    async def strategy_capabilities(self) -> dict[str, Any] | None:
+        """전략 생성 가능 범위(지원/비지원 capability) 조회."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                headers = {}
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                response = await client.get(
+                    f"{self.base_url}/capabilities",
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            return None
+        return None
+
     async def repair_strategy(
         self,
         code: str,

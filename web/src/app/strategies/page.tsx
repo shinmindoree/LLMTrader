@@ -4,13 +4,18 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   deleteStrategy,
+  getStrategyCapabilities,
   generateStrategyStream,
   intakeStrategy,
   listStrategies,
   saveStrategy,
   strategyChat,
 } from "@/lib/api";
-import type { StrategyInfo, StrategyIntakeResponse } from "@/lib/types";
+import type {
+  StrategyCapabilitiesResponse,
+  StrategyInfo,
+  StrategyIntakeResponse,
+} from "@/lib/types";
 
 const MODIFY_KEYWORDS =
   /수정|바꿔|변경|추가해|제거|고쳐|change|modify|update|add|remove|바꿔줘|수정해줘|변경해줘|다시\s*만들|재생성|regenerate/i;
@@ -109,6 +114,8 @@ export default function StrategiesPage() {
   const [activeTab, setActiveTab] = useState<TabId>("chat");
   const [items, setItems] = useState<StrategyInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<StrategyCapabilitiesResponse | null>(null);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -128,6 +135,12 @@ export default function StrategiesPage() {
     listStrategies()
       .then(setItems)
       .catch((e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    getStrategyCapabilities()
+      .then(setCapabilities)
+      .catch((e) => setCapabilityError(String(e)));
   }, []);
 
   useEffect(() => {
@@ -367,6 +380,46 @@ export default function StrategiesPage() {
 
       {activeTab === "chat" ? (
       <section className="mt-0 flex min-h-[60vh] flex-col rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d]">
+        <div className="border-b border-[#2a2e39] bg-[#171b25] px-4 py-3">
+          <div className="mx-auto max-w-3xl">
+            <h2 className="text-sm font-semibold text-[#d1d4dc]">현재 전략 생성 가능 범위</h2>
+            {capabilityError ? (
+              <p className="mt-2 text-xs text-[#ef5350]">
+                capability 정보를 불러오지 못했습니다: {capabilityError}
+              </p>
+            ) : capabilities ? (
+              <>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {capabilities.supported_data_sources.map((item) => (
+                    <span
+                      key={`data-${item}`}
+                      className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1 text-xs text-[#9aa0ad]"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {capabilities.summary_lines.map((line) => (
+                    <span
+                      key={`summary-${line}`}
+                      className="rounded border border-[#2962ff]/30 bg-[#0f1b3a] px-2 py-1 text-xs text-[#8fa8ff]"
+                    >
+                      {line}
+                    </span>
+                  ))}
+                </div>
+                {capabilities.unsupported_categories.length > 0 ? (
+                  <p className="mt-2 text-xs text-[#f9a825]">
+                    외부 연동 없이는 미지원 범주: {capabilities.unsupported_categories.join(", ")}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-[#868993]">capability 정보를 불러오는 중...</p>
+            )}
+          </div>
+        </div>
         {chatMessages.length > 0 ? (
           <>
             <div className="flex flex-shrink-0 justify-end px-4 pt-3">

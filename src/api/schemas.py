@@ -49,6 +49,14 @@ class StrategyIntakeResponse(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
 
 
+class StrategyCapabilityResponse(BaseModel):
+    supported_data_sources: list[str] = Field(default_factory=list)
+    supported_indicator_scopes: list[str] = Field(default_factory=list)
+    supported_context_methods: list[str] = Field(default_factory=list)
+    unsupported_categories: list[str] = Field(default_factory=list)
+    summary_lines: list[str] = Field(default_factory=list)
+
+
 class StrategyGenerateResponse(BaseModel):
     path: str | None = None
     code: str

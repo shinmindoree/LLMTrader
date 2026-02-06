@@ -37,6 +37,14 @@ export type StrategyIntakeResponse = {
   assumptions: string[];
 };
 
+export type StrategyCapabilitiesResponse = {
+  supported_data_sources: string[];
+  supported_indicator_scopes: string[];
+  supported_context_methods: string[];
+  unsupported_categories: string[];
+  summary_lines: string[];
+};
+
 export type StrategySaveResponse = { path: string };
 
 export type Job = {

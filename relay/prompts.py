@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from relay.capability_registry import capability_prompt_fragment
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TEMPLATE_PATH = _REPO_ROOT / "indicator_strategy_template.py"
 _SKILL_PATH = _REPO_ROOT / ".cursor" / "skills" / "indicator-strategy" / "SKILL.md"
@@ -105,7 +107,7 @@ def build_system_prompt() -> str:
 
 
 def build_intake_system_prompt() -> str:
-    return INTAKE_SYSTEM_PROMPT
+    return f"{INTAKE_SYSTEM_PROMPT}\n\n{capability_prompt_fragment()}"
 
 
 def build_repair_system_prompt() -> str:
