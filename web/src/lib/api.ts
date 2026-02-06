@@ -3,6 +3,7 @@ import type {
   DeleteResponse,
   Job,
   JobEvent,
+  JobPolicyCheckResponse,
   JobType,
   Order,
   StopAllResponse,
@@ -243,4 +244,14 @@ export async function createJob(body: {
   config: Record<string, unknown>;
 }): Promise<Job> {
   return json<Job>("/api/backend/api/jobs", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function preflightJob(body: {
+  type: "BACKTEST" | "LIVE";
+  config: Record<string, unknown>;
+}): Promise<JobPolicyCheckResponse> {
+  return json<JobPolicyCheckResponse>("/api/backend/api/jobs/preflight", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

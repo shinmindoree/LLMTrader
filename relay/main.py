@@ -17,6 +17,7 @@ from relay.capability_registry import (
     SUPPORTED_DATA_SOURCES,
     SUPPORTED_INDICATOR_SCOPES,
     UNSUPPORTED_CAPABILITY_RULES,
+    build_development_requirements,
     capability_summary_lines,
     detect_unsupported_requirements,
 )
@@ -51,6 +52,7 @@ class IntakeResponse(BaseModel):
     unsupported_requirements: list[str]
     clarification_questions: list[str]
     assumptions: list[str]
+    development_requirements: list[str]
 
 
 class RepairRequest(BaseModel):
@@ -209,6 +211,7 @@ def _sanitize_intake_response(
     unsupported = _to_str_list(payload.get("unsupported_requirements"))
     clarification_questions = _to_str_list(payload.get("clarification_questions"))
     assumptions = _to_str_list(payload.get("assumptions"))
+    development_requirements = _to_str_list(payload.get("development_requirements"))
 
     conversation_text = " ".join(
         [prompt] + [str(m.content or "") for m in messages]
@@ -216,6 +219,9 @@ def _sanitize_intake_response(
     for note in detect_unsupported_requirements(conversation_text):
         if note not in unsupported:
             unsupported.append(note)
+    for line in build_development_requirements(conversation_text):
+        if line not in development_requirements:
+            development_requirements.append(line)
 
     if intent == "STRATEGY_CREATE":
         if not normalized_spec.get("entry_logic") and "entry_logic" not in missing_fields:
@@ -265,6 +271,7 @@ def _sanitize_intake_response(
         unsupported_requirements=unsupported,
         clarification_questions=clarification_questions,
         assumptions=assumptions,
+        development_requirements=development_requirements,
     )
 
 

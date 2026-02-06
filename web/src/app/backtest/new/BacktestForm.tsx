@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { FocusEvent, MouseEvent } from "react";
 
-import { createJob } from "@/lib/api";
+import { createJob, preflightJob } from "@/lib/api";
 import type { Job, StrategyInfo } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
@@ -55,6 +55,11 @@ function parseDateInputValue(value: string): { year: number; month: number; day:
   return { year, month, day };
 }
 
+function formatPolicyMessages(title: string, items: string[]): string {
+  if (items.length === 0) return title;
+  return `${title}\n${items.map((item, idx) => `${idx + 1}. ${item}`).join("\n")}`;
+}
+
 export function BacktestForm({
   strategies,
   onCreated,
@@ -98,19 +103,39 @@ export function BacktestForm({
       if (startTs > endTs) {
         throw new Error("Start date must be on or before end date");
       }
+      const config = {
+        symbol,
+        interval,
+        leverage,
+        initial_balance: initialBalance,
+        commission,
+        stop_loss_pct: stopLossPct,
+        start_ts: startTs,
+        end_ts: endTs,
+      };
+
+      const preflight = await preflightJob({
+        type: "BACKTEST",
+        config,
+      });
+      if (!preflight.ok) {
+        const msg = formatPolicyMessages("실행이 차단되었습니다. 설정을 수정해주세요.", preflight.blockers);
+        setError(msg);
+        return;
+      }
+      if (preflight.warnings.length > 0) {
+        const proceed = window.confirm(
+          formatPolicyMessages("주의 경고가 있습니다. 계속 실행하시겠습니까?", preflight.warnings),
+        );
+        if (!proceed) {
+          return;
+        }
+      }
+
       const job = await createJob({
         type: "BACKTEST",
         strategy_path: strategyPath,
-        config: {
-          symbol,
-          interval,
-          leverage,
-          initial_balance: initialBalance,
-          commission,
-          stop_loss_pct: stopLossPct,
-          start_ts: startTs,
-          end_ts: endTs,
-        },
+        config,
       });
       if (!job?.job_id || !isUuid(job.job_id)) {
         throw new Error(`Invalid job_id returned: ${String(job?.job_id)}`);

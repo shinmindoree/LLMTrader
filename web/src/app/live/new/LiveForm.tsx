@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { createJob } from "@/lib/api";
+import { createJob, preflightJob } from "@/lib/api";
 import type { Job, StrategyInfo } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
@@ -35,6 +35,11 @@ function loadExecutionDefaults(): { symbol: string; interval: string; applied: b
   }
 }
 
+function formatPolicyMessages(title: string, items: string[]): string {
+  if (items.length === 0) return title;
+  return `${title}\n${items.map((item, idx) => `${idx + 1}. ${item}`).join("\n")}`;
+}
+
 export function LiveForm({
   strategies,
   onCreated,
@@ -56,23 +61,43 @@ export function LiveForm({
   const onSubmit = async () => {
     setError(null);
     try {
+      const config = {
+        streams: [
+          {
+            symbol,
+            interval,
+            leverage,
+            max_position: maxPosition,
+            daily_loss_limit: dailyLossLimit,
+            stop_loss_pct: stopLossPct,
+            max_consecutive_losses: 0,
+            stoploss_cooldown_candles: stoplossCooldownCandles,
+          },
+        ],
+      };
+
+      const preflight = await preflightJob({
+        type: "LIVE",
+        config,
+      });
+      if (!preflight.ok) {
+        const msg = formatPolicyMessages("실행이 차단되었습니다. 설정을 수정해주세요.", preflight.blockers);
+        setError(msg);
+        return;
+      }
+      if (preflight.warnings.length > 0) {
+        const proceed = window.confirm(
+          formatPolicyMessages("고위험 경고가 있습니다. 계속 실행하시겠습니까?", preflight.warnings),
+        );
+        if (!proceed) {
+          return;
+        }
+      }
+
       const job = await createJob({
         type: "LIVE",
         strategy_path: strategyPath,
-        config: {
-          streams: [
-            {
-              symbol,
-              interval,
-              leverage,
-              max_position: maxPosition,
-              daily_loss_limit: dailyLossLimit,
-              stop_loss_pct: stopLossPct,
-              max_consecutive_losses: 0,
-              stoploss_cooldown_candles: stoplossCooldownCandles,
-            },
-          ],
-        },
+        config,
       });
       if (!job?.job_id || !isUuid(job.job_id)) {
         throw new Error(`Invalid job_id returned: ${String(job?.job_id)}`);
@@ -143,7 +168,7 @@ export function LiveForm({
             type="number"
             value={leverage}
             min={1}
-            max={20}
+            max={10}
             onChange={(e) => setLeverage(Number(e.target.value))}
           />
         </label>

@@ -61,6 +61,18 @@ function formatIntakeGuidance(intake: StrategyIntakeResponse): string {
       lines.push(`- ${item}`);
     });
   }
+  if (intake.development_requirements.length > 0) {
+    lines.push("", "추가 개발 필요사항:");
+    intake.development_requirements.forEach((item, idx) => {
+      lines.push(`${idx + 1}. ${item}`);
+    });
+  }
+  if (intake.assumptions.length > 0) {
+    lines.push("", "현재 시스템 기준:");
+    intake.assumptions.forEach((item) => {
+      lines.push(`- ${item}`);
+    });
+  }
   return lines.join("\n");
 }
 

@@ -38,10 +38,13 @@ from settings import get_settings
 from llm.client import LLMClient
 
 from api.deps import require_admin
+from api.job_policy import evaluate_job_policy
 from api.schemas import (
     HealthResponse,
     DeleteAllResponse,
     DeleteResponse,
+    JobPolicyCheckRequest,
+    JobPolicyCheckResponse,
     JobCreateRequest,
     JobEventResponse,
     JobResponse,
@@ -230,6 +233,7 @@ def _normalize_intake_payload(raw: dict[str, Any]) -> StrategyIntakeResponse:
         unsupported_requirements=_list_of_str(raw.get("unsupported_requirements")),
         clarification_questions=_list_of_str(raw.get("clarification_questions")),
         assumptions=_list_of_str(raw.get("assumptions")),
+        development_requirements=_list_of_str(raw.get("development_requirements")),
     )
 
 
@@ -249,6 +253,7 @@ async def _run_intake(client: LLMClient, prompt: str, messages: list[dict[str, s
                 "청산 조건을 한 줄로 적어주세요.",
             ],
             assumptions=[],
+            development_requirements=[],
         )
     return _normalize_intake_payload(intake_raw)
 
@@ -689,11 +694,31 @@ def create_app() -> FastAPI:
         relative_path = str(final_target.relative_to(repo_root))
         return StrategySaveResponse(path=relative_path)
 
+    @app.post(
+        "/api/jobs/preflight",
+        response_model=JobPolicyCheckResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def preflight_job_policy(body: JobPolicyCheckRequest) -> JobPolicyCheckResponse:
+        result = evaluate_job_policy(body.type, body.config)
+        return JobPolicyCheckResponse(ok=result.ok, blockers=result.blockers, warnings=result.warnings)
+
     @app.post("/api/jobs", response_model=JobResponse, dependencies=[Depends(require_admin)])
     async def create_job_api(
         body: JobCreateRequest,
         session: AsyncSession = Depends(_db_session),
     ) -> JobResponse:
+        policy = evaluate_job_policy(body.type, body.config)
+        if policy.blockers:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Job policy check failed",
+                    "blockers": policy.blockers,
+                    "warnings": policy.warnings,
+                },
+            )
+
         root = _repo_root()
         dirs = _strategy_dirs()
         try:
@@ -737,6 +762,14 @@ def create_app() -> FastAPI:
             message="JOB_CREATED",
             payload_json={"type": str(body.type), "strategy_path": body.strategy_path},
         )
+        if policy.warnings:
+            await append_event(
+                session,
+                job_id=job.job_id,
+                kind=EventKind.RISK,
+                message="POLICY_WARNINGS",
+                payload_json={"warnings": policy.warnings},
+            )
         await session.commit()
         return _job_to_response(job)
 

@@ -35,6 +35,7 @@ export type StrategyIntakeResponse = {
   unsupported_requirements: string[];
   clarification_questions: string[];
   assumptions: string[];
+  development_requirements: string[];
 };
 
 export type StrategyCapabilitiesResponse = {
@@ -58,6 +59,12 @@ export type Job = {
   created_at: string;
   started_at: string | null;
   ended_at: string | null;
+};
+
+export type JobPolicyCheckResponse = {
+  ok: boolean;
+  blockers: string[];
+  warnings: string[];
 };
 
 export type StopAllResponse = {

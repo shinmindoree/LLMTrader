@@ -49,13 +49,15 @@ Return ONLY JSON with this schema:
   "missing_fields": string[],
   "unsupported_requirements": string[],
   "clarification_questions": string[],
-  "assumptions": string[]
+  "assumptions": string[],
+  "development_requirements": string[]
 }
 
 Rules:
 - If the input is unrelated to trading strategy generation/modification, set intent=OUT_OF_SCOPE and status=OUT_OF_SCOPE.
 - If entry/exit logic is unclear or missing, set status=NEEDS_CLARIFICATION.
 - If the strategy requires unsupported external infra/data pipelines (e.g. social media scraping, external sentiment engines), set status=UNSUPPORTED_CAPABILITY.
+- For UNSUPPORTED_CAPABILITY, include actionable development_requirements (infra/components to build).
 - Keep clarification_questions concise and concrete.
 - user_message must be in Korean.
 - Output valid JSON only. No markdown."""

@@ -47,6 +47,7 @@ class StrategyIntakeResponse(BaseModel):
     unsupported_requirements: list[str] = Field(default_factory=list)
     clarification_questions: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
+    development_requirements: list[str] = Field(default_factory=list)
 
 
 class StrategyCapabilityResponse(BaseModel):
@@ -90,6 +91,17 @@ class JobCreateRequest(BaseModel):
     type: JobType
     strategy_path: str
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobPolicyCheckRequest(BaseModel):
+    type: JobType
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobPolicyCheckResponse(BaseModel):
+    ok: bool
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class JobResponse(BaseModel):
