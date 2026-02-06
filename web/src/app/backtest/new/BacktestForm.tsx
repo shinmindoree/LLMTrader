@@ -103,6 +103,10 @@ export function BacktestForm({
           {error}
         </p>
       ) : null}
+      <p className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-xs text-[#868993]">
+        전략 생성 프롬프트에 거래 설정(심볼/간격/레버리지 등)을 적었더라도, 실제 실행에는 이 폼의 값이
+        우선 적용됩니다.
+      </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">Strategy</div>

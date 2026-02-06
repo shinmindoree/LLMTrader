@@ -18,6 +18,23 @@ export type StrategyGenerationResponse = {
   backtest_ok: boolean;
 };
 
+export type StrategyIntakeResponse = {
+  intent: "OUT_OF_SCOPE" | "STRATEGY_CREATE" | "STRATEGY_MODIFY" | "STRATEGY_QA";
+  status: "READY" | "NEEDS_CLARIFICATION" | "UNSUPPORTED_CAPABILITY" | "OUT_OF_SCOPE";
+  user_message: string;
+  normalized_spec: {
+    symbol: string | null;
+    timeframe: string | null;
+    entry_logic: string | null;
+    exit_logic: string | null;
+    risk: Record<string, unknown>;
+  } | null;
+  missing_fields: string[];
+  unsupported_requirements: string[];
+  clarification_questions: string[];
+  assumptions: string[];
+};
+
 export type StrategySaveResponse = { path: string };
 
 export type Job = {

@@ -7,6 +7,7 @@ import type {
   Order,
   StopAllResponse,
   StrategyGenerationResponse,
+  StrategyIntakeResponse,
   StrategyInfo,
   StrategySaveResponse,
   Trade,
@@ -34,6 +35,22 @@ export async function deleteStrategy(path: string): Promise<DeleteResponse> {
   params.set("path", path);
   return json<DeleteResponse>(`/api/backend/api/strategies?${params.toString()}`, {
     method: "DELETE",
+  });
+}
+
+export async function intakeStrategy(
+  userPrompt: string,
+  messages?: { role: string; content: string }[],
+): Promise<StrategyIntakeResponse> {
+  const body: Record<string, unknown> = {
+    user_prompt: userPrompt,
+  };
+  if (messages && messages.length > 0) {
+    body.messages = messages;
+  }
+  return json<StrategyIntakeResponse>("/api/backend/api/strategies/intake", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

@@ -5,11 +5,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   deleteStrategy,
   generateStrategyStream,
+  intakeStrategy,
   listStrategies,
   saveStrategy,
   strategyChat,
 } from "@/lib/api";
-import type { StrategyInfo } from "@/lib/types";
+import type { StrategyInfo, StrategyIntakeResponse } from "@/lib/types";
 
 const MODIFY_KEYWORDS =
   /수정|바꿔|변경|추가해|제거|고쳐|change|modify|update|add|remove|바꿔줘|수정해줘|변경해줘|다시\s*만들|재생성|regenerate/i;
@@ -29,6 +30,33 @@ function getLastCodeAndSummary(messages: ChatMessage[]): {
     }
   }
   return null;
+}
+
+function toApiMessages(messages: ChatMessage[]): { role: string; content: string }[] {
+  return messages.map((m) => ({
+    role: m.role,
+    content:
+      m.role === "assistant" && (m.summary != null || m.textOnly)
+        ? (m.summary ?? m.content)
+        : m.content,
+  }));
+}
+
+function formatIntakeGuidance(intake: StrategyIntakeResponse): string {
+  const lines: string[] = [intake.user_message];
+  if (intake.clarification_questions.length > 0) {
+    lines.push("", "추가로 필요한 정보:");
+    intake.clarification_questions.forEach((q, idx) => {
+      lines.push(`${idx + 1}. ${q}`);
+    });
+  }
+  if (intake.unsupported_requirements.length > 0) {
+    lines.push("", "현재 미지원 항목:");
+    intake.unsupported_requirements.forEach((item) => {
+      lines.push(`- ${item}`);
+    });
+  }
+  return lines.join("\n");
 }
 
 type ChatMessage = {
@@ -102,17 +130,7 @@ export default function StrategiesPage() {
     const isFirstTurn = !lastCodeSummary;
     const isModify = lastCodeSummary && isModifyIntent(trimmed);
 
-    const doGenerate = () => {
-      const useMultiturn = nextMessages.length > 1;
-      const messagesToSend = useMultiturn
-        ? nextMessages.map((m) => ({
-            role: m.role,
-            content:
-              m.role === "assistant" && (m.summary != null || m.textOnly)
-                ? (m.summary ?? m.content)
-                : m.content,
-          }))
-        : undefined;
+    const doGenerate = (messagesToSend?: { role: string; content: string }[]) => {
       return generateStrategyStream(
         trimmed,
         {
@@ -170,7 +188,19 @@ export default function StrategiesPage() {
     if (isFirstTurn || isModify) {
       setChatMessages((prev) => [...prev, assistantMessage]);
       try {
-        await doGenerate();
+        const messagesToSend = nextMessages.length > 1 ? toApiMessages(nextMessages) : undefined;
+        const intake = await intakeStrategy(trimmed, messagesToSend);
+        if (intake.status !== "READY") {
+          const guidance = formatIntakeGuidance(intake);
+          setChatMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+            return [...prev.slice(0, -1), { ...last, content: guidance, textOnly: true }];
+          });
+          setIsSending(false);
+          return;
+        }
+        await doGenerate(messagesToSend);
       } catch (e) {
         setChatError(String(e));
         setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
@@ -181,13 +211,7 @@ export default function StrategiesPage() {
 
     setChatMessages((prev) => [...prev, { ...assistantMessage, textOnly: true }]);
     try {
-      const chatMessagesForApi = nextMessages.map((m) => ({
-        role: m.role,
-        content:
-          m.role === "assistant" && (m.summary != null || m.textOnly)
-            ? (m.summary ?? m.content)
-            : m.content,
-      }));
+      const chatMessagesForApi = toApiMessages(nextMessages);
       const res = await strategyChat(
         lastCodeSummary.code,
         lastCodeSummary.summary,
@@ -421,6 +445,10 @@ export default function StrategiesPage() {
                   {isSending ? "..." : "Generate"}
                 </button>
               </form>
+              <p className="mx-auto mt-2 max-w-3xl text-xs text-[#868993]">
+                참고: 프롬프트에 레버리지/심볼/간격 등 거래 설정을 적어도, 실제 백테스트/라이브 실행 시에는
+                실행 폼에서 입력한 설정값이 우선 적용됩니다.
+              </p>
             </div>
           </>
         ) : (
@@ -453,6 +481,10 @@ export default function StrategiesPage() {
                     </button>
                   </div>
                 </div>
+                <p className="mt-2 text-xs text-[#868993]">
+                  참고: 프롬프트에 레버리지/심볼/간격 등 거래 설정을 적어도, 실제 백테스트/라이브 실행 시에는
+                  실행 폼에서 입력한 설정값이 우선 적용됩니다.
+                </p>
               </form>
             </div>
           </>

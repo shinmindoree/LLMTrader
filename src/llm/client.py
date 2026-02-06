@@ -235,6 +235,38 @@ class LLMClient:
         except Exception:
             return None
 
+    async def intake_strategy(
+        self,
+        user_prompt: str,
+        messages: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any] | None:
+        """전략 생성 전 입력 정형화/검증 요청."""
+        if not messages and (not user_prompt or not user_prompt.strip()):
+            return None
+
+        payload: dict[str, Any] = {"user_prompt": (user_prompt or "").strip()}
+        if messages:
+            payload["messages"] = messages
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                headers = {}
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                response = await client.post(
+                    f"{self.base_url}/intake",
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            return None
+        return None
+
     async def generate_strategy_stream(
         self,
         user_prompt: str,

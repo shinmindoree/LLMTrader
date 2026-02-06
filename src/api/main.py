@@ -49,6 +49,8 @@ from api.schemas import (
     StopResponse,
     StopAllResponse,
     StrategyInfo,
+    StrategyIntakeRequest,
+    StrategyIntakeResponse,
     StrategyGenerateRequest,
     StrategyGenerateResponse,
     StrategyChatRequest,
@@ -160,6 +162,93 @@ def _strip_first_line_lang_tag(content: str) -> str:
     if first in ("python", "py", "python3"):
         return "\n".join(lines[1:]).lstrip("\n")
     return content
+
+
+_INTAKE_ALLOWED_STATUSES = {"READY", "NEEDS_CLARIFICATION", "UNSUPPORTED_CAPABILITY", "OUT_OF_SCOPE"}
+_INTAKE_ALLOWED_INTENTS = {"OUT_OF_SCOPE", "STRATEGY_CREATE", "STRATEGY_MODIFY", "STRATEGY_QA"}
+
+
+def _normalize_intake_payload(raw: dict[str, Any]) -> StrategyIntakeResponse:
+    intent = str(raw.get("intent") or "STRATEGY_CREATE").strip().upper()
+    if intent not in _INTAKE_ALLOWED_INTENTS:
+        intent = "STRATEGY_CREATE"
+
+    status = str(raw.get("status") or "NEEDS_CLARIFICATION").strip().upper()
+    if status not in _INTAKE_ALLOWED_STATUSES:
+        status = "NEEDS_CLARIFICATION"
+
+    user_message = str(raw.get("user_message") or "").strip()
+    if not user_message:
+        if status == "OUT_OF_SCOPE":
+            user_message = "이 입력은 트레이딩 전략 생성 요청으로 보기 어렵습니다."
+        elif status == "UNSUPPORTED_CAPABILITY":
+            user_message = "요청에는 현재 시스템에 없는 외부 연동 기능이 필요합니다."
+        elif status == "NEEDS_CLARIFICATION":
+            user_message = "전략 생성 전에 몇 가지 정보가 더 필요합니다."
+        else:
+            user_message = "요청이 명확하여 전략 생성을 진행할 수 있습니다."
+
+    normalized_spec_raw = raw.get("normalized_spec")
+    if not isinstance(normalized_spec_raw, dict):
+        normalized_spec_raw = {}
+    risk_raw = normalized_spec_raw.get("risk")
+    risk = risk_raw if isinstance(risk_raw, dict) else {}
+    normalized_spec = {
+        "symbol": (str(normalized_spec_raw.get("symbol")).strip() or None)
+        if normalized_spec_raw.get("symbol") is not None
+        else None,
+        "timeframe": (str(normalized_spec_raw.get("timeframe")).strip() or None)
+        if normalized_spec_raw.get("timeframe") is not None
+        else None,
+        "entry_logic": (str(normalized_spec_raw.get("entry_logic")).strip() or None)
+        if normalized_spec_raw.get("entry_logic") is not None
+        else None,
+        "exit_logic": (str(normalized_spec_raw.get("exit_logic")).strip() or None)
+        if normalized_spec_raw.get("exit_logic") is not None
+        else None,
+        "risk": risk,
+    }
+
+    def _list_of_str(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        for item in value:
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+
+    return StrategyIntakeResponse(
+        intent=intent,  # type: ignore[arg-type]
+        status=status,  # type: ignore[arg-type]
+        user_message=user_message,
+        normalized_spec=normalized_spec,  # type: ignore[arg-type]
+        missing_fields=_list_of_str(raw.get("missing_fields")),
+        unsupported_requirements=_list_of_str(raw.get("unsupported_requirements")),
+        clarification_questions=_list_of_str(raw.get("clarification_questions")),
+        assumptions=_list_of_str(raw.get("assumptions")),
+    )
+
+
+async def _run_intake(client: LLMClient, prompt: str, messages: list[dict[str, str]] | None) -> StrategyIntakeResponse:
+    intake_raw = await client.intake_strategy(prompt, messages=messages)
+    if not intake_raw:
+        return StrategyIntakeResponse(
+            intent="STRATEGY_CREATE",
+            status="NEEDS_CLARIFICATION",
+            user_message="입력 해석에 실패했습니다. 전략 조건을 더 구체적으로 적어주세요.",
+            normalized_spec=None,
+            missing_fields=[],
+            unsupported_requirements=[],
+            clarification_questions=[
+                "어떤 심볼로 거래할까요? (예: BTCUSDT)",
+                "진입 조건을 한 줄로 적어주세요.",
+                "청산 조건을 한 줄로 적어주세요.",
+            ],
+            assumptions=[],
+        )
+    return _normalize_intake_payload(intake_raw)
 
 
 def _verify_strategy_load(strategy_path: Path, repo_root: Path) -> None:
@@ -284,6 +373,25 @@ def create_app() -> FastAPI:
         return DeleteResponse(ok=True)
 
     @app.post(
+        "/api/strategies/intake",
+        response_model=StrategyIntakeResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def intake_strategy(body: StrategyIntakeRequest) -> StrategyIntakeResponse:
+        prompt = (body.user_prompt or "").strip()
+        messages = body.messages
+        if not messages and not prompt:
+            raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
+
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+        return await _run_intake(client, prompt, openai_messages)
+
+    @app.post(
         "/api/strategies/generate",
         response_model=StrategyGenerateResponse,
         dependencies=[Depends(require_admin)],
@@ -303,8 +411,12 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+        openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+        intake = await _run_intake(client, prompt, openai_messages)
+        if intake.status != "READY":
+            raise HTTPException(status_code=422, detail=intake.model_dump())
+
         if messages:
-            openai_messages = [{"role": m.role, "content": m.content} for m in messages]
             result = await client.generate_strategy("", messages=openai_messages)
         else:
             result = await client.generate_strategy(prompt)
@@ -351,11 +463,17 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
+
+        openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+        intake = await _run_intake(client, prompt, openai_messages)
+        if intake.status != "READY":
+            yield f"data: {json.dumps({'done': True, 'error': intake.user_message})}\n\n"
+            return
+
         repo_root = _repo_root()
         code_acc: list[str] = []
         try:
             if messages:
-                openai_messages = [{"role": m.role, "content": m.content} for m in messages]
                 stream = client.generate_strategy_stream("", messages=openai_messages)
             else:
                 stream = client.generate_strategy_stream(prompt)

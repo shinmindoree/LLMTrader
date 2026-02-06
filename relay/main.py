@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -11,7 +13,7 @@ from pydantic import BaseModel
 from relay.auth import require_api_key
 from relay.azure_openai import chat_completion, chat_completion_messages, chat_completion_stream
 from relay.config import get_config
-from relay.prompts import build_system_prompt
+from relay.prompts import build_intake_system_prompt, build_system_prompt
 
 
 app = FastAPI(title="LLMTrader Relay", version="0.1.0")
@@ -30,6 +32,17 @@ class StrategyRequest(BaseModel):
 class StrategyResponse(BaseModel):
     code: str
     model_used: str | None = None
+
+
+class IntakeResponse(BaseModel):
+    intent: str
+    status: str
+    user_message: str
+    normalized_spec: dict[str, Any] | None = None
+    missing_fields: list[str]
+    unsupported_requirements: list[str]
+    clarification_questions: list[str]
+    assumptions: list[str]
 
 
 class SummarizeRequest(BaseModel):
@@ -53,6 +66,181 @@ class StrategyChatRequest(BaseModel):
 
 class StrategyChatResponse(BaseModel):
     content: str
+
+
+_ALLOWED_INTENTS = {
+    "OUT_OF_SCOPE",
+    "STRATEGY_CREATE",
+    "STRATEGY_MODIFY",
+    "STRATEGY_QA",
+}
+_ALLOWED_STATUSES = {
+    "READY",
+    "NEEDS_CLARIFICATION",
+    "UNSUPPORTED_CAPABILITY",
+    "OUT_OF_SCOPE",
+}
+_GENERIC_REQUEST_PATTERNS = [
+    r"^전략\s*생성",
+    r"^전략\s*만들",
+    r"strategy\s*(please|generate|create)?\s*$",
+]
+_EXTERNAL_REQUIREMENT_PATTERNS: list[tuple[list[str], str]] = [
+    (["트윗", "twitter", "tweet", "x.com", "elon"], "실시간 소셜 데이터 수집/연동 파이프라인이 필요합니다."),
+    (["news", "뉴스", "headline"], "외부 뉴스 데이터 수집/연동 파이프라인이 필요합니다."),
+    (["sentiment", "감성", "nlp"], "외부 감성분석 파이프라인 연동이 필요합니다."),
+    (["onchain", "온체인"], "온체인 데이터 수집/연동 파이프라인이 필요합니다."),
+]
+_MISSING_FIELD_QUESTIONS = {
+    "symbol": "어떤 심볼로 거래할까요? (예: BTCUSDT)",
+    "timeframe": "어떤 캔들 간격을 사용할까요? (예: 1m, 15m, 1h, 4h)",
+    "entry_logic": "진입 조건을 한 줄로 구체적으로 적어주세요.",
+    "exit_logic": "청산 조건을 한 줄로 구체적으로 적어주세요.",
+}
+
+
+def _extract_json_object(content: str) -> dict[str, Any] | None:
+    text = (content or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        parts = text.split("```")
+        if len(parts) >= 3:
+            text = parts[1].strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _to_str_list(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        val = str(item).strip()
+        if val:
+            out.append(val)
+    return out
+
+
+def _is_generic_strategy_prompt(prompt: str) -> bool:
+    text = (prompt or "").strip().lower()
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in _GENERIC_REQUEST_PATTERNS)
+
+
+def _sanitize_intake_response(
+    payload: dict[str, Any],
+    *,
+    prompt: str,
+    messages: list[ChatMessage],
+) -> IntakeResponse:
+    intent = str(payload.get("intent") or "STRATEGY_CREATE").strip().upper()
+    if intent not in _ALLOWED_INTENTS:
+        intent = "STRATEGY_CREATE"
+
+    status = str(payload.get("status") or "NEEDS_CLARIFICATION").strip().upper()
+    if status not in _ALLOWED_STATUSES:
+        status = "NEEDS_CLARIFICATION"
+
+    spec_raw = payload.get("normalized_spec")
+    normalized_spec: dict[str, Any] = {}
+    if isinstance(spec_raw, dict):
+        normalized_spec = {
+            "symbol": (str(spec_raw.get("symbol")).strip() or None) if spec_raw.get("symbol") is not None else None,
+            "timeframe": (str(spec_raw.get("timeframe")).strip() or None)
+            if spec_raw.get("timeframe") is not None
+            else None,
+            "entry_logic": (str(spec_raw.get("entry_logic")).strip() or None)
+            if spec_raw.get("entry_logic") is not None
+            else None,
+            "exit_logic": (str(spec_raw.get("exit_logic")).strip() or None)
+            if spec_raw.get("exit_logic") is not None
+            else None,
+            "risk": spec_raw.get("risk") if isinstance(spec_raw.get("risk"), dict) else {},
+        }
+    else:
+        normalized_spec = {
+            "symbol": None,
+            "timeframe": None,
+            "entry_logic": None,
+            "exit_logic": None,
+            "risk": {},
+        }
+
+    missing_fields = _to_str_list(payload.get("missing_fields"))
+    unsupported = _to_str_list(payload.get("unsupported_requirements"))
+    clarification_questions = _to_str_list(payload.get("clarification_questions"))
+    assumptions = _to_str_list(payload.get("assumptions"))
+
+    conversation_text = " ".join(
+        [prompt] + [str(m.content or "") for m in messages]
+    ).lower()
+    for keywords, note in _EXTERNAL_REQUIREMENT_PATTERNS:
+        if any(keyword in conversation_text for keyword in keywords):
+            if note not in unsupported:
+                unsupported.append(note)
+
+    if intent == "STRATEGY_CREATE":
+        if not normalized_spec.get("entry_logic") and "entry_logic" not in missing_fields:
+            missing_fields.append("entry_logic")
+        if not normalized_spec.get("exit_logic") and "exit_logic" not in missing_fields:
+            missing_fields.append("exit_logic")
+        if _is_generic_strategy_prompt(prompt):
+            for field in ("symbol", "timeframe", "entry_logic", "exit_logic"):
+                if field not in missing_fields:
+                    missing_fields.append(field)
+
+    for field in missing_fields:
+        q = _MISSING_FIELD_QUESTIONS.get(field)
+        if q and q not in clarification_questions:
+            clarification_questions.append(q)
+
+    if intent == "OUT_OF_SCOPE":
+        status = "OUT_OF_SCOPE"
+    elif unsupported:
+        status = "UNSUPPORTED_CAPABILITY"
+    elif missing_fields:
+        status = "NEEDS_CLARIFICATION"
+    elif status != "READY":
+        status = "NEEDS_CLARIFICATION"
+
+    user_message = str(payload.get("user_message") or "").strip()
+    if not user_message:
+        if status == "OUT_OF_SCOPE":
+            user_message = "이 입력은 트레이딩 전략 생성 요청으로 보기 어렵습니다. 전략 설명으로 다시 입력해주세요."
+        elif status == "UNSUPPORTED_CAPABILITY":
+            user_message = "요청에는 현재 시스템에 없는 외부 연동 기능이 필요합니다."
+        elif status == "NEEDS_CLARIFICATION":
+            user_message = "전략 생성 전에 몇 가지 정보가 더 필요합니다."
+        else:
+            user_message = "요청이 명확하여 전략 생성을 진행할 수 있습니다."
+
+    return IntakeResponse(
+        intent=intent,
+        status=status,
+        user_message=user_message,
+        normalized_spec=normalized_spec,
+        missing_fields=missing_fields,
+        unsupported_requirements=unsupported,
+        clarification_questions=clarification_questions,
+        assumptions=assumptions,
+    )
 
 
 def _strategy_chat_system_prompt(code: str, summary: str | None) -> str:
@@ -103,6 +291,51 @@ async def strategy_chat(
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
     return StrategyChatResponse(content=content.strip())
+
+
+@app.post("/intake", response_model=IntakeResponse)
+async def intake(
+    body: StrategyRequest,
+    _: None = Depends(require_api_key),
+) -> IntakeResponse:
+    prompt = (body.user_prompt or "").strip()
+    messages = body.messages or []
+    if not messages and not prompt:
+        raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
+
+    config = get_config()
+    if not config.is_azure_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Azure OpenAI not configured (missing env vars)",
+        )
+
+    try:
+        system_content = build_intake_system_prompt()
+        if messages:
+            openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+            content, _ = chat_completion_messages(
+                config,
+                system_content=system_content,
+                messages=openai_messages,
+            )
+        else:
+            content, _ = chat_completion(
+                config,
+                system_content=system_content,
+                user_content=prompt,
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Azure OpenAI call failed: {e!s}",
+        ) from e
+
+    if not content or not content.strip():
+        raise HTTPException(status_code=502, detail="Empty completion from model")
+
+    payload = _extract_json_object(content) or {}
+    return _sanitize_intake_response(payload, prompt=prompt, messages=messages)
 
 
 @app.post("/summarize", response_model=SummarizeResponse)

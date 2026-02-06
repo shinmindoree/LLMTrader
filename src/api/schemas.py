@@ -25,6 +25,30 @@ class StrategyGenerateRequest(BaseModel):
     messages: list[ChatMessage] | None = None
 
 
+class StrategyIntakeRequest(BaseModel):
+    user_prompt: str
+    messages: list[ChatMessage] | None = None
+
+
+class StrategySpec(BaseModel):
+    symbol: str | None = None
+    timeframe: str | None = None
+    entry_logic: str | None = None
+    exit_logic: str | None = None
+    risk: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyIntakeResponse(BaseModel):
+    intent: Literal["OUT_OF_SCOPE", "STRATEGY_CREATE", "STRATEGY_MODIFY", "STRATEGY_QA"]
+    status: Literal["READY", "NEEDS_CLARIFICATION", "UNSUPPORTED_CAPABILITY", "OUT_OF_SCOPE"]
+    user_message: str
+    normalized_spec: StrategySpec | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    unsupported_requirements: list[str] = Field(default_factory=list)
+    clarification_questions: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+
 class StrategyGenerateResponse(BaseModel):
     path: str | None = None
     code: str
