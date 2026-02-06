@@ -34,16 +34,13 @@ jobs:
       - name: Build and push container image to registry
         uses: azure/container-apps-deploy-action@v2
         with:
-          appSourcePath: ${{ github.workspace }}infra/Dockerfile.runner
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
+          appSourcePath: ${{ github.workspace }}
+          dockerfilePath: ./infra/Dockerfile.runner
           registryUrl: autotraderbinance.azurecr.io
           registryUsername: ${{ secrets.LLMTRADERRUNNER_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.LLMTRADERRUNNER_REGISTRY_PASSWORD }}
           containerAppName: llmtrader-runner
           resourceGroup: autotrader
           imageToBuild: autotraderbinance.azurecr.io/llmtrader-runner:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
 
 
