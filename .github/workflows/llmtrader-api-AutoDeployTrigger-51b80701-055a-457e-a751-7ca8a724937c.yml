@@ -5,7 +5,7 @@ on:
   # Automatically trigger it when detected changes in repo
   push:
     branches: 
-      [ dev ]
+      [ main ]
     paths:
     - '**'
     - '.github/workflows/llmtrader-api-AutoDeployTrigger-51b80701-055a-457e-a751-7ca8a724937c.yml'

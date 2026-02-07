@@ -1,9 +1,9 @@
-name: Deploy relay to Azure Container Apps (dev)
+name: Deploy relay to Azure Container Apps (main)
 
 on:
   push:
     branches:
-      - dev
+      - main
     paths:
       - relay/**
       - infra/Dockerfile.relay

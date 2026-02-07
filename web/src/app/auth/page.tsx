@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 type AuthMode = "login" | "signup";
@@ -11,7 +10,6 @@ function isAuthEnabled(): boolean {
 }
 
 export default function AuthPage() {
-  const router = useRouter();
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,7 +41,7 @@ export default function AuthPage() {
         setMessage("회원가입 완료. 이메일 인증 후 로그인하세요.");
         return;
       }
-      router.replace("/");
+      window.location.href = "/";
     } catch {
       setError("요청 처리 중 오류가 발생했습니다.");
     } finally {
