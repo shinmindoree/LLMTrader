@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   deleteStrategy,
-  getStrategyCapabilities,
+  getStrategyContent,
   generateStrategyStream,
   intakeStrategy,
   listStrategies,
@@ -13,7 +13,6 @@ import {
   validateStrategySyntax,
 } from "@/lib/api";
 import type {
-  StrategyCapabilitiesResponse,
   StrategyInfo,
   StrategyIntakeResponse,
   StrategySyntaxCheckResponse,
@@ -236,108 +235,6 @@ function formatIntakeGuidance(intake: StrategyIntakeResponse): string {
   return lines.join("\n");
 }
 
-const CONTEXT_METHOD_LABELS: Record<string, string> = {
-  current_price: "Current market price",
-  position_size: "Current position size",
-  position_entry_price: "Average entry price",
-  unrealized_pnl: "Unrealized PnL",
-  balance: "Available balance",
-  buy: "Market buy",
-  sell: "Market sell",
-  close_position: "Close position",
-  calc_entry_quantity: "Auto-calculate order size",
-  enter_long: "Open long position",
-  enter_short: "Open short position",
-  get_indicator: "Read indicator values",
-  register_indicator: "Register custom indicators",
-  get_open_orders: "View open orders",
-};
-
-const UNSUPPORTED_CATEGORY_LABELS: Record<string, string> = {
-  social_stream: "Social data",
-  news_feed: "News feed",
-  sentiment_engine: "Sentiment signals",
-  onchain_feed: "On-chain data",
-  macro_feed: "Macro data",
-};
-
-function uniqueNonEmpty(items: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of items) {
-    const normalized = item.trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
-
-function formatDataSourceLabel(source: string): string {
-  const normalized = source.toLowerCase();
-  if (normalized.includes("binance") && normalized.includes("ohlcv")) {
-    return "Binance candle data (OHLCV)";
-  }
-  if (normalized.includes("ohlcv")) {
-    return "Candle data (OHLCV)";
-  }
-  return source.trim();
-}
-
-function formatIndicatorScopeLabels(scopes: string[]): string[] {
-  let supportsTalib = false;
-  let supportsCustom = false;
-  const fallback: string[] = [];
-
-  for (const scope of scopes) {
-    const normalized = scope.toLowerCase();
-    if (
-      normalized.includes("ta-lib") ||
-      normalized.includes("talib") ||
-      normalized.includes("builtin")
-    ) {
-      supportsTalib = true;
-    }
-    if (normalized.includes("custom") || normalized.includes("register_indicator")) {
-      supportsCustom = true;
-    }
-    if (
-      !normalized.includes("ctx.get_indicator") &&
-      !normalized.includes("ctx.register_indicator")
-    ) {
-      fallback.push(scope.trim());
-    }
-  }
-
-  const labels: string[] = [];
-  if (supportsTalib) labels.push("TA-Lib built-in indicators");
-  if (supportsCustom) labels.push("Custom indicators in strategy code");
-  return uniqueNonEmpty([...labels, ...fallback]);
-}
-
-function prettifyMethodName(raw: string): string {
-  const value = raw.trim().replace(/_/g, " ");
-  if (!value) return "";
-  return value.slice(0, 1).toUpperCase() + value.slice(1);
-}
-
-function formatContextMethodLabels(methods: string[]): string[] {
-  const expanded = methods.flatMap((method) =>
-    method
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
-  );
-  return uniqueNonEmpty(
-    expanded.map((method) => CONTEXT_METHOD_LABELS[method] ?? prettifyMethodName(method)),
-  );
-}
-
-function formatUnsupportedCategoryLabel(category: string): string {
-  const normalized = category.trim();
-  return UNSUPPORTED_CATEGORY_LABELS[normalized] ?? normalized.replace(/_/g, " ");
-}
-
 function strategyNameFromPath(path: string): string {
   const trimmed = path.trim();
   if (!trimmed) return "Strategy";
@@ -521,13 +418,13 @@ const createId = () =>
 type TabId = "chat" | "list";
 const SUMMARY_EXPAND_PROMPT =
   "방금 전략 요약을 이어서 더 자세히 설명해줘. 전략 개요 → 진입 흐름 → 청산 흐름 → 리스크 관리 → 실전 주의사항 순서로 써줘. 코드는 변경하지 마.";
+const LOADED_STRATEGY_SUMMARY_PROMPT =
+  "Briefly explain this strategy in plain English in 5 bullets: overview, entry logic, exit logic, risk management, and practical cautions. Keep it concise.";
 
 export default function StrategiesPage() {
   const [activeTab, setActiveTab] = useState<TabId>("chat");
   const [items, setItems] = useState<StrategyInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [capabilities, setCapabilities] = useState<StrategyCapabilitiesResponse | null>(null);
-  const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -541,6 +438,9 @@ export default function StrategiesPage() {
     code: string;
     name: string;
   } | null>(null);
+  const [loadStrategyPath, setLoadStrategyPath] = useState("");
+  const [isLoadingStrategy, setIsLoadingStrategy] = useState(false);
+  const [loadStrategyError, setLoadStrategyError] = useState<string | null>(null);
   const [workspaceCode, setWorkspaceCode] = useState("");
   const [workspaceSourceMessageId, setWorkspaceSourceMessageId] = useState<string | null>(null);
   const [initialGeneratedCode, setInitialGeneratedCode] = useState<string | null>(null);
@@ -565,10 +465,14 @@ export default function StrategiesPage() {
   }, []);
 
   useEffect(() => {
-    getStrategyCapabilities()
-      .then(setCapabilities)
-      .catch((e) => setCapabilityError(String(e)));
-  }, []);
+    if (items.length === 0) {
+      setLoadStrategyPath("");
+      return;
+    }
+    if (!loadStrategyPath || !items.some((item) => item.path === loadStrategyPath)) {
+      setLoadStrategyPath(items[0].path);
+    }
+  }, [items, loadStrategyPath]);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -961,18 +865,58 @@ export default function StrategiesPage() {
     }
   };
 
-  const dataSourceLabels = capabilities
-    ? uniqueNonEmpty(capabilities.supported_data_sources.map(formatDataSourceLabel))
-    : [];
-  const indicatorLabels = capabilities
-    ? formatIndicatorScopeLabels(capabilities.supported_indicator_scopes)
-    : [];
-  const contextMethodLabels = capabilities
-    ? formatContextMethodLabels(capabilities.supported_context_methods)
-    : [];
-  const unsupportedLabels = capabilities
-    ? uniqueNonEmpty(capabilities.unsupported_categories.map(formatUnsupportedCategoryLabel))
-    : [];
+  const handleLoadStrategy = async () => {
+    if (!loadStrategyPath || isLoadingStrategy || isSending) return;
+    setLoadStrategyError(null);
+    setChatError(null);
+    setIsLoadingStrategy(true);
+
+    try {
+      const loaded = await getStrategyContent(loadStrategyPath);
+      const code = loaded.code ?? "";
+      if (!code.trim()) {
+        throw new Error("Loaded strategy is empty.");
+      }
+
+      setWorkspaceCode(code);
+      setInitialGeneratedCode(code);
+      setWorkspaceSourceMessageId(null);
+      setWorkspaceSummary(null);
+      setWorkspaceDirty(false);
+      setWorkspaceOpen(true);
+      setWorkspaceSyntax(null);
+      setWorkspaceSyntaxError(null);
+      setPrompt("");
+
+      const strategyLabel = strategyNameFromPath(loaded.path || loadStrategyPath);
+      let summaryText = "Summary is unavailable right now.";
+      try {
+        const summaryRes = await strategyChat(code, null, [
+          { role: "user", content: LOADED_STRATEGY_SUMMARY_PROMPT },
+        ]);
+        summaryText = summaryRes.content;
+        setWorkspaceSummary(summaryRes.content);
+      } catch {
+        // continue without summary
+      }
+
+      setChatMessages([
+        {
+          id: createId(),
+          role: "assistant",
+          content: `Loaded strategy: ${strategyLabel}\n\n${summaryText}`,
+          textOnly: true,
+          status: null,
+          statusText: null,
+        },
+      ]);
+    } catch (e) {
+      setLoadStrategyError(String(e));
+    } finally {
+      setIsLoadingStrategy(false);
+    }
+  };
+
   const latestAssistantCodeId =
     [...chatMessages]
       .reverse()
@@ -1017,101 +961,6 @@ export default function StrategiesPage() {
 
       {activeTab === "chat" ? (
       <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d]">
-        <div className="border-b border-[#2a2e39] bg-[#171b25] px-4 py-3">
-          <div className="mx-auto max-w-5xl">
-            <h2 className="text-sm font-semibold text-[#d1d4dc]">Current Strategy Generation Scope</h2>
-            {capabilityError ? (
-              <p className="mt-2 text-xs text-[#ef5350]">
-                Failed to load capability info: {capabilityError}
-              </p>
-            ) : capabilities ? (
-              <>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-                    <h3 className="text-xs font-semibold text-[#d1d4dc]">Market Data</h3>
-                    <p className="mt-1 text-xs text-[#868993]">
-                      Strategies are generated using the data sources below.
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {dataSourceLabels.length > 0 ? (
-                        dataSourceLabels.map((item) => (
-                          <span
-                            key={`data-${item}`}
-                            className="rounded border border-[#2a2e39] bg-[#171b25] px-2 py-1 text-xs text-[#9aa0ad]"
-                          >
-                            {item}
-                          </span>
-                        ))
-                      ) : (
-                        <p className="text-xs text-[#868993]">Loading available data sources...</p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-                    <h3 className="text-xs font-semibold text-[#d1d4dc]">Indicator Support</h3>
-                    <p className="mt-1 text-xs text-[#868993]">
-                      You can use both built-in and custom indicators.
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {indicatorLabels.length > 0 ? (
-                        indicatorLabels.map((item) => (
-                          <span
-                            key={`indicator-${item}`}
-                            className="rounded border border-[#2962ff]/30 bg-[#0f1b3a] px-2 py-1 text-xs text-[#8fa8ff]"
-                          >
-                            {item}
-                          </span>
-                        ))
-                      ) : (
-                        <p className="text-xs text-[#868993]">Loading indicator capabilities...</p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded border border-[#2a2e39] bg-[#131722] p-3 md:col-span-2">
-                    <h3 className="text-xs font-semibold text-[#d1d4dc]">Execution Controls</h3>
-                    <p className="mt-1 text-xs text-[#868993]">
-                      These controls are available for entries, exits, and position management.
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {contextMethodLabels.length > 0 ? (
-                        contextMethodLabels.map((item) => (
-                          <span
-                            key={`method-${item}`}
-                            className="rounded border border-[#2a2e39] bg-[#171b25] px-2 py-1 text-xs text-[#9aa0ad]"
-                          >
-                            {item}
-                          </span>
-                        ))
-                      ) : (
-                        <p className="text-xs text-[#868993]">Loading execution controls...</p>
-                      )}
-                    </div>
-                  </div>
-                  {unsupportedLabels.length > 0 ? (
-                    <div className="rounded border border-[#f9a825]/30 bg-[#2b2417] p-3 md:col-span-2">
-                      <h3 className="text-xs font-semibold text-[#f9a825]">Currently Unsupported</h3>
-                      <p className="mt-1 text-xs text-[#d7b36a]">
-                        Items requiring external integrations are outside the current generation scope.
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {unsupportedLabels.map((item) => (
-                          <span
-                            key={`unsupported-${item}`}
-                            className="rounded border border-[#f9a825]/40 bg-[#2f2718] px-2 py-1 text-xs text-[#f7c65e]"
-                          >
-                            {item}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <p className="mt-2 text-xs text-[#868993]">Loading capability info...</p>
-            )}
-          </div>
-        </div>
         <div className="flex min-h-0 flex-1">
           <div className="min-w-0 flex-1 flex flex-col">
             {chatMessages.length > 0 ? (
@@ -1269,11 +1118,46 @@ export default function StrategiesPage() {
                     {chatError}
                   </p>
                 ) : null}
-                <div className="flex flex-1 flex-col items-center justify-center px-4 py-12">
-                  <form
-                    className="w-full max-w-2xl"
-                    onSubmit={handleSubmit}
+            <div className="flex flex-1 flex-col items-center justify-center px-4 py-12">
+              <div className="mb-4 w-full max-w-2xl rounded-xl border border-[#2a2e39] bg-[#131722] p-4">
+                <h3 className="text-sm font-semibold text-[#d1d4dc]">Continue From Existing Strategy</h3>
+                <p className="mt-1 text-xs text-[#868993]">
+                  Load a saved strategy into the workspace and get a quick LLM summary.
+                </p>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <select
+                    className="w-full rounded border border-[#2a2e39] bg-[#171b25] px-3 py-2 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                    value={loadStrategyPath}
+                    onChange={(e) => setLoadStrategyPath(e.target.value)}
+                    disabled={items.length === 0 || isLoadingStrategy || isSending}
                   >
+                    {items.length === 0 ? (
+                      <option value="">No saved strategies</option>
+                    ) : (
+                      items.map((item) => (
+                        <option key={`load-${item.path}`} value={item.path}>
+                          {strategyNameFromPath(item.name)}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  <button
+                    type="button"
+                    className="rounded border border-[#2962ff] px-3 py-2 text-sm text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
+                    onClick={() => void handleLoadStrategy()}
+                    disabled={!loadStrategyPath || items.length === 0 || isLoadingStrategy || isSending}
+                  >
+                    {isLoadingStrategy ? "Loading..." : "Load"}
+                  </button>
+                </div>
+                {loadStrategyError ? (
+                  <p className="mt-2 text-xs text-[#ef5350]">{loadStrategyError}</p>
+                ) : null}
+              </div>
+              <form
+                className="w-full max-w-2xl"
+                onSubmit={handleSubmit}
+              >
                     <div className="rounded-2xl border border-[#2a2e39] bg-[#131722] p-3 shadow-lg">
                       <textarea
                         className="min-h-[120px] w-full resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"

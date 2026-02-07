@@ -14,6 +14,12 @@ class StrategyInfo(BaseModel):
     path: str
 
 
+class StrategyContentResponse(BaseModel):
+    name: str
+    path: str
+    code: str
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str

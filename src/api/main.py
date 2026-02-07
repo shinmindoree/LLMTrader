@@ -59,6 +59,7 @@ from api.schemas import (
     StopResponse,
     StopAllResponse,
     StrategyInfo,
+    StrategyContentResponse,
     StrategyIntakeRequest,
     StrategyIntakeResponse,
     StrategyCapabilityResponse,
@@ -668,6 +669,34 @@ def create_app() -> FastAPI:
         for p in files:
             out.append(StrategyInfo(name=p.name, path=str(p.relative_to(root))))
         return out
+
+    @app.get(
+        "/api/strategies/content",
+        response_model=StrategyContentResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def strategy_content(path: str = Query(..., alias="path")) -> StrategyContentResponse:
+        root = _repo_root()
+        dirs = _strategy_dirs()
+        try:
+            target = validate_strategy_path(
+                repo_root=root,
+                strategy_dirs=dirs,
+                strategy_path=path,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            code = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read strategy file: {exc}") from exc
+
+        return StrategyContentResponse(
+            name=target.name,
+            path=str(target.relative_to(root)),
+            code=code,
+        )
 
     @app.delete(
         "/api/strategies",

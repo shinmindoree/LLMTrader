@@ -9,6 +9,7 @@ import type {
   Order,
   StopAllResponse,
   StrategyCapabilitiesResponse,
+  StrategyContentResponse,
   StrategyGenerationResponse,
   StrategyIntakeResponse,
   StrategyInfo,
@@ -41,6 +42,12 @@ export async function deleteStrategy(path: string): Promise<DeleteResponse> {
   return json<DeleteResponse>(`/api/backend/api/strategies?${params.toString()}`, {
     method: "DELETE",
   });
+}
+
+export async function getStrategyContent(path: string): Promise<StrategyContentResponse> {
+  const params = new URLSearchParams();
+  params.set("path", path);
+  return json<StrategyContentResponse>(`/api/backend/api/strategies/content?${params.toString()}`);
 }
 
 export async function intakeStrategy(
