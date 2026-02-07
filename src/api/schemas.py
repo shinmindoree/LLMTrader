@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -219,3 +219,41 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "error"]
     db_ok: bool
     db_error: str | None = None
+
+
+class BinanceAssetBalance(BaseModel):
+    asset: str
+    wallet_balance: float
+    available_balance: float
+    unrealized_profit: float
+    margin_balance: float
+
+
+class BinancePositionSummary(BaseModel):
+    symbol: str
+    side: Literal["LONG", "SHORT"]
+    position_amt: float
+    entry_price: float
+    break_even_price: float
+    unrealized_pnl: float
+    notional: float
+    leverage: int
+    isolated: bool
+
+
+class BinanceAccountSummaryResponse(BaseModel):
+    configured: bool
+    connected: bool
+    market: Literal["binance_futures"] = "binance_futures"
+    mode: Literal["testnet", "mainnet", "custom"]
+    base_url: str
+    total_wallet_balance: float | None = None
+    total_wallet_balance_btc: float | None = None
+    total_unrealized_profit: float | None = None
+    total_margin_balance: float | None = None
+    available_balance: float | None = None
+    can_trade: bool | None = None
+    update_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    assets: list[BinanceAssetBalance] = Field(default_factory=list)
+    positions: list[BinancePositionSummary] = Field(default_factory=list)
+    error: str | None = None

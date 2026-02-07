@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { listJobs } from "@/lib/api";
+import { BinanceAccountPanel } from "@/components/BinanceAccountPanel";
 import type { Job } from "@/lib/types";
 
 export default function Home() {
@@ -55,6 +56,8 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      <BinanceAccountPanel />
 
       <div className="mt-8">
         <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">Quick Actions</h2>

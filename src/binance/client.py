@@ -149,6 +149,13 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         response = await self._signed_request("GET", "/fapi/v2/positionRisk", payload)
         return response
 
+    async def fetch_account_info(self) -> dict[str, Any]:
+        """선물 계정 정보 조회 (/fapi/v2/account)."""
+        response = await self._signed_request("GET", "/fapi/v2/account", {})
+        if not isinstance(response, dict):
+            raise ValueError("Unexpected response type from /fapi/v2/account")
+        return response
+
     async def fetch_exchange_info(self, symbol: str | None = None) -> dict[str, Any]:
         """거래소 정보 조회 (심볼별 필터 정보 포함).
 

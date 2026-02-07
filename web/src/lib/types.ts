@@ -153,3 +153,41 @@ export type Trade = {
   ts: string;
   raw: Record<string, unknown> | null;
 };
+
+export type BinanceAssetBalance = {
+  asset: string;
+  wallet_balance: number;
+  available_balance: number;
+  unrealized_profit: number;
+  margin_balance: number;
+};
+
+export type BinancePositionSummary = {
+  symbol: string;
+  side: "LONG" | "SHORT";
+  position_amt: number;
+  entry_price: number;
+  break_even_price: number;
+  unrealized_pnl: number;
+  notional: number;
+  leverage: number;
+  isolated: boolean;
+};
+
+export type BinanceAccountSummary = {
+  configured: boolean;
+  connected: boolean;
+  market: "binance_futures";
+  mode: "testnet" | "mainnet" | "custom";
+  base_url: string;
+  total_wallet_balance: number | null;
+  total_wallet_balance_btc: number | null;
+  total_unrealized_profit: number | null;
+  total_margin_balance: number | null;
+  available_balance: number | null;
+  can_trade: boolean | null;
+  update_time: string;
+  assets: BinanceAssetBalance[];
+  positions: BinancePositionSummary[];
+  error: string | null;
+};

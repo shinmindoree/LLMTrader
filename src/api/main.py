@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +41,7 @@ from control.repo import (
 )
 from settings import get_settings
 from llm.client import LLMClient
+from binance.client import BinanceHTTPClient
 
 from api.deps import require_admin
 from api.job_policy import evaluate_job_policy
@@ -72,6 +73,9 @@ from api.schemas import (
     StrategySaveRequest,
     StrategySaveResponse,
     TradeResponse,
+    BinanceAssetBalance,
+    BinancePositionSummary,
+    BinanceAccountSummaryResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 
@@ -176,6 +180,29 @@ def _strip_first_line_lang_tag(content: str) -> str:
     if first in ("python", "py", "python3"):
         return "\n".join(lines[1:]).lstrip("\n")
     return content
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _binance_mode(base_url: str) -> Literal["testnet", "mainnet", "custom"]:
+    lowered = base_url.lower()
+    if "testnet" in lowered:
+        return "testnet"
+    if "fapi.binance.com" in lowered:
+        return "mainnet"
+    return "custom"
 
 
 _INTAKE_ALLOWED_STATUSES = {"READY", "NEEDS_CLARIFICATION", "UNSUPPORTED_CAPABILITY", "OUT_OF_SCOPE"}
@@ -477,6 +504,160 @@ def create_app() -> FastAPI:
             return HealthResponse(status="ok", db_ok=True, db_error=None)
         except Exception as exc:  # noqa: BLE001
             return HealthResponse(status="error", db_ok=False, db_error=str(exc))
+
+    @app.get(
+        "/api/binance/account/summary",
+        response_model=BinanceAccountSummaryResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def binance_account_summary() -> BinanceAccountSummaryResponse:
+        binance_settings = settings.binance
+        base_url = (binance_settings.base_url or "").strip()
+        mode = _binance_mode(base_url)
+
+        if not (binance_settings.api_key or "").strip() or not (binance_settings.api_secret or "").strip():
+            return BinanceAccountSummaryResponse(
+                configured=False,
+                connected=False,
+                mode=mode,
+                base_url=base_url,
+                error="BINANCE_API_KEY/BINANCE_API_SECRET is not configured",
+            )
+
+        client = BinanceHTTPClient(
+            api_key=binance_settings.api_key,
+            api_secret=binance_settings.api_secret,
+            base_url=base_url,
+        )
+        try:
+            account = await client.fetch_account_info()
+
+            btc_price: float | None = None
+            try:
+                btc_price = await client.fetch_ticker_price("BTCUSDT")
+            except Exception:  # noqa: BLE001
+                btc_price = None
+
+            assets: list[BinanceAssetBalance] = []
+            raw_assets = account.get("assets", [])
+            if isinstance(raw_assets, list):
+                for raw_asset in raw_assets:
+                    if not isinstance(raw_asset, dict):
+                        continue
+                    asset = str(raw_asset.get("asset") or "").strip().upper()
+                    if not asset:
+                        continue
+
+                    wallet_balance = _safe_float(raw_asset.get("walletBalance"))
+                    available_balance = _safe_float(raw_asset.get("availableBalance"))
+                    unrealized_profit = _safe_float(raw_asset.get("unrealizedProfit"))
+                    margin_balance = _safe_float(
+                        raw_asset.get("marginBalance"),
+                        wallet_balance + unrealized_profit,
+                    )
+
+                    if (
+                        abs(wallet_balance) < 1e-12
+                        and abs(available_balance) < 1e-12
+                        and abs(unrealized_profit) < 1e-12
+                        and abs(margin_balance) < 1e-12
+                    ):
+                        continue
+
+                    assets.append(
+                        BinanceAssetBalance(
+                            asset=asset,
+                            wallet_balance=wallet_balance,
+                            available_balance=available_balance,
+                            unrealized_profit=unrealized_profit,
+                            margin_balance=margin_balance,
+                        ),
+                    )
+            assets.sort(key=lambda item: abs(item.margin_balance), reverse=True)
+
+            positions: list[BinancePositionSummary] = []
+            raw_positions = account.get("positions", [])
+            if isinstance(raw_positions, list):
+                for raw_position in raw_positions:
+                    if not isinstance(raw_position, dict):
+                        continue
+                    symbol = str(raw_position.get("symbol") or "").strip().upper()
+                    if not symbol:
+                        continue
+
+                    position_amt = _safe_float(raw_position.get("positionAmt"))
+                    unrealized_pnl = _safe_float(raw_position.get("unrealizedProfit"))
+                    notional = _safe_float(raw_position.get("notional"))
+
+                    if abs(position_amt) < 1e-12 and abs(unrealized_pnl) < 1e-12 and abs(notional) < 1e-12:
+                        continue
+
+                    entry_price = _safe_float(raw_position.get("entryPrice"))
+                    break_even_price = _safe_float(raw_position.get("breakEvenPrice"), entry_price)
+                    leverage = max(1, _safe_int(raw_position.get("leverage"), 1))
+
+                    positions.append(
+                        BinancePositionSummary(
+                            symbol=symbol,
+                            side="LONG" if position_amt >= 0 else "SHORT",
+                            position_amt=position_amt,
+                            entry_price=entry_price,
+                            break_even_price=break_even_price,
+                            unrealized_pnl=unrealized_pnl,
+                            notional=notional,
+                            leverage=leverage,
+                            isolated=bool(raw_position.get("isolated", False)),
+                        ),
+                    )
+            positions.sort(key=lambda item: abs(item.notional), reverse=True)
+
+            total_wallet_balance = _safe_float(
+                account.get("totalWalletBalance"),
+                _safe_float(account.get("walletBalance")),
+            )
+            total_unrealized_profit = _safe_float(
+                account.get("totalUnrealizedProfit"),
+                sum(asset.unrealized_profit for asset in assets),
+            )
+            total_margin_balance = _safe_float(
+                account.get("totalMarginBalance"),
+                total_wallet_balance + total_unrealized_profit,
+            )
+            available_balance = _safe_float(account.get("availableBalance"))
+            total_wallet_balance_btc = (
+                (total_wallet_balance / btc_price)
+                if (btc_price is not None and btc_price > 0)
+                else None
+            )
+            can_trade_raw = account.get("canTrade")
+
+            return BinanceAccountSummaryResponse(
+                configured=True,
+                connected=True,
+                mode=mode,
+                base_url=base_url,
+                total_wallet_balance=total_wallet_balance,
+                total_wallet_balance_btc=total_wallet_balance_btc,
+                total_unrealized_profit=total_unrealized_profit,
+                total_margin_balance=total_margin_balance,
+                available_balance=available_balance,
+                can_trade=bool(can_trade_raw) if can_trade_raw is not None else None,
+                update_time=datetime.now(timezone.utc),
+                assets=assets,
+                positions=positions,
+                error=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return BinanceAccountSummaryResponse(
+                configured=True,
+                connected=False,
+                mode=mode,
+                base_url=base_url,
+                error=str(exc)[:1000],
+                update_time=datetime.now(timezone.utc),
+            )
+        finally:
+            await client.aclose()
 
     @app.get("/api/strategies", response_model=list[StrategyInfo], dependencies=[Depends(require_admin)])
     async def strategies() -> list[StrategyInfo]:

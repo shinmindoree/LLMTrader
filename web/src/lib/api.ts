@@ -1,4 +1,5 @@
 import type {
+  BinanceAccountSummary,
   DeleteAllResponse,
   DeleteResponse,
   Job,
@@ -219,6 +220,10 @@ export async function listJobs(options?: { type?: JobType; limit?: number }): Pr
     params.set("type", options.type);
   }
   return json<Job[]>(`/api/backend/api/jobs?${params.toString()}`);
+}
+
+export async function getBinanceAccountSummary(): Promise<BinanceAccountSummary> {
+  return json<BinanceAccountSummary>("/api/backend/api/binance/account/summary");
 }
 
 export async function getJob(jobId: string): Promise<Job> {

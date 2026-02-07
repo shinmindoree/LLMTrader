@@ -20,7 +20,7 @@ import type {
 } from "@/lib/types";
 
 const MODIFY_KEYWORDS =
-  /수정|바꿔|변경|추가해|제거|고쳐|change|modify|update|add|remove|바꿔줘|수정해줘|변경해줘|다시\s*만들|재생성|regenerate/i;
+  /수정|바꿔|변경|추가해|제거|고쳐|개선|개선안|반영|적용|change|modify|update|add|remove|rewrite|revise|바꿔줘|수정해줘|변경해줘|적용해줘|반영해줘|다시\s*만들|다시\s*생성|다시\s*전략\s*생성|전략\s*재생성|재생성|regenerate/i;
 
 function isModifyIntent(text: string): boolean {
   return MODIFY_KEYWORDS.test(text.trim());
@@ -47,6 +47,31 @@ function toApiMessages(messages: ChatMessage[]): { role: string; content: string
         ? (m.summary ?? m.content)
         : m.content,
   }));
+}
+
+function buildMessagesForGeneration(
+  messages: ChatMessage[],
+  latestCode: string | null,
+): { role: string; content: string }[] | undefined {
+  const base = toApiMessages(messages);
+  if (!latestCode) {
+    return base.length > 1 ? base : undefined;
+  }
+  const last = base.pop();
+  if (!last) {
+    return undefined;
+  }
+  const out = [
+    ...base,
+    {
+    role: "assistant",
+    content:
+      "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n"
+      + latestCode,
+    },
+    last,
+  ];
+  return out;
 }
 
 type ClarificationField = "symbol" | "timeframe" | "entry_logic" | "exit_logic" | "risk";
@@ -357,6 +382,8 @@ type ChatMessage = {
   repaired?: boolean;
   repair_attempts?: number;
   textOnly?: boolean;
+  status?: "thinking" | "typing" | "streaming" | null;
+  statusText?: string | null;
 };
 
 const createId = () =>
@@ -366,12 +393,7 @@ const createId = () =>
 
 type TabId = "chat" | "list";
 const SUMMARY_EXPAND_PROMPT =
-  "Expand the latest strategy summary with more detail in this order: overview, entry flow, exit flow, risk controls, and practical cautions. Do not modify the code.";
-
-type EditorModalState = {
-  messageId: string;
-  code: string;
-};
+  "방금 전략 요약을 이어서 더 자세히 설명해줘. 전략 개요 → 진입 흐름 → 청산 흐름 → 리스크 관리 → 실전 주의사항 순서로 써줘. 코드는 변경하지 마.";
 
 export default function StrategiesPage() {
   const [activeTab, setActiveTab] = useState<TabId>("chat");
@@ -392,13 +414,16 @@ export default function StrategiesPage() {
     code: string;
     name: string;
   } | null>(null);
-  const [editorModal, setEditorModal] = useState<EditorModalState | null>(null);
-  const [editorChecking, setEditorChecking] = useState(false);
-  const [editorSyntax, setEditorSyntax] = useState<StrategySyntaxCheckResponse | null>(null);
-  const [editorSyntaxError, setEditorSyntaxError] = useState<string | null>(null);
+  const [workspaceCode, setWorkspaceCode] = useState("");
+  const [workspaceSourceMessageId, setWorkspaceSourceMessageId] = useState<string | null>(null);
+  const [workspaceSummary, setWorkspaceSummary] = useState<string | null>(null);
+  const [workspaceDirty, setWorkspaceDirty] = useState(false);
+  const [workspaceChecking, setWorkspaceChecking] = useState(false);
+  const [workspaceSyntax, setWorkspaceSyntax] = useState<StrategySyntaxCheckResponse | null>(null);
+  const [workspaceSyntaxError, setWorkspaceSyntaxError] = useState<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
-  const editorGutterRef = useRef<HTMLDivElement | null>(null);
-  const editorTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const workspaceGutterRef = useRef<HTMLDivElement | null>(null);
+  const workspaceTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     listStrategies()
@@ -419,36 +444,75 @@ export default function StrategiesPage() {
   }, [chatMessages]);
 
   useEffect(() => {
-    if (!editorModal) {
+    const code = workspaceCode;
+    if (!code.trim()) {
+      setWorkspaceChecking(false);
+      setWorkspaceSyntax(null);
+      setWorkspaceSyntaxError(null);
       return;
     }
     let cancelled = false;
-    const code = editorModal.code;
     const timer = window.setTimeout(() => {
-      setEditorChecking(true);
-      setEditorSyntaxError(null);
+      setWorkspaceChecking(true);
+      setWorkspaceSyntaxError(null);
       validateStrategySyntax(code)
         .then((res) => {
           if (cancelled) return;
-          setEditorSyntax(res);
+          setWorkspaceSyntax(res);
         })
         .catch((e) => {
           if (cancelled) return;
-          setEditorSyntax(null);
-          setEditorSyntaxError(String(e));
+          setWorkspaceSyntax(null);
+          setWorkspaceSyntaxError(String(e));
         })
         .finally(() => {
           if (cancelled) return;
-          setEditorChecking(false);
+          setWorkspaceChecking(false);
         });
     }, 300);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [editorModal]);
+  }, [workspaceCode]);
 
-  const submitPrompt = async (trimmed: string) => {
+  const animateAssistantTyping = async (assistantId: string, fullText: string): Promise<void> => {
+    if (!fullText) {
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: "", status: null, statusText: null }
+            : m,
+        ),
+      );
+      return;
+    }
+    const chunkSize =
+      fullText.length > 2000 ? 24 : fullText.length > 1200 ? 16 : fullText.length > 600 ? 8 : 4;
+    let cursor = 0;
+    while (cursor < fullText.length) {
+      cursor = Math.min(fullText.length, cursor + chunkSize);
+      const partial = fullText.slice(0, cursor);
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content: partial,
+                textOnly: true,
+                status: cursor < fullText.length ? "typing" : null,
+                statusText: cursor < fullText.length ? "답변 작성 중..." : null,
+              }
+            : m,
+        ),
+      );
+      if (cursor < fullText.length) {
+        await new Promise((resolve) => window.setTimeout(resolve, 16));
+      }
+    }
+  };
+
+  const submitPrompt = async (trimmed: string, options?: { forceChat?: boolean }) => {
     if (!trimmed || isSending) {
       return;
     }
@@ -464,8 +528,11 @@ export default function StrategiesPage() {
     setChatMessages(nextMessages);
 
     const lastCodeSummary = getLastCodeAndSummary(nextMessages);
-    const isFirstTurn = !lastCodeSummary;
-    const isModify = lastCodeSummary && isModifyIntent(trimmed);
+    const workspaceCodeTrimmed = workspaceCode.trim();
+    const activeCode = workspaceCodeTrimmed || lastCodeSummary?.code || "";
+    const activeSummary = workspaceCodeTrimmed ? workspaceSummary : (lastCodeSummary?.summary ?? null);
+    const isFirstTurn = !activeCode;
+    const isModify = !options?.forceChat && !isFirstTurn && isModifyIntent(trimmed);
 
     const doGenerate = (
       messagesToSend?: { role: string; content: string }[],
@@ -478,7 +545,15 @@ export default function StrategiesPage() {
             setChatMessages((prev) => {
               const last = prev[prev.length - 1];
               if (last?.role !== "assistant" || last.id !== assistantId) return prev;
-              return [...prev.slice(0, -1), { ...last, content: last.content + token }];
+              return [
+                ...prev.slice(0, -1),
+                {
+                  ...last,
+                  content: last.content + token,
+                  status: "streaming",
+                  statusText: "코드 생성 중...",
+                },
+              ];
             });
           },
           onDone(payload) {
@@ -501,9 +576,17 @@ export default function StrategiesPage() {
                     backtest_ok: payload.backtest_ok ?? false,
                     repaired: payload.repaired ?? false,
                     repair_attempts: payload.repair_attempts ?? 0,
+                    status: null,
+                    statusText: null,
                   },
                 ];
               });
+              if (payload.code) {
+                setWorkspaceCode(payload.code);
+                setWorkspaceSourceMessageId(assistantId);
+                setWorkspaceSummary(payload.summary ?? null);
+                setWorkspaceDirty(false);
+              }
               listStrategies()
                 .then(setItems)
                 .catch((e) => setError(String(e)));
@@ -528,23 +611,38 @@ export default function StrategiesPage() {
       repaired: false,
       repair_attempts: 0,
       textOnly: false,
+      status: "thinking",
+      statusText: "요청 분석 중...",
     };
 
     if (isFirstTurn || isModify) {
       setChatMessages((prev) => [...prev, assistantMessage]);
       try {
-        const messagesToSend = nextMessages.length > 1 ? toApiMessages(nextMessages) : undefined;
+        const messagesToSend = buildMessagesForGeneration(
+          nextMessages,
+          isFirstTurn ? null : activeCode,
+        );
         const intake = await intakeStrategy(trimmed, messagesToSend);
         if (intake.status !== "READY") {
           const guidance = formatIntakeGuidance(intake);
           setChatMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last?.role !== "assistant" || last.id !== assistantId) return prev;
-            return [...prev.slice(0, -1), { ...last, content: guidance, textOnly: true }];
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: guidance, textOnly: true, status: null, statusText: null },
+            ];
           });
           setIsSending(false);
           return;
         }
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, status: "thinking", statusText: "전략 생성 준비 중..." }
+              : m,
+          ),
+        );
         await doGenerate(messagesToSend, intake.normalized_spec);
       } catch (e) {
         setChatError(String(e));
@@ -554,22 +652,18 @@ export default function StrategiesPage() {
       return;
     }
 
-    setChatMessages((prev) => [...prev, { ...assistantMessage, textOnly: true }]);
+    setChatMessages((prev) => [
+      ...prev,
+      { ...assistantMessage, textOnly: true, status: "thinking", statusText: "답변 준비 중..." },
+    ]);
     try {
       const chatMessagesForApi = toApiMessages(nextMessages);
       const res = await strategyChat(
-        lastCodeSummary.code,
-        lastCodeSummary.summary,
+        activeCode,
+        activeSummary,
         chatMessagesForApi,
       );
-      setChatMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.role !== "assistant" || last.id !== assistantId) return prev;
-        return [
-          ...prev.slice(0, -1),
-          { ...last, content: res.content, textOnly: true },
-        ];
-      });
+      await animateAssistantTyping(assistantId, res.content);
     } catch (e) {
       setChatError(String(e));
       setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
@@ -590,41 +684,39 @@ export default function StrategiesPage() {
 
   const handleSummaryExpand = async () => {
     if (isSending) return;
-    await submitPrompt(SUMMARY_EXPAND_PROMPT);
+    await submitPrompt(SUMMARY_EXPAND_PROMPT, { forceChat: true });
   };
 
-  const handleOpenEditor = (message: ChatMessage) => {
-    if (message.textOnly || !message.content) return;
-    setEditorModal({ messageId: message.id, code: message.content });
-    setEditorSyntax(null);
-    setEditorSyntaxError(null);
-    setEditorChecking(true);
+  const handleWorkspaceChange = (nextCode: string) => {
+    setWorkspaceCode(nextCode);
+    setWorkspaceDirty(true);
+    setWorkspaceSummary(null);
   };
 
-  const handleEditorChange = (nextCode: string) => {
-    setEditorModal((prev) => (prev ? { ...prev, code: nextCode } : prev));
-    setEditorChecking(true);
+  const handleWorkspaceScroll = () => {
+    if (!workspaceTextAreaRef.current || !workspaceGutterRef.current) return;
+    workspaceGutterRef.current.scrollTop = workspaceTextAreaRef.current.scrollTop;
   };
 
-  const handleEditorApply = () => {
-    if (!editorModal) return;
-    setChatMessages((prev) =>
-      prev.map((m) =>
-        m.id === editorModal.messageId
-          ? {
-              ...m,
-              content: editorModal.code,
-              summary: null,
-            }
-          : m,
-      ),
-    );
-    setEditorModal(null);
+  const handleSaveWorkspace = () => {
+    const code = workspaceCode.trim();
+    if (!code) return;
+    setSaveModal({
+      messageId: workspaceSourceMessageId ?? createId(),
+      code,
+      name: "",
+    });
   };
 
-  const handleEditorScroll = () => {
-    if (!editorTextAreaRef.current || !editorGutterRef.current) return;
-    editorGutterRef.current.scrollTop = editorTextAreaRef.current.scrollTop;
+  const handleLoadLatestGeneratedCode = () => {
+    const latest = [...chatMessages]
+      .reverse()
+      .find((m) => m.role === "assistant" && !m.textOnly && Boolean(m.content));
+    if (!latest) return;
+    setWorkspaceCode(latest.content);
+    setWorkspaceSourceMessageId(latest.id);
+    setWorkspaceSummary(latest.summary ?? null);
+    setWorkspaceDirty(false);
   };
 
   const handleSaveClick = (messageId: string, code: string) => {
@@ -711,10 +803,10 @@ export default function StrategiesPage() {
     [...chatMessages]
       .reverse()
       .find((m) => m.role === "assistant" && !m.textOnly && Boolean(m.content))?.id ?? null;
-  const editorLineCount = editorModal ? Math.max(1, editorModal.code.split("\n").length) : 1;
-  const syntaxErrorLine = editorSyntax?.error?.line ?? null;
+  const workspaceLineCount = Math.max(1, workspaceCode.split("\n").length);
+  const syntaxErrorLine = workspaceSyntax?.error?.line ?? null;
   const syntaxErrorColumn =
-    typeof editorSyntax?.error?.column === "number" ? editorSyntax.error.column + 1 : null;
+    typeof workspaceSyntax?.error?.column === "number" ? workspaceSyntax.error.column + 1 : null;
 
   return (
     <main className="w-full px-6 py-10">
@@ -841,188 +933,280 @@ export default function StrategiesPage() {
             )}
           </div>
         </div>
-        {chatMessages.length > 0 ? (
-          <>
-            <div className="flex flex-shrink-0 justify-end px-4 pt-3">
-              <button
-                type="button"
-                className="rounded border border-[#2a2e39] px-3 py-1 text-xs text-[#868993] transition hover:border-[#2962ff] hover:text-white"
-                onClick={handleClear}
-              >
-                Clear
-              </button>
-            </div>
-            {chatError ? (
-              <p className="mx-4 mt-2 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-                {chatError}
-              </p>
-            ) : null}
-            <div
-              ref={chatScrollRef}
-              className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
-            >
-              <div className="mx-auto max-w-3xl space-y-4">
-              {chatMessages.map((message) => {
-                const isLatestAssistantCode = message.id === latestAssistantCodeId;
-                return (
-                <div
-                  key={message.id}
-                  className={`rounded-lg border px-4 py-3 ${
-                    message.role === "user"
-                      ? "border-[#2962ff]/40 bg-[#0f1b3a]"
-                      : "border-[#2a2e39] bg-[#1e222d]"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-[#868993]">
-                    <span>{message.role === "user" ? "You" : "LLM"}</span>
-                    {message.role === "assistant" && message.content ? (
-                      <button
-                        className="rounded border border-transparent px-2 py-1 text-xs text-[#9aa0ad] transition hover:border-[#2962ff] hover:text-white"
-                        onClick={() => void handleCopy(message.content, message.id)}
-                        type="button"
-                      >
-                        {copiedId === message.id ? "Copied" : "Copy"}
-                      </button>
-                    ) : null}
-                  </div>
-                  {message.role === "assistant" ? (
-                    message.textOnly ? (
-                      <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
-                        {message.content}
-                      </p>
-                    ) : (
-                      <>
-                        {message.summary ? (
-                          <>
-                            <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
-                              {message.summary}
-                            </p>
-                            {isLatestAssistantCode ? (
-                              <button
-                                type="button"
-                                className="mt-2 rounded border border-[#26a69a]/60 px-3 py-1 text-xs text-[#26a69a] transition hover:bg-[#26a69a]/15 disabled:opacity-50"
-                              onClick={() => void handleSummaryExpand()}
-                              disabled={isSending}
-                            >
-                                Expand summary
-                              </button>
-                            ) : null}
-                          </>
-                        ) : null}
-                        <details className="mt-2">
-                          <summary className="cursor-pointer text-xs text-[#868993]">
-                            Code
-                          </summary>
-                          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-[#d1d4dc]">
-                            {message.content}
-                          </pre>
-                        </details>
-                        {message.backtest_ok ? (
-                          <p className="mt-2 text-xs text-[#26a69a]">
-                            Backtest passed. Strategy runs correctly.
-                          </p>
-                        ) : null}
-                        {message.repaired ? (
-                          <p className="mt-1 text-xs text-[#f9a825]">
-                            Auto-fix applied and verification passed ({message.repair_attempts ?? 0} attempts)
-                          </p>
-                        ) : null}
-                        {message.content && !message.path && isLatestAssistantCode ? (
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              className="rounded border border-[#2962ff] px-3 py-1 text-xs text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
-                              onClick={() => void handleSaveClick(message.id, message.content)}
-                              disabled={savingId !== null}
-                            >
-                              Save strategy
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border border-[#8fa8ff]/60 px-3 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#8fa8ff]/15"
-                              onClick={() => handleOpenEditor(message)}
-                            >
-                              Edit code
-                            </button>
-                          </div>
-                        ) : null}
-                        <div className="mt-2 space-y-1 text-xs text-[#868993]">
-                          {message.path ? <div>Saved to Strategy Library</div> : null}
-                          {message.model ? <div>Model: {message.model}</div> : null}
-                        </div>
-                      </>
-                    )
-                  ) : (
-                    <p className="mt-2 text-sm text-[#d1d4dc]">{message.content}</p>
-                  )}
+        <div className="flex min-h-0 flex-1">
+          <div className="min-w-0 flex-1 flex flex-col">
+            {chatMessages.length > 0 ? (
+              <>
+                <div className="flex flex-shrink-0 justify-end px-4 pt-3">
+                  <button
+                    type="button"
+                    className="rounded border border-[#2a2e39] px-3 py-1 text-xs text-[#868993] transition hover:border-[#2962ff] hover:text-white"
+                    onClick={handleClear}
+                  >
+                    Clear
+                  </button>
                 </div>
-                );
-              })}
-              </div>
-            </div>
-            <div className="flex-shrink-0 border-t border-[#2a2e39] px-4 py-4">
-              <form
-                className="mx-auto max-w-3xl flex gap-2 rounded-xl border border-[#2a2e39] bg-[#131722] p-2"
-                onSubmit={handleSubmit}
-              >
-                <textarea
-                  className="min-h-[44px] max-h-[200px] flex-1 resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Describe your strategy..."
-                  value={prompt}
-                  rows={1}
-                />
-                <button
-                  className="rounded-lg bg-[#2962ff] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!prompt.trim() || isSending}
-                  type="submit"
+                {chatError ? (
+                  <p className="mx-4 mt-2 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
+                    {chatError}
+                  </p>
+                ) : null}
+                <div
+                  ref={chatScrollRef}
+                  className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
                 >
-                  {isSending ? "..." : "Generate"}
-                </button>
-              </form>
-              <p className="mx-auto mt-2 max-w-3xl text-xs text-[#868993]">
-                Note: execution settings in the Backtest/Live forms override values mentioned in this prompt.
-              </p>
-            </div>
-          </>
-        ) : (
-          <>
-            {chatError ? (
-              <p className="mx-4 mt-4 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-                {chatError}
-              </p>
-            ) : null}
-            <div className="flex flex-1 flex-col items-center justify-center px-4 py-12">
-              <form
-                className="w-full max-w-2xl"
-                onSubmit={handleSubmit}
-              >
-                <div className="rounded-2xl border border-[#2a2e39] bg-[#131722] p-3 shadow-lg">
-                  <textarea
-                    className="min-h-[120px] w-full resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
-                    onChange={(e) => setPrompt(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Describe your strategy in plain language. e.g. Buy when RSI crosses above 30, sell at 70, 1h candles."
-                    value={prompt}
-                  />
-                  <div className="flex justify-end pt-2">
+                  <div className="mx-auto max-w-3xl space-y-4">
+                  {chatMessages.map((message) => {
+                    const isLatestAssistantCode = message.id === latestAssistantCodeId;
+                    return (
+                    <div
+                      key={message.id}
+                      className={`rounded-lg border px-4 py-3 ${
+                        message.role === "user"
+                          ? "border-[#2962ff]/40 bg-[#0f1b3a]"
+                          : "border-[#2a2e39] bg-[#1e222d]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-[#868993]">
+                        <span>{message.role === "user" ? "You" : "LLM"}</span>
+                        {message.role === "assistant" && message.content ? (
+                          <button
+                            className="rounded border border-transparent px-2 py-1 text-xs text-[#9aa0ad] transition hover:border-[#2962ff] hover:text-white"
+                            onClick={() => void handleCopy(message.content, message.id)}
+                            type="button"
+                          >
+                            {copiedId === message.id ? "Copied" : "Copy"}
+                          </button>
+                        ) : null}
+                      </div>
+                      {message.statusText ? (
+                        <div className="mt-2 inline-flex items-center gap-2 rounded border border-[#2a2e39] bg-[#171b25] px-2 py-1 text-xs text-[#8fa8ff]">
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#8fa8ff] animate-pulse" />
+                          {message.statusText}
+                        </div>
+                      ) : null}
+                      {message.role === "assistant" ? (
+                        message.textOnly ? (
+                          message.content ? (
+                            <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
+                              {message.content}
+                            </p>
+                          ) : null
+                        ) : (
+                          <>
+                            {message.summary ? (
+                              <>
+                                <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
+                                  {message.summary}
+                                </p>
+                                {isLatestAssistantCode ? (
+                                  <button
+                                    type="button"
+                                    className="mt-2 rounded border border-[#26a69a]/60 px-3 py-1 text-xs text-[#26a69a] transition hover:bg-[#26a69a]/15 disabled:opacity-50"
+                                  onClick={() => void handleSummaryExpand()}
+                                  disabled={isSending}
+                                >
+                                    Expand summary
+                                  </button>
+                                ) : null}
+                              </>
+                            ) : null}
+                            <details className="mt-2">
+                              <summary className="cursor-pointer text-xs text-[#868993]">
+                                Code
+                              </summary>
+                              <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-[#d1d4dc]">
+                                {message.content}
+                              </pre>
+                            </details>
+                            {message.backtest_ok ? (
+                              <p className="mt-2 text-xs text-[#26a69a]">
+                                Backtest passed. Strategy runs correctly.
+                              </p>
+                            ) : null}
+                            {message.repaired ? (
+                              <p className="mt-1 text-xs text-[#f9a825]">
+                                Auto-fix applied and verification passed ({message.repair_attempts ?? 0} attempts)
+                              </p>
+                            ) : null}
+                            {message.content && !message.path && isLatestAssistantCode ? (
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="rounded border border-[#2962ff] px-3 py-1 text-xs text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
+                                  onClick={() => void handleSaveClick(message.id, message.content)}
+                                  disabled={savingId !== null}
+                                >
+                                  Save strategy
+                                </button>
+                              </div>
+                            ) : null}
+                            <div className="mt-2 space-y-1 text-xs text-[#868993]">
+                              {message.path ? <div>Saved to Strategy Library</div> : null}
+                              {message.model ? <div>Model: {message.model}</div> : null}
+                            </div>
+                          </>
+                        )
+                      ) : (
+                        <p className="mt-2 text-sm text-[#d1d4dc]">{message.content}</p>
+                      )}
+                    </div>
+                    );
+                  })}
+                  </div>
+                </div>
+                <div className="flex-shrink-0 border-t border-[#2a2e39] px-4 py-4">
+                  <form
+                    className="mx-auto max-w-3xl flex gap-2 rounded-xl border border-[#2a2e39] bg-[#131722] p-2"
+                    onSubmit={handleSubmit}
+                  >
+                    <textarea
+                      className="min-h-[44px] max-h-[200px] flex-1 resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
+                      onChange={(e) => setPrompt(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Describe your strategy..."
+                      value={prompt}
+                      rows={1}
+                    />
                     <button
-                      className="rounded-lg bg-[#2962ff] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="rounded-lg bg-[#2962ff] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={!prompt.trim() || isSending}
                       type="submit"
                     >
-                      {isSending ? "Generating..." : "Generate"}
+                      {isSending ? "..." : "Generate"}
                     </button>
-                  </div>
+                  </form>
+                  <p className="mx-auto mt-2 max-w-3xl text-xs text-[#868993]">
+                    Note: execution settings in the Backtest/Live forms override values mentioned in this prompt.
+                  </p>
                 </div>
-                <p className="mt-2 text-xs text-[#868993]">
-                  Note: execution settings in the Backtest/Live forms override values mentioned in this prompt.
+              </>
+            ) : (
+              <>
+                {chatError ? (
+                  <p className="mx-4 mt-4 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
+                    {chatError}
+                  </p>
+                ) : null}
+                <div className="flex flex-1 flex-col items-center justify-center px-4 py-12">
+                  <form
+                    className="w-full max-w-2xl"
+                    onSubmit={handleSubmit}
+                  >
+                    <div className="rounded-2xl border border-[#2a2e39] bg-[#131722] p-3 shadow-lg">
+                      <textarea
+                        className="min-h-[120px] w-full resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
+                        onChange={(e) => setPrompt(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        placeholder="Describe your strategy in plain language. e.g. Buy when RSI crosses above 30, sell at 70, 1h candles."
+                        value={prompt}
+                      />
+                      <div className="flex justify-end pt-2">
+                        <button
+                          className="rounded-lg bg-[#2962ff] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={!prompt.trim() || isSending}
+                          type="submit"
+                        >
+                          {isSending ? "Generating..." : "Generate"}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs text-[#868993]">
+                      Note: execution settings in the Backtest/Live forms override values mentioned in this prompt.
+                    </p>
+                  </form>
+                </div>
+              </>
+            )}
+          </div>
+
+          <aside className="hidden w-[420px] shrink-0 border-l border-[#2a2e39] bg-[#151924] lg:flex lg:flex-col">
+            <div className="flex items-center justify-between border-b border-[#2a2e39] px-3 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-[#d1d4dc]">Workspace Code</h3>
+                <p className="mt-1 text-[11px] text-[#868993]">
+                  Follow-up improvements are based on this code.
                 </p>
-              </form>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#9aa0ad] transition hover:border-[#2962ff] hover:text-white"
+                  onClick={handleLoadLatestGeneratedCode}
+                >
+                  Load latest
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-[#2962ff]/70 px-2 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff]/15 disabled:opacity-50"
+                  onClick={handleSaveWorkspace}
+                  disabled={!workspaceCode.trim() || savingId !== null}
+                >
+                  Save
+                </button>
+              </div>
             </div>
-          </>
-        )}
+
+            <div className="min-h-0 flex-1">
+              {workspaceCode.trim() ? (
+                <div className="flex h-full overflow-hidden">
+                  <div
+                    ref={workspaceGutterRef}
+                    className="w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
+                  >
+                    {Array.from({ length: workspaceLineCount }, (_, idx) => {
+                      const lineNo = idx + 1;
+                      return (
+                        <div
+                          key={`workspace-line-${lineNo}`}
+                          className={`pr-2 ${lineNo === syntaxErrorLine ? "bg-[#3b1f26] text-[#ef9a9a]" : ""}`}
+                        >
+                          {lineNo}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <textarea
+                    ref={workspaceTextAreaRef}
+                    className="h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
+                    spellCheck={false}
+                    value={workspaceCode}
+                    onChange={(e) => handleWorkspaceChange(e.target.value)}
+                    onScroll={handleWorkspaceScroll}
+                  />
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[#868993]">
+                  전략 코드가 생성되면 이 영역에서 계속 편집할 수 있습니다.
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-[#2a2e39] px-3 py-2 text-xs">
+              {workspaceChecking ? (
+                <span className="text-[#8fa8ff]">Checking syntax...</span>
+              ) : workspaceSyntaxError ? (
+                <span className="text-[#ef9a9a]">Syntax check failed: {workspaceSyntaxError}</span>
+              ) : workspaceSyntax?.valid ? (
+                <span className="text-[#7fd4a6]">No syntax errors found</span>
+              ) : workspaceSyntax?.error ? (
+                <span className="text-[#ef9a9a]">
+                  Syntax error: {workspaceSyntax.error.message}
+                  {syntaxErrorLine ? ` (line ${syntaxErrorLine}` : ""}
+                  {syntaxErrorColumn ? `, col ${syntaxErrorColumn}` : ""}
+                  {syntaxErrorLine ? ")" : ""}
+                </span>
+              ) : (
+                <span className="text-[#868993]">Syntax check runs while you edit code.</span>
+              )}
+              {workspaceDirty ? (
+                <p className="mt-1 text-[11px] text-[#f9a825]">
+                  Unsaved edits in workspace
+                </p>
+              ) : null}
+            </div>
+          </aside>
+        </div>
 
         {saveModal ? (
           <div
@@ -1064,96 +1248,6 @@ export default function StrategiesPage() {
           </div>
         ) : null}
 
-        {editorModal ? (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-            role="dialog"
-            aria-modal="true"
-          >
-            <div className="w-full max-w-6xl rounded-xl border border-[#2a2e39] bg-[#161a24] p-5 shadow-2xl">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-[#d1d4dc]">Strategy Editor</h3>
-                  <p className="mt-1 text-xs text-[#868993]">
-                    Syntax is checked automatically while you edit.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="rounded border border-[#2a2e39] px-3 py-1 text-xs text-[#d1d4dc] transition hover:bg-[#2a2e39]"
-                  onClick={() => setEditorModal(null)}
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="mt-3 rounded border border-[#2a2e39] bg-[#0f131d]">
-                <div className="flex h-[60vh] overflow-hidden">
-                  <div
-                    ref={editorGutterRef}
-                    className="w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
-                  >
-                    {Array.from({ length: editorLineCount }, (_, idx) => {
-                      const lineNo = idx + 1;
-                      return (
-                        <div
-                          key={`line-${lineNo}`}
-                          className={`pr-2 ${lineNo === syntaxErrorLine ? "bg-[#3b1f26] text-[#ef9a9a]" : ""}`}
-                        >
-                          {lineNo}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <textarea
-                    ref={editorTextAreaRef}
-                    className="h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
-                    spellCheck={false}
-                    value={editorModal.code}
-                    onChange={(e) => handleEditorChange(e.target.value)}
-                    onScroll={handleEditorScroll}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-xs">
-                {editorChecking ? (
-                  <span className="text-[#8fa8ff]">Checking syntax...</span>
-                ) : editorSyntaxError ? (
-                  <span className="text-[#ef9a9a]">Syntax check failed: {editorSyntaxError}</span>
-                ) : editorSyntax?.valid ? (
-                  <span className="text-[#7fd4a6]">No syntax errors found</span>
-                ) : editorSyntax?.error ? (
-                  <span className="text-[#ef9a9a]">
-                    Syntax error: {editorSyntax.error.message}
-                    {syntaxErrorLine ? ` (line ${syntaxErrorLine}` : ""}
-                    {syntaxErrorColumn ? `, col ${syntaxErrorColumn}` : ""}
-                    {syntaxErrorLine ? ")" : ""}
-                  </span>
-                ) : (
-                  <span className="text-[#868993]">Syntax check runs as soon as you edit code.</span>
-                )}
-              </div>
-
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  className="rounded border border-[#2a2e39] px-4 py-2 text-sm text-[#d1d4dc] transition hover:bg-[#2a2e39]"
-                  onClick={() => setEditorModal(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="rounded bg-[#2962ff] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0]"
-                  onClick={handleEditorApply}
-                >
-                  Apply
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </section>
       ) : (
       <section className="mt-0 rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d] p-6">
