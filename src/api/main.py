@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Header, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
@@ -46,7 +46,7 @@ from settings import get_settings
 from llm.client import LLMClient
 from binance.client import BinanceHTTPClient
 
-from api.deps import require_admin
+from api.deps import AuthenticatedUser, require_admin
 from api.job_policy import evaluate_job_policy
 from api.schemas import (
     HealthResponse,
@@ -121,10 +121,8 @@ def _normalize_chat_user_id(raw: str | None) -> str:
     return cleaned or "default"
 
 
-def _chat_user_id_from_header(
-    x_chat_user_id: str | None = Header(default=None, alias="x-chat-user-id"),
-) -> str:
-    return _normalize_chat_user_id(x_chat_user_id)
+def _chat_user_id_from_auth(user: AuthenticatedUser = Depends(require_admin)) -> str:
+    return _normalize_chat_user_id(user.user_id)
 
 
 def _chat_session_to_response(row: Any) -> StrategyChatSessionResponse:
@@ -449,7 +447,7 @@ async def _verify_with_auto_repair(
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    engine = create_async_engine(settings.database_url)
+    engine = create_async_engine(settings.effective_database_url)
     session_maker = create_session_maker(engine)
 
     app = FastAPI(title="LLMTrader API", version="0.1.0")
@@ -1264,7 +1262,7 @@ def create_app() -> FastAPI:
     )
     async def list_chat_sessions(
         limit: int = Query(default=200, ge=1, le=500),
-        user_id: str = Depends(_chat_user_id_from_header),
+        user_id: str = Depends(_chat_user_id_from_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> list[StrategyChatSessionResponse]:
         rows = await repo_list_strategy_chat_sessions(session, user_id=user_id, limit=limit)
@@ -1278,7 +1276,7 @@ def create_app() -> FastAPI:
     async def upsert_chat_session(
         session_id: str,
         body: StrategyChatSessionUpsertRequest,
-        user_id: str = Depends(_chat_user_id_from_header),
+        user_id: str = Depends(_chat_user_id_from_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> StrategyChatSessionResponse:
         normalized_session_id = (session_id or "").strip()
@@ -1308,7 +1306,7 @@ def create_app() -> FastAPI:
     )
     async def delete_chat_session(
         session_id: str,
-        user_id: str = Depends(_chat_user_id_from_header),
+        user_id: str = Depends(_chat_user_id_from_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> DeleteResponse:
         normalized_session_id = (session_id or "").strip()

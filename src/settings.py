@@ -35,22 +35,47 @@ class RelayServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+class SupabaseAuthSettings(BaseSettings):
+    """Supabase 인증 설정."""
+
+    enabled: bool = Field(default=False, alias="SUPABASE_AUTH_ENABLED")
+    url: str = Field(default="", alias="SUPABASE_URL")
+    anon_key: str = Field(default="", alias="SUPABASE_ANON_KEY")
+    auth_timeout_seconds: float = Field(default=5.0, alias="SUPABASE_AUTH_TIMEOUT_SECONDS")
+    allow_admin_fallback: bool = Field(default=True, alias="AUTH_ALLOW_ADMIN_TOKEN_FALLBACK")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
 class Settings(BaseSettings):
     """애플리케이션 전역 설정."""
 
     env: str = Field(default="local", alias="ENV")
     database_url: str = Field(
-        default="postgresql+asyncpg://llmtrader:llmtrader@localhost:5432/llmtrader",
+        default="",
         alias="DATABASE_URL",
     )
+    supabase_database_url: str = Field(default="", alias="SUPABASE_DATABASE_URL")
     admin_token: str = Field(default="dev-admin-token", alias="ADMIN_TOKEN")
     strategy_dirs: str = Field(default="scripts/strategies", alias="STRATEGY_DIRS")
     runner_poll_interval_ms: int = Field(default=500, alias="RUNNER_POLL_INTERVAL_MS")
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
     relay_server: RelayServerSettings = Field(default_factory=RelayServerSettings)
+    supabase_auth: SupabaseAuthSettings = Field(default_factory=SupabaseAuthSettings)
 
     model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
+
+    @property
+    def effective_database_url(self) -> str:
+        """실행 시 사용할 DB URL (DATABASE_URL 우선, 없으면 SUPABASE_DATABASE_URL)."""
+        explicit = self.database_url.strip()
+        if explicit:
+            return explicit
+        supabase = self.supabase_database_url.strip()
+        if supabase:
+            return supabase
+        return "postgresql+asyncpg://llmtrader:llmtrader@localhost:5432/llmtrader"
 
 
 @lru_cache(maxsize=1)

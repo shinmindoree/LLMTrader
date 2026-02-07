@@ -18,6 +18,8 @@ services:
     environment:
       API_ORIGIN: http://api:8000
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      CHAT_USER_ID_HEADER_SOURCE: ${CHAT_USER_ID_HEADER_SOURCE:-x-user-id}
+      CHAT_USER_ID_DEFAULT: ${CHAT_USER_ID_DEFAULT:-}
       NODE_ENV: development
     command: ["sh", "-c", "npm install && npm run dev -- -p 3000"]
     healthcheck:

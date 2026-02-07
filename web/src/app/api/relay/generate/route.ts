@@ -1,4 +1,13 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+
+import {
+  clearSessionCookies,
+  isSupabaseAuthEnabled,
+  readSessionCookies,
+  refreshSession,
+  shouldRefreshSession,
+  writeSessionCookies,
+} from "@/lib/supabaseAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +21,24 @@ export async function POST(req: NextRequest): Promise<Response> {
       JSON.stringify({ error: "RELAY_SERVER_URL is not configured" }),
       { status: 500, headers: { "content-type": "application/json" } },
     );
+  }
+
+  let refreshedSession: ReturnType<typeof readSessionCookies> = null;
+  if (isSupabaseAuthEnabled()) {
+    const session = readSessionCookies(req.cookies);
+    if (!session) {
+      const unauthorized = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      clearSessionCookies(unauthorized.cookies);
+      return unauthorized;
+    }
+    if (shouldRefreshSession(session)) {
+      refreshedSession = await refreshSession(session.refreshToken, session.userId, session.email);
+      if (!refreshedSession) {
+        const unauthorized = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        clearSessionCookies(unauthorized.cookies);
+        return unauthorized;
+      }
+    }
   }
 
   const target = new URL("/generate", RELAY_ORIGIN);
@@ -35,5 +62,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   resHeaders.delete("content-encoding");
   resHeaders.set("cache-control", "no-store");
 
-  return new Response(res.body, { status: res.status, headers: resHeaders });
+  const response = new NextResponse(res.body, { status: res.status, headers: resHeaders });
+  if (refreshedSession) {
+    writeSessionCookies(response.cookies, refreshedSession);
+  }
+  return response;
 }

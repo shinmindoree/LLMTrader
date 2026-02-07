@@ -14,7 +14,7 @@ def _repo_root() -> Path:
 
 async def _amain() -> None:
     settings = get_settings()
-    engine = create_async_engine(settings.database_url)
+    engine = create_async_engine(settings.effective_database_url)
     await init_db(engine)
     session_maker = create_session_maker(engine)
 
@@ -32,4 +32,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -20,10 +20,63 @@ import type {
   Trade,
 } from "@/lib/types";
 
+const CHAT_USER_ID_STORAGE_KEY = "llmtrader.chat_user_id";
+
+function parseSupabaseUserId(value: string): string | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const root = parsed as Record<string, unknown>;
+    const directUser = root.user;
+    if (directUser && typeof directUser === "object") {
+      const directId = (directUser as Record<string, unknown>).id;
+      if (typeof directId === "string" && directId.trim()) return directId.trim();
+    }
+    const currentSession = root.currentSession;
+    if (!currentSession || typeof currentSession !== "object") return null;
+    const user = (currentSession as Record<string, unknown>).user;
+    if (!user || typeof user !== "object") return null;
+    const id = (user as Record<string, unknown>).id;
+    return typeof id === "string" && id.trim() ? id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function getChatUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const explicit = window.localStorage.getItem(CHAT_USER_ID_STORAGE_KEY);
+    if (explicit && explicit.trim()) {
+      return explicit.trim();
+    }
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (!key) continue;
+      if (!key.startsWith("sb-") || !key.endsWith("-auth-token")) continue;
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const extracted = parseSupabaseUserId(raw);
+      if (extracted) {
+        return extracted;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  const chatUserId = getChatUserId();
+  const headers = new Headers(init?.headers);
+  headers.set("content-type", "application/json");
+  if (chatUserId) {
+    headers.set("x-chat-user-id", chatUserId);
+  }
   const res = await fetch(path, {
     ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+    headers,
     cache: "no-store",
   });
   if (!res.ok) {
@@ -183,9 +236,15 @@ export async function generateStrategyStream(
   if (messages && messages.length > 0) {
     body.messages = messages;
   }
+  const chatUserId = getChatUserId();
+  const headers = new Headers();
+  headers.set("content-type", "application/json");
+  if (chatUserId) {
+    headers.set("x-chat-user-id", chatUserId);
+  }
   const res = await fetch("/api/backend/api/strategies/generate/stream", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(body),
     cache: "no-store",
   });

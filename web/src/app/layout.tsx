@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import "./globals.css";
 import SidebarNav from "./SidebarNav";
+import { AuthActions } from "@/components/AuthActions";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -49,6 +50,7 @@ export default function RootLayout({
                 Backtest
               </Link>
             </nav>
+            <AuthActions />
           </div>
         </header>
         <div className="flex w-full">
