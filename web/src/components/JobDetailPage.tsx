@@ -28,6 +28,18 @@ function formatDateTime(value: string | null): string {
   return dt.toLocaleString();
 }
 
+function toRunReference(jobId: string): string {
+  if (!jobId) return "-";
+  return jobId.length > 8 ? `#${jobId.slice(0, 8)}` : `#${jobId}`;
+}
+
+function strategyNameFromPath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return "Strategy";
+  const base = trimmed.split("/").pop() ?? trimmed;
+  return base.replace(/\.[^.]+$/, "");
+}
+
 export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
   const params = useParams<{ jobId?: string | string[] }>();
   const raw = params?.jobId;
@@ -77,7 +89,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
       {!validJobId ? (
         <div className="rounded border border-[#2a2e39] bg-[#1e222d] p-4 text-sm text-[#d1d4dc]">
-          Invalid job id: <span className="font-mono text-[#868993]">{String(jobId)}</span>
+          Invalid run link: <span className="font-mono text-[#868993]">{String(jobId)}</span>
         </div>
       ) : null}
 
@@ -94,9 +106,9 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-[#d1d4dc]">
-            {job?.type === "BACKTEST" ? "Backtest Job" : job?.type === "LIVE" ? "Live Job" : "Job Details"}
+            {job?.type === "BACKTEST" ? "Backtest Run" : job?.type === "LIVE" ? "Live Run" : "Run Details"}
           </h1>
-          <div className="mt-1 font-mono text-sm text-[#868993]">{jobId}</div>
+          <div className="mt-1 font-mono text-sm text-[#868993]">Run Reference {toRunReference(jobId ?? "")}</div>
           {job ? (
             <div className="mt-4 space-y-2 text-sm">
               <div className="flex items-center gap-2">
@@ -105,7 +117,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[#868993]">Strategy:</span>
-                <span className="text-[#d1d4dc]">{job.strategy_path}</span>
+                <span className="text-[#d1d4dc]">{strategyNameFromPath(job.strategy_path)}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[#868993]">Created:</span>
@@ -162,7 +174,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
       {job?.result ? (
         <details className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
-          <summary className="cursor-pointer text-xs text-[#868993]">Raw result payload</summary>
+          <summary className="cursor-pointer text-xs text-[#868993]">Technical result payload</summary>
           <pre className="mt-3 max-h-[240px] overflow-auto text-xs text-[#d1d4dc]">
             {JSON.stringify(job.result, null, 2)}
           </pre>

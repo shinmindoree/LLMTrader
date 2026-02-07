@@ -30,7 +30,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
         setLastId(ev.event_id);
         setEvents((prev) => {
           const newEvents = [...prev, ev].slice(-500);
-          // 스크롤 자동 이동
+          // Keep the latest event in view.
           setTimeout(() => {
             if (scrollRef.current) {
               scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -66,7 +66,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
             }`}
           />
           <span className="text-[#868993]">
-            {connected ? "connected" : "disconnected"} • last_id={lastId}
+            {connected ? "connected" : "disconnected"} • last event #{lastId}
           </span>
         </div>
       </div>

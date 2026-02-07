@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import importlib.util
 import json
 import re
@@ -65,6 +66,9 @@ from api.schemas import (
     StrategyGenerateResponse,
     StrategyChatRequest,
     StrategyChatResponse,
+    StrategySyntaxCheckRequest,
+    StrategySyntaxCheckResponse,
+    StrategySyntaxError,
     StrategySaveRequest,
     StrategySaveResponse,
     TradeResponse,
@@ -1056,6 +1060,36 @@ def create_app() -> FastAPI:
 
         relative_path = str(final_target.relative_to(repo_root))
         return StrategySaveResponse(path=relative_path)
+
+    @app.post(
+        "/api/strategies/validate-syntax",
+        response_model=StrategySyntaxCheckResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def validate_strategy_syntax(
+        body: StrategySyntaxCheckRequest,
+    ) -> StrategySyntaxCheckResponse:
+        code = _strip_code_fences(body.code or "")
+        if not code.strip():
+            raise HTTPException(status_code=422, detail="code must be non-empty")
+        try:
+            ast.parse(code)
+            return StrategySyntaxCheckResponse(valid=True, error=None)
+        except SyntaxError as exc:
+            return StrategySyntaxCheckResponse(
+                valid=False,
+                error=StrategySyntaxError(
+                    message=exc.msg or "invalid syntax",
+                    line=exc.lineno,
+                    column=(exc.offset - 1) if isinstance(exc.offset, int) and exc.offset > 0 else exc.offset,
+                    end_line=getattr(exc, "end_lineno", None),
+                    end_column=(
+                        (exc.end_offset - 1)
+                        if isinstance(getattr(exc, "end_offset", None), int) and getattr(exc, "end_offset", None) > 0
+                        else getattr(exc, "end_offset", None)
+                    ),
+                ),
+            )
 
     @app.post(
         "/api/jobs/preflight",

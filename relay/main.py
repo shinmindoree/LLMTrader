@@ -113,13 +113,81 @@ _ALLOWED_STATUSES = {
 _GENERIC_REQUEST_PATTERNS = [
     r"^전략\s*생성",
     r"^전략\s*만들",
+    r"전략.*아무거나",
+    r"아무거나.*전략",
+    r"알아서.*전략",
     r"strategy\s*(please|generate|create)?\s*$",
 ]
+_MISSING_FIELD_ORDER = ("symbol", "timeframe", "entry_logic", "exit_logic", "risk")
 _MISSING_FIELD_QUESTIONS = {
     "symbol": "어떤 심볼로 거래할까요? (예: BTCUSDT)",
     "timeframe": "어떤 캔들 간격을 사용할까요? (예: 1m, 15m, 1h, 4h)",
     "entry_logic": "진입 조건을 한 줄로 구체적으로 적어주세요.",
     "exit_logic": "청산 조건을 한 줄로 구체적으로 적어주세요.",
+    "risk": "리스크 관리는 어떻게 할까요? (예: 고정 수량, 계좌 비율, 손절 기준)",
+}
+_FIELD_TO_QUESTION_CATEGORY = {
+    "symbol": "symbol",
+    "timeframe": "timeframe",
+    "entry_logic": "entry",
+    "exit_logic": "exit",
+    "risk": "risk",
+}
+_QUESTION_CATEGORY_KEYWORDS = {
+    "symbol": (
+        "symbol",
+        "ticker",
+        "market",
+        "pair",
+        "심볼",
+        "종목",
+        "티커",
+        "거래쌍",
+        "자산",
+    ),
+    "timeframe": (
+        "timeframe",
+        "interval",
+        "candle",
+        "timescale",
+        "타임프레임",
+        "캔들",
+        "캔들간격",
+        "봉",
+        "시간간격",
+    ),
+    "entry": (
+        "entry",
+        "enter",
+        "buycondition",
+        "진입",
+        "매수조건",
+        "롱조건",
+        "숏조건",
+    ),
+    "risk": (
+        "risk",
+        "position",
+        "size",
+        "leverage",
+        "drawdown",
+        "리스크",
+        "위험관리",
+        "수량",
+        "비중",
+        "레버리지",
+        "손실한도",
+    ),
+    "exit": (
+        "exit",
+        "close",
+        "takeprofit",
+        "stoploss",
+        "청산",
+        "익절",
+        "손절",
+        "종료",
+    ),
 }
 
 
@@ -159,6 +227,69 @@ def _to_str_list(raw: Any) -> list[str]:
         if val:
             out.append(val)
     return out
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        item = value.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", (value or "").lower())
+
+
+def _question_category(question: str) -> str | None:
+    normalized = _normalize_text(question)
+    if not normalized:
+        return None
+    for category, keywords in _QUESTION_CATEGORY_KEYWORDS.items():
+        if any(keyword in normalized for keyword in keywords):
+            return category
+    return None
+
+
+def _merge_clarification_questions(
+    missing_fields: list[str],
+    model_questions: list[str],
+) -> list[str]:
+    ordered_missing = [f for f in _MISSING_FIELD_ORDER if f in missing_fields]
+    ordered_missing.extend(f for f in missing_fields if f not in ordered_missing)
+
+    result: list[str] = []
+    seen_text: set[str] = set()
+    seen_categories: set[str] = set()
+
+    def _push(question: str, category: str | None = None) -> None:
+        q = question.strip()
+        if not q:
+            return
+        normalized = _normalize_text(q)
+        if not normalized or normalized in seen_text:
+            return
+        cat = category or _question_category(q)
+        if cat and cat in seen_categories:
+            return
+        seen_text.add(normalized)
+        if cat:
+            seen_categories.add(cat)
+        result.append(q)
+
+    for field in ordered_missing:
+        default_q = _MISSING_FIELD_QUESTIONS.get(field)
+        if default_q:
+            _push(default_q, _FIELD_TO_QUESTION_CATEGORY.get(field))
+
+    for question in model_questions:
+        _push(question)
+
+    return result
 
 
 def _is_generic_strategy_prompt(prompt: str) -> bool:
@@ -207,11 +338,11 @@ def _sanitize_intake_response(
             "risk": {},
         }
 
-    missing_fields = _to_str_list(payload.get("missing_fields"))
-    unsupported = _to_str_list(payload.get("unsupported_requirements"))
+    missing_fields = _unique_preserve_order(_to_str_list(payload.get("missing_fields")))
+    unsupported = _unique_preserve_order(_to_str_list(payload.get("unsupported_requirements")))
     clarification_questions = _to_str_list(payload.get("clarification_questions"))
-    assumptions = _to_str_list(payload.get("assumptions"))
-    development_requirements = _to_str_list(payload.get("development_requirements"))
+    assumptions = _unique_preserve_order(_to_str_list(payload.get("assumptions")))
+    development_requirements = _unique_preserve_order(_to_str_list(payload.get("development_requirements")))
 
     conversation_text = " ".join(
         [prompt] + [str(m.content or "") for m in messages]
@@ -233,10 +364,10 @@ def _sanitize_intake_response(
                 if field not in missing_fields:
                     missing_fields.append(field)
 
-    for field in missing_fields:
-        q = _MISSING_FIELD_QUESTIONS.get(field)
-        if q and q not in clarification_questions:
-            clarification_questions.append(q)
+    clarification_questions = _merge_clarification_questions(
+        missing_fields=missing_fields,
+        model_questions=clarification_questions,
+    )
 
     if intent == "OUT_OF_SCOPE":
         status = "OUT_OF_SCOPE"
@@ -279,7 +410,10 @@ def _strategy_chat_system_prompt(code: str, summary: str | None) -> str:
     return (
         "You are a trading strategy assistant. The user has the following strategy. "
         "Answer their questions in natural language. Do not generate new code. "
-        "Use Korean if the user writes in Korean.\n\n"
+        "Use Korean if the user writes in Korean. "
+        "If the user asks for more detail, continue from the prior summary and expand it step-by-step "
+        "(strategy overview -> entry flow -> exit flow -> risk/position sizing -> practical cautions) "
+        "instead of restarting from scratch.\n\n"
         "Strategy code:\n"
         f"{code}\n\n"
         f"Summary:\n{summary or 'N/A'}"

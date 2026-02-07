@@ -39,6 +39,9 @@ export default function RootLayout({
               <span className="text-sm font-semibold text-[#d1d4dc]">LLMTrader</span>
             </Link>
             <nav className="flex items-center gap-2 text-sm md:hidden">
+              <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors" href="/admin">
+                Admin
+              </Link>
               <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors" href="/live">
                 Live
               </Link>

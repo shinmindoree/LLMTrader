@@ -27,9 +27,8 @@ export default function Home() {
   return (
     <main className="w-full px-6 py-10">
       <h1 className="text-2xl font-semibold text-[#d1d4dc]">LLMTrader Dashboard</h1>
-      <p className="mt-2 text-sm text-[#868993]">Backtest + Live Trading 운영 콘솔</p>
+      <p className="mt-2 text-sm text-[#868993]">Control center for backtesting and live trading</p>
 
-      {/* 통계 카드 */}
       <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] transition-colors">
           <div className="text-xs text-[#868993]">Total Jobs</div>
@@ -57,7 +56,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* 빠른 액션 카드 */}
       <div className="mt-8">
         <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">Quick Actions</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -66,35 +64,35 @@ export default function Home() {
             href="/strategies"
           >
             <div className="text-sm font-medium text-[#d1d4dc]">Strategies</div>
-            <div className="mt-1 text-sm text-[#868993]">전략 목록 확인</div>
+            <div className="mt-1 text-sm text-[#868993]">Create and manage strategies</div>
           </Link>
           <Link
             className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] hover:bg-[#252936] transition-colors"
             href="/live"
           >
             <div className="text-sm font-medium text-[#d1d4dc]">Live Runs</div>
-            <div className="mt-1 text-sm text-[#868993]">라이브 실행 목록/상태</div>
+            <div className="mt-1 text-sm text-[#868993]">Monitor active and recent live runs</div>
           </Link>
           <Link
             className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] hover:bg-[#252936] transition-colors"
             href="/backtest"
           >
             <div className="text-sm font-medium text-[#d1d4dc]">Backtest Runs</div>
-            <div className="mt-1 text-sm text-[#868993]">백테스트 실행 목록</div>
+            <div className="mt-1 text-sm text-[#868993]">Review backtest history and outcomes</div>
           </Link>
           <Link
             className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#ef5350] hover:bg-[#2d1f1f] transition-colors"
             href="/live"
           >
             <div className="text-sm font-medium text-[#d1d4dc]">New Live Run</div>
-            <div className="mt-1 text-sm text-[#868993]">라이브 트레이딩 실행</div>
+            <div className="mt-1 text-sm text-[#868993]">Start live trading on testnet</div>
           </Link>
           <Link
             className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] hover:bg-[#252936] transition-colors"
             href="/backtest"
           >
             <div className="text-sm font-medium text-[#d1d4dc]">New Backtest</div>
-            <div className="mt-1 text-sm text-[#868993]">백테스트 실행</div>
+            <div className="mt-1 text-sm text-[#868993]">Run a new backtest</div>
           </Link>
         </div>
       </div>

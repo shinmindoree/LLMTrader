@@ -9,6 +9,19 @@ const STATUS_STYLES: Record<JobStatus, string> = {
   FAILED: "bg-[#ef5350] text-white",
 };
 
+const STATUS_LABELS: Record<JobStatus, string> = {
+  PENDING: "Queued",
+  RUNNING: "Running",
+  STOP_REQUESTED: "Stopping",
+  SUCCEEDED: "Completed",
+  STOPPED: "Stopped",
+  FAILED: "Failed",
+};
+
 export function JobStatusBadge({ status }: { status: JobStatus }) {
-  return <span className={`rounded px-2 py-1 text-xs font-medium ${STATUS_STYLES[status]}`}>{status}</span>;
+  return (
+    <span className={`rounded px-2 py-1 text-xs font-medium ${STATUS_STYLES[status]}`}>
+      {STATUS_LABELS[status]}
+    </span>
+  );
 }

@@ -72,6 +72,19 @@ export type StrategyQualitySummaryResponse = {
 
 export type StrategySaveResponse = { path: string };
 
+export type StrategySyntaxError = {
+  message: string;
+  line: number | null;
+  column: number | null;
+  end_line: number | null;
+  end_column: number | null;
+};
+
+export type StrategySyntaxCheckResponse = {
+  valid: boolean;
+  error: StrategySyntaxError | null;
+};
+
 export type Job = {
   job_id: string;
   type: JobType;

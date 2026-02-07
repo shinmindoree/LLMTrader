@@ -13,6 +13,7 @@ import type {
   StrategyInfo,
   StrategyQualitySummaryResponse,
   StrategySaveResponse,
+  StrategySyntaxCheckResponse,
   Trade,
 } from "@/lib/types";
 
@@ -94,6 +95,17 @@ export async function saveStrategy(
     body: JSON.stringify({
       code,
       strategy_name: strategyName?.trim() ? strategyName.trim() : undefined,
+    }),
+  });
+}
+
+export async function validateStrategySyntax(
+  code: string,
+): Promise<StrategySyntaxCheckResponse> {
+  return json<StrategySyntaxCheckResponse>("/api/backend/api/strategies/validate-syntax", {
+    method: "POST",
+    body: JSON.stringify({
+      code,
     }),
   });
 }

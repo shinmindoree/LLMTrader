@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  /* TradingView 다크 테마 색상 */
+  /* TradingView dark theme colors */
   --background: #131722;
   --foreground: #d1d4dc;
   --card-bg: #1e222d;
@@ -25,7 +25,7 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-/* 스크롤바 스타일 */
+/* Scrollbar styles */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

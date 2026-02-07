@@ -12,6 +12,13 @@ import { LiveForm } from "./new/LiveForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
+function strategyNameFromPath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return "Strategy";
+  const base = trimmed.split("/").pop() ?? trimmed;
+  return base.replace(/\.[^.]+$/, "");
+}
+
 export default function LiveJobsPage() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [strategyError, setStrategyError] = useState<string | null>(null);
@@ -43,18 +50,18 @@ export default function LiveJobsPage() {
 
   const onCreated = (job: Job) => {
     setLatestJob(job);
-    setNotice("Live job started.");
+    setNotice("Live run started.");
     refresh();
   };
 
   const onDeleteJob = async (job: Job) => {
     if (busy) return;
     if (!FINISHED_STATUSES.has(job.status)) {
-      setError("RUNNING/PENDING/STOP_REQUESTED 상태의 잡은 삭제할 수 없습니다.");
+      setError("Only completed runs can be deleted.");
       return;
     }
     const ok = confirm(
-      "이 Live 잡을 삭제할까요?\n\n삭제 시 관련 이벤트/주문/트레이드 기록도 함께 제거됩니다.",
+      "Delete this live run?\n\nThis also removes related events, orders, and trades.",
     );
     if (!ok) return;
 
@@ -64,7 +71,7 @@ export default function LiveJobsPage() {
       setNotice(null);
       await deleteJob(job.job_id);
       setLatestJob((prev) => (prev?.job_id === job.job_id ? null : prev));
-      setNotice("잡 삭제 완료.");
+      setNotice("Run deleted.");
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -76,7 +83,7 @@ export default function LiveJobsPage() {
   const onDeleteAll = async () => {
     if (busy) return;
     const ok = confirm(
-      "LIVE 잡 전체를 삭제할까요?\n\n- 완료된 잡(SUCCEEDED/FAILED/STOPPED)만 삭제됩니다.\n- RUNNING/PENDING/STOP_REQUESTED는 삭제되지 않습니다.",
+      "Delete all live runs?\n\n- Only completed runs are deleted.\n- Queued/running/stopping runs are kept.",
     );
     if (!ok) return;
 
@@ -88,7 +95,7 @@ export default function LiveJobsPage() {
       setLatestJob((prev) =>
         prev && FINISHED_STATUSES.has(prev.status) ? null : prev,
       );
-      setNotice(`삭제 완료: deleted=${res.deleted}, skipped_active=${res.skipped_active}`);
+      setNotice(`Done: deleted=${res.deleted}, skipped_active=${res.skipped_active}`);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -100,7 +107,7 @@ export default function LiveJobsPage() {
   const onStopAll = async () => {
     if (busy) return;
     const ok = confirm(
-      "LIVE 잡 전체 Stop All 을 실행할까요?\n\n- PENDING 잡은 즉시 STOPPED로 처리됩니다.\n- RUNNING 잡은 STOP_REQUESTED로 변경됩니다.",
+      "Request stop for all live runs?\n\n- Queued runs stop immediately.\n- Running runs move to Stopping.",
     );
     if (!ok) return;
 
@@ -110,7 +117,7 @@ export default function LiveJobsPage() {
       setNotice(null);
       const res = await stopAllJobs("LIVE");
       setNotice(
-        `Stop All 완료: stopped_queued=${res.stopped_queued}, stop_requested_running=${res.stop_requested_running}`,
+        `Stop requested: stopped_queued=${res.stopped_queued}, stop_requested_running=${res.stop_requested_running}`,
       );
       await refresh();
     } catch (e) {
@@ -126,7 +133,7 @@ export default function LiveJobsPage() {
         <div>
           <h1 className="text-xl font-semibold text-[#d1d4dc]">Live</h1>
           <p className="mt-1 text-xs text-[#868993]">
-            Live job은 Backtest와 별도 큐로 동작합니다.
+            Live runs use a separate queue from backtests.
           </p>
         </div>
         <div className="flex gap-2 text-sm">
@@ -183,7 +190,7 @@ export default function LiveJobsPage() {
       <section className="mt-6">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">New Live Run</div>
         <p className="mb-3 text-xs text-[#efb6b2]">
-          주의: 실제 주문이 나갑니다. MVP에서는 1 스트림만 지원합니다.
+          Caution: this places real testnet orders. Only one stream is supported in this MVP.
         </p>
         {strategies.length ? (
           <LiveForm strategies={strategies} onCreated={onCreated} />
@@ -195,7 +202,7 @@ export default function LiveJobsPage() {
       <LatestJobResult jobType="LIVE" focusJobId={latestJob?.job_id ?? null} title="Latest Live Result" />
 
       <section className="mt-10">
-        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">Job List</div>
+        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">Run History</div>
         {error ? (
           <p className="mb-4 text-sm text-[#ef5350] rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3">
             {error}
@@ -218,7 +225,7 @@ export default function LiveJobsPage() {
                     className="font-medium text-[#d1d4dc] hover:text-[#2962ff] hover:underline transition-colors"
                     href={jobDetailPath("LIVE", j.job_id)}
                   >
-                    {j.strategy_path}
+                    {strategyNameFromPath(j.strategy_path)}
                   </Link>
                   <div className="flex items-center gap-2">
                     <JobStatusBadge status={j.status} />

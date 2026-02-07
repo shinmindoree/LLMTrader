@@ -18,6 +18,13 @@ const formatDateTime = (value: string | null): string => {
   return dt.toLocaleString();
 };
 
+const strategyNameFromPath = (path: string): string => {
+  const trimmed = path.trim();
+  if (!trimmed) return "Strategy";
+  const base = trimmed.split("/").pop() ?? trimmed;
+  return base.replace(/\.[^.]+$/, "");
+};
+
 type LatestJobResultProps = {
   jobType: JobType;
   focusJobId?: string | null;
@@ -67,7 +74,7 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
           <div>
             <div className="text-sm font-semibold text-[#d1d4dc]">{title}</div>
             {job ? (
-              <div className="mt-1 text-xs text-[#868993]">{job.strategy_path}</div>
+              <div className="mt-1 text-xs text-[#868993]">{strategyNameFromPath(job.strategy_path)}</div>
             ) : null}
           </div>
           {job ? <JobStatusBadge status={job.status} /> : null}
@@ -131,7 +138,7 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
 
         {job?.result ? (
           <details className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
-            <summary className="cursor-pointer text-xs text-[#868993]">Raw result payload</summary>
+            <summary className="cursor-pointer text-xs text-[#868993]">Technical result payload</summary>
             <pre className="mt-3 max-h-[240px] overflow-auto text-xs text-[#d1d4dc]">
               {JSON.stringify(job.result, null, 2)}
             </pre>

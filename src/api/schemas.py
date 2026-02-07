@@ -114,6 +114,23 @@ class StrategyChatResponse(BaseModel):
     content: str
 
 
+class StrategySyntaxError(BaseModel):
+    message: str
+    line: int | None = None
+    column: int | None = None
+    end_line: int | None = None
+    end_column: int | None = None
+
+
+class StrategySyntaxCheckRequest(BaseModel):
+    code: str
+
+
+class StrategySyntaxCheckResponse(BaseModel):
+    valid: bool
+    error: StrategySyntaxError | None = None
+
+
 class JobCreateRequest(BaseModel):
     type: JobType
     strategy_path: str

@@ -119,13 +119,13 @@ export function BacktestForm({
         config,
       });
       if (!preflight.ok) {
-        const msg = formatPolicyMessages("실행이 차단되었습니다. 설정을 수정해주세요.", preflight.blockers);
+        const msg = formatPolicyMessages("Run blocked. Please update your settings.", preflight.blockers);
         setError(msg);
         return;
       }
       if (preflight.warnings.length > 0) {
         const proceed = window.confirm(
-          formatPolicyMessages("주의 경고가 있습니다. 계속 실행하시겠습니까?", preflight.warnings),
+          formatPolicyMessages("Warnings detected. Do you want to continue?", preflight.warnings),
         );
         if (!proceed) {
           return;
@@ -138,7 +138,7 @@ export function BacktestForm({
         config,
       });
       if (!job?.job_id || !isUuid(job.job_id)) {
-        throw new Error(`Invalid job_id returned: ${String(job?.job_id)}`);
+        throw new Error(`Invalid run reference returned: ${String(job?.job_id)}`);
       }
       onCreated?.(job);
     } catch (e) {
@@ -154,12 +154,12 @@ export function BacktestForm({
         </p>
       ) : null}
       <p className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-xs text-[#868993]">
-        전략 생성 프롬프트에 거래 설정(심볼/간격/레버리지 등)을 적었더라도, 실제 실행에는 이 폼의 값이
-        우선 적용됩니다.
+        Even if you include trading settings in your strategy prompt (symbol/interval/leverage),
+        this form's values are used for execution.
       </p>
       {defaults.applied ? (
         <p className="mb-4 text-xs text-[#868993]">
-          최근 전략 입력에서 추출한 기본값을 반영했습니다. 필요하면 아래에서 변경하세요.
+          Defaults were pre-filled from your recent strategy request. Update them if needed.
         </p>
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2">

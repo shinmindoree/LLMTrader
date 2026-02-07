@@ -31,7 +31,7 @@ export default function JobRedirectPage() {
     <main className="w-full px-6 py-10">
       {!validJobId ? (
         <div className="rounded border border-[#2a2e39] bg-[#1e222d] p-4 text-sm text-[#d1d4dc]">
-          Invalid job id: <span className="font-mono text-[#868993]">{String(jobId)}</span>
+          Invalid run link: <span className="font-mono text-[#868993]">{String(jobId)}</span>
         </div>
       ) : null}
       {error ? (
