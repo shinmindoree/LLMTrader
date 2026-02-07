@@ -78,6 +78,15 @@ export type StrategyQualitySummaryResponse = {
 
 export type StrategySaveResponse = { path: string };
 
+export type StrategyChatSessionRecord = {
+  session_id: string;
+  title: string;
+  data: Record<string, unknown>;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type StrategySyntaxError = {
   message: string;
   line: number | null;

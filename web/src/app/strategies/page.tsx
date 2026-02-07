@@ -3,16 +3,20 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  deleteStrategyChatSession,
   deleteStrategy,
   getStrategyContent,
   generateStrategyStream,
   intakeStrategy,
+  listStrategyChatSessions,
   listStrategies,
   saveStrategy,
   strategyChat,
+  upsertStrategyChatSession,
   validateStrategySyntax,
 } from "@/lib/api";
 import type {
+  StrategyChatSessionRecord,
   StrategyInfo,
   StrategyIntakeResponse,
   StrategySyntaxCheckResponse,
@@ -370,6 +374,7 @@ function buildCodeDiffLines(beforeCode: string, afterCode: string): DiffLine[] {
 }
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
+const CHAT_SESSIONS_KEY = "llmtrader.strategy_chat_sessions.v1";
 
 function persistExecutionDefaults(spec: StrategyIntakeResponse["normalized_spec"] | null | undefined): void {
   if (!spec || typeof window === "undefined") {
@@ -410,10 +415,152 @@ type ChatMessage = {
   statusText?: string | null;
 };
 
+type ChatSessionRecord = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+  workspaceCode: string;
+  workspaceSummary: string | null;
+  workspaceSourceMessageId: string | null;
+  initialGeneratedCode: string | null;
+};
+
+type StoredChatSessionsPayload = {
+  version: 1;
+  sessions: ChatSessionRecord[];
+  activeSessionId: string | null;
+};
+
 const createId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random()}`;
+
+const isPresent = <T,>(value: T | null | undefined): value is T =>
+  value !== null && value !== undefined;
+
+function toOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value;
+}
+
+function sanitizeChatMessage(value: unknown): ChatMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const role = raw.role;
+  if (role !== "user" && role !== "assistant") return null;
+  const statusRaw = raw.status;
+  const status =
+    statusRaw === "thinking" || statusRaw === "typing" || statusRaw === "streaming"
+      ? statusRaw
+      : null;
+  const repairedRaw = raw.repaired;
+  const backtestOkRaw = raw.backtest_ok;
+  const repairAttemptsRaw = raw.repair_attempts;
+  const textOnlyRaw = raw.textOnly;
+  return {
+    id: typeof raw.id === "string" && raw.id.trim() ? raw.id : createId(),
+    role,
+    content: typeof raw.content === "string" ? raw.content : "",
+    model: toOptionalString(raw.model),
+    path: toOptionalString(raw.path),
+    summary: toOptionalString(raw.summary),
+    backtest_ok: typeof backtestOkRaw === "boolean" ? backtestOkRaw : false,
+    repaired: typeof repairedRaw === "boolean" ? repairedRaw : false,
+    repair_attempts: typeof repairAttemptsRaw === "number" ? repairAttemptsRaw : 0,
+    textOnly: typeof textOnlyRaw === "boolean" ? textOnlyRaw : false,
+    status,
+    statusText: toOptionalString(raw.statusText),
+  };
+}
+
+function sanitizeChatSession(value: unknown): ChatSessionRecord | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id : null;
+  if (!id) return null;
+  const now = new Date().toISOString();
+  const createdAt = typeof raw.createdAt === "string" ? raw.createdAt : now;
+  const updatedAt = typeof raw.updatedAt === "string" ? raw.updatedAt : createdAt;
+  const rawMessages = Array.isArray(raw.messages) ? raw.messages : [];
+  const messages = rawMessages.map((item) => sanitizeChatMessage(item)).filter(isPresent);
+  const fallbackTitle = "New chat";
+  const title =
+    typeof raw.title === "string" && raw.title.trim()
+      ? raw.title
+      : fallbackTitle;
+  return {
+    id,
+    title,
+    createdAt,
+    updatedAt,
+    messages,
+    workspaceCode: typeof raw.workspaceCode === "string" ? raw.workspaceCode : "",
+    workspaceSummary: toOptionalString(raw.workspaceSummary),
+    workspaceSourceMessageId: toOptionalString(raw.workspaceSourceMessageId),
+    initialGeneratedCode: toOptionalString(raw.initialGeneratedCode),
+  };
+}
+
+function sortSessionsByUpdated(sessions: ChatSessionRecord[]): ChatSessionRecord[] {
+  return [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function deriveSessionTitle(messages: ChatMessage[]): string {
+  const firstUserMessage = messages.find((message) => message.role === "user" && message.content.trim());
+  if (!firstUserMessage) return "New chat";
+  const normalized = firstUserMessage.content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 36) return normalized;
+  return `${normalized.slice(0, 36)}...`;
+}
+
+function createEmptySession(): ChatSessionRecord {
+  const now = new Date().toISOString();
+  return {
+    id: createId(),
+    title: "New chat",
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+    workspaceCode: "",
+    workspaceSummary: null,
+    workspaceSourceMessageId: null,
+    initialGeneratedCode: null,
+  };
+}
+
+function formatSessionTimestamp(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return "Unknown";
+  return parsed.toLocaleString();
+}
+
+function fromRemoteSessionRecord(remote: StrategyChatSessionRecord): ChatSessionRecord | null {
+  const data = remote.data ?? {};
+  return sanitizeChatSession({
+    id: remote.session_id,
+    title: remote.title,
+    createdAt: remote.created_at,
+    updatedAt: remote.updated_at,
+    messages: (data as { messages?: unknown }).messages,
+    workspaceCode: (data as { workspaceCode?: unknown }).workspaceCode,
+    workspaceSummary: (data as { workspaceSummary?: unknown }).workspaceSummary,
+    workspaceSourceMessageId: (data as { workspaceSourceMessageId?: unknown }).workspaceSourceMessageId,
+    initialGeneratedCode: (data as { initialGeneratedCode?: unknown }).initialGeneratedCode,
+  });
+}
+
+function toRemoteSessionData(session: ChatSessionRecord): Record<string, unknown> {
+  return {
+    messages: session.messages,
+    workspaceCode: session.workspaceCode,
+    workspaceSummary: session.workspaceSummary,
+    workspaceSourceMessageId: session.workspaceSourceMessageId,
+    initialGeneratedCode: session.initialGeneratedCode,
+  };
+}
 
 type TabId = "chat" | "list";
 const SUMMARY_EXPAND_PROMPT =
@@ -453,15 +600,101 @@ export default function StrategiesPage() {
   const [workspaceWidth, setWorkspaceWidth] = useState(440);
   const [isResizingWorkspace, setIsResizingWorkspace] = useState(false);
   const [isComposingPrompt, setIsComposingPrompt] = useState(false);
+  const [chatSessions, setChatSessions] = useState<ChatSessionRecord[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionsReady, setSessionsReady] = useState(false);
+  const [sessionSyncError, setSessionSyncError] = useState<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const workspaceGutterRef = useRef<HTMLDivElement | null>(null);
   const workspaceTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const workspaceResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const skipSessionSyncRef = useRef(false);
+  const chatSessionsRef = useRef<ChatSessionRecord[]>([]);
 
   useEffect(() => {
     listStrategies()
       .then(setItems)
       .catch((e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+
+    const applyFromLocalStorage = () => {
+      try {
+        const raw = window.localStorage.getItem(CHAT_SESSIONS_KEY);
+        let loadedSessions: ChatSessionRecord[] = [];
+        let loadedActiveSessionId: string | null = null;
+        if (raw) {
+          const parsed = JSON.parse(raw) as unknown;
+          if (Array.isArray(parsed)) {
+            loadedSessions = parsed.map((item) => sanitizeChatSession(item)).filter(isPresent);
+          } else if (parsed && typeof parsed === "object") {
+            const payload = parsed as Record<string, unknown>;
+            if (Array.isArray(payload.sessions)) {
+              loadedSessions = payload.sessions
+                .map((item) => sanitizeChatSession(item))
+                .filter(isPresent);
+            }
+            loadedActiveSessionId =
+              typeof payload.activeSessionId === "string" ? payload.activeSessionId : null;
+          }
+        }
+
+        if (loadedSessions.length === 0) {
+          const initialSession = createEmptySession();
+          setChatSessions([initialSession]);
+          setActiveSessionId(initialSession.id);
+          return;
+        }
+        const sorted = sortSessionsByUpdated(loadedSessions);
+        const resolvedActiveId =
+          loadedActiveSessionId && sorted.some((session) => session.id === loadedActiveSessionId)
+            ? loadedActiveSessionId
+            : sorted[0].id;
+        setChatSessions(sorted);
+        setActiveSessionId(resolvedActiveId);
+      } catch {
+        const fallbackSession = createEmptySession();
+        setChatSessions([fallbackSession]);
+        setActiveSessionId(fallbackSession.id);
+      }
+    };
+
+    const loadSessions = async () => {
+      try {
+        const remote = await listStrategyChatSessions();
+        if (cancelled) return;
+        const remoteSessions = remote
+          .map((item) => fromRemoteSessionRecord(item))
+          .filter(isPresent);
+        if (remoteSessions.length > 0) {
+          const sorted = sortSessionsByUpdated(remoteSessions);
+          setChatSessions(sorted);
+          setActiveSessionId(sorted[0].id);
+          setSessionSyncError(null);
+          return;
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setSessionSyncError(`Remote session load failed: ${String(e)}`);
+        }
+      }
+      if (!cancelled) {
+        applyFromLocalStorage();
+      }
+    };
+
+    void loadSessions().finally(() => {
+      if (!cancelled) {
+        setSessionsReady(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -479,6 +712,115 @@ export default function StrategiesPage() {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [chatMessages]);
+
+  useEffect(() => {
+    chatSessionsRef.current = chatSessions;
+  }, [chatSessions]);
+
+  useEffect(() => {
+    if (!sessionsReady || !activeSessionId) {
+      return;
+    }
+    const activeSession = chatSessionsRef.current.find((session) => session.id === activeSessionId);
+    if (!activeSession) {
+      return;
+    }
+    skipSessionSyncRef.current = true;
+    setChatMessages(activeSession.messages);
+    setChatError(null);
+    setPrompt("");
+    setWorkspaceCode(activeSession.workspaceCode);
+    setWorkspaceSourceMessageId(activeSession.workspaceSourceMessageId);
+    setInitialGeneratedCode(activeSession.initialGeneratedCode);
+    setWorkspaceSummary(activeSession.workspaceSummary);
+    setWorkspaceDirty(false);
+    setWorkspaceSyntax(null);
+    setWorkspaceSyntaxError(null);
+  }, [activeSessionId, sessionsReady]);
+
+  useEffect(() => {
+    if (!sessionsReady || !activeSessionId) {
+      return;
+    }
+    if (skipSessionSyncRef.current) {
+      skipSessionSyncRef.current = false;
+      return;
+    }
+    setChatSessions((prev) => {
+      const idx = prev.findIndex((session) => session.id === activeSessionId);
+      if (idx < 0) return prev;
+      const current = prev[idx];
+      const next: ChatSessionRecord = {
+        ...current,
+        title: deriveSessionTitle(chatMessages),
+        updatedAt: new Date().toISOString(),
+        messages: chatMessages,
+        workspaceCode,
+        workspaceSummary,
+        workspaceSourceMessageId,
+        initialGeneratedCode,
+      };
+      const updatedSessions = [...prev];
+      updatedSessions[idx] = next;
+      return sortSessionsByUpdated(updatedSessions);
+    });
+  }, [
+    activeSessionId,
+    chatMessages,
+    initialGeneratedCode,
+    sessionsReady,
+    workspaceCode,
+    workspaceSourceMessageId,
+    workspaceSummary,
+  ]);
+
+  useEffect(() => {
+    if (!sessionsReady || typeof window === "undefined") {
+      return;
+    }
+    try {
+      const payload: StoredChatSessionsPayload = {
+        version: 1,
+        sessions: chatSessions,
+        activeSessionId,
+      };
+      window.localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeSessionId, chatSessions, sessionsReady]);
+
+  useEffect(() => {
+    if (!sessionsReady || !activeSessionId || typeof window === "undefined") {
+      return;
+    }
+    const activeSession = chatSessions.find((session) => session.id === activeSessionId);
+    if (!activeSession) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await upsertStrategyChatSession(activeSession.id, {
+            title: activeSession.title,
+            data: toRemoteSessionData(activeSession),
+          });
+          if (!cancelled) {
+            setSessionSyncError(null);
+          }
+        } catch (e) {
+          if (!cancelled) {
+            setSessionSyncError(`Remote sync failed: ${String(e)}`);
+          }
+        }
+      })();
+    }, 650);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeSessionId, chatSessions, sessionsReady]);
 
   useEffect(() => {
     const code = workspaceCode;
@@ -802,7 +1144,6 @@ export default function StrategiesPage() {
       listStrategies()
         .then(setItems)
         .catch((e) => setError(String(e)));
-      setChatMessages([]);
       setSaveModal(null);
       setActiveTab("list");
     } catch (e) {
@@ -831,6 +1172,44 @@ export default function StrategiesPage() {
     setChatMessages([]);
     setChatError(null);
     setPrompt("");
+    setWorkspaceCode("");
+    setWorkspaceSourceMessageId(null);
+    setInitialGeneratedCode(null);
+    setWorkspaceSummary(null);
+    setWorkspaceDirty(false);
+    setWorkspaceSyntax(null);
+    setWorkspaceSyntaxError(null);
+  };
+
+  const handleNewChatSession = () => {
+    if (isSending) return;
+    const nextSession = createEmptySession();
+    setChatSessions((prev) => [nextSession, ...prev]);
+    setActiveSessionId(nextSession.id);
+  };
+
+  const handleSelectSession = (sessionId: string) => {
+    if (sessionId === activeSessionId || isSending) return;
+    setActiveSessionId(sessionId);
+  };
+
+  const handleDeleteSession = (sessionId: string) => {
+    if (isSending) return;
+    setChatSessions((prev) => {
+      const remaining = prev.filter((session) => session.id !== sessionId);
+      if (remaining.length === 0) {
+        const fallbackSession = createEmptySession();
+        setActiveSessionId(fallbackSession.id);
+        return [fallbackSession];
+      }
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(remaining[0].id);
+      }
+      return remaining;
+    });
+    void deleteStrategyChatSession(sessionId)
+      .then(() => setSessionSyncError(null))
+      .catch((e) => setSessionSyncError(`Remote delete failed: ${String(e)}`));
   };
 
   const handleCopy = async (content: string, id: string) => {
@@ -930,6 +1309,9 @@ export default function StrategiesPage() {
       ? buildCodeDiffLines(initialGeneratedCode, workspaceCode)
       : [];
   const hasWorkspaceDiff = workspaceDiffLines.some((line) => line.type !== "context");
+  const activeSession = activeSessionId
+    ? chatSessions.find((session) => session.id === activeSessionId) ?? null
+    : null;
 
   return (
     <main className="flex h-[calc(100vh-3.5rem)] min-h-0 w-full flex-col overflow-hidden px-6 py-6">
@@ -962,7 +1344,95 @@ export default function StrategiesPage() {
       {activeTab === "chat" ? (
       <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d]">
         <div className="flex min-h-0 flex-1">
+          <aside className="hidden w-72 shrink-0 border-r border-[#2a2e39] bg-[#171b25] md:flex md:flex-col">
+            <div className="border-b border-[#2a2e39] px-3 py-3">
+              <button
+                type="button"
+                className="w-full rounded border border-[#2962ff] px-3 py-2 text-sm text-[#8fa8ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
+                onClick={handleNewChatSession}
+                disabled={isSending || !sessionsReady}
+              >
+                + New chat
+              </button>
+            </div>
+            <div className="border-b border-[#2a2e39] px-3 py-2 text-xs text-[#868993]">
+              {activeSession ? `Current: ${activeSession.title}` : "No active chat"}
+            </div>
+            {sessionSyncError ? (
+              <p className="border-b border-[#ef5350]/30 bg-[#2d1f1f]/40 px-3 py-2 text-[11px] text-[#ef9a9a]">
+                {sessionSyncError}
+              </p>
+            ) : null}
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+              {chatSessions.length === 0 ? (
+                <p className="px-2 py-3 text-xs text-[#868993]">No chats yet.</p>
+              ) : (
+                <div className="space-y-1">
+                  {chatSessions.map((session) => {
+                    const isActive = session.id === activeSessionId;
+                    return (
+                      <div
+                        key={session.id}
+                        className={`rounded border p-2 ${
+                          isActive
+                            ? "border-[#2962ff]/70 bg-[#1a2442]"
+                            : "border-[#2a2e39] bg-[#131722]"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="w-full text-left"
+                          onClick={() => handleSelectSession(session.id)}
+                          disabled={isSending}
+                        >
+                          <p className="truncate text-sm text-[#d1d4dc]">{session.title}</p>
+                          <p className="mt-1 text-[11px] text-[#868993]">
+                            {formatSessionTimestamp(session.updatedAt)}
+                          </p>
+                          <p className="mt-1 text-[11px] text-[#5f6472]">
+                            {session.messages.length} messages
+                          </p>
+                        </button>
+                        <div className="mt-2 flex justify-end">
+                          <button
+                            type="button"
+                            className="rounded border border-[#ef5350]/40 px-2 py-1 text-[11px] text-[#ef9a9a] transition hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50"
+                            onClick={() => handleDeleteSession(session.id)}
+                            disabled={isSending}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </aside>
           <div className="min-w-0 flex-1 flex flex-col">
+            <div className="flex items-center gap-2 border-b border-[#2a2e39] px-4 py-2 md:hidden">
+              <select
+                className="min-w-0 flex-1 rounded border border-[#2a2e39] bg-[#171b25] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                value={activeSessionId ?? ""}
+                onChange={(e) => handleSelectSession(e.target.value)}
+                disabled={isSending || !sessionsReady}
+              >
+                {chatSessions.map((session) => (
+                  <option key={`mobile-session-${session.id}`} value={session.id}>
+                    {session.title}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="shrink-0 rounded border border-[#2962ff] px-2 py-1.5 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
+                onClick={handleNewChatSession}
+                disabled={isSending || !sessionsReady}
+              >
+                New
+              </button>
+            </div>
             {chatMessages.length > 0 ? (
               <>
                 <div className="flex flex-shrink-0 justify-end px-4 pt-3">

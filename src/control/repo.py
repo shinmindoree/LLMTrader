@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.enums import EventKind, JobStatus, JobType
-from control.models import Job, JobEvent, Order, StrategyQualityLog, Trade
+from control.models import Job, JobEvent, Order, StrategyChatSession, StrategyQualityLog, Trade
 
 ACTIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.STOP_REQUESTED}
 FINISHED_STATUSES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
@@ -82,20 +82,22 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
     """Finalize jobs that were left RUNNING/STOP_REQUESTED but have no active runner.
 
     This is primarily used on runner startup to clean up stale rows after crashes/restarts.
+    LIVE jobs are re-queued so they can be resumed by the runner loop.
     """
     now = datetime.now()
 
-    running_ids = list(
+    running_rows = list(
         (
             await session.execute(
-                select(Job.job_id)
+                select(Job.job_id, Job.type)
                 .where(Job.ended_at.is_(None))
                 .where(Job.status == JobStatus.RUNNING)
             )
-        )
-        .scalars()
-        .all()
+        ).all()
     )
+    running_live_ids = [job_id for job_id, job_type in running_rows if str(job_type) == str(JobType.LIVE)]
+    running_non_live_ids = [job_id for job_id, job_type in running_rows if str(job_type) != str(JobType.LIVE)]
+
     stop_requested_ids = list(
         (
             await session.execute(
@@ -109,32 +111,26 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
     )
 
     res_running = None
-    if running_ids:
+    if running_non_live_ids:
         res_running = await session.execute(
             update(Job)
-            .where(Job.job_id.in_(running_ids))
+            .where(Job.job_id.in_(running_non_live_ids))
             .values(status=JobStatus.FAILED, ended_at=now, updated_at=now, error=f"Orphaned job ({reason})")
         )
 
-    for job_id in running_ids:
-        job = await get_job(session, job_id)
-        if job and job.type == JobType.LIVE:
-            trades = await list_trades(session, job_id=job_id)
-            net_profit = sum((t.realized_pnl or 0) for t in trades)
-            total_commission = sum((t.commission or 0) for t in trades)
-            result_json: dict[str, Any] = {
-                "summary": {
-                    "initial_equity": None,
-                    "final_equity": None,
-                    "total_return_pct": None,
-                    "num_trades": len(trades),
-                    "net_profit": net_profit,
-                    "total_commission": total_commission,
-                }
-            }
-            await session.execute(
-                update(Job).where(Job.job_id == job_id).values(result_json=result_json, updated_at=now)
+    res_live_requeued = None
+    if running_live_ids:
+        res_live_requeued = await session.execute(
+            update(Job)
+            .where(Job.job_id.in_(running_live_ids))
+            .values(
+                status=JobStatus.PENDING,
+                started_at=None,
+                ended_at=None,
+                updated_at=now,
+                error=None,
             )
+        )
 
     res_stop_requested = None
     if stop_requested_ids:
@@ -144,13 +140,21 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
             .values(status=JobStatus.STOPPED, ended_at=now, updated_at=now)
         )
 
-    for job_id in running_ids:
+    for job_id in running_non_live_ids:
         await append_event(
             session,
             job_id=job_id,
             kind=EventKind.STATUS,
             message="JOB_FAILED",
             payload_json={"error": f"Orphaned job ({reason})"},
+        )
+    for job_id in running_live_ids:
+        await append_event(
+            session,
+            job_id=job_id,
+            kind=EventKind.STATUS,
+            message="JOB_REQUEUED",
+            payload_json={"reason": reason, "resume": True},
         )
     for job_id in stop_requested_ids:
         await append_event(
@@ -163,6 +167,7 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
 
     return {
         "finalized_failed": int(res_running.rowcount or 0) if res_running is not None else 0,
+        "requeued_live": int(res_live_requeued.rowcount or 0) if res_live_requeued is not None else 0,
         "finalized_stopped": int(res_stop_requested.rowcount or 0) if res_stop_requested is not None else 0,
     }
 
@@ -510,3 +515,76 @@ async def list_trades(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 
         select(Trade).where(Trade.job_id == job_id).order_by(Trade.ts.desc()).limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def list_strategy_chat_sessions(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    limit: int = 200,
+) -> list[StrategyChatSession]:
+    result = await session.execute(
+        select(StrategyChatSession)
+        .where(StrategyChatSession.user_id == user_id)
+        .order_by(StrategyChatSession.updated_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def upsert_strategy_chat_session(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    session_id: str,
+    title: str,
+    data_json: dict[str, Any],
+) -> StrategyChatSession:
+    now = datetime.now()
+    stmt = (
+        insert(StrategyChatSession)
+        .values(
+            user_id=user_id,
+            session_id=session_id,
+            title=title,
+            data_json=data_json,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[StrategyChatSession.user_id, StrategyChatSession.session_id],
+            set_={
+                "title": title,
+                "data_json": data_json,
+                "updated_at": now,
+            },
+        )
+        .returning(StrategyChatSession)
+    )
+    result = await session.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is not None:
+        return row
+    refreshed = await session.execute(
+        select(StrategyChatSession)
+        .where(StrategyChatSession.user_id == user_id)
+        .where(StrategyChatSession.session_id == session_id)
+    )
+    saved = refreshed.scalar_one_or_none()
+    if saved is None:
+        raise RuntimeError("Failed to upsert strategy chat session")
+    return saved
+
+
+async def delete_strategy_chat_session(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    session_id: str,
+) -> bool:
+    res = await session.execute(
+        delete(StrategyChatSession)
+        .where(StrategyChatSession.user_id == user_id)
+        .where(StrategyChatSession.session_id == session_id)
+    )
+    return bool(res.rowcount)

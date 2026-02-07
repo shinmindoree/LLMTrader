@@ -34,12 +34,12 @@ class RunnerWorker:
         self._poll_interval = max(50, poll_interval_ms) / 1000.0
 
     async def run_forever(self) -> None:
-        # On runner startup, finalize any jobs left RUNNING/STOP_REQUESTED from a previous crash/restart.
-        # In MVP mode we do not attempt to resume them; we mark them completed so new jobs can run safely.
+        # On runner startup, reconcile jobs left RUNNING/STOP_REQUESTED from a previous crash/restart.
+        # LIVE jobs are re-queued so the runner can resume them automatically.
         async with self._session_maker() as session:
             counts = await finalize_orphaned_jobs(session, reason="runner_startup")
-            if counts.get("finalized_failed") or counts.get("finalized_stopped"):
-                print(f"[runner] finalized orphaned jobs: {counts}")
+            if counts.get("finalized_failed") or counts.get("requeued_live") or counts.get("finalized_stopped"):
+                print(f"[runner] reconciled orphaned jobs: {counts}")
             await session.commit()
 
         await asyncio.gather(

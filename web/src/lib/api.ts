@@ -15,6 +15,7 @@ import type {
   StrategyInfo,
   StrategyQualitySummaryResponse,
   StrategySaveResponse,
+  StrategyChatSessionRecord,
   StrategySyntaxCheckResponse,
   Trade,
 } from "@/lib/types";
@@ -131,6 +132,30 @@ export async function strategyChat(
       messages,
     }),
   });
+}
+
+export async function listStrategyChatSessions(): Promise<StrategyChatSessionRecord[]> {
+  return json<StrategyChatSessionRecord[]>("/api/backend/api/strategies/chat/sessions?limit=200");
+}
+
+export async function upsertStrategyChatSession(
+  sessionId: string,
+  payload: { title?: string; data: Record<string, unknown> },
+): Promise<StrategyChatSessionRecord> {
+  return json<StrategyChatSessionRecord>(
+    `/api/backend/api/strategies/chat/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function deleteStrategyChatSession(sessionId: string): Promise<DeleteResponse> {
+  return json<DeleteResponse>(
+    `/api/backend/api/strategies/chat/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export type GenerateStreamCallbacks = {

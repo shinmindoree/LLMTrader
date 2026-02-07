@@ -120,6 +120,20 @@ class StrategyChatResponse(BaseModel):
     content: str
 
 
+class StrategyChatSessionUpsertRequest(BaseModel):
+    title: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyChatSessionResponse(BaseModel):
+    session_id: str
+    title: str
+    data: dict[str, Any] = Field(default_factory=dict)
+    message_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
 class StrategySyntaxError(BaseModel):
     message: str
     line: int | None = None

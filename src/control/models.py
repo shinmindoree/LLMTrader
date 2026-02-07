@@ -106,6 +106,27 @@ class Trade(Base):
     raw_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
+class StrategyChatSession(Base):
+    __tablename__ = "strategy_chat_sessions"
+    __table_args__ = (UniqueConstraint("user_id", "session_id", name="uq_strategy_chat_sessions_user_session"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True, default="default")
+    session_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="New chat")
+    data_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        index=True,
+    )
+
+
 class StrategyQualityLog(Base):
     __tablename__ = "strategy_quality_logs"
 

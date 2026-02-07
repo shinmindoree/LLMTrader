@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
@@ -28,16 +28,19 @@ from control.repo import (
     append_event,
     create_job,
     create_strategy_quality_log,
+    delete_strategy_chat_session as repo_delete_strategy_chat_session,
     delete_job,
     delete_jobs,
     get_job,
     list_events,
     list_jobs,
     list_orders,
+    list_strategy_chat_sessions as repo_list_strategy_chat_sessions,
     list_strategy_quality_logs,
     list_trades,
     request_stop,
     stop_all_jobs,
+    upsert_strategy_chat_session as repo_upsert_strategy_chat_session,
 )
 from settings import get_settings
 from llm.client import LLMClient
@@ -66,6 +69,8 @@ from api.schemas import (
     StrategyQualitySummaryResponse,
     StrategyGenerateRequest,
     StrategyGenerateResponse,
+    StrategyChatSessionResponse,
+    StrategyChatSessionUpsertRequest,
     StrategyChatRequest,
     StrategyChatResponse,
     StrategySyntaxCheckRequest,
@@ -105,6 +110,34 @@ def _event_to_response(ev: Any) -> JobEventResponse:
         level=ev.level,
         message=ev.message,
         payload=ev.payload_json,
+    )
+
+
+def _normalize_chat_user_id(raw: str | None) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return "default"
+    cleaned = re.sub(r"[^A-Za-z0-9._:-]+", "_", value)[:64].strip("_")
+    return cleaned or "default"
+
+
+def _chat_user_id_from_header(
+    x_chat_user_id: str | None = Header(default=None, alias="x-chat-user-id"),
+) -> str:
+    return _normalize_chat_user_id(x_chat_user_id)
+
+
+def _chat_session_to_response(row: Any) -> StrategyChatSessionResponse:
+    data = row.data_json if isinstance(row.data_json, dict) else {}
+    messages = data.get("messages") if isinstance(data, dict) else None
+    message_count = len(messages) if isinstance(messages, list) else 0
+    return StrategyChatSessionResponse(
+        session_id=str(row.session_id),
+        title=str(row.title or "New chat"),
+        data=data,
+        message_count=message_count,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -1223,6 +1256,71 @@ def create_app() -> FastAPI:
         if content is None:
             raise HTTPException(status_code=502, detail="Strategy chat failed")
         return StrategyChatResponse(content=content)
+
+    @app.get(
+        "/api/strategies/chat/sessions",
+        response_model=list[StrategyChatSessionResponse],
+        dependencies=[Depends(require_admin)],
+    )
+    async def list_chat_sessions(
+        limit: int = Query(default=200, ge=1, le=500),
+        user_id: str = Depends(_chat_user_id_from_header),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[StrategyChatSessionResponse]:
+        rows = await repo_list_strategy_chat_sessions(session, user_id=user_id, limit=limit)
+        return [_chat_session_to_response(row) for row in rows]
+
+    @app.put(
+        "/api/strategies/chat/sessions/{session_id}",
+        response_model=StrategyChatSessionResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def upsert_chat_session(
+        session_id: str,
+        body: StrategyChatSessionUpsertRequest,
+        user_id: str = Depends(_chat_user_id_from_header),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StrategyChatSessionResponse:
+        normalized_session_id = (session_id or "").strip()
+        if not normalized_session_id:
+            raise HTTPException(status_code=422, detail="session_id must be non-empty")
+        if len(normalized_session_id) > 128:
+            raise HTTPException(status_code=422, detail="session_id too long")
+
+        title = (body.title or "").strip() or "New chat"
+        if len(title) > 200:
+            title = title[:200]
+
+        row = await repo_upsert_strategy_chat_session(
+            session,
+            user_id=user_id,
+            session_id=normalized_session_id,
+            title=title,
+            data_json=body.data,
+        )
+        await session.commit()
+        return _chat_session_to_response(row)
+
+    @app.delete(
+        "/api/strategies/chat/sessions/{session_id}",
+        response_model=DeleteResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def delete_chat_session(
+        session_id: str,
+        user_id: str = Depends(_chat_user_id_from_header),
+        session: AsyncSession = Depends(_db_session),
+    ) -> DeleteResponse:
+        normalized_session_id = (session_id or "").strip()
+        if not normalized_session_id:
+            raise HTTPException(status_code=422, detail="session_id must be non-empty")
+        ok = await repo_delete_strategy_chat_session(
+            session,
+            user_id=user_id,
+            session_id=normalized_session_id,
+        )
+        await session.commit()
+        return DeleteResponse(ok=ok)
 
     @app.post(
         "/api/strategies/save",
