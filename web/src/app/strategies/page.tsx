@@ -64,10 +64,10 @@ function buildMessagesForGeneration(
   const out = [
     ...base,
     {
-    role: "assistant",
-    content:
-      "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n"
-      + latestCode,
+      role: "assistant",
+      content:
+        "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n"
+        + latestCode,
     },
     last,
   ];
@@ -345,6 +345,133 @@ function strategyNameFromPath(path: string): string {
   return base.replace(/\.[^.]+$/, "");
 }
 
+type DiffLine = {
+  type: "context" | "add" | "remove";
+  leftLineNo: number | null;
+  rightLineNo: number | null;
+  text: string;
+};
+
+function buildCodeDiffLines(beforeCode: string, afterCode: string): DiffLine[] {
+  const beforeLines = beforeCode.split("\n");
+  const afterLines = afterCode.split("\n");
+  const n = beforeLines.length;
+  const m = afterLines.length;
+
+  if (n === 0 && m === 0) return [];
+
+  // Guardrail for very large files to avoid expensive LCS matrix.
+  if (n * m > 240_000) {
+    const out: DiffLine[] = [];
+    const max = Math.max(n, m);
+    for (let i = 0; i < max; i++) {
+      const before = beforeLines[i];
+      const after = afterLines[i];
+      if (before === after) {
+        out.push({
+          type: "context",
+          leftLineNo: before !== undefined ? i + 1 : null,
+          rightLineNo: after !== undefined ? i + 1 : null,
+          text: before ?? after ?? "",
+        });
+        continue;
+      }
+      if (before !== undefined) {
+        out.push({
+          type: "remove",
+          leftLineNo: i + 1,
+          rightLineNo: null,
+          text: before,
+        });
+      }
+      if (after !== undefined) {
+        out.push({
+          type: "add",
+          leftLineNo: null,
+          rightLineNo: i + 1,
+          text: after,
+        });
+      }
+    }
+    return out;
+  }
+
+  const lcs = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (beforeLines[i - 1] === afterLines[j - 1]) {
+        lcs[i][j] = lcs[i - 1][j - 1] + 1;
+      } else {
+        lcs[i][j] = Math.max(lcs[i - 1][j], lcs[i][j - 1]);
+      }
+    }
+  }
+
+  type Op = { type: "context" | "add" | "remove"; text: string };
+  const ops: Op[] = [];
+  let i = n;
+  let j = m;
+  while (i > 0 && j > 0) {
+    if (beforeLines[i - 1] === afterLines[j - 1]) {
+      ops.push({ type: "context", text: beforeLines[i - 1] });
+      i -= 1;
+      j -= 1;
+      continue;
+    }
+    if (lcs[i - 1][j] >= lcs[i][j - 1]) {
+      ops.push({ type: "remove", text: beforeLines[i - 1] });
+      i -= 1;
+    } else {
+      ops.push({ type: "add", text: afterLines[j - 1] });
+      j -= 1;
+    }
+  }
+  while (i > 0) {
+    ops.push({ type: "remove", text: beforeLines[i - 1] });
+    i -= 1;
+  }
+  while (j > 0) {
+    ops.push({ type: "add", text: afterLines[j - 1] });
+    j -= 1;
+  }
+  ops.reverse();
+
+  const out: DiffLine[] = [];
+  let leftLine = 1;
+  let rightLine = 1;
+  for (const op of ops) {
+    if (op.type === "context") {
+      out.push({
+        type: "context",
+        leftLineNo: leftLine,
+        rightLineNo: rightLine,
+        text: op.text,
+      });
+      leftLine += 1;
+      rightLine += 1;
+      continue;
+    }
+    if (op.type === "remove") {
+      out.push({
+        type: "remove",
+        leftLineNo: leftLine,
+        rightLineNo: null,
+        text: op.text,
+      });
+      leftLine += 1;
+      continue;
+    }
+    out.push({
+      type: "add",
+      leftLineNo: null,
+      rightLineNo: rightLine,
+      text: op.text,
+    });
+    rightLine += 1;
+  }
+  return out;
+}
+
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
 
 function persistExecutionDefaults(spec: StrategyIntakeResponse["normalized_spec"] | null | undefined): void {
@@ -416,14 +543,20 @@ export default function StrategiesPage() {
   } | null>(null);
   const [workspaceCode, setWorkspaceCode] = useState("");
   const [workspaceSourceMessageId, setWorkspaceSourceMessageId] = useState<string | null>(null);
+  const [initialGeneratedCode, setInitialGeneratedCode] = useState<string | null>(null);
   const [workspaceSummary, setWorkspaceSummary] = useState<string | null>(null);
   const [workspaceDirty, setWorkspaceDirty] = useState(false);
   const [workspaceChecking, setWorkspaceChecking] = useState(false);
   const [workspaceSyntax, setWorkspaceSyntax] = useState<StrategySyntaxCheckResponse | null>(null);
   const [workspaceSyntaxError, setWorkspaceSyntaxError] = useState<string | null>(null);
+  const [workspaceOpen, setWorkspaceOpen] = useState(true);
+  const [workspaceWidth, setWorkspaceWidth] = useState(440);
+  const [isResizingWorkspace, setIsResizingWorkspace] = useState(false);
+  const [isComposingPrompt, setIsComposingPrompt] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const workspaceGutterRef = useRef<HTMLDivElement | null>(null);
   const workspaceTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const workspaceResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
     listStrategies()
@@ -475,6 +608,36 @@ export default function StrategiesPage() {
       window.clearTimeout(timer);
     };
   }, [workspaceCode]);
+
+  useEffect(() => {
+    if (!isResizingWorkspace) {
+      return;
+    }
+    const onMouseMove = (event: MouseEvent) => {
+      const state = workspaceResizeRef.current;
+      if (!state) return;
+      const delta = state.startX - event.clientX;
+      const maxWidth = Math.max(360, Math.min(900, window.innerWidth - 460));
+      const nextWidth = Math.max(320, Math.min(maxWidth, state.startWidth + delta));
+      setWorkspaceWidth(nextWidth);
+    };
+    const onMouseUp = () => {
+      workspaceResizeRef.current = null;
+      setIsResizingWorkspace(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [isResizingWorkspace]);
 
   const animateAssistantTyping = async (assistantId: string, fullText: string): Promise<void> => {
     if (!fullText) {
@@ -586,6 +749,7 @@ export default function StrategiesPage() {
                 setWorkspaceSourceMessageId(assistantId);
                 setWorkspaceSummary(payload.summary ?? null);
                 setWorkspaceDirty(false);
+                setInitialGeneratedCode((prev) => prev ?? payload.code ?? null);
               }
               listStrategies()
                 .then(setItems)
@@ -698,6 +862,19 @@ export default function StrategiesPage() {
     workspaceGutterRef.current.scrollTop = workspaceTextAreaRef.current.scrollTop;
   };
 
+  const handleWorkspaceResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!workspaceOpen) return;
+    workspaceResizeRef.current = {
+      startX: event.clientX,
+      startWidth: workspaceWidth,
+    };
+    setIsResizingWorkspace(true);
+  };
+
+  const handleWorkspaceToggle = () => {
+    setWorkspaceOpen((prev) => !prev);
+  };
+
   const handleSaveWorkspace = () => {
     const code = workspaceCode.trim();
     if (!code) return;
@@ -706,17 +883,6 @@ export default function StrategiesPage() {
       code,
       name: "",
     });
-  };
-
-  const handleLoadLatestGeneratedCode = () => {
-    const latest = [...chatMessages]
-      .reverse()
-      .find((m) => m.role === "assistant" && !m.textOnly && Boolean(m.content));
-    if (!latest) return;
-    setWorkspaceCode(latest.content);
-    setWorkspaceSourceMessageId(latest.id);
-    setWorkspaceSummary(latest.summary ?? null);
-    setWorkspaceDirty(false);
   };
 
   const handleSaveClick = (messageId: string, code: string) => {
@@ -743,9 +909,17 @@ export default function StrategiesPage() {
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (
+      event.key === "Enter"
+      && !event.shiftKey
+      && !isComposingPrompt
+      && !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
-      void handleSubmit();
+      const next = event.currentTarget.value.trim();
+      if (!next || isSending) return;
+      setPrompt("");
+      void submitPrompt(next);
     }
   };
 
@@ -807,9 +981,14 @@ export default function StrategiesPage() {
   const syntaxErrorLine = workspaceSyntax?.error?.line ?? null;
   const syntaxErrorColumn =
     typeof workspaceSyntax?.error?.column === "number" ? workspaceSyntax.error.column + 1 : null;
+  const workspaceDiffLines =
+    initialGeneratedCode && workspaceCode
+      ? buildCodeDiffLines(initialGeneratedCode, workspaceCode)
+      : [];
+  const hasWorkspaceDiff = workspaceDiffLines.some((line) => line.type !== "context");
 
   return (
-    <main className="w-full px-6 py-10">
+    <main className="flex h-[calc(100vh-3.5rem)] min-h-0 w-full flex-col overflow-hidden px-6 py-6">
       <h1 className="text-xl font-semibold text-[#d1d4dc]">Strategies</h1>
       <div className="mt-4 flex gap-1 border-b border-[#2a2e39]">
         <button
@@ -837,7 +1016,7 @@ export default function StrategiesPage() {
       </div>
 
       {activeTab === "chat" ? (
-      <section className="mt-0 flex min-h-[60vh] flex-col rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d]">
+      <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d]">
         <div className="border-b border-[#2a2e39] bg-[#171b25] px-4 py-3">
           <div className="mx-auto max-w-5xl">
             <h2 className="text-sm font-semibold text-[#d1d4dc]">Current Strategy Generation Scope</h2>
@@ -1063,6 +1242,8 @@ export default function StrategiesPage() {
                     <textarea
                       className="min-h-[44px] max-h-[200px] flex-1 resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
                       onChange={(e) => setPrompt(e.target.value)}
+                      onCompositionStart={() => setIsComposingPrompt(true)}
+                      onCompositionEnd={() => setIsComposingPrompt(false)}
                       onKeyDown={handleKeyDown}
                       placeholder="Describe your strategy..."
                       value={prompt}
@@ -1097,6 +1278,8 @@ export default function StrategiesPage() {
                       <textarea
                         className="min-h-[120px] w-full resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
                         onChange={(e) => setPrompt(e.target.value)}
+                        onCompositionStart={() => setIsComposingPrompt(true)}
+                        onCompositionEnd={() => setIsComposingPrompt(false)}
                         onKeyDown={handleKeyDown}
                         placeholder="Describe your strategy in plain language. e.g. Buy when RSI crosses above 30, sell at 70, 1h candles."
                         value={prompt}
@@ -1120,92 +1303,134 @@ export default function StrategiesPage() {
             )}
           </div>
 
-          <aside className="hidden w-[420px] shrink-0 border-l border-[#2a2e39] bg-[#151924] lg:flex lg:flex-col">
-            <div className="flex items-center justify-between border-b border-[#2a2e39] px-3 py-3">
-              <div>
-                <h3 className="text-sm font-semibold text-[#d1d4dc]">Workspace Code</h3>
-                <p className="mt-1 text-[11px] text-[#868993]">
-                  Follow-up improvements are based on this code.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#9aa0ad] transition hover:border-[#2962ff] hover:text-white"
-                  onClick={handleLoadLatestGeneratedCode}
-                >
-                  Load latest
-                </button>
-                <button
-                  type="button"
-                  className="rounded border border-[#2962ff]/70 px-2 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff]/15 disabled:opacity-50"
-                  onClick={handleSaveWorkspace}
-                  disabled={!workspaceCode.trim() || savingId !== null}
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1">
-              {workspaceCode.trim() ? (
-                <div className="flex h-full overflow-hidden">
-                  <div
-                    ref={workspaceGutterRef}
-                    className="w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
-                  >
-                    {Array.from({ length: workspaceLineCount }, (_, idx) => {
-                      const lineNo = idx + 1;
-                      return (
-                        <div
-                          key={`workspace-line-${lineNo}`}
-                          className={`pr-2 ${lineNo === syntaxErrorLine ? "bg-[#3b1f26] text-[#ef9a9a]" : ""}`}
-                        >
-                          {lineNo}
-                        </div>
-                      );
-                    })}
+          {workspaceOpen ? (
+            <div
+              className="hidden w-1 shrink-0 cursor-col-resize bg-[#2a2e39] transition hover:bg-[#2962ff] lg:block"
+              onMouseDown={handleWorkspaceResizeStart}
+            />
+          ) : null}
+          <aside
+            className={`relative hidden shrink-0 border-l border-[#2a2e39] bg-[#151924] lg:flex lg:flex-col ${
+              workspaceOpen ? "" : "overflow-hidden border-l-0"
+            }`}
+            style={{ width: workspaceOpen ? workspaceWidth : 0 }}
+          >
+            {workspaceOpen ? (
+              <>
+                <div className="flex items-center justify-between border-b border-[#2a2e39] px-3 py-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-[#d1d4dc]">Workspace Code</h3>
+                    <p className="mt-1 text-[11px] text-[#868993]">
+                      Follow-up generation uses this code automatically.
+                    </p>
                   </div>
-                  <textarea
-                    ref={workspaceTextAreaRef}
-                    className="h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
-                    spellCheck={false}
-                    value={workspaceCode}
-                    onChange={(e) => handleWorkspaceChange(e.target.value)}
-                    onScroll={handleWorkspaceScroll}
-                  />
+                  <button
+                    type="button"
+                    className="rounded border border-[#2962ff]/70 px-2 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff]/15 disabled:opacity-50"
+                    onClick={handleSaveWorkspace}
+                    disabled={!workspaceCode.trim() || savingId !== null}
+                  >
+                    Save
+                  </button>
                 </div>
-              ) : (
-                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[#868993]">
-                  전략 코드가 생성되면 이 영역에서 계속 편집할 수 있습니다.
-                </div>
-              )}
-            </div>
 
-            <div className="border-t border-[#2a2e39] px-3 py-2 text-xs">
-              {workspaceChecking ? (
-                <span className="text-[#8fa8ff]">Checking syntax...</span>
-              ) : workspaceSyntaxError ? (
-                <span className="text-[#ef9a9a]">Syntax check failed: {workspaceSyntaxError}</span>
-              ) : workspaceSyntax?.valid ? (
-                <span className="text-[#7fd4a6]">No syntax errors found</span>
-              ) : workspaceSyntax?.error ? (
-                <span className="text-[#ef9a9a]">
-                  Syntax error: {workspaceSyntax.error.message}
-                  {syntaxErrorLine ? ` (line ${syntaxErrorLine}` : ""}
-                  {syntaxErrorColumn ? `, col ${syntaxErrorColumn}` : ""}
-                  {syntaxErrorLine ? ")" : ""}
-                </span>
-              ) : (
-                <span className="text-[#868993]">Syntax check runs while you edit code.</span>
-              )}
-              {workspaceDirty ? (
-                <p className="mt-1 text-[11px] text-[#f9a825]">
-                  Unsaved edits in workspace
-                </p>
-              ) : null}
-            </div>
+                <div className="min-h-0 flex-1">
+                  {workspaceCode.trim() ? (
+                    <div className="flex h-full overflow-hidden">
+                      <div
+                        ref={workspaceGutterRef}
+                        className="w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
+                      >
+                        {Array.from({ length: workspaceLineCount }, (_, idx) => {
+                          const lineNo = idx + 1;
+                          return (
+                            <div
+                              key={`workspace-line-${lineNo}`}
+                              className={`pr-2 ${lineNo === syntaxErrorLine ? "bg-[#3b1f26] text-[#ef9a9a]" : ""}`}
+                            >
+                              {lineNo}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <textarea
+                        ref={workspaceTextAreaRef}
+                        className="h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
+                        spellCheck={false}
+                        value={workspaceCode}
+                        onChange={(e) => handleWorkspaceChange(e.target.value)}
+                        onScroll={handleWorkspaceScroll}
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[#868993]">
+                      전략 코드가 생성되면 이 영역에서 계속 편집할 수 있습니다.
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-[#2a2e39] px-3 py-2 text-xs">
+                  {workspaceChecking ? (
+                    <span className="text-[#8fa8ff]">Checking syntax...</span>
+                  ) : workspaceSyntaxError ? (
+                    <span className="text-[#ef9a9a]">Syntax check failed: {workspaceSyntaxError}</span>
+                  ) : workspaceSyntax?.valid ? (
+                    <span className="text-[#7fd4a6]">No syntax errors found</span>
+                  ) : workspaceSyntax?.error ? (
+                    <span className="text-[#ef9a9a]">
+                      Syntax error: {workspaceSyntax.error.message}
+                      {syntaxErrorLine ? ` (line ${syntaxErrorLine}` : ""}
+                      {syntaxErrorColumn ? `, col ${syntaxErrorColumn}` : ""}
+                      {syntaxErrorLine ? ")" : ""}
+                    </span>
+                  ) : (
+                    <span className="text-[#868993]">Syntax check runs while you edit code.</span>
+                  )}
+                  {workspaceDirty ? (
+                    <p className="mt-1 text-[11px] text-[#f9a825]">
+                      Unsaved edits in workspace
+                    </p>
+                  ) : null}
+                  {initialGeneratedCode ? (
+                    <details className="mt-2 rounded border border-[#2a2e39] bg-[#101522] p-2">
+                      <summary className="cursor-pointer text-[11px] text-[#9aa0ad]">
+                        Diff from initial code {hasWorkspaceDiff ? "(modified)" : "(no changes)"}
+                      </summary>
+                      <div className="mt-2 max-h-48 overflow-auto rounded border border-[#2a2e39] bg-[#0d111a] font-mono text-[11px] leading-5">
+                        {workspaceDiffLines.map((line, idx) => {
+                          const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+                          const rowClass =
+                            line.type === "add"
+                              ? "bg-[#1a2f25] text-[#8ad0a4]"
+                              : line.type === "remove"
+                                ? "bg-[#3a1f26] text-[#f3a6ae]"
+                                : "text-[#8690a3]";
+                          return (
+                            <div key={`diff-${idx}`} className={`grid grid-cols-[56px_1fr] px-2 ${rowClass}`}>
+                              <span className="select-none text-[#6b7383]">
+                                {line.leftLineNo ?? ""}{line.rightLineNo ? `:${line.rightLineNo}` : ""}
+                              </span>
+                              <span className="whitespace-pre-wrap break-words">
+                                {prefix} {line.text}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
           </aside>
+          <button
+            type="button"
+            className="absolute right-2 top-1/2 z-20 hidden -translate-y-1/2 rounded-full border border-[#2a2e39] bg-[#171b25] px-2 py-3 text-xs text-[#9aa0ad] shadow-lg transition hover:border-[#2962ff] hover:text-white lg:block"
+            onClick={handleWorkspaceToggle}
+            aria-label={workspaceOpen ? "Collapse workspace" : "Expand workspace"}
+          >
+            {workspaceOpen ? ">" : "<"}
+          </button>
         </div>
 
         {saveModal ? (
@@ -1250,7 +1475,7 @@ export default function StrategiesPage() {
 
       </section>
       ) : (
-      <section className="mt-0 rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d] p-6">
+      <section className="mt-0 min-h-0 flex-1 overflow-y-auto rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d] p-6">
         <h2 className="text-lg font-semibold text-[#d1d4dc]">Saved Strategies</h2>
         {error ? (
           <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
