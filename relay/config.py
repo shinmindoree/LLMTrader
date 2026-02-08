@@ -20,14 +20,14 @@ class RelayConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    def has_client_secret_credential(self) -> bool:
+        return bool(self.azure_tenant_id and self.azure_client_id and self.azure_client_secret)
+
     def is_azure_configured(self) -> bool:
-        return bool(
-            self.azure_tenant_id
-            and self.azure_client_id
-            and self.azure_client_secret
-            and self.azure_openai_endpoint
-            and self.azure_openai_model
-        )
+        # Endpoint/model are always required; auth is resolved by:
+        # 1) Client secret tuple (tenant/client/secret) or
+        # 2) DefaultAzureCredential chain (managed identity, az login, etc).
+        return bool(self.azure_openai_endpoint and self.azure_openai_model)
 
     def is_api_key_required(self) -> bool:
         return bool(self.relay_api_key)

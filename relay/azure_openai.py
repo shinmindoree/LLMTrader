@@ -1,21 +1,38 @@
-"""Azure OpenAI client using Entra ID (ClientSecretCredential)."""
+"""Azure OpenAI client using Entra ID credentials.
+
+Auth strategy:
+1) Use ClientSecretCredential when tenant/client/secret env vars are provided.
+2) Otherwise use DefaultAzureCredential (Managed Identity preferred in Azure runtime).
+"""
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
-from azure.identity import ClientSecretCredential, get_bearer_token_provider
+from azure.core.credentials import TokenCredential
+from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
 
 from relay.config import RelayConfig
 
 
+def _build_credential(config: RelayConfig) -> TokenCredential:
+    if config.has_client_secret_credential():
+        return ClientSecretCredential(
+            tenant_id=config.azure_tenant_id,
+            client_id=config.azure_client_id,
+            client_secret=config.azure_client_secret,
+        )
+
+    kwargs: dict[str, str] = {}
+    if config.azure_client_id:
+        # Supports user-assigned managed identity when AZURE_CLIENT_ID is set.
+        kwargs["managed_identity_client_id"] = config.azure_client_id
+    return DefaultAzureCredential(**kwargs)
+
+
 def _create_client(config: RelayConfig) -> AzureOpenAI:
-    credential = ClientSecretCredential(
-        tenant_id=config.azure_tenant_id,
-        client_id=config.azure_client_id,
-        client_secret=config.azure_client_secret,
-    )
+    credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
         credential,
         "https://cognitiveservices.azure.com/.default",
@@ -28,11 +45,7 @@ def _create_client(config: RelayConfig) -> AzureOpenAI:
 
 
 def _create_async_client(config: RelayConfig) -> AsyncAzureOpenAI:
-    credential = ClientSecretCredential(
-        tenant_id=config.azure_tenant_id,
-        client_id=config.azure_client_id,
-        client_secret=config.azure_client_secret,
-    )
+    credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
         credential,
         "https://cognitiveservices.azure.com/.default",

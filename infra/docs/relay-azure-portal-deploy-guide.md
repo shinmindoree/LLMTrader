@@ -178,17 +178,17 @@ docker push llmtraderrelayacr.azurecr.io/llmtrader-relay:latest
    - `AZURE_OPENAI_ENDPOINT` = Azure OpenAI 엔드포인트 (예: `https://xxx.cognitiveservices.azure.com/`).
    - `AZURE_OPENAI_MODEL` = 배포(모델) 이름 (예: `gpt-4o`, `gpt-5.2-chat` 등).
    - (선택) `AZURE_OPENAI_API_VERSION` = `2024-08-01-preview`.
-4. **+ 추가** → **시크릿 참조**로 아래 추가 (비밀번호/키는 시크릿으로만 저장):
-   - **시크릿 추가** 클릭 후 이름 `azure-tenant-id`, 값에 Tenant ID 입력 → **확인**.
-   - **시크릿 추가** 클릭 후 이름 `azure-client-id`, 값에 Client ID 입력 → **확인**.
-   - **시크릿 추가** 클릭 후 이름 `azure-client-secret`, 값에 Client Secret 입력 → **확인**.
-5. **환경 변수** 목록에서 다시 **+ 추가**:
-   - **환경 변수**: `AZURE_TENANT_ID` / **시크릿 참조**: `azure-tenant-id` 선택.
-   - **환경 변수**: `AZURE_CLIENT_ID` / **시크릿 참조**: `azure-client-id` 선택.
-   - **환경 변수**: `AZURE_CLIENT_SECRET` / **시크릿 참조**: `azure-client-secret` 선택.
-6. (선택) `RELAY_API_KEY` 사용 시: 시크릿 추가 후 환경 변수에서 해당 시크릿 참조.
-7. **저장** 또는 **적용** 클릭.
-8. 필요 시 **개정 관리**에서 **새 개정 만들기**를 실행해 변경 사항을 반영.
+4. **권장 방식(Managed Identity)**:
+   - Container App의 **ID(Identity)** 메뉴에서 **System assigned**를 켭니다.
+   - 해당 Managed Identity에 Azure OpenAI 리소스 접근 권한(필요 Role)을 부여합니다.
+   - `AZURE_CLIENT_SECRET`는 설정하지 않습니다.
+5. (선택) User-assigned Managed Identity를 쓰는 경우에만:
+   - `AZURE_CLIENT_ID` 환경 변수에 User-assigned MI의 Client ID를 설정합니다.
+6. (예외) 클라이언트 시크릿 인증이 꼭 필요할 때만 시크릿 참조를 사용합니다:
+   - `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`
+7. (선택) `RELAY_API_KEY` 사용 시: 시크릿 추가 후 환경 변수에서 해당 시크릿 참조.
+8. **저장** 또는 **적용** 클릭.
+9. 필요 시 **개정 관리**에서 **새 개정 만들기**를 실행해 변경 사항을 반영.
 
 ---
 

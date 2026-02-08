@@ -1,35 +1,28 @@
-name: Deploy Runner (test)
+name: Deploy Service (test)
 
-# When this action will be executed
 on:
-  # Automatically trigger it when runner related files change
   push:
     branches:
       - main
     paths:
-      - src/**
-      - scripts/**
-      - infra/Dockerfile.runner
-      - .github/workflows/llmtrader-runner-AutoDeployTrigger-fce05b31-a5b9-45c7-af61-c1fa39994159.yml
-
-  # Allow manual trigger 
+      - '**'
   workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write #This is required for requesting the OIDC JWT Token
-      contents: read #Required when GH token is used to authenticate with private repo
+      id-token: write
+      contents: read
     env:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_TEST }}
       AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME_TEST }}
       AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
-      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME_RUNNER_TEST }}
-      IMAGE_NAME: service-runner
+      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME_MAIN_TEST }}
+      IMAGE_NAME: service-main
 
     steps:
-      - name: Checkout to the branch
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Validate workflow inputs
@@ -37,7 +30,7 @@ jobs:
           : "${AZURE_RESOURCE_GROUP:?Missing vars.AZURE_RESOURCE_GROUP_TEST}"
           : "${AZURE_ACR_NAME:?Missing vars.AZURE_ACR_NAME_TEST}"
           : "${AZURE_ACR_LOGIN_SERVER:?Missing vars.AZURE_ACR_LOGIN_SERVER_TEST}"
-          : "${AZURE_CONTAINER_APP_NAME:?Missing vars.AZURE_CONTAINER_APP_NAME_RUNNER_TEST}"
+          : "${AZURE_CONTAINER_APP_NAME:?Missing vars.AZURE_CONTAINER_APP_NAME_MAIN_TEST}"
 
       - name: Azure Login
         uses: azure/login@v2
@@ -46,19 +39,25 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID_TEST }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_TEST }}
 
-      - name: Build and push container image to registry
+      - name: Build and push container image
         run: |
           IMAGE_TAG="${AZURE_ACR_LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}"
           az acr login --name "${AZURE_ACR_NAME}"
-          docker build -f infra/Dockerfile.runner -t "${IMAGE_TAG}" .
+          docker build -f ./Dockerfile -t "${IMAGE_TAG}" .
           docker push "${IMAGE_TAG}"
           echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
 
-      - name: Update Container App image
+      - name: Update Container App with latest image
         run: |
+          short_sha="$(echo "${GITHUB_SHA}" | cut -c 1-7)"
+
           az containerapp update \
             --name "${AZURE_CONTAINER_APP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
-            --image "${IMAGE_TAG}"
+            --image "${IMAGE_TAG}" \
+            --revision-suffix "${short_sha}" \
+            --min-replicas 1 \
+            --max-replicas 1
+
 
 

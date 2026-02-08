@@ -1,46 +1,64 @@
-name: Trigger auto deployment for llmtrader-api
+name: Deploy API (test)
 
 # When this action will be executed
 on:
-  # Automatically trigger it when detected changes in repo
+  # Automatically trigger it when API related files change
   push:
-    branches: 
-      [ main ]
+    branches:
+      - main
     paths:
-    - '**'
-    - '.github/workflows/llmtrader-api-AutoDeployTrigger-51b80701-055a-457e-a751-7ca8a724937c.yml'
+      - src/**
+      - scripts/**
+      - infra/Dockerfile.api
+      - .github/workflows/llmtrader-api-AutoDeployTrigger-51b80701-055a-457e-a751-7ca8a724937c.yml
 
   # Allow manual trigger 
-  workflow_dispatch:      
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions: 
+    permissions:
       id-token: write #This is required for requesting the OIDC JWT Token
       contents: read #Required when GH token is used to authenticate with private repo
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_TEST }}
+      AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME_TEST }}
+      AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
+      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME_API_TEST }}
+      IMAGE_NAME: service-api
 
     steps:
       - name: Checkout to the branch
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+
+      - name: Validate workflow inputs
+        run: |
+          : "${AZURE_RESOURCE_GROUP:?Missing vars.AZURE_RESOURCE_GROUP_TEST}"
+          : "${AZURE_ACR_NAME:?Missing vars.AZURE_ACR_NAME_TEST}"
+          : "${AZURE_ACR_LOGIN_SERVER:?Missing vars.AZURE_ACR_LOGIN_SERVER_TEST}"
+          : "${AZURE_CONTAINER_APP_NAME:?Missing vars.AZURE_CONTAINER_APP_NAME_API_TEST}"
 
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.LLMTRADERAPI_AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.LLMTRADERAPI_AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.LLMTRADERAPI_AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID_TEST }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID_TEST }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_TEST }}
 
       - name: Build and push container image to registry
-        uses: azure/container-apps-deploy-action@v2
-        with:
-          appSourcePath: ${{ github.workspace }}
-          dockerfilePath: ./infra/Dockerfile.api
-          registryUrl: autotraderbinance.azurecr.io
-          registryUsername: ${{ secrets.LLMTRADERAPI_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.LLMTRADERAPI_REGISTRY_PASSWORD }}
-          containerAppName: llmtrader-api
-          resourceGroup: autotrader
-          imageToBuild: autotraderbinance.azurecr.io/llmtrader-api:${{ github.sha }}
+        run: |
+          IMAGE_TAG="${AZURE_ACR_LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}"
+          az acr login --name "${AZURE_ACR_NAME}"
+          docker build -f infra/Dockerfile.api -t "${IMAGE_TAG}" .
+          docker push "${IMAGE_TAG}"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
+
+      - name: Update Container App image
+        run: |
+          az containerapp update \
+            --name "${AZURE_CONTAINER_APP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --image "${IMAGE_TAG}"
 
 

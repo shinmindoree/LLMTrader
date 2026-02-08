@@ -14,9 +14,9 @@ LLM 전략 생성 프록시 서버: Entra ID로 Azure OpenAI에 접근하고, �
 
 | 이름 | 필수 | 설명 |
 |------|------|------|
-| `AZURE_TENANT_ID` | 예 | Entra ID tenant ID. |
-| `AZURE_CLIENT_ID` | 예 | 앱 등록(클라이언트) ID. |
-| `AZURE_CLIENT_SECRET` | 예 | 클라이언트 시크릿. |
+| `AZURE_TENANT_ID` | 조건부 | 클라이언트 시크릿 인증 시 필요. Managed Identity만 쓰면 불필요. |
+| `AZURE_CLIENT_ID` | 조건부 | User-assigned Managed Identity 또는 클라이언트 시크릿 인증 시 필요. |
+| `AZURE_CLIENT_SECRET` | 권장 안 함 | 클라이언트 시크릿 인증 시에만 필요. 가능하면 미사용(OIDC/MI 권장). |
 | `AZURE_OPENAI_ENDPOINT` | 예 | Azure OpenAI 엔드포인트 (예: `https://xxx.cognitiveservices.azure.com/`). |
 | `AZURE_OPENAI_MODEL` | 예 | 배포(모델) 이름 (예: `gpt-4o`). |
 | `AZURE_OPENAI_API_VERSION` | 아니오 | 기본 `2024-08-01-preview`. |
@@ -31,13 +31,13 @@ Container Apps에서는 시크릿은 Secrets에 등록한 뒤 환경 변수에�
 ```bash
 docker build -f infra/Dockerfile.relay -t llmtrader-relay .
 docker run --rm -p 8000:8000 \
-  -e AZURE_TENANT_ID=... \
-  -e AZURE_CLIENT_ID=... \
-  -e AZURE_CLIENT_SECRET=... \
   -e AZURE_OPENAI_ENDPOINT=https://xxx.cognitiveservices.azure.com/ \
   -e AZURE_OPENAI_MODEL=gpt-4o \
   llmtrader-relay
 ```
+
+로컬에서 `az login` 되어 있으면 `DefaultAzureCredential` 경로로 동작한다.
+클라이언트 시크릿 인증을 유지해야 한다면 `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`를 추가한다.
 
 `http://localhost:8000/docs` 로 Swagger, `POST http://localhost:8000/generate` 로 전략 생성 테스트.
 
