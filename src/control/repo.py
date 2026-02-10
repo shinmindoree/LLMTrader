@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.enums import EventKind, JobStatus, JobType
-from control.models import Job, JobEvent, Order, StrategyChatSession, StrategyQualityLog, Trade
+from control.models import AccountSnapshot, Job, JobEvent, Order, StrategyChatSession, StrategyQualityLog, Trade
 
 ACTIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.STOP_REQUESTED}
 FINISHED_STATUSES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
@@ -588,3 +588,31 @@ async def delete_strategy_chat_session(
         .where(StrategyChatSession.session_id == session_id)
     )
     return bool(res.rowcount)
+
+
+async def upsert_account_snapshot(
+    session: AsyncSession,
+    *,
+    key: str,
+    data_json: dict[str, Any],
+) -> None:
+    stmt = (
+        insert(AccountSnapshot)
+        .values(key=key, data_json=data_json, updated_at=datetime.now())
+        .on_conflict_do_update(
+            index_elements=[AccountSnapshot.key],
+            set_={"data_json": data_json, "updated_at": datetime.now()},
+        )
+    )
+    await session.execute(stmt)
+
+
+async def get_account_snapshot(
+    session: AsyncSession,
+    *,
+    key: str,
+) -> AccountSnapshot | None:
+    result = await session.execute(
+        select(AccountSnapshot).where(AccountSnapshot.key == key)
+    )
+    return result.scalar_one_or_none()

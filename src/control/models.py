@@ -127,6 +127,16 @@ class StrategyChatSession(Base):
     )
 
 
+class AccountSnapshot(Base):
+    __tablename__ = "account_snapshots"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    data_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class StrategyQualityLog(Base):
     __tablename__ = "strategy_quality_logs"
 
