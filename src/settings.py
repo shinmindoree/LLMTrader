@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     relay_server: RelayServerSettings = Field(default_factory=RelayServerSettings)
     supabase_auth: SupabaseAuthSettings = Field(default_factory=SupabaseAuthSettings)
 
-    model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def effective_database_url(self) -> str:
