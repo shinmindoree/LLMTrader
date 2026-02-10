@@ -148,12 +148,11 @@ async def run_backtest_async() -> dict[str, Any]:
     """백테스트를 비동기로 실행."""
     settings = get_settings()
     
-    # 백테스트는 실서버 데이터 사용 (라이브 트레이딩은 테스트넷 사용)
     client = BinanceHTTPClient(
         api_key=settings.binance.api_key or "",
         api_secret=settings.binance.api_secret or "",
-        base_url="https://fapi.binance.com",  # 실서버 URL
-        timeout=60.0,  # 대용량 데이터 조회를 위해 타임아웃 증가
+        base_url=settings.binance.base_url,
+        timeout=60.0,
     )
     
     try:

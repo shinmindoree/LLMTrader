@@ -96,6 +96,22 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
                 response = await self._client.get("/fapi/v1/klines", params=params)
                 response.raise_for_status()
                 return response.json()
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code
+                if status_code == 451:
+                    raise ValueError(
+                        "Binance Futures market data endpoint returned HTTP 451 "
+                        f"for {e.request.url}. This usually means the endpoint is "
+                        "blocked for your current region/IP. "
+                        "Set BINANCE_BASE_URL in .env to an allowed endpoint "
+                        "(for example, https://testnet.binancefuture.com) and retry."
+                    ) from e
+                body = e.response.text.strip()
+                body_preview = body[:300] + ("..." if len(body) > 300 else "")
+                raise ValueError(
+                    "Binance API error: "
+                    f"{status_code} GET /fapi/v1/klines | params={params} | body={body_preview}"
+                ) from e
             except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 2  # 2초, 4초, 6초 대기

@@ -41,7 +41,7 @@ async def run_backtest(
     client = BinanceHTTPClient(
         api_key=settings.binance.api_key or "",
         api_secret=settings.binance.api_secret or "",
-        base_url="https://fapi.binance.com",
+        base_url=settings.binance.base_url,
         timeout=60.0,
     )
 
@@ -95,4 +95,3 @@ async def run_backtest(
         return results
     finally:
         await client.aclose()
-
