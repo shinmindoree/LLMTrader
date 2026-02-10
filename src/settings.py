@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     supabase_auth: SupabaseAuthSettings = Field(default_factory=SupabaseAuthSettings)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def _resolve_nested_from_env(self) -> "Settings":
+        """중첩 BaseSettings 모델이 환경변수를 독립적으로 읽도록 명시적으로 재생성한다."""
+        object.__setattr__(self, "binance", BinanceSettings())
+        object.__setattr__(self, "slack", SlackSettings())
+        object.__setattr__(self, "relay_server", RelayServerSettings())
+        object.__setattr__(self, "supabase_auth", SupabaseAuthSettings())
+        return self
 
     @property
     def effective_database_url(self) -> str:
