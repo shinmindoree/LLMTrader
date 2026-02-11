@@ -25,7 +25,7 @@ jobs:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_TEST }}
       AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME_TEST }}
       AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
-      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME_API_TEST }}
+      AZURE_CONTAINER_APP_NAME: test-api
       IMAGE_NAME: service-api
 
     steps:
@@ -37,7 +37,7 @@ jobs:
           : "${AZURE_RESOURCE_GROUP:?Missing vars.AZURE_RESOURCE_GROUP_TEST}"
           : "${AZURE_ACR_NAME:?Missing vars.AZURE_ACR_NAME_TEST}"
           : "${AZURE_ACR_LOGIN_SERVER:?Missing vars.AZURE_ACR_LOGIN_SERVER_TEST}"
-          : "${AZURE_CONTAINER_APP_NAME:?Missing vars.AZURE_CONTAINER_APP_NAME_API_TEST}"
+          : "${AZURE_CONTAINER_APP_NAME:?Missing AZURE_CONTAINER_APP_NAME}"
 
       - name: Azure Login
         uses: azure/login@v2
