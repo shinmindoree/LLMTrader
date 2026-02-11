@@ -16,7 +16,7 @@ class BinanceSettings(BaseSettings):
     )
     base_url_backtest: str = Field(
         default="",
-        alias="BINANCE_BASE_URL_BACKTESET",
+        alias="BINANCE_BASE_URL_BACKTEST",
         description="백테스트 전용 바이낸스 엔드포인트.",
     )
 
