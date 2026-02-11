@@ -354,15 +354,9 @@ def _sanitize_intake_response(
         if line not in development_requirements:
             development_requirements.append(line)
 
-    if intent == "STRATEGY_CREATE":
+    if intent == "STRATEGY_CREATE" and _is_generic_strategy_prompt(prompt) and not assumptions:
         if not normalized_spec.get("entry_logic") and "entry_logic" not in missing_fields:
             missing_fields.append("entry_logic")
-        if not normalized_spec.get("exit_logic") and "exit_logic" not in missing_fields:
-            missing_fields.append("exit_logic")
-        if _is_generic_strategy_prompt(prompt):
-            for field in ("symbol", "timeframe", "entry_logic", "exit_logic"):
-                if field not in missing_fields:
-                    missing_fields.append(field)
 
     clarification_questions = _merge_clarification_questions(
         missing_fields=missing_fields,

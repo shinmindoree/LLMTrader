@@ -7,28 +7,11 @@ from relay.capability_registry import capability_prompt_fragment
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TEMPLATE_PATH = _REPO_ROOT / "indicator_strategy_template.py"
 _SKILL_PATH = _REPO_ROOT / ".cursor" / "skills" / "indicator-strategy" / "SKILL.md"
-
-STRATEGY_SYSTEM_PROMPT_FALLBACK = """You generate a single Python file for a trading strategy. The file must be loadable by a runner that discovers a class whose name ends with "Strategy".
-
-Rules::
-- Output ONLY the contents of one new file: scripts/strategies/{name}_strategy.py (file path is logical; emit only the code, no markdown code fences).
-- File name: snake_case, suffix _strategy.py. Class name: PascalCase ending with "Strategy" (e.g. RsiOversoldBounceLongStrategy).
-- Imports: from strategy.base import Strategy; from strategy.context import StrategyContext.
-- Include these helpers inside the file (do not import from template): _last_non_nan, register_talib_indicator_all_outputs, and if needed crossed_above, crossed_below. Copy them EXACTLY from the reference template below.
-- Class: inherit Strategy; __init__ must call super().__init__(); set self.params (dict), self.indicator_config (dict), prev_* state, self.is_closing = False.
-- initialize(ctx): call register_talib_indicator_all_outputs(ctx, INDICATOR_NAME); reset prev_* and is_closing.
-- on_bar(ctx, bar) MUST follow this order exactly:
-  1. If ctx.position_size == 0: self.is_closing = False
-  2. If ctx.get_open_orders(): return
-  3. If not bar.get("is_new_bar", True): return
-  4. Get indicator value with ctx.get_indicator(INDICATOR_NAME, period=...). Check math.isfinite(value); if not, return.
-  5. If prev_value is None or not finite: self.prev_value = value; return
-  6. Closing: if ctx.position_size > 0 and not self.is_closing and exit condition: self.is_closing = True; ctx.close_position(...); self.prev_value = value; return. Same for short (position_size < 0).
-  7. Entry: only if ctx.position_size == 0: ctx.enter_long(...) or ctx.enter_short(...)
-  8. At end: self.prev_value = value
-- Use TA-Lib builtin name (e.g. RSI, MACD) in INDICATOR_NAME and in indicator_config. Emit only this one strategy file.
-- Code must be valid Python, no placeholders, no comments like "your code here". Do not wrap output in markdown code blocks.
-"""
+_VERIFY_SKILL_PATH = _REPO_ROOT / ".cursor" / "skills" / "strategy-verify" / "SKILL.md"
+_EXAMPLE_STRATEGIES: tuple[Path, ...] = (
+    _REPO_ROOT / "scripts" / "strategies" / "rsi_long_short_strategy.py",
+    _REPO_ROOT / "scripts" / "strategies" / "macd_hist_immediate_entry_takeprofit_strategy.py",
+)
 
 
 INTAKE_SYSTEM_PROMPT = """You are an intake classifier for an algorithmic trading strategy builder.
@@ -55,57 +38,79 @@ Return ONLY JSON with this schema:
 
 Rules:
 - If the input is unrelated to trading strategy generation/modification, set intent=OUT_OF_SCOPE and status=OUT_OF_SCOPE.
-- If entry/exit logic is unclear or missing, set status=NEEDS_CLARIFICATION.
 - If the strategy requires unsupported external infra/data pipelines (e.g. social media scraping, external sentiment engines), set status=UNSUPPORTED_CAPABILITY.
 - For UNSUPPORTED_CAPABILITY, include actionable development_requirements (infra/components to build).
 - Keep clarification_questions concise and concrete.
 - user_message must be in Korean.
-- Output valid JSON only. No markdown."""
+- Output valid JSON only. No markdown.
+
+IMPORTANT — Be lenient about missing details:
+- If the user mentions ANY indicator name or strategy concept (e.g. "RSI 과매도", "MACD 크로스", "볼린저밴드 전략", "이평선 골든크로스"), that IS sufficient entry/exit logic. Set status=READY and fill reasonable defaults in assumptions.
+- Do NOT require explicit entry_logic/exit_logic text if the indicator/concept implies standard usage. Fill normalized_spec.entry_logic and exit_logic with inferred logic.
+- symbol and timeframe are OPTIONAL — if missing, fill assumptions with sensible defaults (e.g. BTCUSDT, 1h) and still set status=READY.
+- risk is ALWAYS optional. Never block on missing risk.
+- Only set status=NEEDS_CLARIFICATION when the request is truly ambiguous (e.g. "전략 만들어줘" with zero indicator/concept hint).
+- Prefer READY with assumptions over NEEDS_CLARIFICATION whenever possible."""
 
 
-REPAIR_SYSTEM_PROMPT = """You fix Python trading strategy code so that it can be loaded and backtested.
-
-Requirements:
-- Output ONLY raw Python code for one strategy file. No markdown fences.
-- Keep compatibility with runner expectations:
-  - class name must end with "Strategy"
-  - inherit Strategy
-  - valid initialize/on_bar signatures
-- Preserve the user's original strategy intent as much as possible.
-- Use only available runtime capabilities from current project context.
-- If helper functions are required, keep them consistent with template-based strategy format.
-- Return syntactically valid and executable code only."""
+def _read_file(path: Path) -> str | None:
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return None
 
 
 def _load_template_and_skill() -> tuple[str | None, str | None]:
-    template = None
-    skill = None
-    if _TEMPLATE_PATH.exists():
-        template = _TEMPLATE_PATH.read_text(encoding="utf-8")
-    if _SKILL_PATH.exists():
-        skill = _SKILL_PATH.read_text(encoding="utf-8")
-    return template, skill
+    return _read_file(_TEMPLATE_PATH), _read_file(_SKILL_PATH)
+
+
+def _load_verify_skill() -> str | None:
+    return _read_file(_VERIFY_SKILL_PATH)
+
+
+def _load_example_strategies() -> str:
+    parts: list[str] = []
+    for path in _EXAMPLE_STRATEGIES:
+        content = _read_file(path)
+        if content:
+            parts.append(f"### {path.name}\n\n{content}")
+    return "\n\n".join(parts)
 
 
 def build_system_prompt() -> str:
     template, skill = _load_template_and_skill()
+    examples = _load_example_strategies()
+
     if template and skill:
-        return (
-            "You generate a single Python file for a trading strategy. The runner discovers a class whose name ends with \"Strategy\".\n\n"
-            "## Rules (from indicator-strategy skill)\n\n"
-            "- Output ONLY the raw Python code for one file. Do NOT wrap in markdown code fences (no ```).\n"
-            "- File: scripts/strategies/{name}_strategy.py. Class: PascalCase ending with \"Strategy\".\n"
-            "- Imports: from strategy.base import Strategy; from strategy.context import StrategyContext.\n"
-            "- You MUST copy the helper functions _last_non_nan, register_talib_indicator_all_outputs, crossed_above, crossed_below EXACTLY from the reference template below into your output. Do not simplify or rewrite them.\n"
-            "- Class: inherit Strategy; __init__ must call super().__init__(); set self.params, self.indicator_config, prev_* state, self.is_closing = False.\n"
-            "- initialize(ctx): call register_talib_indicator_all_outputs(ctx, INDICATOR_NAME); reset prev_* and is_closing.\n"
-            "- on_bar(ctx, bar) order: 1) position_size==0 -> is_closing=False 2) get_open_orders() -> return 3) not bar.get(\"is_new_bar\",True) -> return 4) get_indicator, isfinite check 5) prev init 6) closing logic 7) entry logic 8) prev update.\n"
-            "- TA-Lib builtin: INDICATOR_NAME and indicator_config use names like RSI, MACD. Emit only this one file, valid Python only.\n\n"
-            "## Reference template (copy helpers exactly, then implement your strategy class)\n\n"
-            + template
-            + "\n"
-        )
-    return STRATEGY_SYSTEM_PROMPT_FALLBACK
+        sections = [
+            "You generate a single Python file for a trading strategy.",
+            "Output ONLY raw Python code. Do NOT wrap in markdown code fences (no ```).",
+            "",
+            "## Strategy Generation Rules (MUST follow)\n",
+            skill,
+            "",
+            "## Reference template (copy helpers exactly, then implement your strategy class)\n",
+            template,
+        ]
+        if examples:
+            sections.extend([
+                "",
+                "## Example strategies (these are verified and working — follow the same patterns)\n",
+                examples,
+            ])
+        return "\n".join(sections)
+
+    fallback = (
+        "You generate a single Python file for a trading strategy. "
+        "The runner discovers a class whose name ends with \"Strategy\".\n\n"
+        "- Output ONLY raw Python code. No markdown fences.\n"
+        "- Class: PascalCase ending with \"Strategy\", inherit Strategy.\n"
+        "- on_bar order: position reset -> open orders guard -> is_new_bar guard -> indicator -> prev init -> close -> entry -> prev update.\n"
+    )
+    if template:
+        fallback += f"\n## Reference template\n\n{template}\n"
+    if examples:
+        fallback += f"\n## Example strategies\n\n{examples}\n"
+    return fallback
 
 
 def build_intake_system_prompt() -> str:
@@ -113,4 +118,29 @@ def build_intake_system_prompt() -> str:
 
 
 def build_repair_system_prompt() -> str:
-    return REPAIR_SYSTEM_PROMPT
+    template, skill = _load_template_and_skill()
+    verify_skill = _load_verify_skill()
+    examples = _load_example_strategies()
+
+    sections = [
+        "You fix Python trading strategy code so that it can be loaded and backtested.",
+        "",
+        "Requirements:",
+        "- Output ONLY raw Python code for one strategy file. No markdown fences.",
+        "- Preserve the user's original strategy intent as much as possible.",
+        "- Return syntactically valid and executable code only.",
+    ]
+
+    if skill:
+        sections.extend(["", "## Strategy Rules (code must comply)\n", skill])
+
+    if verify_skill:
+        sections.extend(["", "## Verification Checklist (code must pass all checks)\n", verify_skill])
+
+    if template:
+        sections.extend(["", "## Reference template (helpers must be copied exactly)\n", template])
+
+    if examples:
+        sections.extend(["", "## Working examples (follow these patterns)\n", examples])
+
+    return "\n".join(sections)
