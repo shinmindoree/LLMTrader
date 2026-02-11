@@ -1022,16 +1022,6 @@ def create_app() -> FastAPI:
             return
 
         openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
-        intake = await _run_intake(client, prompt, openai_messages)
-        if intake.status != "READY":
-            await _log_once(
-                generation_attempted=False,
-                generation_success=False,
-                error_stage="intake_blocked",
-                error_message=intake.user_message,
-            )
-            yield f"data: {json.dumps({'done': True, 'error': intake.user_message})}\n\n"
-            return
 
         repo_root = _repo_root()
         code_acc: list[str] = []
