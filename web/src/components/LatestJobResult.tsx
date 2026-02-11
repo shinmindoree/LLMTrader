@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { getJob, listJobs } from "@/lib/api";
-import type { Job, JobStatus, JobType } from "@/lib/types";
+import { getJob, listJobs, listTrades } from "@/lib/api";
+import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobProgressGauge } from "@/components/JobProgressGauge";
@@ -33,6 +33,7 @@ type LatestJobResultProps = {
 
 export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultProps) {
   const [job, setJob] = useState<Job | null>(null);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -65,7 +66,27 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
     };
   }, [focusJobId, jobType]);
 
+  useEffect(() => {
+    if (!job || jobType !== "LIVE") return;
+    let active = true;
+
+    const fetchTrades = () => {
+      listTrades(job.job_id).then((data) => {
+        if (active) setTrades(data);
+      }).catch(() => {});
+    };
+
+    fetchTrades();
+    const timer = setInterval(fetchTrades, 3000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [job?.job_id, jobType]);
+
   const finished = useMemo(() => (job ? FINISHED_STATUSES.has(job.status) : false), [job]);
+  const hasLiveTrades = jobType === "LIVE" && trades.length > 0;
 
   return (
     <section className="mt-10">
@@ -108,7 +129,7 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
           </p>
         ) : null}
 
-        {job && !finished ? (
+        {job && !finished && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             Run in progress. Results will appear here once it finishes.
           </div>
@@ -116,12 +137,21 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
 
         {job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
-        {job && finished && job.result && isRecord(job.result) ? (
-          <JobResultSummary type={job.type} result={job.result} />
+        {(job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
+        (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result)))) ? (
+          <JobResultSummary
+            type={job!.type}
+            result={job!.result && isRecord(job!.result) ? job!.result : {}}
+            liveTrades={job!.type === "LIVE" ? trades : undefined}
+          />
         ) : null}
 
         {job && finished && job.type === "BACKTEST" ? (
           <TradeAnalysis job={job} liveTrades={[]} />
+        ) : null}
+
+        {job && job.type === "LIVE" ? (
+          <TradeAnalysis job={job} liveTrades={trades} />
         ) : null}
 
         {job && finished && job.result && !isRecord(job.result) ? (
@@ -130,7 +160,7 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
           </div>
         ) : null}
 
-        {job && finished && !job.result ? (
+        {job && finished && !job.result && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             No result payload found for this run.
           </div>
