@@ -41,7 +41,7 @@ async def run_backtest(
     client = BinanceHTTPClient(
         api_key=settings.binance.api_key or "",
         api_secret=settings.binance.api_secret or "",
-        base_url=settings.binance.base_url,
+        base_url=settings.binance.base_url_backtest,
         timeout=60.0,
     )
 

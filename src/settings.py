@@ -14,6 +14,11 @@ class BinanceSettings(BaseSettings):
         alias="BINANCE_BASE_URL",
         description="테스트넷 기본값. 실서버는 https://fapi.binance.com",
     )
+    base_url_backtest: str = Field(
+        default="",
+        alias="BINANCE_BASE_URL_BACKTESET",
+        description="백테스트 전용 바이낸스 엔드포인트.",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
