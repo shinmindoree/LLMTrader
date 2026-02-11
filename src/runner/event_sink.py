@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from functools import partial
 from typing import Any
 
@@ -10,6 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from control.enums import EventKind
 from control.repo import append_event, insert_trade, upsert_order
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """Decimal 등 JSON 직렬화 불가 타입을 float/str로 변환한다."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
 
 
 @dataclass(frozen=True)
@@ -142,7 +154,7 @@ class DbEventSink:
                 price=float(price) if price is not None else None,
                 executed_qty=float(executed_qty) if executed_qty is not None else None,
                 avg_price=float(avg_price) if avg_price is not None else None,
-                raw_json=data,
+                raw_json=_sanitize_for_json(data),
             )
             await session.commit()
 
@@ -182,7 +194,7 @@ class DbEventSink:
                 price=price,
                 realized_pnl=realized_pnl,
                 commission=commission,
-                raw_json=raw_json,
+                raw_json=_sanitize_for_json(raw_json),
             )
             await session.commit()
 
