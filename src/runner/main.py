@@ -4,7 +4,6 @@ import asyncio
 from pathlib import Path
 
 from control.db import create_async_engine, create_session_maker, init_db
-from runner.account_snapshot import run_account_snapshot_loop
 from runner.worker import RunnerWorker
 from settings import get_settings
 
@@ -25,24 +24,8 @@ async def _amain() -> None:
         poll_interval_ms=settings.runner_poll_interval_ms,
     )
 
-    tasks = [worker.run_forever()]
-
-    binance_key = (settings.binance.api_key or "").strip()
-    binance_secret = (settings.binance.api_secret or "").strip()
-    if binance_key and binance_secret:
-        tasks.append(
-            run_account_snapshot_loop(
-                session_maker=session_maker,
-                api_key=binance_key,
-                api_secret=binance_secret,
-                base_url=(settings.binance.base_url or "").strip(),
-            )
-        )
-        print("[runner] account snapshot loop enabled")
-    else:
-        print("[runner] BINANCE_API_KEY not set, account snapshot loop disabled")
-
-    await asyncio.gather(*tasks)
+    print("[runner] starting worker (user-specific Binance keys mode)")
+    await worker.run_forever()
 
 
 def main() -> None:

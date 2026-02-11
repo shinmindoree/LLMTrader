@@ -53,15 +53,10 @@ async def _resolve_binance_client(
         base_url = profile.binance_base_url or "https://testnet.binancefuture.com"
         return BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
 
-    settings = get_settings()
-    if settings.binance.api_key:
-        return BinanceHTTPClient(
-            api_key=settings.binance.api_key,
-            api_secret=settings.binance.api_secret,
-            base_url=settings.binance.base_url,
-        )
-
-    raise ValueError(f"No Binance API keys configured for user {user_id}")
+    raise ValueError(
+        f"No Binance API keys configured for user {user_id}. "
+        "Please configure your keys in Settings before starting a live trade."
+    )
 
 
 async def run_live(
@@ -75,14 +70,9 @@ async def run_live(
     session_maker: Any = None,
 ) -> dict[str, Any]:
     settings = get_settings()
-    if session_maker and user_id != "legacy":
-        client = await _resolve_binance_client(user_id, session_maker)
-    else:
-        client = BinanceHTTPClient(
-            api_key=settings.binance.api_key,
-            api_secret=settings.binance.api_secret,
-            base_url=settings.binance.base_url,
-        )
+    if not session_maker:
+        raise ValueError("session_maker is required for live trading")
+    client = await _resolve_binance_client(user_id, session_maker)
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
     strategy_file = (repo_root / strategy_path).resolve()

@@ -115,8 +115,11 @@ export function BinanceAccountPanel() {
 
       {snapshot && !hasConfig ? (
         <div className="mt-4 rounded border border-[#efb74d]/40 bg-[#2d2718] px-4 py-3 text-sm text-[#efb74d]">
-          Binance API key is not configured. Set `BINANCE_API_KEY` and `BINANCE_API_SECRET` in
-          your environment.
+          Binance API keys are not configured.{" "}
+          <a className="underline hover:text-[#d1d4dc] transition-colors" href="/settings">
+            Go to Settings
+          </a>{" "}
+          to set up your keys.
         </div>
       ) : null}
 

@@ -520,33 +520,52 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/binance/account/summary",
         response_model=BinanceAccountSummaryResponse,
-        dependencies=[Depends(require_auth)],
     )
     async def binance_account_summary(
+        user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> BinanceAccountSummaryResponse:
-        row = await get_account_snapshot(session, key="binance_futures")
-        if not row:
+        from control.repo import get_user_profile
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
             return BinanceAccountSummaryResponse(
                 configured=False,
                 connected=False,
                 mode="testnet",
                 base_url="",
-                error="No account snapshot available. Runner may not be running or BINANCE_API_KEY is not configured on the runner.",
+                error="Binance API keys are not configured. Go to Settings to set up your keys.",
             )
 
-        data = row.data_json or {}
+        from common.crypto import get_crypto_service
+        try:
+            crypto = get_crypto_service()
+            api_key = crypto.decrypt(profile.binance_api_key_enc)
+            api_secret = crypto.decrypt(profile.binance_api_secret_enc)
+        except Exception as exc:  # noqa: BLE001
+            return BinanceAccountSummaryResponse(
+                configured=True,
+                connected=False,
+                mode="testnet",
+                base_url=profile.binance_base_url,
+                error=f"Failed to decrypt keys: {type(exc).__name__}",
+            )
+
+        base_url = profile.binance_base_url or "https://testnet.binancefuture.com"
+
+        from runner.account_snapshot import _fetch_snapshot
+        data = await _fetch_snapshot(api_key=api_key, api_secret=api_secret, base_url=base_url)
+
         assets = [BinanceAssetBalance(**a) for a in data.get("assets", [])]
         positions = [BinancePositionSummary(**p) for p in data.get("positions", [])]
 
         update_time_raw = data.get("update_time")
+        update_time = datetime.now()
         if isinstance(update_time_raw, str):
             try:
                 update_time = datetime.fromisoformat(update_time_raw)
             except (ValueError, TypeError):
-                update_time = row.updated_at
-        else:
-            update_time = row.updated_at
+                pass
 
         return BinanceAccountSummaryResponse(
             configured=data.get("configured", False),

@@ -38,10 +38,11 @@ async def run_backtest(
     sink.emit(kind=EventKind.LOG, message="BACKTEST_START", payload={"symbol": symbol, "interval": interval})
 
     settings = get_settings()
+    backtest_url = settings.binance.base_url_backtest or "https://fapi.binance.com"
     client = BinanceHTTPClient(
-        api_key=settings.binance.api_key or "",
-        api_secret=settings.binance.api_secret or "",
-        base_url=settings.binance.base_url_backtest,
+        api_key="",
+        api_secret="",
+        base_url=backtest_url,
         timeout=60.0,
     )
 

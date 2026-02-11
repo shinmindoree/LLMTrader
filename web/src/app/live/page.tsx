@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
-import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
+import { deleteAllJobs, deleteJob, getBinanceKeysStatus, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
+import type { BinanceKeysStatus, Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { jobDetailPath } from "@/lib/routes";
@@ -27,6 +27,7 @@ export default function LiveJobsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [latestJob, setLatestJob] = useState<Job | null>(null);
+  const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
 
   const refresh = async () => {
     try {
@@ -40,6 +41,7 @@ export default function LiveJobsPage() {
 
   useEffect(() => {
     refresh();
+    getBinanceKeysStatus().then(setKeysStatus).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -127,8 +129,18 @@ export default function LiveJobsPage() {
     }
   };
 
+  const keysNotConfigured = keysStatus !== null && !keysStatus.configured;
+
   return (
     <main className="w-full px-6 py-10">
+      {keysNotConfigured && (
+        <div className="mb-4 rounded-lg border border-[#efb74d]/40 bg-[#2d2718] px-4 py-3 text-sm text-[#efb74d]">
+          Binance API keys are not configured. Live trading requires your own API keys.{" "}
+          <a className="underline hover:text-[#d1d4dc] transition-colors" href="/settings">
+            Go to Settings
+          </a>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-[#d1d4dc]">Live</h1>
