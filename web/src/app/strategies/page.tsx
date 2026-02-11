@@ -947,6 +947,13 @@ export default function StrategiesPage() {
       messagesToSend?: { role: string; content: string }[],
       intakeSpec?: StrategyIntakeResponse["normalized_spec"] | null,
     ) => {
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, status: "streaming", statusText: "코드 생성 중..." }
+            : m,
+        ),
+      );
       return generateStrategyStream(
         trimmed,
         {

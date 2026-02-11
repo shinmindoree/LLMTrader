@@ -234,6 +234,9 @@ export async function generateStrategyStream(
   strategyName?: string,
   messages?: { role: string; content: string }[],
 ): Promise<void> {
+  const FIRST_EVENT_TIMEOUT_MS = 45_000;
+  const EVENT_GAP_TIMEOUT_MS = 120_000;
+
   const body: Record<string, unknown> = {
     user_prompt: userPrompt,
     strategy_name: strategyName?.trim() ? strategyName.trim() : undefined,
@@ -247,40 +250,97 @@ export async function generateStrategyStream(
   if (chatUserId) {
     headers.set("x-chat-user-id", chatUserId);
   }
-  const res = await fetch("/api/backend/api/strategies/generate/stream", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    cache: "no-store",
-  });
+  const controller = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let settled = false;
+  let sawEvent = false;
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearStallTimer = () => {
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  };
+
+  const doneWith = (payload: {
+    code?: string;
+    summary?: string | null;
+    backtest_ok?: boolean;
+    repaired?: boolean;
+    repair_attempts?: number;
+    error?: string;
+  }) => {
+    if (settled) return;
+    settled = true;
+    clearStallTimer();
+    callbacks.onDone(payload);
+  };
+
+  const timeoutMessage = () =>
+    sawEvent
+      ? "스트림 응답이 중단되었습니다. 잠시 후 다시 시도해주세요."
+      : "생성 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.";
+
+  const armStallTimer = (ms: number) => {
+    clearStallTimer();
+    stallTimer = setTimeout(() => {
+      controller.abort();
+      doneWith({ error: timeoutMessage() });
+    }, ms);
+  };
+
+  armStallTimer(FIRST_EVENT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch("/api/backend/api/strategies/generate/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (e) {
+    doneWith({ error: controller.signal.aborted ? timeoutMessage() : String(e) });
+    return;
+  }
+
   if (!res.ok) {
-    const text = await res.text();
-    callbacks.onDone({ error: `${res.status} ${res.statusText}: ${text}` });
+    const text = await res.text().catch(() => "");
+    doneWith({ error: `${res.status} ${res.statusText}: ${text}` });
     return;
   }
-  const reader = res.body?.getReader();
+  reader = res.body?.getReader() ?? null;
   if (!reader) {
-    callbacks.onDone({ error: "No response body" });
+    doneWith({ error: "No response body" });
     return;
   }
+
   const decoder = new TextDecoder();
   let buffer = "";
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      armStallTimer(EVENT_GAP_TIMEOUT_MS);
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? "";
+      for (const event of events) {
+        const dataLines = event
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart());
+        if (dataLines.length === 0) continue;
+        sawEvent = true;
+        armStallTimer(EVENT_GAP_TIMEOUT_MS);
         try {
-          const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
+          const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
           if (typeof data.token === "string") {
             callbacks.onToken(data.token);
           }
           if (data.done === true) {
-            callbacks.onDone({
+            doneWith({
               code: typeof data.code === "string" ? data.code : undefined,
               summary:
                 data.summary !== undefined && data.summary !== null
@@ -295,16 +355,19 @@ export async function generateStrategyStream(
             return;
           }
           if (typeof data.error === "string") {
-            callbacks.onDone({ error: data.error });
+            doneWith({ error: data.error });
             return;
           }
         } catch {
-          // skip malformed line
+          // skip malformed event payload
         }
       }
     }
-    callbacks.onDone({ error: "Stream ended without done" });
+    doneWith({ error: "Stream ended without done" });
+  } catch (e) {
+    doneWith({ error: controller.signal.aborted ? timeoutMessage() : String(e) });
   } finally {
+    clearStallTimer();
     reader.releaseLock();
   }
 }
