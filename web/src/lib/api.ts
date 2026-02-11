@@ -1,5 +1,8 @@
 import type {
+  BillingStatus,
   BinanceAccountSummary,
+  BinanceKeysStatus,
+  CheckoutResponse,
   DeleteAllResponse,
   DeleteResponse,
   Job,
@@ -7,6 +10,7 @@ import type {
   JobPolicyCheckResponse,
   JobType,
   Order,
+  PortalResponse,
   StopAllResponse,
   StrategyCapabilitiesResponse,
   StrategyContentResponse,
@@ -18,6 +22,7 @@ import type {
   StrategyChatSessionRecord,
   StrategySyntaxCheckResponse,
   Trade,
+  UserProfile,
 } from "@/lib/types";
 
 const CHAT_USER_ID_STORAGE_KEY = "llmtrader.chat_user_id";
@@ -369,4 +374,42 @@ export async function preflightJob(body: {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export async function getUserProfile(): Promise<UserProfile> {
+  return json<UserProfile>("/api/backend/api/me");
+}
+
+export async function getBinanceKeysStatus(): Promise<BinanceKeysStatus> {
+  return json<BinanceKeysStatus>("/api/backend/api/me/binance-keys");
+}
+
+export async function setBinanceKeys(body: {
+  api_key: string;
+  api_secret: string;
+  base_url?: string;
+}): Promise<{ ok: boolean; api_key_masked: string; base_url: string }> {
+  return json("/api/backend/api/me/binance-keys", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteBinanceKeys(): Promise<{ ok: boolean }> {
+  return json("/api/backend/api/me/binance-keys", { method: "DELETE" });
+}
+
+export async function getBillingStatus(): Promise<BillingStatus> {
+  return json<BillingStatus>("/api/backend/api/billing/status");
+}
+
+export async function createCheckoutSession(plan: string): Promise<CheckoutResponse> {
+  return json<CheckoutResponse>("/api/backend/api/billing/checkout", {
+    method: "POST",
+    body: JSON.stringify({ plan }),
+  });
+}
+
+export async function createBillingPortalSession(): Promise<PortalResponse> {
+  return json<PortalResponse>("/api/backend/api/billing/portal", { method: "POST" });
 }

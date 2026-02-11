@@ -169,6 +169,47 @@ export type Trade = {
   raw: Record<string, unknown> | null;
 };
 
+export type UserProfile = {
+  user_id: string;
+  email: string;
+  display_name: string;
+  plan: string;
+  has_binance_keys: boolean;
+  binance_base_url: string | null;
+  plan_expires_at: string | null;
+  created_at: string;
+};
+
+export type BinanceKeysStatus = {
+  configured: boolean;
+  api_key_masked?: string;
+  base_url?: string;
+};
+
+export type BillingStatus = {
+  plan: string;
+  limits: {
+    max_live_jobs: number;
+    max_backtest_per_month: number;
+    max_llm_generate_per_month: number;
+    portfolio_mode: boolean;
+  };
+  usage: {
+    backtest_this_month: number;
+    llm_generate_this_month: number;
+  };
+  plan_expires_at: string | null;
+};
+
+export type CheckoutResponse = {
+  checkout_url: string;
+  session_id: string;
+};
+
+export type PortalResponse = {
+  portal_url: string;
+};
+
 export type BinanceAssetBalance = {
   asset: string;
   wallet_balance: number;

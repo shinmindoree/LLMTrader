@@ -3,19 +3,23 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { listJobs } from "@/lib/api";
+import { listJobs, getBillingStatus, getBinanceKeysStatus } from "@/lib/api";
 import { BinanceAccountPanel } from "@/components/BinanceAccountPanel";
-import type { Job } from "@/lib/types";
+import type { Job, BillingStatus, BinanceKeysStatus } from "@/lib/types";
 
 export default function Home() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [billing, setBilling] = useState<BillingStatus | null>(null);
+  const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
 
   useEffect(() => {
     listJobs()
       .then(setJobs)
       .catch(() => {})
       .finally(() => setLoading(false));
+    getBillingStatus().then(setBilling).catch(() => {});
+    getBinanceKeysStatus().then(setKeysStatus).catch(() => {});
   }, []);
 
   const stats = {
@@ -55,6 +59,63 @@ export default function Home() {
             {loading ? "..." : stats.failed}
           </div>
         </div>
+      </div>
+
+      {/* Plan & Setup Status */}
+      <div className="mt-8 grid gap-4 sm:grid-cols-2">
+        {billing && (
+          <Link
+            className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] transition-colors"
+            href="/billing"
+          >
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-[#868993]">Current Plan</div>
+              <span className={`text-xs font-semibold uppercase ${
+                billing.plan === "enterprise" ? "text-[#ff9800]" :
+                billing.plan === "pro" ? "text-[#2962ff]" :
+                "text-[#868993]"
+              }`}>
+                {billing.plan}
+              </span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <span className="text-[#868993]">Backtests: </span>
+                <span className="text-[#d1d4dc]">{billing.usage.backtest_this_month}/{billing.limits.max_backtest_per_month >= 9999 ? "∞" : billing.limits.max_backtest_per_month}</span>
+              </div>
+              <div>
+                <span className="text-[#868993]">LLM Gen: </span>
+                <span className="text-[#d1d4dc]">{billing.usage.llm_generate_this_month}/{billing.limits.max_llm_generate_per_month >= 9999 ? "∞" : billing.limits.max_llm_generate_per_month}</span>
+              </div>
+            </div>
+          </Link>
+        )}
+        <Link
+          className={`rounded-lg border bg-[#1e222d] p-5 transition-colors ${
+            keysStatus?.configured
+              ? "border-[#2a2e39] hover:border-[#26a69a]"
+              : "border-[#ef5350]/30 hover:border-[#ef5350]"
+          }`}
+          href="/settings"
+        >
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-[#868993]">Binance API Keys</div>
+            {keysStatus?.configured ? (
+              <span className="flex items-center gap-1 text-xs text-[#26a69a]">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#26a69a]" />
+                Connected
+              </span>
+            ) : (
+              <span className="text-xs text-[#ef5350]">Not configured</span>
+            )}
+          </div>
+          <div className="mt-2 text-sm text-[#868993]">
+            {keysStatus?.configured
+              ? `Key: ${keysStatus.api_key_masked || "****"}`
+              : "Set up your Binance API keys to start trading"
+            }
+          </div>
+        </Link>
       </div>
 
       <BinanceAccountPanel />
