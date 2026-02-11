@@ -1573,7 +1573,7 @@ def create_app() -> FastAPI:
         from binance.client import BinanceHTTPClient
         test_client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0)
         try:
-            account_info = await test_client.get_account_info()
+            account_info = await test_client.fetch_account_info()
             if not account_info:
                 raise HTTPException(status_code=400, detail="Binance API connection test failed: empty response")
         except HTTPException:
