@@ -9,46 +9,207 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.enums import EventKind, JobStatus, JobType
-from control.models import AccountSnapshot, Job, JobEvent, Order, StrategyChatSession, StrategyQualityLog, Trade
+from control.models import (
+    AccountSnapshot,
+    Job,
+    JobEvent,
+    Order,
+    StrategyChatSession,
+    StrategyQualityLog,
+    Trade,
+    UsageRecord,
+    UserProfile,
+)
 
 ACTIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.STOP_REQUESTED}
 FINISHED_STATUSES = {JobStatus.SUCCEEDED, JobStatus.STOPPED, JobStatus.FAILED}
 ACTIVE_STATUS_VALUES = {str(s) for s in ACTIVE_STATUSES}
 
 
+# ---------------------------------------------------------------------------
+# UserProfile
+# ---------------------------------------------------------------------------
+
+
+async def get_user_profile(session: AsyncSession, *, user_id: str) -> UserProfile | None:
+    result = await session.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def upsert_user_profile(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    email: str = "",
+    display_name: str = "",
+) -> UserProfile:
+    now = datetime.now()
+    stmt = (
+        insert(UserProfile)
+        .values(user_id=user_id, email=email, display_name=display_name, created_at=now, updated_at=now)
+        .on_conflict_do_update(
+            index_elements=[UserProfile.user_id],
+            set_={"email": email, "updated_at": now},
+        )
+    )
+    await session.execute(stmt)
+    await session.flush()
+    result = await session.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+    return result.scalar_one()
+
+
+async def update_user_plan(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    plan: str,
+    stripe_customer_id: str | None = None,
+    stripe_subscription_id: str | None = None,
+    plan_expires_at: datetime | None = None,
+) -> None:
+    values: dict[str, Any] = {"plan": plan, "updated_at": datetime.now()}
+    if stripe_customer_id is not None:
+        values["stripe_customer_id"] = stripe_customer_id
+    if stripe_subscription_id is not None:
+        values["stripe_subscription_id"] = stripe_subscription_id
+    if plan_expires_at is not None:
+        values["plan_expires_at"] = plan_expires_at
+    await session.execute(update(UserProfile).where(UserProfile.user_id == user_id).values(**values))
+
+
+async def update_user_binance_keys(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    api_key_enc: str | None,
+    api_secret_enc: str | None,
+    base_url: str,
+) -> None:
+    await session.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id)
+        .values(
+            binance_api_key_enc=api_key_enc,
+            binance_api_secret_enc=api_secret_enc,
+            binance_base_url=base_url,
+            updated_at=datetime.now(),
+        )
+    )
+
+
+async def get_user_by_stripe_customer_id(
+    session: AsyncSession, *, stripe_customer_id: str
+) -> UserProfile | None:
+    result = await session.execute(
+        select(UserProfile).where(UserProfile.stripe_customer_id == stripe_customer_id)
+    )
+    return result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# UsageRecord
+# ---------------------------------------------------------------------------
+
+
+async def increment_usage(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    action: str,
+    period_key: str,
+) -> int:
+    stmt = (
+        insert(UsageRecord)
+        .values(user_id=user_id, action=action, period_key=period_key, count=1)
+        .on_conflict_do_update(
+            constraint="uq_usage_user_action_period",
+            set_={"count": UsageRecord.count + 1, "ts": datetime.now()},
+        )
+        .returning(UsageRecord.count)
+    )
+    result = await session.execute(stmt)
+    return int(result.scalar_one())
+
+
+async def get_usage_count(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    action: str,
+    period_key: str,
+) -> int:
+    result = await session.execute(
+        select(UsageRecord.count)
+        .where(UsageRecord.user_id == user_id)
+        .where(UsageRecord.action == action)
+        .where(UsageRecord.period_key == period_key)
+    )
+    return int(result.scalar_one_or_none() or 0)
+
+
+# ---------------------------------------------------------------------------
+# Job
+# ---------------------------------------------------------------------------
+
+
 async def create_job(
     session: AsyncSession,
     *,
+    user_id: str,
     job_type: JobType,
     strategy_path: str,
     config_json: dict[str, Any],
 ) -> Job:
-    job = Job(type=job_type, status=JobStatus.PENDING, strategy_path=strategy_path, config_json=config_json)
+    job = Job(
+        user_id=user_id,
+        type=job_type,
+        status=JobStatus.PENDING,
+        strategy_path=strategy_path,
+        config_json=config_json,
+    )
     session.add(job)
     await session.flush()
     return job
 
 
-async def get_job(session: AsyncSession, job_id: uuid.UUID) -> Job | None:
-    result = await session.execute(select(Job).where(Job.job_id == job_id))
+async def get_job(session: AsyncSession, job_id: uuid.UUID, *, user_id: str | None = None) -> Job | None:
+    stmt = select(Job).where(Job.job_id == job_id)
+    if user_id is not None:
+        stmt = stmt.where(Job.user_id == user_id)
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
 async def list_jobs(
     session: AsyncSession,
     *,
+    user_id: str,
     limit: int = 50,
     job_type: JobType | None = None,
 ) -> list[Job]:
-    stmt: Select[tuple[Job]] = select(Job)
+    stmt: Select[tuple[Job]] = select(Job).where(Job.user_id == user_id)
     if job_type is not None:
         stmt = stmt.where(Job.type == job_type)
     result = await session.execute(stmt.order_by(Job.created_at.desc()).limit(limit))
     return list(result.scalars().all())
 
 
-async def delete_job(session: AsyncSession, job_id: uuid.UUID) -> tuple[bool, JobStatus | None]:
-    job = await get_job(session, job_id)
+async def count_active_jobs(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    job_type: JobType | None = None,
+) -> int:
+    stmt = select(func.count()).select_from(Job).where(Job.user_id == user_id).where(Job.status.in_(ACTIVE_STATUSES))
+    if job_type is not None:
+        stmt = stmt.where(Job.type == job_type)
+    return int((await session.execute(stmt)).scalar_one() or 0)
+
+
+async def delete_job(
+    session: AsyncSession, job_id: uuid.UUID, *, user_id: str
+) -> tuple[bool, JobStatus | None]:
+    job = await get_job(session, job_id, user_id=user_id)
     if not job:
         return False, None
     status_value = str(job.status)
@@ -61,14 +222,16 @@ async def delete_job(session: AsyncSession, job_id: uuid.UUID) -> tuple[bool, Jo
 async def delete_jobs(
     session: AsyncSession,
     *,
+    user_id: str,
     job_type: JobType | None = None,
 ) -> dict[str, int]:
-    active_stmt = select(func.count()).select_from(Job).where(Job.status.in_(ACTIVE_STATUSES))
+    base = select(func.count()).select_from(Job).where(Job.user_id == user_id)
+    active_stmt = base.where(Job.status.in_(ACTIVE_STATUSES))
     if job_type is not None:
         active_stmt = active_stmt.where(Job.type == job_type)
     active_count = int((await session.execute(active_stmt)).scalar_one() or 0)
 
-    delete_stmt = delete(Job).where(Job.status.in_(FINISHED_STATUSES))
+    delete_stmt = delete(Job).where(Job.user_id == user_id).where(Job.status.in_(FINISHED_STATUSES))
     if job_type is not None:
         delete_stmt = delete_stmt.where(Job.type == job_type)
     res = await session.execute(delete_stmt)
@@ -79,11 +242,6 @@ async def delete_jobs(
 
 
 async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner_restart") -> dict[str, int]:
-    """Finalize jobs that were left RUNNING/STOP_REQUESTED but have no active runner.
-
-    This is primarily used on runner startup to clean up stale rows after crashes/restarts.
-    LIVE jobs are re-queued so they can be resumed by the runner loop.
-    """
     now = datetime.now()
 
     running_rows = list(
@@ -123,13 +281,7 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
         res_live_requeued = await session.execute(
             update(Job)
             .where(Job.job_id.in_(running_live_ids))
-            .values(
-                status=JobStatus.PENDING,
-                started_at=None,
-                ended_at=None,
-                updated_at=now,
-                error=None,
-            )
+            .values(status=JobStatus.PENDING, started_at=None, ended_at=None, updated_at=now, error=None)
         )
 
     res_stop_requested = None
@@ -140,30 +292,15 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
             .values(status=JobStatus.STOPPED, ended_at=now, updated_at=now)
         )
 
-    for job_id in running_non_live_ids:
-        await append_event(
-            session,
-            job_id=job_id,
-            kind=EventKind.STATUS,
-            message="JOB_FAILED",
-            payload_json={"error": f"Orphaned job ({reason})"},
-        )
-    for job_id in running_live_ids:
-        await append_event(
-            session,
-            job_id=job_id,
-            kind=EventKind.STATUS,
-            message="JOB_REQUEUED",
-            payload_json={"reason": reason, "resume": True},
-        )
-    for job_id in stop_requested_ids:
-        await append_event(
-            session,
-            job_id=job_id,
-            kind=EventKind.STATUS,
-            message="JOB_STOPPED",
-            payload_json={"reason": reason},
-        )
+    for jid in running_non_live_ids:
+        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_FAILED",
+                           payload_json={"error": f"Orphaned job ({reason})"})
+    for jid in running_live_ids:
+        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_REQUEUED",
+                           payload_json={"reason": reason, "resume": True})
+    for jid in stop_requested_ids:
+        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_STOPPED",
+                           payload_json={"reason": reason})
 
     return {
         "finalized_failed": int(res_running.rowcount or 0) if res_running is not None else 0,
@@ -208,29 +345,17 @@ async def set_job_finished(
     await session.execute(
         update(Job)
         .where(Job.job_id == job_id)
-        .values(
-            status=status,
-            result_json=result_json,
-            error=error,
-            ended_at=datetime.now(),
-            updated_at=datetime.now(),
-        )
+        .values(status=status, result_json=result_json, error=error, ended_at=datetime.now(), updated_at=datetime.now())
     )
 
 
-async def request_stop(session: AsyncSession, job_id: uuid.UUID) -> JobStatus | None:
-    """Request a job stop.
-
-    Semantics:
-    - PENDING and never started => STOPPED immediately (acts like cancel)
-    - RUNNING => STOP_REQUESTED (runner will stop gracefully)
-    """
+async def request_stop(session: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> JobStatus | None:
     now = datetime.now()
 
-    # Cancel queued job immediately.
     res_queued = await session.execute(
         update(Job)
         .where(Job.job_id == job_id)
+        .where(Job.user_id == user_id)
         .where(Job.started_at.is_(None))
         .where(Job.status.in_([JobStatus.PENDING, JobStatus.STOP_REQUESTED]))
         .values(status=JobStatus.STOPPED, ended_at=now, updated_at=now)
@@ -238,10 +363,10 @@ async def request_stop(session: AsyncSession, job_id: uuid.UUID) -> JobStatus | 
     if res_queued.rowcount:
         return JobStatus.STOPPED
 
-    # Request stop for running job.
     res_running = await session.execute(
         update(Job)
         .where(Job.job_id == job_id)
+        .where(Job.user_id == user_id)
         .where(Job.started_at.is_not(None))
         .where(Job.status.in_([JobStatus.RUNNING, JobStatus.STOP_REQUESTED]))
         .values(status=JobStatus.STOP_REQUESTED, updated_at=now)
@@ -252,17 +377,14 @@ async def request_stop(session: AsyncSession, job_id: uuid.UUID) -> JobStatus | 
     return None
 
 
-async def stop_all_jobs(session: AsyncSession, *, job_type: JobType | None = None) -> dict[str, int]:
-    """Stop all active jobs.
-
-    Semantics (MVP-safe):
-    - RUNNING (or STOP_REQUESTED but started) => STOP_REQUESTED (runner will stop gracefully)
-    - PENDING/STOP_REQUESTED but never started => STOPPED immediately (won't be picked up by runner)
-    """
+async def stop_all_jobs(
+    session: AsyncSession, *, user_id: str, job_type: JobType | None = None
+) -> dict[str, int]:
     now = datetime.now()
 
     queued_stmt = (
         select(Job.job_id)
+        .where(Job.user_id == user_id)
         .where(Job.started_at.is_(None))
         .where(Job.status.in_([JobStatus.PENDING, JobStatus.STOP_REQUESTED]))
     )
@@ -272,6 +394,7 @@ async def stop_all_jobs(session: AsyncSession, *, job_type: JobType | None = Non
 
     running_stmt = (
         select(Job.job_id)
+        .where(Job.user_id == user_id)
         .where(Job.started_at.is_not(None))
         .where(Job.status.in_([JobStatus.RUNNING, JobStatus.STOP_REQUESTED]))
     )
@@ -279,21 +402,19 @@ async def stop_all_jobs(session: AsyncSession, *, job_type: JobType | None = Non
         running_stmt = running_stmt.where(Job.type == job_type)
     running_ids = list((await session.execute(running_stmt)).scalars().all())
 
-    # Stop queued jobs immediately so they don't block new runs.
     queued_update = (
         update(Job)
+        .where(Job.user_id == user_id)
         .where(Job.started_at.is_(None))
         .where(Job.status.in_([JobStatus.PENDING, JobStatus.STOP_REQUESTED]))
     )
     if job_type is not None:
         queued_update = queued_update.where(Job.type == job_type)
-    res_queued = await session.execute(
-        queued_update.values(status=JobStatus.STOPPED, ended_at=now, updated_at=now)
-    )
+    res_queued = await session.execute(queued_update.values(status=JobStatus.STOPPED, ended_at=now, updated_at=now))
 
-    # Request stop for running jobs.
     running_update = (
         update(Job)
+        .where(Job.user_id == user_id)
         .where(Job.started_at.is_not(None))
         .where(Job.status.in_([JobStatus.RUNNING, JobStatus.STOP_REQUESTED]))
     )
@@ -301,28 +422,22 @@ async def stop_all_jobs(session: AsyncSession, *, job_type: JobType | None = Non
         running_update = running_update.where(Job.type == job_type)
     res_running = await session.execute(running_update.values(status=JobStatus.STOP_REQUESTED, updated_at=now))
 
-    for job_id in queued_ids:
-        await append_event(
-            session,
-            job_id=job_id,
-            kind=EventKind.STATUS,
-            message="JOB_STOPPED",
-            payload_json={"reason": "stop_all"},
-        )
-
-    for job_id in running_ids:
-        await append_event(
-            session,
-            job_id=job_id,
-            kind=EventKind.STATUS,
-            message="STOP_REQUESTED",
-            payload_json={"reason": "stop_all"},
-        )
+    for jid in queued_ids:
+        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_STOPPED",
+                           payload_json={"reason": "stop_all"})
+    for jid in running_ids:
+        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="STOP_REQUESTED",
+                           payload_json={"reason": "stop_all"})
 
     return {
         "stopped_queued": int(res_queued.rowcount or 0),
         "stop_requested_running": int(res_running.rowcount or 0),
     }
+
+
+# ---------------------------------------------------------------------------
+# Events / Orders / Trades
+# ---------------------------------------------------------------------------
 
 
 async def append_event(
@@ -358,6 +473,86 @@ async def list_events(
     return list(result.scalars().all())
 
 
+async def upsert_order(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    symbol: str,
+    order_id: int,
+    side: str,
+    order_type: str,
+    status: str,
+    quantity: float | None = None,
+    price: float | None = None,
+    executed_qty: float | None = None,
+    avg_price: float | None = None,
+    raw_json: dict[str, Any] | None = None,
+) -> None:
+    stmt = (
+        insert(Order)
+        .values(
+            job_id=job_id, symbol=symbol, order_id=order_id, side=side,
+            order_type=order_type, status=status, quantity=quantity,
+            price=price, executed_qty=executed_qty, avg_price=avg_price,
+            raw_json=raw_json,
+        )
+        .on_conflict_do_update(
+            index_elements=[Order.job_id, Order.order_id],
+            set_={
+                "symbol": symbol, "side": side, "order_type": order_type,
+                "status": status, "quantity": quantity, "price": price,
+                "executed_qty": executed_qty, "avg_price": avg_price,
+                "raw_json": raw_json, "ts": datetime.now(),
+            },
+        )
+    )
+    await session.execute(stmt)
+
+
+async def insert_trade(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    symbol: str,
+    trade_id: int,
+    order_id: int | None,
+    quantity: float | None,
+    price: float | None,
+    realized_pnl: float | None,
+    commission: float | None,
+    raw_json: dict[str, Any] | None = None,
+) -> None:
+    stmt = (
+        insert(Trade)
+        .values(
+            job_id=job_id, symbol=symbol, trade_id=trade_id, order_id=order_id,
+            quantity=quantity, price=price, realized_pnl=realized_pnl,
+            commission=commission, raw_json=raw_json,
+        )
+        .on_conflict_do_nothing(index_elements=[Trade.job_id, Trade.trade_id])
+    )
+    await session.execute(stmt)
+
+
+async def list_orders(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 200) -> list[Order]:
+    result = await session.execute(
+        select(Order).where(Order.job_id == job_id).order_by(Order.ts.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def list_trades(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 200) -> list[Trade]:
+    result = await session.execute(
+        select(Trade).where(Trade.job_id == job_id).order_by(Trade.ts.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Strategy quality logs
+# ---------------------------------------------------------------------------
+
+
 async def create_strategy_quality_log(
     session: AsyncSession,
     *,
@@ -383,26 +578,16 @@ async def create_strategy_quality_log(
     meta_json: dict[str, Any] | None = None,
 ) -> StrategyQualityLog:
     row = StrategyQualityLog(
-        request_id=request_id,
-        pipeline_version=pipeline_version,
-        endpoint=endpoint,
-        user_prompt_len=max(0, int(user_prompt_len)),
-        message_count=max(0, int(message_count)),
-        intent=intent,
-        status=status,
-        missing_fields=missing_fields,
+        request_id=request_id, pipeline_version=pipeline_version, endpoint=endpoint,
+        user_prompt_len=max(0, int(user_prompt_len)), message_count=max(0, int(message_count)),
+        intent=intent, status=status, missing_fields=missing_fields,
         unsupported_requirements=unsupported_requirements,
         development_requirements=development_requirements,
-        generation_attempted=generation_attempted,
-        generation_success=generation_success,
-        verification_passed=verification_passed,
-        repaired=repaired,
-        repair_attempts=max(0, int(repair_attempts)),
-        model_used=model_used,
-        error_stage=error_stage,
-        error_message=error_message,
-        duration_ms=max(0, int(duration_ms)),
-        meta_json=meta_json,
+        generation_attempted=generation_attempted, generation_success=generation_success,
+        verification_passed=verification_passed, repaired=repaired,
+        repair_attempts=max(0, int(repair_attempts)), model_used=model_used,
+        error_stage=error_stage, error_message=error_message,
+        duration_ms=max(0, int(duration_ms)), meta_json=meta_json,
     )
     session.add(row)
     await session.flush()
@@ -423,98 +608,9 @@ async def list_strategy_quality_logs(
     return list(result.scalars().all())
 
 
-async def upsert_order(
-    session: AsyncSession,
-    *,
-    job_id: uuid.UUID,
-    symbol: str,
-    order_id: int,
-    side: str,
-    order_type: str,
-    status: str,
-    quantity: float | None = None,
-    price: float | None = None,
-    executed_qty: float | None = None,
-    avg_price: float | None = None,
-    raw_json: dict[str, Any] | None = None,
-) -> None:
-    stmt = (
-        insert(Order)
-        .values(
-            job_id=job_id,
-            symbol=symbol,
-            order_id=order_id,
-            side=side,
-            order_type=order_type,
-            status=status,
-            quantity=quantity,
-            price=price,
-            executed_qty=executed_qty,
-            avg_price=avg_price,
-            raw_json=raw_json,
-        )
-        .on_conflict_do_update(
-            index_elements=[Order.job_id, Order.order_id],
-            set_={
-                "symbol": symbol,
-                "side": side,
-                "order_type": order_type,
-                "status": status,
-                "quantity": quantity,
-                "price": price,
-                "executed_qty": executed_qty,
-                "avg_price": avg_price,
-                "raw_json": raw_json,
-                "ts": datetime.now(),
-            },
-        )
-    )
-    await session.execute(stmt)
-
-
-async def insert_trade(
-    session: AsyncSession,
-    *,
-    job_id: uuid.UUID,
-    symbol: str,
-    trade_id: int,
-    order_id: int | None,
-    quantity: float | None,
-    price: float | None,
-    realized_pnl: float | None,
-    commission: float | None,
-    raw_json: dict[str, Any] | None = None,
-) -> None:
-    stmt = (
-        insert(Trade)
-        .values(
-            job_id=job_id,
-            symbol=symbol,
-            trade_id=trade_id,
-            order_id=order_id,
-            quantity=quantity,
-            price=price,
-            realized_pnl=realized_pnl,
-            commission=commission,
-            raw_json=raw_json,
-        )
-        .on_conflict_do_nothing(index_elements=[Trade.job_id, Trade.trade_id])
-    )
-    await session.execute(stmt)
-
-
-async def list_orders(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 200) -> list[Order]:
-    result = await session.execute(
-        select(Order).where(Order.job_id == job_id).order_by(Order.ts.desc()).limit(limit)
-    )
-    return list(result.scalars().all())
-
-
-async def list_trades(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 200) -> list[Trade]:
-    result = await session.execute(
-        select(Trade).where(Trade.job_id == job_id).order_by(Trade.ts.desc()).limit(limit)
-    )
-    return list(result.scalars().all())
+# ---------------------------------------------------------------------------
+# Strategy chat sessions
+# ---------------------------------------------------------------------------
 
 
 async def list_strategy_chat_sessions(
@@ -543,21 +639,11 @@ async def upsert_strategy_chat_session(
     now = datetime.now()
     stmt = (
         insert(StrategyChatSession)
-        .values(
-            user_id=user_id,
-            session_id=session_id,
-            title=title,
-            data_json=data_json,
-            created_at=now,
-            updated_at=now,
-        )
+        .values(user_id=user_id, session_id=session_id, title=title,
+                data_json=data_json, created_at=now, updated_at=now)
         .on_conflict_do_update(
             index_elements=[StrategyChatSession.user_id, StrategyChatSession.session_id],
-            set_={
-                "title": title,
-                "data_json": data_json,
-                "updated_at": now,
-            },
+            set_={"title": title, "data_json": data_json, "updated_at": now},
         )
         .returning(StrategyChatSession)
     )
@@ -588,6 +674,11 @@ async def delete_strategy_chat_session(
         .where(StrategyChatSession.session_id == session_id)
     )
     return bool(res.rowcount)
+
+
+# ---------------------------------------------------------------------------
+# Account snapshots
+# ---------------------------------------------------------------------------
 
 
 async def upsert_account_snapshot(

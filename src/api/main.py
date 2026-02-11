@@ -46,7 +46,7 @@ from control.repo import (
 from settings import get_settings
 from llm.client import LLMClient
 
-from api.deps import AuthenticatedUser, require_admin
+from api.deps import AuthenticatedUser, require_auth, set_session_maker
 from api.job_policy import evaluate_job_policy
 from api.schemas import (
     HealthResponse,
@@ -121,7 +121,7 @@ def _normalize_chat_user_id(raw: str | None) -> str:
     return cleaned or "default"
 
 
-def _chat_user_id_from_auth(user: AuthenticatedUser = Depends(require_admin)) -> str:
+def _chat_user_id_from_auth(user: AuthenticatedUser = Depends(require_auth)) -> str:
     return _normalize_chat_user_id(user.user_id)
 
 
@@ -440,6 +440,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    set_session_maker(session_maker)
+
     @app.on_event("startup")
     async def _startup() -> None:
         await init_db(engine)
@@ -518,7 +520,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/binance/account/summary",
         response_model=BinanceAccountSummaryResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def binance_account_summary(
         session: AsyncSession = Depends(_db_session),
@@ -563,7 +565,7 @@ def create_app() -> FastAPI:
             error=data.get("error"),
         )
 
-    @app.get("/api/strategies", response_model=list[StrategyInfo], dependencies=[Depends(require_admin)])
+    @app.get("/api/strategies", response_model=list[StrategyInfo], dependencies=[Depends(require_auth)])
     async def strategies() -> list[StrategyInfo]:
         root = _repo_root()
         dirs = _strategy_dirs()
@@ -576,7 +578,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/strategies/content",
         response_model=StrategyContentResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def strategy_content(path: str = Query(..., alias="path")) -> StrategyContentResponse:
         root = _repo_root()
@@ -604,7 +606,7 @@ def create_app() -> FastAPI:
     @app.delete(
         "/api/strategies",
         response_model=DeleteResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def delete_strategy(path: str = Query(..., alias="path")) -> DeleteResponse:
         root = _repo_root()
@@ -626,7 +628,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/strategies/intake",
         response_model=StrategyIntakeResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def intake_strategy(body: StrategyIntakeRequest) -> StrategyIntakeResponse:
         prompt = (body.user_prompt or "").strip()
@@ -670,7 +672,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/strategies/capabilities",
         response_model=StrategyCapabilityResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def strategy_capabilities() -> StrategyCapabilityResponse:
         try:
@@ -703,7 +705,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/strategies/quality/summary",
         response_model=StrategyQualitySummaryResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def strategy_quality_summary(
         days: int = Query(default=7, ge=1, le=90),
@@ -771,7 +773,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/strategies/generate",
         response_model=StrategyGenerateResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def generate_strategy(body: StrategyGenerateRequest) -> StrategyGenerateResponse:
         prompt = (body.user_prompt or "").strip()
@@ -1109,7 +1111,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/strategies/chat",
         response_model=StrategyChatResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def strategy_chat(body: StrategyChatRequest) -> StrategyChatResponse:
         code = (body.code or "").strip()
@@ -1130,7 +1132,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/strategies/chat/sessions",
         response_model=list[StrategyChatSessionResponse],
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def list_chat_sessions(
         limit: int = Query(default=200, ge=1, le=500),
@@ -1143,7 +1145,7 @@ def create_app() -> FastAPI:
     @app.put(
         "/api/strategies/chat/sessions/{session_id}",
         response_model=StrategyChatSessionResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def upsert_chat_session(
         session_id: str,
@@ -1174,7 +1176,7 @@ def create_app() -> FastAPI:
     @app.delete(
         "/api/strategies/chat/sessions/{session_id}",
         response_model=DeleteResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def delete_chat_session(
         session_id: str,
@@ -1195,7 +1197,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/strategies/save",
         response_model=StrategySaveResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def save_strategy(body: StrategySaveRequest) -> StrategySaveResponse:
         code = (body.code or "").strip()
@@ -1242,7 +1244,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/strategies/validate-syntax",
         response_model=StrategySyntaxCheckResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def validate_strategy_syntax(
         body: StrategySyntaxCheckRequest,
@@ -1272,15 +1274,16 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/jobs/preflight",
         response_model=JobPolicyCheckResponse,
-        dependencies=[Depends(require_admin)],
+        dependencies=[Depends(require_auth)],
     )
     async def preflight_job_policy(body: JobPolicyCheckRequest) -> JobPolicyCheckResponse:
         result = evaluate_job_policy(body.type, body.config)
         return JobPolicyCheckResponse(ok=result.ok, blockers=result.blockers, warnings=result.warnings)
 
-    @app.post("/api/jobs", response_model=JobResponse, dependencies=[Depends(require_admin)])
+    @app.post("/api/jobs", response_model=JobResponse)
     async def create_job_api(
         body: JobCreateRequest,
+        user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> JobResponse:
         policy = evaluate_job_policy(body.type, body.config)
@@ -1305,27 +1308,20 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        # MVP safety: enforce single LIVE run at a time.
+        from control.repo import count_active_jobs
         if body.type == JobType.LIVE:
-            res = await session.execute(
-                select(Job.job_id)
-                .where(Job.type == str(JobType.LIVE))
-                .where(Job.started_at.is_not(None))
-                .where(Job.status.in_([JobStatus.RUNNING, JobStatus.STOP_REQUESTED]))
-                .limit(1)
-            )
-            active_job_id = res.scalar_one_or_none()
-            if active_job_id is not None:
+            active_count = await count_active_jobs(session, user_id=user.user_id, job_type=JobType.LIVE)
+            if active_count > 0:
                 raise HTTPException(
                     status_code=409,
                     detail={
                         "message": "A LIVE job is already running (or stopping). Stop it before starting a new one.",
-                        "active_job_id": str(active_job_id),
                     },
                 )
 
         job = await create_job(
             session,
+            user_id=user.user_id,
             job_type=body.type,
             strategy_path=str(validated.relative_to(root)),
             config_json=body.config,
@@ -1348,46 +1344,54 @@ def create_app() -> FastAPI:
         await session.commit()
         return _job_to_response(job)
 
-    @app.get("/api/jobs", response_model=list[JobResponse], dependencies=[Depends(require_admin)])
+    @app.get("/api/jobs", response_model=list[JobResponse])
     async def jobs(
         limit: int = Query(default=50, ge=1, le=200),
         job_type: JobType | None = Query(default=None, alias="type"),
+        user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> list[JobResponse]:
-        rows = await list_jobs(session, limit=limit, job_type=job_type)
+        rows = await list_jobs(session, user_id=user.user_id, limit=limit, job_type=job_type)
         return [_job_to_response(j) for j in rows]
 
-    @app.post("/api/jobs/stop-all", response_model=StopAllResponse, dependencies=[Depends(require_admin)])
+    @app.post("/api/jobs/stop-all", response_model=StopAllResponse)
     async def stop_all(
         job_type: JobType | None = Query(default=None, alias="type"),
+        user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> StopAllResponse:
-        # NOTE: This route must be registered before `/api/jobs/{job_id}`.
-        # Starlette uses first-match semantics and will otherwise treat `{job_id}` as a partial match
-        # and return `405 Method Not Allowed` for POST.
-        counts = await stop_all_jobs(session, job_type=job_type)
+        counts = await stop_all_jobs(session, user_id=user.user_id, job_type=job_type)
         await session.commit()
         return StopAllResponse(**counts)
 
-    @app.delete("/api/jobs", response_model=DeleteAllResponse, dependencies=[Depends(require_admin)])
+    @app.delete("/api/jobs", response_model=DeleteAllResponse)
     async def delete_all(
         job_type: JobType | None = Query(default=None, alias="type"),
+        user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> DeleteAllResponse:
-        counts = await delete_jobs(session, job_type=job_type)
+        counts = await delete_jobs(session, user_id=user.user_id, job_type=job_type)
         await session.commit()
         return DeleteAllResponse(**counts)
 
-    @app.get("/api/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require_admin)])
-    async def job_detail(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> JobResponse:
-        job = await get_job(session, job_id)
+    @app.get("/api/jobs/{job_id}", response_model=JobResponse)
+    async def job_detail(
+        job_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> JobResponse:
+        job = await get_job(session, job_id, user_id=user.user_id)
         if not job:
             raise HTTPException(status_code=404, detail="Not found")
         return _job_to_response(job)
 
-    @app.delete("/api/jobs/{job_id}", response_model=DeleteResponse, dependencies=[Depends(require_admin)])
-    async def delete_single_job(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> DeleteResponse:
-        deleted, status = await delete_job(session, job_id)
+    @app.delete("/api/jobs/{job_id}", response_model=DeleteResponse)
+    async def delete_single_job(
+        job_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> DeleteResponse:
+        deleted, status = await delete_job(session, job_id, user_id=user.user_id)
         if status is None:
             raise HTTPException(status_code=404, detail="Not found")
         if not deleted:
@@ -1398,9 +1402,13 @@ def create_app() -> FastAPI:
         await session.commit()
         return DeleteResponse(ok=True)
 
-    @app.post("/api/jobs/{job_id}/stop", response_model=StopResponse, dependencies=[Depends(require_admin)])
-    async def stop_job(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> StopResponse:
-        new_status = await request_stop(session, job_id)
+    @app.post("/api/jobs/{job_id}/stop", response_model=StopResponse)
+    async def stop_job(
+        job_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StopResponse:
+        new_status = await request_stop(session, job_id, user_id=user.user_id)
         if new_status is None:
             return StopResponse(ok=False)
 
@@ -1417,24 +1425,25 @@ def create_app() -> FastAPI:
         await session.commit()
         return StopResponse(ok=True)
 
-    @app.get("/api/jobs/{job_id}/events", response_model=list[JobEventResponse], dependencies=[Depends(require_admin)])
+    @app.get("/api/jobs/{job_id}/events", response_model=list[JobEventResponse])
     async def events(
         job_id: uuid.UUID,
         after_event_id: int = Query(default=0, ge=0),
         limit: int = Query(default=200, ge=1, le=1000),
+        user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> list[JobEventResponse]:
+        job = await get_job(session, job_id, user_id=user.user_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Not found")
         rows = await list_events(session, job_id=job_id, after_event_id=after_event_id, limit=limit)
         return [_event_to_response(e) for e in rows]
 
-    @app.get(
-        "/api/jobs/{job_id}/events/stream",
-        response_class=StreamingResponse,
-        dependencies=[Depends(require_admin)],
-    )
+    @app.get("/api/jobs/{job_id}/events/stream", response_class=StreamingResponse)
     async def events_stream(
         job_id: uuid.UUID,
         after_event_id: int = Query(default=0, ge=0),
+        _user: AuthenticatedUser = Depends(require_auth),
     ) -> StreamingResponse:
         async def gen() -> AsyncIterator[bytes]:
             last_id = after_event_id
@@ -1462,43 +1471,328 @@ def create_app() -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    @app.get("/api/jobs/{job_id}/orders", response_model=list[OrderResponse], dependencies=[Depends(require_admin)])
-    async def orders(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> list[OrderResponse]:
+    @app.get("/api/jobs/{job_id}/orders", response_model=list[OrderResponse])
+    async def orders(
+        job_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[OrderResponse]:
+        job = await get_job(session, job_id, user_id=user.user_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Not found")
         rows = await list_orders(session, job_id=job_id)
         return [
             OrderResponse(
-                order_id=o.order_id,
-                symbol=o.symbol,
-                side=o.side,
-                order_type=o.order_type,
-                status=o.status,
-                quantity=o.quantity,
-                price=o.price,
-                executed_qty=o.executed_qty,
-                avg_price=o.avg_price,
-                ts=o.ts,
-                raw=o.raw_json,
+                order_id=o.order_id, symbol=o.symbol, side=o.side,
+                order_type=o.order_type, status=o.status, quantity=o.quantity,
+                price=o.price, executed_qty=o.executed_qty, avg_price=o.avg_price,
+                ts=o.ts, raw=o.raw_json,
             )
             for o in rows
         ]
 
-    @app.get("/api/jobs/{job_id}/trades", response_model=list[TradeResponse], dependencies=[Depends(require_admin)])
-    async def trades(job_id: uuid.UUID, session: AsyncSession = Depends(_db_session)) -> list[TradeResponse]:
+    @app.get("/api/jobs/{job_id}/trades", response_model=list[TradeResponse])
+    async def trades(
+        job_id: uuid.UUID,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[TradeResponse]:
+        job = await get_job(session, job_id, user_id=user.user_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Not found")
         rows = await list_trades(session, job_id=job_id)
         return [
             TradeResponse(
-                trade_id=t.trade_id,
-                symbol=t.symbol,
-                order_id=t.order_id,
-                quantity=t.quantity,
-                price=t.price,
-                realized_pnl=t.realized_pnl,
-                commission=t.commission,
-                ts=t.ts,
-                raw=t.raw_json,
+                trade_id=t.trade_id, symbol=t.symbol, order_id=t.order_id,
+                quantity=t.quantity, price=t.price, realized_pnl=t.realized_pnl,
+                commission=t.commission, ts=t.ts, raw=t.raw_json,
             )
             for t in rows
         ]
+
+    # ------------------------------------------------------------------
+    # /api/me — User profile & binance keys
+    # ------------------------------------------------------------------
+
+    @app.get("/api/me")
+    async def get_me(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.repo import get_user_profile
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        has_binance_keys = bool(profile.binance_api_key_enc)
+        return {
+            "user_id": profile.user_id,
+            "email": profile.email,
+            "display_name": profile.display_name,
+            "plan": profile.plan,
+            "has_binance_keys": has_binance_keys,
+            "binance_base_url": profile.binance_base_url,
+            "created_at": profile.created_at.isoformat() if profile.created_at else None,
+        }
+
+    def _mask_key(key: str) -> str:
+        if len(key) <= 8:
+            return "***"
+        return key[:4] + "***" + key[-4:]
+
+    @app.put("/api/me/binance-keys")
+    async def set_binance_keys(
+        body: dict[str, Any],
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        api_key = str(body.get("api_key") or "").strip()
+        api_secret = str(body.get("api_secret") or "").strip()
+        base_url = str(body.get("base_url") or "https://testnet.binancefuture.com").strip()
+        if not api_key or not api_secret:
+            raise HTTPException(status_code=422, detail="api_key and api_secret are required")
+
+        from binance.client import BinanceHTTPClient
+        test_client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0)
+        try:
+            account_info = await test_client.get_account_info()
+            if not account_info:
+                raise HTTPException(status_code=400, detail="Binance API connection test failed: empty response")
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
+        finally:
+            await test_client.aclose()
+
+        from common.crypto import get_crypto_service
+        crypto = get_crypto_service()
+        api_key_enc = crypto.encrypt(api_key)
+        api_secret_enc = crypto.encrypt(api_secret)
+
+        from control.repo import update_user_binance_keys
+        await update_user_binance_keys(
+            session,
+            user_id=user.user_id,
+            api_key_enc=api_key_enc,
+            api_secret_enc=api_secret_enc,
+            base_url=base_url,
+        )
+        await session.commit()
+        return {"ok": True, "api_key_masked": _mask_key(api_key), "base_url": base_url}
+
+    @app.get("/api/me/binance-keys")
+    async def get_binance_keys(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.repo import get_user_profile
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not profile.binance_api_key_enc:
+            return {"configured": False}
+
+        from common.crypto import get_crypto_service
+        crypto = get_crypto_service()
+        try:
+            raw_key = crypto.decrypt(profile.binance_api_key_enc)
+        except Exception:  # noqa: BLE001
+            return {"configured": True, "api_key_masked": "***decryption_error***", "base_url": profile.binance_base_url}
+
+        return {
+            "configured": True,
+            "api_key_masked": _mask_key(raw_key),
+            "base_url": profile.binance_base_url,
+        }
+
+    @app.delete("/api/me/binance-keys")
+    async def delete_binance_keys(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, bool]:
+        from control.repo import update_user_binance_keys
+        await update_user_binance_keys(
+            session,
+            user_id=user.user_id,
+            api_key_enc=None,
+            api_secret_enc=None,
+            base_url="https://testnet.binancefuture.com",
+        )
+        await session.commit()
+        return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # /api/billing — Stripe 결제
+    # ------------------------------------------------------------------
+
+    @app.post("/api/billing/checkout")
+    async def billing_checkout(
+        body: dict[str, Any],
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        import stripe as stripe_lib
+
+        stripe_settings = settings.stripe
+        if not stripe_settings.secret_key:
+            raise HTTPException(status_code=500, detail="Stripe is not configured")
+
+        stripe_lib.api_key = stripe_settings.secret_key
+        plan = str(body.get("plan") or "pro").strip().lower()
+        price_map = {"pro": stripe_settings.price_id_pro, "enterprise": stripe_settings.price_id_enterprise}
+        price_id = price_map.get(plan)
+        if not price_id:
+            raise HTTPException(status_code=400, detail=f"Unknown plan: {plan}")
+
+        from control.repo import get_user_profile
+        profile = await get_user_profile(session, user_id=user.user_id)
+        customer_id = profile.stripe_customer_id if profile else None
+        checkout_params: dict[str, Any] = {
+            "mode": "subscription",
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "success_url": f"{settings.frontend_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
+            "cancel_url": f"{settings.frontend_url}/billing/cancel",
+            "allow_promotion_codes": True,
+            "metadata": {"user_id": user.user_id},
+        }
+        if customer_id:
+            checkout_params["customer"] = customer_id
+        else:
+            checkout_params["customer_email"] = user.email
+
+        cs = stripe_lib.checkout.Session.create(**checkout_params)
+        return {"checkout_url": cs.url, "session_id": cs.id}
+
+    @app.post("/api/billing/portal")
+    async def billing_portal(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, str]:
+        import stripe as stripe_lib
+
+        stripe_settings = settings.stripe
+        if not stripe_settings.secret_key:
+            raise HTTPException(status_code=500, detail="Stripe is not configured")
+        stripe_lib.api_key = stripe_settings.secret_key
+
+        from control.repo import get_user_profile
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not profile.stripe_customer_id:
+            raise HTTPException(status_code=400, detail="No billing account found. Subscribe first.")
+
+        portal = stripe_lib.billing_portal.Session.create(
+            customer=profile.stripe_customer_id,
+            return_url=f"{settings.frontend_url}/billing",
+        )
+        return {"portal_url": portal.url}
+
+    @app.get("/api/billing/status")
+    async def billing_status(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.repo import get_user_profile, get_usage_count
+        from api.plans import get_plan_limits
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        plan = profile.plan if profile else "free"
+        limits = get_plan_limits(plan)
+
+        from datetime import datetime as dt, timezone as tz
+        period = dt.now(tz.utc).strftime("%Y-%m")
+        bt_used = await get_usage_count(session, user_id=user.user_id, action="backtest", period_key=period)
+        llm_used = await get_usage_count(session, user_id=user.user_id, action="llm_generate", period_key=period)
+
+        return {
+            "plan": plan,
+            "limits": {
+                "max_live_jobs": limits.max_live_jobs,
+                "max_backtest_per_month": limits.max_backtest_per_month,
+                "max_llm_generate_per_month": limits.max_llm_generate_per_month,
+                "portfolio_mode": limits.portfolio_mode,
+            },
+            "usage": {
+                "backtest_this_month": bt_used,
+                "llm_generate_this_month": llm_used,
+            },
+            "plan_expires_at": profile.plan_expires_at.isoformat() if profile and profile.plan_expires_at else None,
+        }
+
+    @app.post("/api/billing/webhook")
+    async def billing_webhook(request: Any) -> dict[str, str]:
+        import stripe as stripe_lib
+
+        stripe_settings = settings.stripe
+        if not stripe_settings.secret_key or not stripe_settings.webhook_secret:
+            raise HTTPException(status_code=500, detail="Stripe webhook is not configured")
+
+        stripe_lib.api_key = stripe_settings.secret_key
+        payload = await request.body()
+        sig = request.headers.get("stripe-signature", "")
+
+        try:
+            event = stripe_lib.Webhook.construct_event(payload, sig, stripe_settings.webhook_secret)
+        except (ValueError, stripe_lib.error.SignatureVerificationError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid webhook: {exc}") from exc
+
+        event_type = event["type"]
+        data_obj = event["data"]["object"]
+
+        async with session_maker() as session:
+            if event_type == "checkout.session.completed":
+                user_id = (data_obj.get("metadata") or {}).get("user_id")
+                customer_id = data_obj.get("customer")
+                subscription_id = data_obj.get("subscription")
+                if user_id and customer_id:
+                    from control.repo import update_user_plan
+                    plan = "pro"
+                    if data_obj.get("metadata", {}).get("plan"):
+                        plan = data_obj["metadata"]["plan"]
+                    await update_user_plan(
+                        session,
+                        user_id=user_id,
+                        plan=plan,
+                        stripe_customer_id=customer_id,
+                        stripe_subscription_id=subscription_id,
+                    )
+                    await session.commit()
+
+            elif event_type == "customer.subscription.updated":
+                customer_id = data_obj.get("customer")
+                if customer_id:
+                    from control.repo import get_user_by_stripe_customer_id, update_user_plan
+                    profile = await get_user_by_stripe_customer_id(session, stripe_customer_id=customer_id)
+                    if profile:
+                        status = data_obj.get("status")
+                        if status in ("active", "trialing"):
+                            items = data_obj.get("items", {}).get("data", [])
+                            price_id = items[0]["price"]["id"] if items else ""
+                            plan = "pro"
+                            if price_id == stripe_settings.price_id_enterprise:
+                                plan = "enterprise"
+                            await update_user_plan(session, user_id=profile.user_id, plan=plan)
+                        elif status in ("past_due", "unpaid"):
+                            pass
+                        await session.commit()
+
+            elif event_type == "customer.subscription.deleted":
+                customer_id = data_obj.get("customer")
+                if customer_id:
+                    from control.repo import get_user_by_stripe_customer_id, update_user_plan
+                    from datetime import datetime as dt, timedelta, timezone as tz
+                    profile = await get_user_by_stripe_customer_id(session, stripe_customer_id=customer_id)
+                    if profile:
+                        grace = dt.now(tz.utc) + timedelta(days=3)
+                        await update_user_plan(
+                            session,
+                            user_id=profile.user_id,
+                            plan="free",
+                            plan_expires_at=grace,
+                        )
+                        await session.commit()
+
+            elif event_type == "invoice.payment_failed":
+                pass
+
+        return {"status": "ok"}
 
     return app
 

@@ -15,10 +15,39 @@ class Base(DeclarativeBase):
     pass
 
 
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    plan: Mapped[str] = mapped_column(String(24), nullable=False, default="free")
+
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    binance_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    binance_api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    binance_base_url: Mapped[str] = mapped_column(
+        String(256), nullable=False, default="https://testnet.binancefuture.com"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True, default="legacy"
+    )
     type: Mapped[JobType] = mapped_column(String(16), nullable=False)
     status: Mapped[JobStatus] = mapped_column(String(24), nullable=False, default=JobStatus.PENDING)
 
@@ -168,3 +197,37 @@ class StrategyQualityLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     meta_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class UsageRecord(Base):
+    __tablename__ = "usage_records"
+    __table_args__ = (UniqueConstraint("user_id", "action", "period_key", name="uq_usage_user_action_period"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    period_key: Mapped[str] = mapped_column(String(16), nullable=False)
+    count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class StrategyMeta(Base):
+    __tablename__ = "strategy_metadata"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True
+    )
+    strategy_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    blob_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

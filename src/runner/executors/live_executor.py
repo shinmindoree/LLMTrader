@@ -35,6 +35,35 @@ def _parse_interval_seconds(interval: str) -> int:
     return 0
 
 
+async def _resolve_binance_client(
+    user_id: str,
+    session_maker: Any,
+) -> BinanceHTTPClient:
+    """사용자별 암호화된 키를 복호화하여 BinanceHTTPClient를 생성한다."""
+    from control.repo import get_user_profile
+
+    async with session_maker() as session:
+        profile = await get_user_profile(session, user_id=user_id)
+
+    if profile and profile.binance_api_key_enc and profile.binance_api_secret_enc:
+        from common.crypto import get_crypto_service
+        crypto = get_crypto_service()
+        api_key = crypto.decrypt(profile.binance_api_key_enc)
+        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
+        base_url = profile.binance_base_url or "https://testnet.binancefuture.com"
+        return BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
+
+    settings = get_settings()
+    if settings.binance.api_key:
+        return BinanceHTTPClient(
+            api_key=settings.binance.api_key,
+            api_secret=settings.binance.api_secret,
+            base_url=settings.binance.base_url,
+        )
+
+    raise ValueError(f"No Binance API keys configured for user {user_id}")
+
+
 async def run_live(
     *,
     repo_root: Path,
@@ -42,13 +71,18 @@ async def run_live(
     config: dict[str, Any],
     sink: DbEventSink,
     should_stop: asyncio.Event,
+    user_id: str = "legacy",
+    session_maker: Any = None,
 ) -> dict[str, Any]:
     settings = get_settings()
-    client = BinanceHTTPClient(
-        api_key=settings.binance.api_key,
-        api_secret=settings.binance.api_secret,
-        base_url=settings.binance.base_url,
-    )
+    if session_maker and user_id != "legacy":
+        client = await _resolve_binance_client(user_id, session_maker)
+    else:
+        client = BinanceHTTPClient(
+            api_key=settings.binance.api_key,
+            api_secret=settings.binance.api_secret,
+            base_url=settings.binance.base_url,
+        )
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
     strategy_file = (repo_root / strategy_path).resolve()
