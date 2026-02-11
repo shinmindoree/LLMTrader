@@ -45,6 +45,22 @@ from control.repo import (
 )
 from settings import get_settings
 from llm.client import LLMClient
+try:
+    from relay.capability_registry import (
+        SUPPORTED_DATA_SOURCES as LOCAL_SUPPORTED_DATA_SOURCES,
+        SUPPORTED_INDICATOR_SCOPES as LOCAL_SUPPORTED_INDICATOR_SCOPES,
+        SUPPORTED_CONTEXT_METHODS as LOCAL_SUPPORTED_CONTEXT_METHODS,
+        UNSUPPORTED_CAPABILITY_RULES as LOCAL_UNSUPPORTED_CAPABILITY_RULES,
+        capability_summary_lines as local_capability_summary_lines,
+    )
+except Exception:  # pragma: no cover - fallback for minimal runtime packaging
+    LOCAL_SUPPORTED_DATA_SOURCES = ()
+    LOCAL_SUPPORTED_INDICATOR_SCOPES = ()
+    LOCAL_SUPPORTED_CONTEXT_METHODS = ()
+    LOCAL_UNSUPPORTED_CAPABILITY_RULES = ()
+
+    def local_capability_summary_lines() -> list[str]:
+        return []
 
 from api.deps import AuthenticatedUser, require_auth, set_session_maker
 from api.job_policy import evaluate_job_policy
@@ -162,6 +178,19 @@ def _strategy_dirs() -> list[Path]:
     parts = [p.strip() for p in (settings.strategy_dirs or ".").split(",") if p.strip()]
     root = _repo_root()
     return [(root / p).resolve() for p in parts]
+
+
+def _local_capability_payload() -> dict[str, list[str]]:
+    unsupported = [str(getattr(rule, "name", "")).strip() for rule in LOCAL_UNSUPPORTED_CAPABILITY_RULES]
+    return {
+        "supported_data_sources": [str(v).strip() for v in LOCAL_SUPPORTED_DATA_SOURCES if str(v).strip()],
+        "supported_indicator_scopes": [
+            str(v).strip() for v in LOCAL_SUPPORTED_INDICATOR_SCOPES if str(v).strip()
+        ],
+        "supported_context_methods": [str(v).strip() for v in LOCAL_SUPPORTED_CONTEXT_METHODS if str(v).strip()],
+        "unsupported_categories": [v for v in unsupported if v],
+        "summary_lines": [str(v).strip() for v in local_capability_summary_lines() if str(v).strip()],
+    }
 
 
 def _sanitize_strategy_filename(raw_name: str | None) -> str:
@@ -694,14 +723,14 @@ def create_app() -> FastAPI:
         dependencies=[Depends(require_auth)],
     )
     async def strategy_capabilities() -> StrategyCapabilityResponse:
+        payload: dict[str, Any] | None = None
         try:
             client = LLMClient()
-        except ValueError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-        payload = await client.strategy_capabilities()
+            payload = await client.strategy_capabilities()
+        except ValueError:
+            payload = None
         if not payload:
-            raise HTTPException(status_code=502, detail="Failed to fetch strategy capabilities")
+            payload = _local_capability_payload()
 
         def _to_str_list(value: Any) -> list[str]:
             if not isinstance(value, list):
