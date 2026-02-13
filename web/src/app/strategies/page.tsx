@@ -7,7 +7,6 @@ import {
   deleteStrategy,
   getStrategyContent,
   generateStrategyStream,
-  intakeStrategy,
   listStrategyChatSessions,
   listStrategies,
   saveStrategy,
@@ -18,7 +17,6 @@ import {
 import type {
   StrategyChatSessionRecord,
   StrategyInfo,
-  StrategyIntakeResponse,
   StrategySyntaxCheckResponse,
 } from "@/lib/types";
 
@@ -75,168 +73,6 @@ function buildMessagesForGeneration(
     last,
   ];
   return out;
-}
-
-type ClarificationField = "symbol" | "timeframe" | "entry_logic" | "exit_logic" | "risk";
-
-const CLARIFICATION_FIELD_ORDER: ClarificationField[] = [
-  "symbol",
-  "timeframe",
-  "entry_logic",
-  "exit_logic",
-  "risk",
-];
-
-const CLARIFICATION_TEMPLATE_LABELS: Record<ClarificationField, string> = {
-  symbol: "Symbol (e.g. BTCUSDT)",
-  timeframe: "Timeframe (e.g. 1m, 15m, 1h, 4h)",
-  entry_logic: "Entry rules (one line)",
-  exit_logic: "Exit rules (one line)",
-  risk: "Risk settings (e.g. fixed size / account ratio / stop-loss rule)",
-};
-
-function normalizeQuestion(text: string): string {
-  return text.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
-}
-
-function classifyQuestion(question: string): ClarificationField | null {
-  const normalized = normalizeQuestion(question);
-  if (!normalized) return null;
-  if (
-    normalized.includes("symbol") ||
-    normalized.includes("ticker") ||
-    normalized.includes("pair") ||
-    normalized.includes("심볼") ||
-    normalized.includes("종목") ||
-    normalized.includes("티커") ||
-    normalized.includes("거래쌍")
-  ) {
-    return "symbol";
-  }
-  if (
-    normalized.includes("timeframe") ||
-    normalized.includes("interval") ||
-    normalized.includes("candle") ||
-    normalized.includes("타임프레임") ||
-    normalized.includes("캔들") ||
-    normalized.includes("봉")
-  ) {
-    return "timeframe";
-  }
-  if (
-    normalized.includes("entry") ||
-    normalized.includes("enter") ||
-    normalized.includes("진입") ||
-    normalized.includes("매수조건") ||
-    normalized.includes("롱조건")
-  ) {
-    return "entry_logic";
-  }
-  if (
-    normalized.includes("risk") ||
-    normalized.includes("position") ||
-    normalized.includes("size") ||
-    normalized.includes("leverage") ||
-    normalized.includes("리스크") ||
-    normalized.includes("위험관리") ||
-    normalized.includes("비중") ||
-    normalized.includes("수량")
-  ) {
-    return "risk";
-  }
-  if (
-    normalized.includes("exit") ||
-    normalized.includes("close") ||
-    normalized.includes("takeprofit") ||
-    normalized.includes("stoploss") ||
-    normalized.includes("청산") ||
-    normalized.includes("익절") ||
-    normalized.includes("손절")
-  ) {
-    return "exit_logic";
-  }
-  return null;
-}
-
-function dedupeClarificationQuestions(questions: string[]): string[] {
-  const deduped: string[] = [];
-  const seenText = new Set<string>();
-  const seenCategory = new Set<ClarificationField>();
-  for (const raw of questions) {
-    const q = raw.trim();
-    if (!q) continue;
-    const key = normalizeQuestion(q);
-    if (!key || seenText.has(key)) continue;
-    const category = classifyQuestion(q);
-    if (category && seenCategory.has(category)) continue;
-    seenText.add(key);
-    if (category) seenCategory.add(category);
-    deduped.push(q);
-  }
-  return deduped;
-}
-
-function buildClarificationTemplate(
-  intake: StrategyIntakeResponse,
-  questions: string[],
-): ClarificationField[] {
-  const missing = new Set(intake.missing_fields.map((field) => field.trim()));
-  const fields: ClarificationField[] = [];
-  const addField = (field: ClarificationField) => {
-    if (!fields.includes(field)) fields.push(field);
-  };
-
-  for (const field of CLARIFICATION_FIELD_ORDER) {
-    if (missing.has(field)) {
-      addField(field);
-    }
-  }
-  for (const question of questions) {
-    const field = classifyQuestion(question);
-    if (field) {
-      addField(field);
-    }
-  }
-  return fields;
-}
-
-function formatIntakeGuidance(intake: StrategyIntakeResponse): string {
-  const lines: string[] = [intake.user_message];
-  const clarificationQuestions = dedupeClarificationQuestions(intake.clarification_questions);
-  if (clarificationQuestions.length > 0) {
-    lines.push("", "Additional details needed:");
-    clarificationQuestions.forEach((q, idx) => {
-      lines.push(`${idx + 1}. ${q}`);
-    });
-  }
-  if (intake.status === "NEEDS_CLARIFICATION") {
-    const templateFields = buildClarificationTemplate(intake, clarificationQuestions);
-    if (templateFields.length > 0) {
-      lines.push("", "Please reply in this format (copy and fill in values):");
-      templateFields.forEach((field) => {
-        lines.push(`${CLARIFICATION_TEMPLATE_LABELS[field]}:`);
-      });
-    }
-  }
-  if (intake.unsupported_requirements.length > 0) {
-    lines.push("", "Currently unsupported:");
-    intake.unsupported_requirements.forEach((item) => {
-      lines.push(`- ${item}`);
-    });
-  }
-  if (intake.development_requirements.length > 0) {
-    lines.push("", "Requires additional development:");
-    intake.development_requirements.forEach((item, idx) => {
-      lines.push(`${idx + 1}. ${item}`);
-    });
-  }
-  if (intake.assumptions.length > 0) {
-    lines.push("", "Current system assumptions:");
-    intake.assumptions.forEach((item) => {
-      lines.push(`- ${item}`);
-    });
-  }
-  return lines.join("\n");
 }
 
 function strategyNameFromPath(path: string): string {
@@ -373,32 +209,7 @@ function buildCodeDiffLines(beforeCode: string, afterCode: string): DiffLine[] {
   return out;
 }
 
-const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
 const CHAT_SESSIONS_KEY = "llmtrader.strategy_chat_sessions.v1";
-
-function persistExecutionDefaults(spec: StrategyIntakeResponse["normalized_spec"] | null | undefined): void {
-  if (!spec || typeof window === "undefined") {
-    return;
-  }
-  const symbol = typeof spec.symbol === "string" ? spec.symbol.trim().toUpperCase() : "";
-  const interval = typeof spec.timeframe === "string" ? spec.timeframe.trim() : "";
-  if (!symbol && !interval) {
-    return;
-  }
-  try {
-    const prevRaw = window.localStorage.getItem(EXECUTION_DEFAULTS_KEY);
-    const prev = prevRaw ? (JSON.parse(prevRaw) as Record<string, unknown>) : {};
-    const next: Record<string, unknown> = {
-      ...prev,
-      updated_at: new Date().toISOString(),
-    };
-    if (symbol) next.symbol = symbol;
-    if (interval) next.interval = interval;
-    window.localStorage.setItem(EXECUTION_DEFAULTS_KEY, JSON.stringify(next));
-  } catch {
-    // ignore storage errors
-  }
-}
 
 type ChatMessage = {
   id: string;
@@ -945,7 +756,6 @@ export default function StrategiesPage() {
 
     const doGenerate = (
       messagesToSend?: { role: string; content: string }[],
-      intakeSpec?: StrategyIntakeResponse["normalized_spec"] | null,
     ) => {
       setChatMessages((prev) =>
         prev.map((m) =>
@@ -979,7 +789,6 @@ export default function StrategiesPage() {
                 prev.filter((m) => m.id !== assistantId),
               );
             } else {
-              persistExecutionDefaults(intakeSpec);
               setChatMessages((prev) => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== "assistant" || last.id !== assistantId) return prev;
@@ -1039,20 +848,6 @@ export default function StrategiesPage() {
           nextMessages,
           isFirstTurn ? null : activeCode,
         );
-        const intake = await intakeStrategy(trimmed, messagesToSend);
-        if (intake.status !== "READY") {
-          const guidance = formatIntakeGuidance(intake);
-          setChatMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.role !== "assistant" || last.id !== assistantId) return prev;
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: guidance, textOnly: true, status: null, statusText: null },
-            ];
-          });
-          setIsSending(false);
-          return;
-        }
         setChatMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -1060,7 +855,7 @@ export default function StrategiesPage() {
               : m,
           ),
         );
-        await doGenerate(messagesToSend, intake.normalized_spec);
+        await doGenerate(messagesToSend);
       } catch (e) {
         setChatError(String(e));
         setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));

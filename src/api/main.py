@@ -832,7 +832,6 @@ def create_app() -> FastAPI:
         started_at = time.perf_counter()
         message_count = len(messages or [])
         quality_logged = False
-        intake: StrategyIntakeResponse | None = None
 
         try:
             dirs = _strategy_dirs()
@@ -869,23 +868,6 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
 
             openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
-            intake = await _run_intake(client, prompt, openai_messages)
-            if intake.status != "READY":
-                await _record_strategy_quality(
-                    request_id=request_id,
-                    endpoint="generate",
-                    user_prompt_len=len(prompt),
-                    message_count=message_count,
-                    intake=intake,
-                    generation_attempted=False,
-                    generation_success=False,
-                    error_stage="intake_blocked",
-                    error_message=intake.user_message,
-                    duration_ms=int((time.perf_counter() - started_at) * 1000),
-                )
-                quality_logged = True
-                raise HTTPException(status_code=422, detail=intake.model_dump())
-
             if messages:
                 result = await client.generate_strategy("", messages=openai_messages)
             else:
@@ -896,7 +878,6 @@ def create_app() -> FastAPI:
                     endpoint="generate",
                     user_prompt_len=len(prompt),
                     message_count=message_count,
-                    intake=intake,
                     generation_attempted=True,
                     generation_success=False,
                     verification_passed=False,
@@ -923,7 +904,6 @@ def create_app() -> FastAPI:
                     endpoint="generate",
                     user_prompt_len=len(prompt),
                     message_count=message_count,
-                    intake=intake,
                     generation_attempted=True,
                     generation_success=False,
                     verification_passed=False,
@@ -950,7 +930,6 @@ def create_app() -> FastAPI:
                 endpoint="generate",
                 user_prompt_len=len(prompt),
                 message_count=message_count,
-                intake=intake,
                 generation_attempted=True,
                 generation_success=True,
                 verification_passed=True,
@@ -968,8 +947,7 @@ def create_app() -> FastAPI:
                     endpoint="generate",
                     user_prompt_len=len(prompt),
                     message_count=message_count,
-                    intake=intake,
-                    generation_attempted=(intake is not None and intake.status == "READY"),
+                    generation_attempted=True,
                     generation_success=False,
                     verification_passed=False,
                     error_stage="unhandled",
@@ -984,7 +962,6 @@ def create_app() -> FastAPI:
         request_id = uuid.uuid4()
         started_at = time.perf_counter()
         message_count = len(messages or [])
-        intake: StrategyIntakeResponse | None = None
         quality_logged = False
 
         async def _log_once(
@@ -1006,7 +983,6 @@ def create_app() -> FastAPI:
                 endpoint="generate_stream",
                 user_prompt_len=len(prompt),
                 message_count=message_count,
-                intake=intake,
                 generation_attempted=generation_attempted,
                 generation_success=generation_success,
                 verification_passed=verification_passed,
