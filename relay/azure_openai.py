@@ -8,6 +8,8 @@ Auth strategy:
 from __future__ import annotations
 
 import inspect
+import json
+import logging
 from contextlib import asynccontextmanager, contextmanager
 from typing import AsyncIterator
 
@@ -21,6 +23,8 @@ from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCreden
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 from relay.config import RelayConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _build_credential(config: RelayConfig) -> TokenCredential:
@@ -139,6 +143,65 @@ def _create_async_client(config: RelayConfig) -> AsyncAzureOpenAI:
     )
 
 
+def _serialize_diagnostic(value: object) -> object:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return str(value)
+    if isinstance(value, (dict, list, str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _build_empty_response_detail(response: object) -> dict[str, object]:
+    detail: dict[str, object] = {}
+    model_used = getattr(response, "model", None)
+    if model_used:
+        detail["model"] = str(model_used)
+    choices = getattr(response, "choices", None)
+    if not choices:
+        detail["reason"] = "no_choices"
+        prompt_filters = _serialize_diagnostic(getattr(response, "prompt_filter_results", None))
+        if prompt_filters:
+            detail["prompt_filter_results"] = prompt_filters
+        return detail
+
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason is not None:
+        detail["finish_reason"] = str(finish_reason)
+
+    prompt_filters = _serialize_diagnostic(getattr(response, "prompt_filter_results", None))
+    if prompt_filters:
+        detail["prompt_filter_results"] = prompt_filters
+
+    choice_filters = _serialize_diagnostic(getattr(choice, "content_filter_results", None))
+    if choice_filters:
+        detail["content_filter_results"] = choice_filters
+
+    message = getattr(choice, "message", None)
+    refusal = getattr(message, "refusal", None) if message is not None else None
+    if refusal:
+        detail["refusal"] = str(refusal)
+
+    content = getattr(message, "content", None) if message is not None else None
+    if content is None:
+        detail["reason"] = detail.get("reason", "missing_content")
+    elif isinstance(content, str) and not content.strip():
+        detail["reason"] = detail.get("reason", "empty_content")
+    return detail
+
+
+def _raise_empty_completion(response: object) -> None:
+    detail = _build_empty_response_detail(response)
+    detail_text = json.dumps(detail, ensure_ascii=False, default=str)
+    logger.warning("LLM returned empty completion: %s", detail_text)
+    raise ValueError(f"Empty completion from model. diagnostics={detail_text}")
+
+
 async def chat_completion_stream(
     config: RelayConfig,
     system_content: str,
@@ -154,6 +217,8 @@ async def chat_completion_stream(
             {"role": "user", "content": user_content or ""},
         ]
 
+    emitted = False
+    last_finish_reason: str | None = None
     if config.is_foundry_project_mode():
         async with _foundry_async_client(config) as client:
             stream = await client.chat.completions.create(
@@ -162,8 +227,17 @@ async def chat_completion_stream(
                 stream=True,
             )
             async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content is not None:
-                    yield chunk.choices[0].delta.content
+                if chunk.choices:
+                    finish_reason = getattr(chunk.choices[0], "finish_reason", None)
+                    if finish_reason is not None:
+                        last_finish_reason = str(finish_reason)
+                    if chunk.choices[0].delta.content is not None:
+                        emitted = True
+                        yield chunk.choices[0].delta.content
+        if not emitted:
+            diag = {"reason": "empty_stream", "finish_reason": last_finish_reason}
+            logger.warning("LLM returned empty stream: %s", json.dumps(diag, ensure_ascii=False))
+            raise ValueError(f"Empty streamed completion from model. diagnostics={json.dumps(diag)}")
         return
 
     client = _create_async_client(config)
@@ -173,8 +247,17 @@ async def chat_completion_stream(
         stream=True,
     )
     async for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content is not None:
-            yield chunk.choices[0].delta.content
+        if chunk.choices:
+            finish_reason = getattr(chunk.choices[0], "finish_reason", None)
+            if finish_reason is not None:
+                last_finish_reason = str(finish_reason)
+            if chunk.choices[0].delta.content is not None:
+                emitted = True
+                yield chunk.choices[0].delta.content
+    if not emitted:
+        diag = {"reason": "empty_stream", "finish_reason": last_finish_reason}
+        logger.warning("LLM returned empty stream: %s", json.dumps(diag, ensure_ascii=False))
+        raise ValueError(f"Empty streamed completion from model. diagnostics={json.dumps(diag)}")
 
 
 def chat_completion(
@@ -203,8 +286,10 @@ def chat_completion(
 
     choice = response.choices[0] if response.choices else None
     if not choice or not choice.message or choice.message.content is None:
-        raise ValueError("Empty or missing completion content")
+        _raise_empty_completion(response)
     content = choice.message.content
+    if isinstance(content, str) and not content.strip():
+        _raise_empty_completion(response)
     model_used = getattr(response, "model", None) or config.azure_openai_model
     return content, model_used
 
@@ -232,7 +317,9 @@ def chat_completion_messages(
 
     choice = response.choices[0] if response.choices else None
     if not choice or not choice.message or choice.message.content is None:
-        raise ValueError("Empty or missing completion content")
+        _raise_empty_completion(response)
     content = choice.message.content
+    if isinstance(content, str) and not content.strip():
+        _raise_empty_completion(response)
     model_used = getattr(response, "model", None) or config.azure_openai_model
     return content, model_used

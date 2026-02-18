@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -26,6 +27,7 @@ from relay.prompts import build_intake_system_prompt, build_repair_system_prompt
 
 
 app = FastAPI(title="LLMTrader Relay", version="0.1.0")
+logger = logging.getLogger(__name__)
 
 
 class ChatMessage(BaseModel):
@@ -422,6 +424,14 @@ def _strategy_chat_system_prompt(code: str, summary: str | None) -> str:
     )
 
 
+def _raise_llm_http_error(endpoint: str, exc: Exception) -> None:
+    logger.exception("LLM call failed at %s: %s", endpoint, exc)
+    raise HTTPException(
+        status_code=502,
+        detail=f"Azure OpenAI call failed: {exc!s}",
+    ) from exc
+
+
 @app.post("/test", response_model=TestResponse)
 async def test_llm(
     body: TestRequest,
@@ -440,10 +450,7 @@ async def test_llm(
             user_content=(body.input or "").strip() or "Hello",
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Azure OpenAI call failed: {e!s}",
-        ) from e
+        _raise_llm_http_error("/test", e)
     return TestResponse(output=(content or "").strip())
 
 
@@ -488,12 +495,10 @@ async def strategy_chat(
             messages=openai_messages,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Azure OpenAI call failed: {e!s}",
-        ) from e
+        _raise_llm_http_error("/strategy/chat", e)
 
     if not content or not content.strip():
+        logger.warning("LLM returned blank content at /strategy/chat")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
     return StrategyChatResponse(content=content.strip())
@@ -532,12 +537,10 @@ async def intake(
                 user_content=prompt,
             )
     except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Azure OpenAI call failed: {e!s}",
-        ) from e
+        _raise_llm_http_error("/intake", e)
 
     if not content or not content.strip():
+        logger.warning("LLM returned blank content at /intake")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
     payload = _extract_json_object(content) or {}
@@ -594,12 +597,10 @@ async def repair(
             user_content=repair_user_content,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Azure OpenAI call failed: {e!s}",
-        ) from e
+        _raise_llm_http_error("/repair", e)
 
     if not content or not content.strip():
+        logger.warning("LLM returned blank content at /repair")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
     return RepairResponse(code=content.strip(), model_used=model_used)
@@ -628,12 +629,10 @@ async def summarize(
             user_content=code,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Azure OpenAI call failed: {e!s}",
-        ) from e
+        _raise_llm_http_error("/summarize", e)
 
     if not content or not content.strip():
+        logger.warning("LLM returned blank content at /summarize")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
     return SummarizeResponse(summary=content.strip())
@@ -672,12 +671,10 @@ async def generate(
                 user_content=prompt,
             )
     except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Azure OpenAI call failed: {e!s}",
-        ) from e
+        _raise_llm_http_error("/generate", e)
 
     if not content or not content.strip():
+        logger.warning("LLM returned blank content at /generate")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
     return StrategyResponse(code=content.strip(), model_used=model_used)
@@ -712,6 +709,7 @@ async def _generate_stream_body(body: StrategyRequest):
                 yield f"data: {json.dumps({'token': token})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
     except Exception as e:
+        logger.exception("LLM stream failed at /generate/stream: %s", e)
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
