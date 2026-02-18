@@ -6,6 +6,7 @@ import {
   getBinanceKeysStatus,
   setBinanceKeys,
   deleteBinanceKeys,
+  testLlmEndpoint,
 } from "@/lib/api";
 import type { UserProfile, BinanceKeysStatus } from "@/lib/types";
 
@@ -23,6 +24,11 @@ export default function SettingsPage() {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const [llmInput, setLlmInput] = useState("Hello");
+  const [llmOutput, setLlmOutput] = useState<string | null>(null);
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [llmError, setLlmError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([getUserProfile(), getBinanceKeysStatus()])
@@ -58,6 +64,20 @@ export default function SettingsPage() {
       setMessage({ type: "error", text: msg });
     } finally {
       setFormState("idle");
+    }
+  }
+
+  async function handleTestLlm() {
+    setLlmLoading(true);
+    setLlmOutput(null);
+    setLlmError(null);
+    try {
+      const res = await testLlmEndpoint(llmInput);
+      setLlmOutput(res.output);
+    } catch (err: unknown) {
+      setLlmError(err instanceof Error ? err.message : "LLM 테스트 실패");
+    } finally {
+      setLlmLoading(false);
     }
   }
 
@@ -240,6 +260,39 @@ export default function SettingsPage() {
             <li>• Plain-text keys are never logged or stored</li>
             <li>• Only you can access your keys through your account</li>
           </ul>
+        </div>
+      </section>
+
+      {/* LLM 연결 테스트 */}
+      <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
+        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-2">LLM 연결 테스트</h2>
+        <p className="text-xs text-[#868993] mb-4">
+          배포된 LLM 엔드포인트가 정상 동작하는지 확인합니다. 입력 후 전송하면 응답을 출력합니다.
+        </p>
+        <div className="space-y-3">
+          <input
+            className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] placeholder-[#4a4e59] focus:border-[#2962ff] focus:outline-none transition-colors"
+            onChange={(e) => setLlmInput(e.target.value)}
+            placeholder="입력 (예: 안녕)"
+            value={llmInput}
+          />
+          <button
+            className="rounded-lg bg-[#2962ff] px-4 py-2 text-sm font-medium text-white hover:bg-[#2962ff]/80 transition-colors disabled:opacity-50"
+            disabled={llmLoading}
+            onClick={handleTestLlm}
+          >
+            {llmLoading ? "테스트 중..." : "전송"}
+          </button>
+          {llmError && (
+            <div className="rounded-lg px-4 py-3 text-sm bg-[#ef5350]/10 border border-[#ef5350]/30 text-[#ef5350]">
+              {llmError}
+            </div>
+          )}
+          {llmOutput !== null && !llmError && (
+            <div className="rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc] whitespace-pre-wrap">
+              {llmOutput}
+            </div>
+          )}
         </div>
       </section>
     </main>

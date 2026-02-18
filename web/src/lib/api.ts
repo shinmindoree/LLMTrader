@@ -234,7 +234,7 @@ export async function generateStrategyStream(
   strategyName?: string,
   messages?: { role: string; content: string }[],
 ): Promise<void> {
-  const FIRST_EVENT_TIMEOUT_MS = 45_000;
+  const FIRST_EVENT_TIMEOUT_MS = 90_000;
   const EVENT_GAP_TIMEOUT_MS = 120_000;
 
   const body: Record<string, unknown> = {
@@ -475,4 +475,11 @@ export async function createCheckoutSession(plan: string): Promise<CheckoutRespo
 
 export async function createBillingPortalSession(): Promise<PortalResponse> {
   return json<PortalResponse>("/api/backend/api/billing/portal", { method: "POST" });
+}
+
+export async function testLlmEndpoint(input: string): Promise<{ output: string }> {
+  return json<{ output: string }>("/api/relay/test", {
+    method: "POST",
+    body: JSON.stringify({ input: (input || "").trim() || "Hello" }),
+  });
 }

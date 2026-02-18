@@ -67,6 +67,14 @@ class RepairResponse(BaseModel):
     model_used: str | None = None
 
 
+class TestRequest(BaseModel):
+    input: str = "Hello"
+
+
+class TestResponse(BaseModel):
+    output: str
+
+
 class CapabilityResponse(BaseModel):
     supported_data_sources: list[str]
     supported_indicator_scopes: list[str]
@@ -412,6 +420,31 @@ def _strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         f"{code}\n\n"
         f"Summary:\n{summary or 'N/A'}"
     )
+
+
+@app.post("/test", response_model=TestResponse)
+async def test_llm(
+    body: TestRequest,
+    _: None = Depends(require_api_key),
+) -> TestResponse:
+    config = get_config()
+    if not config.is_azure_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Azure OpenAI not configured (missing env vars)",
+        )
+    try:
+        content, _ = chat_completion(
+            config,
+            system_content="Reply briefly to the user. Use the same language as the input.",
+            user_content=(body.input or "").strip() or "Hello",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Azure OpenAI call failed: {e!s}",
+        ) from e
+    return TestResponse(output=(content or "").strip())
 
 
 @app.get("/capabilities", response_model=CapabilityResponse)
