@@ -380,3 +380,28 @@ class LLMClient:
                                 pass
         except Exception as e:
             yield {"error": str(e)}
+
+    async def test_llm(self, input_text: str) -> tuple[str | None, str | None]:
+        """LLM 연결 테스트. Relay /test 호출.
+
+        Returns:
+            (output, error) - 성공 시 output, 실패 시 error 메시지
+        """
+        text = (input_text or "").strip() or "Hello"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                headers = {}
+                if self.api_key:
+                    headers["X-API-Key"] = self.api_key
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                response = await client.post(
+                    f"{self.base_url}/test",
+                    json={"input": text},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                output = data.get("output")
+                return (str(output).strip() if output else None, None)
+        except Exception as e:
+            return (None, str(e))

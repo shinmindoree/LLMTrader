@@ -120,6 +120,14 @@ class StrategyChatResponse(BaseModel):
     content: str
 
 
+class LlmTestRequest(BaseModel):
+    input: str = "Hello"
+
+
+class LlmTestResponse(BaseModel):
+    output: str
+
+
 class StrategyChatSessionUpsertRequest(BaseModel):
     title: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)

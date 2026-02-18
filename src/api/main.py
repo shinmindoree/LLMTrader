@@ -94,6 +94,8 @@ from api.schemas import (
     StrategySyntaxError,
     StrategySaveRequest,
     StrategySaveResponse,
+    LlmTestRequest,
+    LlmTestResponse,
     TradeResponse,
     BinanceAssetBalance,
     BinancePositionSummary,
@@ -652,6 +654,23 @@ def create_app() -> FastAPI:
             duration_ms=int((time.perf_counter() - started_at) * 1000),
         )
         return intake
+
+    @app.post(
+        "/api/llm-test",
+        response_model=LlmTestResponse,
+        dependencies=[Depends(require_auth)],
+    )
+    async def llm_test(body: LlmTestRequest) -> LlmTestResponse:
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        output, error = await client.test_llm(body.input)
+        if error:
+            raise HTTPException(status_code=502, detail=error)
+        if not output:
+            raise HTTPException(status_code=502, detail="Empty response from LLM")
+        return LlmTestResponse(output=output)
 
     @app.get(
         "/api/strategies/capabilities",

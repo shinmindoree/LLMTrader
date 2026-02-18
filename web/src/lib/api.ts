@@ -478,7 +478,7 @@ export async function createBillingPortalSession(): Promise<PortalResponse> {
 }
 
 export async function testLlmEndpoint(input: string): Promise<{ output: string }> {
-  return json<{ output: string }>("/api/relay/test", {
+  return json<{ output: string }>("/api/backend/api/llm-test", {
     method: "POST",
     body: JSON.stringify({ input: (input || "").trim() || "Hello" }),
   });
