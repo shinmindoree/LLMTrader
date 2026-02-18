@@ -22,7 +22,7 @@ class RelayConfig(BaseSettings):
     azure_openai_endpoint: str = Field(default="", alias="AZURE_OPENAI_ENDPOINT")
     azure_openai_model: str = Field(default="", alias="AZURE_OPENAI_MODEL")
     azure_openai_api_version: str = Field(
-        default="2024-08-01-preview",
+        default="",
         alias="AZURE_OPENAI_API_VERSION",
     )
     relay_api_key: str = Field(default="", alias="RELAY_API_KEY")
@@ -36,7 +36,12 @@ class RelayConfig(BaseSettings):
         return bool(self.azure_ai_project_endpoint)
 
     def is_azure_configured(self) -> bool:
+        api_version = (
+            self.azure_ai_project_openai_api_version or self.azure_openai_api_version
+        ).strip()
         if not self.azure_openai_model:
+            return False
+        if not api_version:
             return False
         if self.is_foundry_project_mode():
             return True

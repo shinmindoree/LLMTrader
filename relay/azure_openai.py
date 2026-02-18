@@ -56,8 +56,12 @@ def _foundry_openai_kwargs(config: RelayConfig) -> dict[str, str]:
     kwargs: dict[str, str] = {}
     if config.azure_ai_project_connection_name:
         kwargs["connection_name"] = config.azure_ai_project_connection_name
-    if config.azure_ai_project_openai_api_version:
-        kwargs["api_version"] = config.azure_ai_project_openai_api_version
+    api_version = (config.azure_ai_project_openai_api_version or config.azure_openai_api_version).strip()
+    if not api_version:
+        raise ValueError(
+            "Missing API version: set AZURE_AI_PROJECT_OPENAI_API_VERSION or AZURE_OPENAI_API_VERSION."
+        )
+    kwargs["api_version"] = api_version
     return kwargs
 
 
@@ -104,6 +108,9 @@ async def _foundry_async_client(config: RelayConfig):
 
 
 def _create_client(config: RelayConfig) -> AzureOpenAI:
+    api_version = config.azure_openai_api_version.strip()
+    if not api_version:
+        raise ValueError("Missing API version: set AZURE_OPENAI_API_VERSION.")
     credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
         credential,
@@ -112,11 +119,14 @@ def _create_client(config: RelayConfig) -> AzureOpenAI:
     return AzureOpenAI(
         azure_endpoint=config.azure_openai_endpoint.rstrip("/"),
         azure_ad_token_provider=token_provider,
-        api_version=config.azure_openai_api_version,
+        api_version=api_version,
     )
 
 
 def _create_async_client(config: RelayConfig) -> AsyncAzureOpenAI:
+    api_version = config.azure_openai_api_version.strip()
+    if not api_version:
+        raise ValueError("Missing API version: set AZURE_OPENAI_API_VERSION.")
     credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
         credential,
@@ -125,7 +135,7 @@ def _create_async_client(config: RelayConfig) -> AsyncAzureOpenAI:
     return AsyncAzureOpenAI(
         azure_endpoint=config.azure_openai_endpoint.rstrip("/"),
         azure_ad_token_provider=token_provider,
-        api_version=config.azure_openai_api_version,
+        api_version=api_version,
     )
 
 
