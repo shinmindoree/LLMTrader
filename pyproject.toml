@@ -41,6 +41,7 @@ dev = [
 ]
 relay = [
     "azure-identity>=1.15.0",
+    "azure-ai-projects>=1.0.0",
     "openai>=1.12.0",
 ]
 
