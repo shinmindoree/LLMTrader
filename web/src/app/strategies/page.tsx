@@ -20,13 +20,6 @@ import type {
   StrategySyntaxCheckResponse,
 } from "@/lib/types";
 
-const MODIFY_KEYWORDS =
-  /수정|바꿔|변경|추가해|제거|고쳐|개선|개선안|반영|적용|change|modify|update|add|remove|rewrite|revise|바꿔줘|수정해줘|변경해줘|적용해줘|반영해줘|다시\s*만들|다시\s*생성|다시\s*전략\s*생성|전략\s*재생성|재생성|regenerate/i;
-
-function isModifyIntent(text: string): boolean {
-  return MODIFY_KEYWORDS.test(text.trim());
-}
-
 function getLastCodeAndSummary(messages: ChatMessage[]): {
   code: string;
   summary: string | null;
@@ -751,8 +744,6 @@ export default function StrategiesPage() {
     const workspaceCodeTrimmed = workspaceCode.trim();
     const activeCode = workspaceCodeTrimmed || lastCodeSummary?.code || "";
     const activeSummary = workspaceCodeTrimmed ? workspaceSummary : (lastCodeSummary?.summary ?? null);
-    const isFirstTurn = !activeCode;
-    const isModify = !options?.forceChat && !isFirstTurn && isModifyIntent(trimmed);
 
     const doGenerate = (
       messagesToSend?: { role: string; content: string }[],
@@ -838,48 +829,38 @@ export default function StrategiesPage() {
       repair_attempts: 0,
       textOnly: false,
       status: "thinking",
-      statusText: "요청 분석 중...",
+      statusText: "코드 생성 중...",
     };
 
-    if (isFirstTurn || isModify) {
-      setChatMessages((prev) => [...prev, assistantMessage]);
+    if (options?.forceChat && activeCode) {
+      setChatMessages((prev) => [...prev, { ...assistantMessage, textOnly: true }]);
       try {
-        const messagesToSend = buildMessagesForGeneration(
-          nextMessages,
-          isFirstTurn ? null : activeCode,
+        const chatMessagesForApi = toApiMessages(nextMessages);
+        const res = await strategyChat(
+          activeCode,
+          activeSummary,
+          chatMessagesForApi,
         );
-        setChatMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, status: "thinking", statusText: "전략 생성 준비 중..." }
-              : m,
-          ),
-        );
-        await doGenerate(messagesToSend);
+        await animateAssistantTyping(assistantId, res.content);
       } catch (e) {
         setChatError(String(e));
         setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      } finally {
         setIsSending(false);
       }
       return;
     }
 
-    setChatMessages((prev) => [
-      ...prev,
-      { ...assistantMessage, textOnly: true, status: "thinking", statusText: "답변 준비 중..." },
-    ]);
+    setChatMessages((prev) => [...prev, assistantMessage]);
     try {
-      const chatMessagesForApi = toApiMessages(nextMessages);
-      const res = await strategyChat(
-        activeCode,
-        activeSummary,
-        chatMessagesForApi,
+      const messagesToSend = buildMessagesForGeneration(
+        nextMessages,
+        activeCode || null,
       );
-      await animateAssistantTyping(assistantId, res.content);
+      await doGenerate(messagesToSend);
     } catch (e) {
       setChatError(String(e));
       setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
-    } finally {
       setIsSending(false);
     }
   };

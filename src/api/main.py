@@ -246,7 +246,6 @@ def _strip_first_line_lang_tag(content: str) -> str:
 
 _INTAKE_ALLOWED_STATUSES = {"READY", "NEEDS_CLARIFICATION", "UNSUPPORTED_CAPABILITY", "OUT_OF_SCOPE"}
 _INTAKE_ALLOWED_INTENTS = {"OUT_OF_SCOPE", "STRATEGY_CREATE", "STRATEGY_MODIFY", "STRATEGY_QA"}
-_MAX_AUTO_REPAIR_ATTEMPTS = 2
 
 
 def _normalize_intake_payload(raw: dict[str, Any]) -> StrategyIntakeResponse:
@@ -387,69 +386,6 @@ def _verify_strategy_backtest(strategy_path: Path, repo_root: Path) -> None:
     if result.returncode != 0:
         stderr = result.stderr or result.stdout or ""
         raise ValueError(f"Backtest failed: {stderr[:2000]}")
-
-
-def _verify_code_once(code: str, repo_root: Path) -> None:
-    temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
-    try:
-        temp_path.write_text(code, encoding="utf-8")
-        _verify_strategy_load(temp_path, repo_root)
-        _verify_strategy_backtest(temp_path, repo_root)
-    finally:
-        _cleanup_verify_temp(temp_path)
-
-
-async def _verify_with_auto_repair(
-    *,
-    client: LLMClient,
-    initial_code: str,
-    prompt: str,
-    messages: list[dict[str, str]] | None,
-    repo_root: Path,
-) -> tuple[str, int]:
-    code = _strip_code_fences(initial_code)
-    if not code:
-        raise HTTPException(status_code=502, detail="LLM returned empty code")
-
-    repair_attempts = 0
-    while True:
-        try:
-            _verify_code_once(code, repo_root)
-            return code, repair_attempts
-        except Exception as exc:  # noqa: BLE001
-            verification_error = str(exc)
-            if repair_attempts >= _MAX_AUTO_REPAIR_ATTEMPTS:
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        "Strategy verification failed after auto-repair attempts: "
-                        f"{verification_error}"
-                    ),
-                ) from exc
-
-            repair = await client.repair_strategy(
-                code=code,
-                verification_error=verification_error,
-                user_prompt=prompt,
-                messages=messages,
-            )
-            if not repair.success or not repair.code:
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        "Strategy verification failed and auto-repair could not fix it: "
-                        f"{verification_error} / repair_error={repair.error or 'unknown'}"
-                    ),
-                ) from exc
-
-            repaired_code = _strip_code_fences(repair.code)
-            if not repaired_code:
-                raise HTTPException(
-                    status_code=502,
-                    detail="Auto-repair returned empty code",
-                ) from exc
-            code = repaired_code
-            repair_attempts += 1
 
 
 def create_app() -> FastAPI:
@@ -834,22 +770,6 @@ def create_app() -> FastAPI:
         quality_logged = False
 
         try:
-            dirs = _strategy_dirs()
-            if not dirs:
-                await _record_strategy_quality(
-                    request_id=request_id,
-                    endpoint="generate",
-                    user_prompt_len=len(prompt),
-                    message_count=message_count,
-                    generation_attempted=False,
-                    generation_success=False,
-                    error_stage="strategy_dirs",
-                    error_message="STRATEGY_DIRS is not configured",
-                    duration_ms=int((time.perf_counter() - started_at) * 1000),
-                )
-                quality_logged = True
-                raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
-
             try:
                 client = LLMClient()
             except ValueError as exc:
@@ -889,16 +809,8 @@ def create_app() -> FastAPI:
                 quality_logged = True
                 raise HTTPException(status_code=502, detail=result.error or "LLM generation failed")
 
-            repo_root = _repo_root()
-            try:
-                code, repair_attempts = await _verify_with_auto_repair(
-                    client=client,
-                    initial_code=result.code,
-                    prompt=prompt,
-                    messages=openai_messages,
-                    repo_root=repo_root,
-                )
-            except HTTPException as exc:
+            code = _strip_code_fences(result.code)
+            if not code:
                 await _record_strategy_quality(
                     request_id=request_id,
                     endpoint="generate",
@@ -907,23 +819,22 @@ def create_app() -> FastAPI:
                     generation_attempted=True,
                     generation_success=False,
                     verification_passed=False,
-                    error_stage="verification",
-                    error_message=str(exc.detail),
+                    error_stage="empty_code",
+                    error_message="LLM returned empty code",
                     model_used=result.model_used,
                     duration_ms=int((time.perf_counter() - started_at) * 1000),
                 )
                 quality_logged = True
-                raise
+                raise HTTPException(status_code=502, detail="LLM returned empty code")
 
-            summary = await client.summarize_strategy(code)
             response = StrategyGenerateResponse(
                 path=None,
                 code=code,
                 model_used=result.model_used,
-                summary=summary,
-                backtest_ok=True,
-                repaired=repair_attempts > 0,
-                repair_attempts=repair_attempts,
+                summary=None,
+                backtest_ok=False,
+                repaired=False,
+                repair_attempts=0,
             )
             await _record_strategy_quality(
                 request_id=request_id,
@@ -933,13 +844,15 @@ def create_app() -> FastAPI:
                 generation_attempted=True,
                 generation_success=True,
                 verification_passed=True,
-                repaired=repair_attempts > 0,
-                repair_attempts=repair_attempts,
+                repaired=False,
+                repair_attempts=0,
                 model_used=result.model_used,
                 duration_ms=int((time.perf_counter() - started_at) * 1000),
             )
             quality_logged = True
             return response
+        except HTTPException:
+            raise
         except Exception as exc:
             if not quality_logged:
                 await _record_strategy_quality(
@@ -1004,16 +917,6 @@ def create_app() -> FastAPI:
             )
             yield f"data: {json.dumps({'error': 'user_prompt must be non-empty'})}\n\n"
             return
-        dirs = _strategy_dirs()
-        if not dirs:
-            await _log_once(
-                generation_attempted=False,
-                generation_success=False,
-                error_stage="strategy_dirs",
-                error_message="STRATEGY_DIRS is not configured",
-            )
-            yield f"data: {json.dumps({'error': 'STRATEGY_DIRS is not configured'})}\n\n"
-            return
         try:
             client = LLMClient()
         except ValueError as exc:
@@ -1028,7 +931,6 @@ def create_app() -> FastAPI:
 
         openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
 
-        repo_root = _repo_root()
         code_acc: list[str] = []
         try:
             if messages:
@@ -1072,32 +974,12 @@ def create_app() -> FastAPI:
             )
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
             return
-        try:
-            code, repair_attempts = await _verify_with_auto_repair(
-                client=client,
-                initial_code=code,
-                prompt=prompt,
-                messages=openai_messages,
-                repo_root=repo_root,
-            )
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
-            await _log_once(
-                generation_attempted=True,
-                generation_success=False,
-                verification_passed=False,
-                error_stage="verification",
-                error_message=detail,
-            )
-            yield f"data: {json.dumps({'done': True, 'error': detail, 'code': code})}\n\n"
-            return
-        summary = await client.summarize_strategy(code)
         await _log_once(
             generation_attempted=True,
             generation_success=True,
             verification_passed=True,
-            repaired=repair_attempts > 0,
-            repair_attempts=repair_attempts,
+            repaired=False,
+            repair_attempts=0,
         )
         yield (
             "data: "
@@ -1105,10 +987,10 @@ def create_app() -> FastAPI:
                 {
                     "done": True,
                     "code": code,
-                    "summary": summary,
-                    "backtest_ok": True,
-                    "repaired": repair_attempts > 0,
-                    "repair_attempts": repair_attempts,
+                    "summary": None,
+                    "backtest_ok": False,
+                    "repaired": False,
+                    "repair_attempts": 0,
                 }
             )
             + "\n\n"

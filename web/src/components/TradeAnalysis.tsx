@@ -422,7 +422,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                   <th className="px-4 py-2">Symbol</th>
                   <th className="px-4 py-2">Price</th>
                   <th className="px-4 py-2">Side</th>
-                  <th className="px-4 py-2">Entry/Exit</th>
                   <th className="px-4 py-2">Position(Qty)</th>
                   <th className="px-4 py-2">Position(USDT)</th>
                   <th className="px-4 py-2">PnL</th>
@@ -449,9 +448,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                       }`}
                     >
                       {t.side ?? "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.side === "BUY" ? "Entry" : "Exit"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.quantity !== null ? formatNumber(t.quantity, 6) : "-"}
@@ -491,7 +487,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                   <th className="px-4 py-2">Symbol</th>
                   <th className="px-4 py-2">Price</th>
                   <th className="px-4 py-2">Side</th>
-                  <th className="px-4 py-2">Entry/Exit</th>
                   <th className="px-4 py-2">Position(Qty)</th>
                   <th className="px-4 py-2">Position(USDT)</th>
                   <th className="px-4 py-2">PnL</th>
@@ -516,9 +511,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                       }`}
                     >
                       {t.side ?? "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.side === "BUY" ? "Entry" : "Exit"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.quantity !== null ? formatNumber(t.quantity, 6) : "-"}
