@@ -26,8 +26,8 @@ export default function DashboardPage() {
   useEffect(() => {
     Promise.all([
       listStrategies().then((s) => setStrategyCount(s.length)),
-      listJobs({ type: "BACKTEST", limit: 9999 }).then((j) => setBacktestCount(j.length)),
-      listJobs({ type: "LIVE", limit: 9999 }).then((j) =>
+      listJobs({ type: "BACKTEST", limit: 200 }).then((j) => setBacktestCount(j.length)),
+      listJobs({ type: "LIVE", limit: 200 }).then((j) =>
         setRunningLiveCount(j.filter((x) => x.status === "RUNNING").length),
       ),
       getBinanceKeysStatus().then(setKeysStatus),
