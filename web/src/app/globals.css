@@ -43,3 +43,45 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
+
+@keyframes page-load-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes page-load-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.page-load-spinner {
+  position: relative;
+  width: 48px;
+  height: 48px;
+}
+
+.page-load-spinner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+}
+
+.page-load-spinner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  animation: page-load-spin 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.page-load-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: page-load-dot 1.2s ease-in-out infinite;
+}

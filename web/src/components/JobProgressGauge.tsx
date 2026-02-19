@@ -50,8 +50,6 @@ export function JobProgressGauge({
         const pct = clampPct(pctRaw);
         if (ev.message === "DATA_FETCH") {
           setDataFetchPct((prev) => (prev === null ? pct : Math.max(prev, pct)));
-        } else if (ev.message === "BACKTEST_PROGRESS") {
-          setBacktestPct((prev) => (prev === null ? pct : Math.max(prev, pct)));
         } else {
           setBacktestPct((prev) => (prev === null ? pct : Math.max(prev, pct)));
         }
@@ -68,10 +66,13 @@ export function JobProgressGauge({
     return null;
   }
 
-  const showFetch = dataFetchPct !== null || (!finished && backtestPct === null);
-  const showBacktest = backtestPct !== null || !finished;
-  const displayFetchPct = dataFetchPct !== null ? (finished ? 100 : dataFetchPct) : null;
-  const displayBacktestPct = backtestPct !== null ? (finished ? 100 : backtestPct) : null;
+  const dataFetchDone = (dataFetchPct ?? 0) >= 100 || finished;
+  const combinedPct = finished
+    ? 100
+    : dataFetchDone
+      ? 50 + (50 * (backtestPct ?? 0)) / 100
+      : (50 * (dataFetchPct ?? 0)) / 100;
+  const displayPct = clampPct(combinedPct);
 
   return (
     <section className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
@@ -83,36 +84,17 @@ export function JobProgressGauge({
         </span>
       </div>
 
-      <div className="mt-3 space-y-3">
-        {showFetch ? (
-          <div>
-            <div className="mb-1 flex items-center justify-between text-xs text-[#d1d4dc]">
-              <span>Data Fetch</span>
-              <span className="text-[#868993]">{formatPct(displayFetchPct)}</span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-[#0f141f]">
-              <div
-                className="h-full rounded-full bg-[#2962ff] transition-[width] duration-300"
-                style={{ width: `${displayFetchPct ?? 0}%` }}
-              />
-            </div>
-          </div>
-        ) : null}
-
-        {showBacktest ? (
-          <div>
-            <div className="mb-1 flex items-center justify-between text-xs text-[#d1d4dc]">
-              <span>Backtest Run</span>
-              <span className="text-[#868993]">{formatPct(displayBacktestPct)}</span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-[#0f141f]">
-              <div
-                className="h-full rounded-full bg-[#26a69a] transition-[width] duration-300"
-                style={{ width: `${displayBacktestPct ?? 0}%` }}
-              />
-            </div>
-          </div>
-        ) : null}
+      <div className="mt-3">
+        <div className="mb-1 flex items-center justify-between text-xs text-[#d1d4dc]">
+          <span>Progress</span>
+          <span className="text-[#868993]">{formatPct(displayPct)}</span>
+        </div>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-[#0f141f]">
+          <div
+            className="h-full rounded-full bg-[#2962ff] transition-[width] duration-300"
+            style={{ width: `${displayPct}%` }}
+          />
+        </div>
       </div>
     </section>
   );

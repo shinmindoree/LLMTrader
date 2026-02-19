@@ -29,9 +29,10 @@ type LatestJobResultProps = {
   jobType: JobType;
   focusJobId?: string | null;
   title: string;
+  showPendingSpinner?: boolean;
 };
 
-export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultProps) {
+export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner }: LatestJobResultProps) {
   const [job, setJob] = useState<Job | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -94,28 +95,43 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-sm font-semibold text-[#d1d4dc]">{title}</div>
-            {job ? (
+            {!showPendingSpinner && job ? (
               <div className="mt-1 text-xs text-[#868993]">{strategyNameFromPath(job.strategy_path)}</div>
             ) : null}
           </div>
-          {job ? <JobStatusBadge status={job.status} /> : null}
+          {!showPendingSpinner && job ? <JobStatusBadge status={job.status} /> : null}
         </div>
 
-        {loading && !job ? (
-          <div className="mt-4 text-sm text-[#868993]">Loading latest run…</div>
+        {(loading && !job) || showPendingSpinner ? (
+          <div className="mt-4 flex flex-col items-center justify-center gap-3 py-6">
+            <div className="page-load-spinner" aria-hidden />
+            <div className="flex gap-1.5">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="page-load-dot"
+                  style={{ animationDelay: `${i * 0.15}s` }}
+                  aria-hidden
+                />
+              ))}
+            </div>
+            <span className="text-sm text-[#868993]">
+              {showPendingSpinner ? "Starting run…" : "Loading latest run…"}
+            </span>
+          </div>
         ) : null}
 
-        {error ? (
+        {!showPendingSpinner && error ? (
           <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
             {error}
           </p>
         ) : null}
 
-        {!job && !loading && !error ? (
+        {!showPendingSpinner && !job && !loading && !error ? (
           <div className="mt-4 text-sm text-[#868993]">No runs yet. Start one to see results here.</div>
         ) : null}
 
-        {job ? (
+        {!showPendingSpinner && job ? (
           <div className="mt-3 text-xs text-[#868993]">
             <span>Created {formatDateTime(job.created_at)}</span>
             <span className="mx-2">•</span>
@@ -123,22 +139,23 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
           </div>
         ) : null}
 
-        {job?.error ? (
+        {!showPendingSpinner && job?.error ? (
           <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
             {job.error}
           </p>
         ) : null}
 
-        {job && !finished && !hasLiveTrades ? (
+        {!showPendingSpinner && job && !finished && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             Run in progress. Results will appear here once it finishes.
           </div>
         ) : null}
 
-        {job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
+        {!showPendingSpinner && job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
-        {(job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
-        (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result)))) ? (
+        {!showPendingSpinner &&
+        ((job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
+        (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result))))) ? (
           <JobResultSummary
             type={job!.type}
             result={job!.result && isRecord(job!.result) ? job!.result : {}}
@@ -146,27 +163,27 @@ export function LatestJobResult({ jobType, focusJobId, title }: LatestJobResultP
           />
         ) : null}
 
-        {job && finished && job.type === "BACKTEST" ? (
+        {!showPendingSpinner && job && finished && job.type === "BACKTEST" ? (
           <TradeAnalysis job={job} liveTrades={[]} />
         ) : null}
 
-        {job && job.type === "LIVE" ? (
+        {!showPendingSpinner && job && job.type === "LIVE" ? (
           <TradeAnalysis job={job} liveTrades={trades} />
         ) : null}
 
-        {job && finished && job.result && !isRecord(job.result) ? (
+        {!showPendingSpinner && job && finished && job.result && !isRecord(job.result) ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             Result payload is not structured for summary. See raw payload below.
           </div>
         ) : null}
 
-        {job && finished && !job.result && !hasLiveTrades ? (
+        {!showPendingSpinner && job && finished && !job.result && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             No result payload found for this run.
           </div>
         ) : null}
 
-        {job?.result ? (
+        {!showPendingSpinner && job?.result ? (
           <details className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
             <summary className="cursor-pointer text-xs text-[#868993]">Technical result payload</summary>
             <pre className="mt-3 max-h-[240px] overflow-auto text-xs text-[#d1d4dc]">

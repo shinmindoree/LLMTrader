@@ -41,7 +41,7 @@ export default function AuthPage() {
         setMessage("회원가입 완료. 이메일 인증 후 로그인하세요.");
         return;
       }
-      window.location.href = "/";
+      window.location.href = "/dashboard";
     } catch {
       setError("요청 처리 중 오류가 발생했습니다.");
     } finally {

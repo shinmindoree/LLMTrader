@@ -6,17 +6,17 @@ import { usePathname } from "next/navigation";
 type NavItem = { href: string; label: string; section?: string };
 
 const NAV_ITEMS: NavItem[] = [
-  { href: "/", label: "Home" },
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/strategies", label: "Strategies" },
-  { href: "/admin", label: "Admin" },
-  { href: "/live", label: "Live" },
   { href: "/backtest", label: "Backtest" },
+  { href: "/live", label: "Live" },
   { href: "/settings", label: "Settings", section: "account" },
   { href: "/billing", label: "Billing", section: "account" },
+  { href: "/admin", label: "Admin", section: "account" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
+  if (href === "/dashboard") return pathname === "/dashboard";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

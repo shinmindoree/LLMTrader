@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
 import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
@@ -11,6 +11,7 @@ import { jobDetailPath } from "@/lib/routes";
 import { BacktestForm } from "./new/BacktestForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
+const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
 
 function strategyNameFromPath(path: string): string {
   const trimmed = path.trim();
@@ -27,8 +28,9 @@ export default function BacktestJobsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [latestJob, setLatestJob] = useState<Job | null>(null);
+  const [runPending, setRunPending] = useState(false);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setError(null);
       const data = await listJobs({ type: "BACKTEST", limit: 200 });
@@ -36,11 +38,18 @@ export default function BacktestJobsPage() {
     } catch (e) {
       setError(String(e));
     }
-  };
+  }, []);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
+
+  const hasActiveJobs = items.some((j) => ACTIVE_STATUSES.has(j.status));
+  useEffect(() => {
+    if (!hasActiveJobs) return;
+    const interval = setInterval(refresh, 2000);
+    return () => clearInterval(interval);
+  }, [hasActiveJobs, refresh]);
 
   useEffect(() => {
     listStrategies()
@@ -180,7 +189,11 @@ export default function BacktestJobsPage() {
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">New Backtest</div>
         <p className="mb-3 text-xs text-[#868993]">Create a backtest run stored in Postgres.</p>
         {strategies.length ? (
-          <BacktestForm strategies={strategies} onCreated={onCreated} />
+          <BacktestForm
+            strategies={strategies}
+            onCreated={onCreated}
+            onSubmittingChange={setRunPending}
+          />
         ) : (
           <div className="text-sm text-[#868993]">Loading…</div>
         )}
@@ -190,6 +203,7 @@ export default function BacktestJobsPage() {
         jobType="BACKTEST"
         focusJobId={latestJob?.job_id ?? null}
         title="Latest Backtest Result"
+        showPendingSpinner={runPending}
       />
 
       <section className="mt-10">

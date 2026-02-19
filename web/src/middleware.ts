@@ -22,7 +22,7 @@ export function middleware(req: NextRequest): NextResponse {
     const session = readSessionCookies(req.cookies);
     if (pathname === "/auth" && session) {
       const url = req.nextUrl.clone();
-      url.pathname = "/";
+      url.pathname = "/dashboard";
       url.search = "";
       return NextResponse.redirect(url);
     }

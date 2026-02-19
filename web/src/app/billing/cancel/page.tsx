@@ -21,7 +21,7 @@ export default function BillingCancelPage() {
           </Link>
           <Link
             className="rounded-lg border border-[#2a2e39] px-6 py-2.5 text-sm text-[#868993] hover:text-[#d1d4dc] hover:border-[#d1d4dc] transition-colors"
-            href="/"
+            href="/dashboard"
           >
             Back to Dashboard
           </Link>

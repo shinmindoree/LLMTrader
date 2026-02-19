@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { deleteAllJobs, deleteJob, getBinanceKeysStatus, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
 import type { BinanceKeysStatus, Job, JobStatus, StrategyInfo } from "@/lib/types";
@@ -11,6 +11,7 @@ import { jobDetailPath } from "@/lib/routes";
 import { LiveForm } from "./new/LiveForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
+const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
 
 function strategyNameFromPath(path: string): string {
   const trimmed = path.trim();
@@ -28,8 +29,9 @@ export default function LiveJobsPage() {
   const [busy, setBusy] = useState(false);
   const [latestJob, setLatestJob] = useState<Job | null>(null);
   const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
+  const [runPending, setRunPending] = useState(false);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setError(null);
       const data = await listJobs({ type: "LIVE", limit: 200 });
@@ -37,12 +39,19 @@ export default function LiveJobsPage() {
     } catch (e) {
       setError(String(e));
     }
-  };
+  }, []);
 
   useEffect(() => {
     refresh();
     getBinanceKeysStatus().then(setKeysStatus).catch(() => {});
-  }, []);
+  }, [refresh]);
+
+  const hasActiveJobs = items.some((j) => ACTIVE_STATUSES.has(j.status));
+  useEffect(() => {
+    if (!hasActiveJobs) return;
+    const interval = setInterval(refresh, 2000);
+    return () => clearInterval(interval);
+  }, [hasActiveJobs, refresh]);
 
   useEffect(() => {
     listStrategies()
@@ -205,13 +214,22 @@ export default function LiveJobsPage() {
           Caution: this places real testnet orders. Only one stream is supported in this MVP.
         </p>
         {strategies.length ? (
-          <LiveForm strategies={strategies} onCreated={onCreated} />
+          <LiveForm
+            strategies={strategies}
+            onCreated={onCreated}
+            onSubmittingChange={setRunPending}
+          />
         ) : (
           <div className="text-sm text-[#868993]">Loading…</div>
         )}
       </section>
 
-      <LatestJobResult jobType="LIVE" focusJobId={latestJob?.job_id ?? null} title="Latest Live Result" />
+      <LatestJobResult
+        jobType="LIVE"
+        focusJobId={latestJob?.job_id ?? null}
+        title="Latest Live Result"
+        showPendingSpinner={runPending}
+      />
 
       <section className="mt-10">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">Run History</div>

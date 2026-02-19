@@ -63,9 +63,11 @@ function formatPolicyMessages(title: string, items: string[]): string {
 export function BacktestForm({
   strategies,
   onCreated,
+  onSubmittingChange,
 }: {
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
+  onSubmittingChange?: (submitting: boolean) => void;
 }) {
   const defaults = loadExecutionDefaults();
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
@@ -79,6 +81,7 @@ export function BacktestForm({
   const [startDate, setStartDate] = useState(() => formatDateInputValue(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
   const [endDate, setEndDate] = useState(() => formatDateInputValue(now));
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const openDatePicker = (event: FocusEvent<HTMLInputElement> | MouseEvent<HTMLInputElement>) => {
     const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
@@ -89,6 +92,8 @@ export function BacktestForm({
 
   const onSubmit = async () => {
     setError(null);
+    setSubmitting(true);
+    onSubmittingChange?.(true);
     try {
       const startParts = parseDateInputValue(startDate);
       const endParts = parseDateInputValue(endDate);
@@ -143,6 +148,9 @@ export function BacktestForm({
       onCreated?.(job);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setSubmitting(false);
+      onSubmittingChange?.(false);
     }
   };
 
@@ -268,8 +276,9 @@ export function BacktestForm({
       </div>
 
       <button
-        className="mt-5 rounded bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] transition-colors"
+        className="mt-5 rounded bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         onClick={onSubmit}
+        disabled={submitting}
       >
         Run Backtest
       </button>

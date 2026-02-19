@@ -43,9 +43,11 @@ function formatPolicyMessages(title: string, items: string[]): string {
 export function LiveForm({
   strategies,
   onCreated,
+  onSubmittingChange,
 }: {
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
+  onSubmittingChange?: (submitting: boolean) => void;
 }) {
   const defaults = loadExecutionDefaults();
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
@@ -57,9 +59,12 @@ export function LiveForm({
   const [stopLossPct, setStopLossPct] = useState(0.05);
   const [stoplossCooldownCandles, setStoplossCooldownCandles] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const onSubmit = async () => {
     setError(null);
+    setSubmitting(true);
+    onSubmittingChange?.(true);
     try {
       const config = {
         streams: [
@@ -105,6 +110,9 @@ export function LiveForm({
       onCreated?.(job);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setSubmitting(false);
+      onSubmittingChange?.(false);
     }
   };
 
@@ -221,8 +229,9 @@ export function LiveForm({
       </div>
 
       <button
-        className="mt-5 rounded bg-[#ef5350] px-4 py-2 text-sm text-white hover:bg-[#d32f2f] transition-colors"
+        className="mt-5 rounded bg-[#ef5350] px-4 py-2 text-sm text-white hover:bg-[#d32f2f] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         onClick={onSubmit}
+        disabled={submitting}
       >
         Run Live (Testnet)
       </button>

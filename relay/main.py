@@ -446,7 +446,7 @@ async def test_llm(
     try:
         content, _ = chat_completion(
             config,
-            system_content="Reply briefly to the user. Use the same language as the input.",
+            system_content="Use the same language as the input.",
             user_content=(body.input or "").strip() or "Hello",
         )
     except Exception as e:
