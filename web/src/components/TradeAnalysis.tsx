@@ -27,6 +27,10 @@ type ChartPoint = {
   timestamp: number | null;
   pnl: number;
   equity: number;
+  symbol: string | null;
+  side: string | null;
+  positionSizeUsdt: number | null;
+  reason: string | null;
 };
 
 const asNumber = (value: unknown): number | null =>
@@ -220,6 +224,10 @@ function buildEquitySeries(trades: NormalizedTrade[], initialEquity: number | nu
         timestamp: trade.timestamp,
         pnl: trade.pnl,
         equity,
+        symbol: trade.symbol,
+        side: trade.side,
+        positionSizeUsdt: trade.positionSizeUsdt,
+        reason: trade.exitReason ?? trade.reason,
       });
     }
   }
@@ -266,10 +274,15 @@ function enrichLiveTrades(
 function Chart({
   points,
   showEquity,
+  backtestSymbol,
 }: {
   points: ChartPoint[];
   showEquity: boolean;
+  backtestSymbol: string | null;
 }) {
+  const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+
   if (!points.length) {
     return (
       <div className="rounded border border-[#2a2e39] bg-[#131722] px-4 py-6 text-center text-xs text-[#868993]">
@@ -307,8 +320,13 @@ function Chart({
     })
     .join(" ");
 
+  const symbolLabel = (p: ChartPoint) => p.symbol ?? backtestSymbol ?? "-";
+
   return (
-    <div className="rounded border border-[#2a2e39] bg-[#131722] p-4">
+    <div
+      className="relative rounded border border-[#2a2e39] bg-[#131722] p-4"
+      onMouseLeave={() => setHoveredPoint(null)}
+    >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#868993]">
         <div>
           <span className="mr-3 inline-flex items-center gap-2">
@@ -322,6 +340,36 @@ function Chart({
           {points.length} trades - PnL range +/-{formatNumber(maxAbsPnl, 2)} USDT
         </div>
       </div>
+      {hoveredPoint ? (
+        <div
+          className="pointer-events-none fixed z-50 min-w-[180px] rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-xs shadow-lg"
+          style={{ left: tooltipPos.x + 12, top: tooltipPos.y + 12 }}
+        >
+          <ul className="list-inside list-disc space-y-1 text-[#d1d4dc]">
+            <li>Time: {formatDateTime(hoveredPoint.timestamp)}</li>
+            <li>Symbol: {symbolLabel(hoveredPoint)}</li>
+            <li>Side: {hoveredPoint.side ?? "-"}</li>
+            <li>
+              Position (USDT):{" "}
+              {hoveredPoint.positionSizeUsdt !== null
+                ? formatNumber(hoveredPoint.positionSizeUsdt, 2)
+                : "-"}
+            </li>
+            <li>
+              PnL:{" "}
+              <span
+                className={
+                  hoveredPoint.pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
+                }
+              >
+                {formatSigned(hoveredPoint.pnl, "USDT")}
+              </span>
+            </li>
+            <li>Equity: {formatNumber(hoveredPoint.equity, 2)} USDT</li>
+            <li>Reason: {hoveredPoint.reason ?? "-"}</li>
+          </ul>
+        </div>
+      ) : null}
       <svg
         viewBox={`0 0 ${width} ${height}`}
         className="w-full"
@@ -337,7 +385,14 @@ function Chart({
           const yTop = p.pnl >= 0 ? y : yZero;
           const color = p.pnl >= 0 ? "#26a69a" : "#ef5350";
           return (
-            <g key={`bar-${p.index}`}>
+            <g
+              key={`bar-${p.index}`}
+              onMouseEnter={(e) => {
+                setHoveredPoint(p);
+                setTooltipPos({ x: e.clientX, y: e.clientY });
+              }}
+              onMouseMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
+            >
               <rect
                 x={xCenter - barWidth / 2}
                 y={yTop}
@@ -360,11 +415,21 @@ function Chart({
               const x = padding + idx * step;
               const y = yEq(p.equity);
               return (
-                <circle key={`pt-${p.index}`} cx={x} cy={y} r={3} fill="#42a5f5">
-                  <title>
-                    {`#${p.index} ${formatDateTime(p.timestamp)}\nEquity ${formatSigned(p.equity, "USDT")}`}
-                  </title>
-                </circle>
+                <g
+                  key={`pt-${p.index}`}
+                  onMouseEnter={(e) => {
+                    setHoveredPoint(p);
+                    setTooltipPos({ x: e.clientX, y: e.clientY });
+                  }}
+                  onMouseMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
+                >
+                  <circle cx={x} cy={y} r={8} fill="transparent" />
+                  <circle cx={x} cy={y} r={3} fill="#42a5f5">
+                    <title>
+                      {`#${p.index} ${formatDateTime(p.timestamp)}\nEquity ${formatSigned(p.equity, "USDT")}`}
+                    </title>
+                  </circle>
+                </g>
               );
             })}
           </>
@@ -612,7 +677,11 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 </div>
               ) : null}
 
-              <Chart points={chartPoints} showEquity={initialEquity !== null} />
+              <Chart
+                points={chartPoints}
+                showEquity={initialEquity !== null}
+                backtestSymbol={backtestSymbol}
+              />
             </>
           ) : (
             <div className="rounded border border-[#2a2e39] bg-[#0f141f]">
