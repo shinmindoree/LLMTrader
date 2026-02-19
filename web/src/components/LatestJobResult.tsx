@@ -90,7 +90,8 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
   const finished = useMemo(() => (job ? FINISHED_STATUSES.has(job.status) : false), [job]);
   const hasLiveTrades = jobType === "LIVE" && trades.length > 0;
   const showPlaceholderGauge =
-    showPendingSpinner || (!!focusJobId && loading && !job);
+    showPendingSpinner ||
+    (!!focusJobId && ((loading && !job) || (job != null && job.job_id !== focusJobId)));
 
   return (
     <section className="mt-10">

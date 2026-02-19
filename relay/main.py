@@ -23,7 +23,14 @@ from relay.capability_registry import (
     detect_unsupported_requirements,
 )
 from relay.config import get_config
-from relay.prompts import build_intake_system_prompt, build_repair_system_prompt, build_system_prompt
+from relay.prompts import (
+    SUMMARY_SYSTEM_PROMPT,
+    TEST_SYSTEM_PROMPT,
+    build_intake_system_prompt,
+    build_repair_system_prompt,
+    build_strategy_chat_system_prompt,
+    build_system_prompt,
+)
 
 
 app = FastAPI(title="LLMTrader Relay", version="0.1.0")
@@ -91,11 +98,6 @@ class SummarizeRequest(BaseModel):
 
 class SummarizeResponse(BaseModel):
     summary: str
-
-
-SUMMARY_SYSTEM_PROMPT = """You summarize trading strategy Python code in Korean.
-Output only a short summary: 1) overall strategy in 2-3 lines, 2) entry conditions in one line, 3) exit conditions in one line.
-No code, no markdown."""
 
 
 class StrategyChatRequest(BaseModel):
@@ -410,20 +412,6 @@ def _sanitize_intake_response(
     )
 
 
-def _strategy_chat_system_prompt(code: str, summary: str | None) -> str:
-    return (
-        "You are a trading strategy assistant. The user has the following strategy. "
-        "Answer their questions in natural language. Do not generate new code. "
-        "Use Korean if the user writes in Korean. "
-        "If the user asks for more detail, continue from the prior summary and expand it step-by-step "
-        "(strategy overview -> entry flow -> exit flow -> risk/position sizing -> practical cautions) "
-        "instead of restarting from scratch.\n\n"
-        "Strategy code:\n"
-        f"{code}\n\n"
-        f"Summary:\n{summary or 'N/A'}"
-    )
-
-
 def _raise_llm_http_error(endpoint: str, exc: Exception) -> None:
     logger.exception("LLM call failed at %s: %s", endpoint, exc)
     raise HTTPException(
@@ -446,7 +434,7 @@ async def test_llm(
     try:
         content, _ = chat_completion(
             config,
-            system_content="Use the same language as the input.",
+            system_content=TEST_SYSTEM_PROMPT,
             user_content=(body.input or "").strip() or "Hello",
         )
     except Exception as e:
@@ -487,7 +475,7 @@ async def strategy_chat(
         )
 
     try:
-        system_content = _strategy_chat_system_prompt(code, body.summary)
+        system_content = build_strategy_chat_system_prompt(code, body.summary)
         openai_messages = [{"role": m.role, "content": m.content} for m in messages]
         content, _ = chat_completion_messages(
             config,
