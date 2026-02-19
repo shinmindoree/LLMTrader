@@ -39,7 +39,7 @@ function modeBadge(mode: BinanceAccountSummary["mode"]): string {
   return "Custom";
 }
 
-export function BinanceAccountPanel() {
+export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
   const [snapshot, setSnapshot] = useState<BinanceAccountSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -72,14 +72,16 @@ export function BinanceAccountPanel() {
   const lastUpdated = snapshot?.update_time ? new Date(snapshot.update_time).toLocaleString() : "-";
 
   return (
-    <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5">
+    <section className={embedded ? "" : "mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-[#d1d4dc]">Binance Asset Overview</h2>
-          <p className="mt-1 text-xs text-[#868993]">
-            Futures account snapshot with 15s auto-refresh
-          </p>
-        </div>
+        {!embedded && (
+          <div>
+            <h2 className="text-lg font-semibold text-[#d1d4dc]">Binance Asset Overview</h2>
+            <p className="mt-1 text-xs text-[#868993]">
+              Futures account snapshot with 15s auto-refresh
+            </p>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           {snapshot ? (
             <span className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#868993]">
@@ -89,9 +91,7 @@ export function BinanceAccountPanel() {
           <button
             className="rounded border border-[#2a2e39] bg-[#131722] px-3 py-1.5 text-xs text-[#d1d4dc] hover:border-[#2962ff] hover:bg-[#252936] transition-colors disabled:opacity-60"
             disabled={refreshing}
-            onClick={() => {
-              void refresh(false);
-            }}
+            onClick={() => void refresh(false)}
             type="button"
           >
             {refreshing ? "Refreshing..." : "Refresh"}
@@ -99,7 +99,9 @@ export function BinanceAccountPanel() {
         </div>
       </div>
 
-      <div className="mt-2 text-xs text-[#868993]">Last updated: {lastUpdated}</div>
+      <div className={`mt-2 text-xs text-[#868993] ${embedded ? "mt-0" : ""}`}>
+        Last updated: {lastUpdated}
+      </div>
 
       {loading && !snapshot ? (
         <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-6 text-sm text-[#868993]">

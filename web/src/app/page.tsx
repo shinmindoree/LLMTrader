@@ -160,15 +160,15 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section className="border-t border-[#2a2e39] px-6 py-20 md:py-28">
-        <div className="mx-auto max-w-3xl text-center">
-          <h2 className="text-3xl font-bold text-[#d1d4dc] md:text-4xl">
-            {t.landing.cta.title}
-          </h2>
-          <p className="mt-4 text-[#868993]">
-            {t.landing.cta.subtitle}
-          </p>
-          {showCTA && (
+      {showCTA && (
+        <section className="border-t border-[#2a2e39] px-6 py-20 md:py-28">
+          <div className="mx-auto max-w-3xl text-center">
+            <h2 className="text-3xl font-bold text-[#d1d4dc] md:text-4xl">
+              {t.landing.cta.title}
+            </h2>
+            <p className="mt-4 text-[#868993]">
+              {t.landing.cta.subtitle}
+            </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
               <Link
                 className="w-full rounded-lg bg-[#2962ff] px-8 py-4 text-center font-semibold text-white transition-all hover:bg-[#1e53e5] sm:w-auto"
@@ -183,9 +183,9 @@ export default function LandingPage() {
                 {t.landing.cta.login}
               </Link>
             </div>
-          )}
-        </div>
-      </section>
+          </div>
+        </section>
+      )}
 
       <footer className="border-t border-[#2a2e39] px-6 py-8">
         <div className="mx-auto max-w-6xl flex flex-col items-center justify-between gap-4 sm:flex-row">

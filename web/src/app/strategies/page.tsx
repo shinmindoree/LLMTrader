@@ -1015,6 +1015,59 @@ export default function StrategiesPage() {
     setDeleteError(null);
   };
 
+  const handleOpenStrategyInWorkspace = async (path: string) => {
+    if (isLoadingStrategy || isSending) return;
+    setLoadStrategyError(null);
+    setChatError(null);
+    setIsLoadingStrategy(true);
+    setActiveTab("chat");
+
+    try {
+      const loaded = await getStrategyContent(path);
+      const code = loaded.code ?? "";
+      if (!code.trim()) {
+        throw new Error("Loaded strategy is empty.");
+      }
+
+      setWorkspaceCode(code);
+      setInitialGeneratedCode(code);
+      setWorkspaceSourceMessageId(null);
+      setWorkspaceSummary(null);
+      setWorkspaceDirty(false);
+      setWorkspaceOpen(true);
+      setWorkspaceSyntax(null);
+      setWorkspaceSyntaxError(null);
+      setPrompt("");
+
+      const strategyLabel = strategyNameFromPath(loaded.path || path);
+      let summaryText = "Summary is unavailable right now.";
+      try {
+        const summaryRes = await strategyChat(code, null, [
+          { role: "user", content: LOADED_STRATEGY_SUMMARY_PROMPT },
+        ]);
+        summaryText = summaryRes.content;
+        setWorkspaceSummary(summaryRes.content);
+      } catch {
+        // continue without summary
+      }
+
+      setChatMessages([
+        {
+          id: createId(),
+          role: "assistant",
+          content: `Loaded strategy: ${strategyLabel}\n\n${summaryText}`,
+          textOnly: true,
+          status: null,
+          statusText: null,
+        },
+      ]);
+    } catch (e) {
+      setLoadStrategyError(String(e));
+    } finally {
+      setIsLoadingStrategy(false);
+    }
+  };
+
   const handleDeleteConfirm = async () => {
     if (!deletingPath) return;
     try {
@@ -1633,16 +1686,28 @@ export default function StrategiesPage() {
             {items.map((s) => (
               <div
                 key={s.path}
-                className="flex items-center justify-between gap-3 rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 transition-colors hover:border-[#2962ff] hover:bg-[#252936]"
+                role="button"
+                tabIndex={0}
+                className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 transition-colors hover:border-[#2962ff] hover:bg-[#252936]"
+                onClick={() => void handleOpenStrategyInWorkspace(s.path)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    void handleOpenStrategyInWorkspace(s.path);
+                  }
+                }}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium text-[#d1d4dc]">{s.name}</div>
-                  <div className="truncate text-xs text-[#868993]">Ready to run</div>
+                  <div className="font-medium text-[#d1d4dc]">{strategyNameFromPath(s.path)}</div>
+                  <div className="truncate text-xs text-[#868993]">Click to edit in workspace</div>
                 </div>
                 <button
                   type="button"
                   className="shrink-0 rounded border border-[#ef5350]/50 px-3 py-1.5 text-xs text-[#ef5350] transition hover:border-[#ef5350] hover:bg-[#ef5350]/10"
-                  onClick={() => handleDeleteClick(s.path)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteClick(s.path);
+                  }}
                 >
                   Delete
                 </button>
