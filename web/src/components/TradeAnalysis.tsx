@@ -512,6 +512,8 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   const tradeStats = useMemo(() => computeTradeStats(pnls), [pnls]);
 
   const numTrades = sortedTrades.filter((t) => t.pnl != null && t.pnl !== 0).length;
+  const winCount = pnls.filter((p) => p > 0).length;
+  const winRatePct = numTrades > 0 ? (winCount / numTrades) * 100 : 0;
 
   const backtestSymbol = useMemo(() => {
     if (job.type !== "BACKTEST" || !job.config) return null;
@@ -613,69 +615,71 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
           {activeTab === "chart" ? (
             <>
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {totalReturnPct !== null && (
+                {totalReturnPct !== null && netProfit !== null && (
                   <MetricCard
                     label="Return"
-                    value={`${formatNumber(totalReturnPct)}%`}
-                    tone={totalReturnPct >= 0 ? "positive" : "negative"}
-                  />
-                )}
-                {initialEquity !== null && (
-                  <MetricCard label={balanceLabel} value={`${formatNumber(initialEquity)} USDT`} />
-                )}
-                {finalEquity !== null && (
-                  <MetricCard label={finalLabel} value={`${formatNumber(finalEquity)} USDT`} />
-                )}
-                {netProfit !== null && (
-                  <MetricCard
-                    label="Net Profit"
-                    value={formatSigned(netProfit, "USDT")}
+                    value={`${formatSigned(netProfit, "USDT")} (${formatNumber(totalReturnPct)}%)`}
                     tone={netProfit >= 0 ? "positive" : "negative"}
                   />
                 )}
-                <MetricCard label="Total Trades" value={`${numTrades}`} />
+                {initialEquity !== null && finalEquity !== null && (
+                  <MetricCard
+                    label="Balance"
+                    value={`${formatNumber(initialEquity)} → ${formatNumber(finalEquity)} USDT`}
+                  />
+                )}
                 <MetricCard
-                  label="Total Commission"
-                  value={`${formatNumber(totalCommission)} USDT`}
-                  tone="negative"
+                  label="Total Trades"
+                  value={`${numTrades} (${winCount} wins, ${formatNumber(winRatePct, 1)}%)`}
                 />
-                {numTrades > 0 && netProfit !== null && (
-                  <MetricCard
-                    label="Avg Profit / Trade"
-                    value={formatSigned(netProfit / numTrades, "USDT")}
-                    tone={netProfit >= 0 ? "positive" : "negative"}
-                  />
-                )}
               </div>
 
-              {tradeStats ? (
-                <div className="mb-4">
-                  <div className="mb-2 text-xs font-medium text-[#d1d4dc]">Trade Stats</div>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    <MetricCard label="Win Rate" value={`${formatNumber(tradeStats.winRatePct, 1)}%`} />
+              <details className="mb-4 group">
+                <summary className="flex cursor-pointer list-none items-center rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-2 text-xs font-medium text-[#d1d4dc] hover:bg-[#252a37] [&::-webkit-details-marker]:hidden [&::marker]:hidden">
+                  Trade detail
+                  <span className="ml-2 inline-block text-[#868993] transition-transform group-open:rotate-180">
+                    ▾
+                  </span>
+                </summary>
+                <div className="grid gap-3 rounded-b border border-[#2a2e39] border-t-0 bg-[#131722] p-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <MetricCard
+                    label="Total Commission"
+                    value={`${formatNumber(totalCommission)} USDT`}
+                    tone="negative"
+                  />
+                  {numTrades > 0 && netProfit !== null && (
                     <MetricCard
-                      label="Profit Factor"
-                      value={tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
+                      label="Avg Profit / Trade"
+                      value={formatSigned(netProfit / numTrades, "USDT")}
+                      tone={netProfit >= 0 ? "positive" : "negative"}
                     />
-                    {tradeStats.maxProfit !== null && (
+                  )}
+                  {tradeStats ? (
+                    <>
                       <MetricCard
-                        label="Max Profit"
-                        value={formatSigned(tradeStats.maxProfit, "USDT")}
-                        tone="positive"
+                        label="Profit Factor"
+                        value={tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
                       />
-                    )}
-                    {tradeStats.maxLoss !== null && (
-                      <MetricCard
-                        label="Max Loss"
-                        value={formatSigned(tradeStats.maxLoss, "USDT")}
-                        tone="negative"
-                      />
-                    )}
-                    <MetricCard label="Max Consecutive Wins" value={`${tradeStats.maxConsecutiveWins}`} />
-                    <MetricCard label="Max Consecutive Losses" value={`${tradeStats.maxConsecutiveLosses}`} />
-                  </div>
+                      {tradeStats.maxProfit !== null && (
+                        <MetricCard
+                          label="Max Profit"
+                          value={formatSigned(tradeStats.maxProfit, "USDT")}
+                          tone="positive"
+                        />
+                      )}
+                      {tradeStats.maxLoss !== null && (
+                        <MetricCard
+                          label="Max Loss"
+                          value={formatSigned(tradeStats.maxLoss, "USDT")}
+                          tone="negative"
+                        />
+                      )}
+                      <MetricCard label="Max Consecutive Wins" value={`${tradeStats.maxConsecutiveWins}`} />
+                      <MetricCard label="Max Consecutive Losses" value={`${tradeStats.maxConsecutiveLosses}`} />
+                    </>
+                  ) : null}
                 </div>
-              ) : null}
+              </details>
 
               <Chart
                 points={chartPoints}
