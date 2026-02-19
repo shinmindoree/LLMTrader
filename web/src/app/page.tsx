@@ -177,8 +177,8 @@ export default function LandingPage() {
             >
               <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
                 <Image
-                  src="/landing/dashboard-stats.png"
-                  alt="Dashboard - 통계 요약"
+                  src="/landing/dashboard.png"
+                  alt="Dashboard - 통계 및 자산 요약"
                   width={960}
                   height={400}
                   className="w-full object-cover"
@@ -191,50 +191,14 @@ export default function LandingPage() {
               title={t.landing.screenshots.strategies}
               description={t.landing.screenshots.strategiesDesc}
             >
-              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#131722] shadow-2xl">
-                <div className="grid md:grid-cols-2">
-                  <div className="border-r border-[#2a2e39] p-5">
-                    <div className="mb-3 h-3 w-24 rounded bg-[#2a2e39]" />
-                    <div className="space-y-2">
-                      {[1, 2, 3, 4].map((i) => (
-                        <div key={i} className="flex gap-2">
-                          <div className="h-8 w-8 shrink-0 rounded-full bg-[#a855f7]/30" />
-                          <div className="flex-1 space-y-1">
-                            <div className="h-2 w-full rounded bg-[#2a2e39]" />
-                            <div className="h-2 w-[75%] rounded bg-[#2a2e39] opacity-70" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 rounded-lg border border-[#a855f7]/30 bg-[#1e222d] p-3">
-                      <div className="h-2 w-full rounded bg-[#2a2e39]" />
-                      <div className="mt-2 h-2 w-[80%] rounded bg-[#2a2e39] opacity-60" />
-                    </div>
-                  </div>
-                  <div className="p-5 font-mono text-xs">
-                    <div className="mb-2 flex gap-1">
-                      <span className="h-2 w-2 rounded-full bg-[#ef5350]" />
-                      <span className="h-2 w-2 rounded-full bg-[#ffc107]" />
-                      <span className="h-2 w-2 rounded-full bg-[#26a69a]" />
-                    </div>
-                    <div className="space-y-1 text-[#868993]">
-                      <span className="text-[#a855f7]">def</span>{" "}
-                      <span className="text-[#26a69a]">on_bar</span>
-                      <span className="text-[#d1d4dc]">(self, bar):</span>
-                      <br />
-                      <span className="text-[#868993] pl-4">  </span>
-                      <span className="text-[#a855f7]">if</span>{" "}
-                      <span className="text-[#d1d4dc]">self.rsi</span>
-                      <span className="text-[#d1d4dc]"> &lt; </span>
-                      <span className="text-[#ff9800]">30</span>
-                      <span className="text-[#d1d4dc]">:</span>
-                      <br />
-                      <span className="text-[#868993] pl-4">    </span>
-                      <span className="text-[#26a69a]">self.buy</span>
-                      <span className="text-[#d1d4dc]">()</span>
-                    </div>
-                  </div>
-                </div>
+              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
+                <Image
+                  src="/landing/strategies.png"
+                  alt="Strategies - 자연어로 전략 생성"
+                  width={1200}
+                  height={800}
+                  className="w-full object-cover"
+                />
               </div>
             </ScreenshotBlock>
 
