@@ -9,6 +9,7 @@ function isPublicPath(pathname: string): boolean {
   if (pathname.startsWith("/api/")) return true;
   if (pathname === "/favicon.ico") return true;
   if (pathname === "/auth") return true;
+  if (pathname === "/") return true;
   return PUBLIC_FILE.test(pathname);
 }
 
