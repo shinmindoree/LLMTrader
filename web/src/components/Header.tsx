@@ -27,11 +27,14 @@ export function Header() {
           <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors" href="/dashboard">
             {t.nav.dashboard}
           </Link>
-          <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors md:hidden" href="/live">
-            {t.nav.live}
+          <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors" href="/strategies">
+            {t.nav.strategies}
           </Link>
-          <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors md:hidden" href="/backtest">
+          <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors" href="/backtest">
             {t.nav.backtest}
+          </Link>
+          <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors" href="/live">
+            {t.nav.live}
           </Link>
           <Link className="rounded px-2 py-1 text-[#d1d4dc] hover:bg-[#2a2e39] transition-colors md:hidden" href="/settings">
             {t.nav.settings}
