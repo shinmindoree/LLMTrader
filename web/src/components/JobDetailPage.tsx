@@ -78,6 +78,16 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
   const finished = useMemo(() => (job ? FINISHED_STATUSES.has(job.status) : false), [job]);
   const mismatchedType = Boolean(expectedType && job && job.type !== expectedType);
+  const hasTrades = useMemo(
+    () =>
+      job
+        ? (job.type === "BACKTEST" &&
+            Array.isArray((job.result as Record<string, unknown>)?.trades) &&
+            ((job.result as Record<string, unknown>).trades as unknown[]).length > 0) ||
+          (job.type === "LIVE" && trades.length > 0)
+        : false,
+    [job, trades],
+  );
 
   return (
     <main className="w-full px-6 py-10">
@@ -148,7 +158,8 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       {job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
       {(job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
-      (job?.type === "LIVE" && (trades.length > 0 || (finished && job.result && isRecord(job.result)))) ? (
+      (job?.type === "LIVE" && (trades.length > 0 || (finished && job.result && isRecord(job.result)))) &&
+      !hasTrades ? (
         <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
           <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Trade Result Summary</div>
           <JobResultSummary

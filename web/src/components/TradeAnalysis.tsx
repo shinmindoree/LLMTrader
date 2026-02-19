@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
@@ -43,6 +43,76 @@ const formatSigned = (value: number, suffix = ""): string => {
   const sign = value > 0 ? "+" : value < 0 ? "" : "";
   return `${sign}${formatted}${suffix ? ` ${suffix}` : ""}`;
 };
+
+type MetricTone = "neutral" | "positive" | "negative";
+const metricToneClass: Record<MetricTone, string> = {
+  neutral: "text-[#d1d4dc]",
+  positive: "text-[#26a69a]",
+  negative: "text-[#ef5350]",
+};
+
+function MetricCard({ label, value, tone = "neutral" }: { label: string; value: string; tone?: MetricTone }) {
+  return (
+    <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
+      <div className="text-xs text-[#868993]">{label}</div>
+      <div className={`mt-1 text-lg font-semibold ${metricToneClass[tone]}`}>{value}</div>
+    </div>
+  );
+}
+
+type TradeStats = {
+  winRatePct: number;
+  profitFactor: number;
+  maxProfit: number | null;
+  maxLoss: number | null;
+  maxConsecutiveWins: number;
+  maxConsecutiveLosses: number;
+};
+
+function computeTradeStats(pnls: number[]): TradeStats | null {
+  if (pnls.length === 0) return null;
+  let wins = 0;
+  let losses = 0;
+  let totalProfit = 0;
+  let totalLoss = 0;
+  let maxProfit = -Infinity;
+  let maxLoss = Infinity;
+  let maxConsecutiveWins = 0;
+  let maxConsecutiveLosses = 0;
+  let currentWins = 0;
+  let currentLosses = 0;
+  for (const pnl of pnls) {
+    if (pnl > 0) {
+      wins += 1;
+      totalProfit += pnl;
+      maxProfit = Math.max(maxProfit, pnl);
+      currentWins += 1;
+      currentLosses = 0;
+      maxConsecutiveWins = Math.max(maxConsecutiveWins, currentWins);
+    } else if (pnl < 0) {
+      losses += 1;
+      totalLoss += Math.abs(pnl);
+      maxLoss = Math.min(maxLoss, pnl);
+      currentLosses += 1;
+      currentWins = 0;
+      maxConsecutiveLosses = Math.max(maxConsecutiveLosses, currentLosses);
+    } else {
+      currentWins = 0;
+      currentLosses = 0;
+    }
+  }
+  const totalTrades = wins + losses;
+  const winRatePct = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+  const profitFactor = totalLoss > 0 ? totalProfit / totalLoss : totalProfit > 0 ? Infinity : 0;
+  return {
+    winRatePct,
+    profitFactor,
+    maxProfit: Number.isFinite(maxProfit) ? maxProfit : null,
+    maxLoss: Number.isFinite(maxLoss) ? maxLoss : null,
+    maxConsecutiveWins,
+    maxConsecutiveLosses,
+  };
+}
 
 function formatDateTime(ms: number | null): string {
   if (!ms) return "-";
@@ -353,6 +423,23 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   const finalEquity =
     initialEquity !== null ? initialEquity + totalPnl - totalCommission : null;
 
+  const netProfit = initialEquity !== null && finalEquity !== null ? finalEquity - initialEquity : null;
+  const totalReturnPct =
+    initialEquity != null && initialEquity > 0 && finalEquity !== null
+      ? ((finalEquity - initialEquity) / initialEquity) * 100
+      : null;
+
+  const pnls = useMemo(
+    () =>
+      sortedTrades
+        .map((t) => t.pnl)
+        .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p)),
+    [sortedTrades],
+  );
+  const tradeStats = useMemo(() => computeTradeStats(pnls), [pnls]);
+
+  const numTrades = sortedTrades.filter((t) => t.pnl != null && t.pnl !== 0).length;
+
   const backtestSymbol = useMemo(() => {
     if (job.type !== "BACKTEST" || !job.config) return null;
     const cfg = job.config as Record<string, unknown>;
@@ -372,48 +459,117 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     );
   }
 
+  const balanceLabel = job.type === "BACKTEST" ? "Initial Balance" : "Initial Equity";
+  const finalLabel = job.type === "BACKTEST" ? "Final Balance" : "Final Equity";
+
+  const [activeTab, setActiveTab] = useState<"chart" | "trades">("chart");
+
+  const tabButtonBase =
+    "w-full border border-[#2a2e39] border-r-0 px-4 py-2.5 text-left text-xs font-medium transition-colors";
+  const tabButtonActive = "bg-[#131722] text-[#d1d4dc]";
+  const tabButtonInactive = "bg-[#1e222d] text-[#868993] hover:bg-[#252a37]";
+
   return (
     <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
-      <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Trade Analysis</div>
-      <Chart points={chartPoints} showEquity={initialEquity !== null} />
+      <div className="mb-4 text-sm font-medium text-[#d1d4dc]">Trade Analysis</div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-          <div className="text-xs text-[#868993]">Initial Equity</div>
-          <div className="mt-1 text-lg font-semibold text-[#d1d4dc]">
-            {initialEquity !== null ? `${formatNumber(initialEquity)} USDT` : "-"}
-          </div>
-        </div>
-        <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-          <div className="text-xs text-[#868993]">Final Equity</div>
-          <div className="mt-1 text-lg font-semibold text-[#d1d4dc]">
-            {finalEquity !== null ? `${formatNumber(finalEquity)} USDT` : "-"}
-          </div>
-        </div>
-        <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-          <div className="text-xs text-[#868993]">Total PnL</div>
-          <div
-            className={`mt-1 text-lg font-semibold ${
-              totalPnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
-            }`}
+      <div className="flex">
+        <nav className="flex shrink-0 flex-col">
+          <button
+            type="button"
+            className={`${tabButtonBase} rounded-tl ${activeTab === "chart" ? tabButtonActive : tabButtonInactive}`}
+            onClick={() => setActiveTab("chart")}
+            aria-pressed={activeTab === "chart"}
           >
-            {formatSigned(totalPnl, "USDT")}
-          </div>
-        </div>
-        <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-          <div className="text-xs text-[#868993]">Total Commission</div>
-          <div className="mt-1 text-lg font-semibold text-[#ef5350]">
-            {formatSigned(-Math.abs(totalCommission), "USDT")}
-          </div>
-        </div>
-      </div>
+            차트
+          </button>
+          <button
+            type="button"
+            className={`${tabButtonBase} rounded-bl ${activeTab === "trades" ? tabButtonActive : tabButtonInactive}`}
+            onClick={() => setActiveTab("trades")}
+            aria-pressed={activeTab === "trades"}
+          >
+            거래 내역
+          </button>
+        </nav>
 
-      <div className="mt-6 rounded border border-[#2a2e39] bg-[#131722]">
-        <div className="border-b border-[#2a2e39] px-4 py-2 text-xs font-medium text-[#d1d4dc]">
-          Trades ({sortedTrades.length})
-        </div>
-        <div className="max-h-[420px] overflow-auto">
-          {job.type === "BACKTEST" ? (
+        <div className="min-w-0 flex-1 rounded-r border border-[#2a2e39] bg-[#131722] p-4">
+          {activeTab === "chart" ? (
+            <>
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {totalReturnPct !== null && (
+                  <MetricCard
+                    label="Return"
+                    value={`${formatNumber(totalReturnPct)}%`}
+                    tone={totalReturnPct >= 0 ? "positive" : "negative"}
+                  />
+                )}
+                {initialEquity !== null && (
+                  <MetricCard label={balanceLabel} value={`${formatNumber(initialEquity)} USDT`} />
+                )}
+                {finalEquity !== null && (
+                  <MetricCard label={finalLabel} value={`${formatNumber(finalEquity)} USDT`} />
+                )}
+                {netProfit !== null && (
+                  <MetricCard
+                    label="Net Profit"
+                    value={formatSigned(netProfit, "USDT")}
+                    tone={netProfit >= 0 ? "positive" : "negative"}
+                  />
+                )}
+                <MetricCard label="Total Trades" value={`${numTrades}`} />
+                <MetricCard
+                  label="Total Commission"
+                  value={`${formatNumber(totalCommission)} USDT`}
+                  tone="negative"
+                />
+                {numTrades > 0 && netProfit !== null && (
+                  <MetricCard
+                    label="Avg Profit / Trade"
+                    value={formatSigned(netProfit / numTrades, "USDT")}
+                    tone={netProfit >= 0 ? "positive" : "negative"}
+                  />
+                )}
+              </div>
+
+              {tradeStats ? (
+                <div className="mb-4">
+                  <div className="mb-2 text-xs font-medium text-[#d1d4dc]">Trade Stats</div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <MetricCard label="Win Rate" value={`${formatNumber(tradeStats.winRatePct, 1)}%`} />
+                    <MetricCard
+                      label="Profit Factor"
+                      value={tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
+                    />
+                    {tradeStats.maxProfit !== null && (
+                      <MetricCard
+                        label="Max Profit"
+                        value={formatSigned(tradeStats.maxProfit, "USDT")}
+                        tone="positive"
+                      />
+                    )}
+                    {tradeStats.maxLoss !== null && (
+                      <MetricCard
+                        label="Max Loss"
+                        value={formatSigned(tradeStats.maxLoss, "USDT")}
+                        tone="negative"
+                      />
+                    )}
+                    <MetricCard label="Max Consecutive Wins" value={`${tradeStats.maxConsecutiveWins}`} />
+                    <MetricCard label="Max Consecutive Losses" value={`${tradeStats.maxConsecutiveLosses}`} />
+                  </div>
+                </div>
+              ) : null}
+
+              <Chart points={chartPoints} showEquity={initialEquity !== null} />
+            </>
+          ) : (
+            <div className="rounded border border-[#2a2e39] bg-[#0f141f]">
+              <div className="border-b border-[#2a2e39] px-4 py-2 text-xs font-medium text-[#d1d4dc]">
+                Trades ({sortedTrades.length})
+              </div>
+              <div className="max-h-[520px] overflow-auto">
+                {job.type === "BACKTEST" ? (
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-[#131722]">
                 <tr className="border-b border-[#2a2e39] text-left text-[#868993]">
@@ -541,6 +697,9 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 ))}
               </tbody>
             </table>
+          )}
+              </div>
+            </div>
           )}
         </div>
       </div>

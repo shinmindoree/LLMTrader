@@ -89,6 +89,16 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
 
   const finished = useMemo(() => (job ? FINISHED_STATUSES.has(job.status) : false), [job]);
   const hasLiveTrades = jobType === "LIVE" && trades.length > 0;
+  const hasTrades = useMemo(
+    () =>
+      job
+        ? (job.type === "BACKTEST" &&
+            Array.isArray((job.result as Record<string, unknown>)?.trades) &&
+            ((job.result as Record<string, unknown>).trades as unknown[]).length > 0) ||
+          (job.type === "LIVE" && trades.length > 0)
+        : false,
+    [job, trades],
+  );
   const showPlaceholderGauge =
     showPendingSpinner ||
     (!!focusJobId && ((loading && !job) || (job != null && job.job_id !== focusJobId)));
@@ -165,7 +175,8 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
 
         {!showPlaceholderGauge &&
         ((job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
-        (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result))))) ? (
+        (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result))))) &&
+        !hasTrades ? (
           <JobResultSummary
             type={job!.type}
             result={job!.result && isRecord(job!.result) ? job!.result : {}}
