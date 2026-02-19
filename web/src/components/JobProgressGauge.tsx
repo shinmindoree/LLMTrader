@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { JobEvent, JobStatus, JobType } from "@/lib/types";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
+const LERP_FACTOR = 0.06;
+const SNAP_THRESHOLD = 0.3;
 
 const clampPct = (value: number): number => Math.max(0, Math.min(100, value));
 
-function formatPct(value: number | null): string {
-  if (value === null) return "-";
-  return `${value.toFixed(1)}%`;
+function formatPct(value: number): string {
+  return `${Math.round(value * 10) / 10}%`;
 }
 
 export function JobProgressGauge({
@@ -26,6 +27,9 @@ export function JobProgressGauge({
   const [backtestPct, setBacktestPct] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [smoothPct, setSmoothPct] = useState(0);
+  const targetRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
 
   const url = useMemo(() => `/api/backend/api/jobs/${jobId}/events/stream?after_event_id=0`, [jobId]);
   const finished = FINISHED_STATUSES.has(status);
@@ -60,19 +64,42 @@ export function JobProgressGauge({
     return () => es.close();
   }, [jobType, url]);
 
+  const dataFetchDone = (dataFetchPct ?? 0) >= 100 || (backtestPct !== null && dataFetchPct === null) || finished;
+  const targetPct = useMemo(() => {
+    if (finished) return 100;
+    if (dataFetchDone) {
+      return clampPct(50 + (50 * (backtestPct ?? 0)) / 100);
+    }
+    return clampPct((50 * (dataFetchPct ?? 0)) / 100);
+  }, [finished, dataFetchDone, dataFetchPct, backtestPct]);
+
+  useEffect(() => {
+    targetRef.current = targetPct;
+  }, [targetPct]);
+
+  useEffect(() => {
+    const animate = () => {
+      const target = targetRef.current;
+      setSmoothPct((prev) => {
+        const diff = target - prev;
+        if (Math.abs(diff) < SNAP_THRESHOLD) return target;
+        return prev + diff * LERP_FACTOR;
+      });
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
   if (jobType !== "BACKTEST") return null;
 
   if (finished && dataFetchPct === null && backtestPct === null) {
     return null;
   }
 
-  const dataFetchDone = (dataFetchPct ?? 0) >= 100 || finished;
-  const combinedPct = finished
-    ? 100
-    : dataFetchDone
-      ? 50 + (50 * (backtestPct ?? 0)) / 100
-      : (50 * (dataFetchPct ?? 0)) / 100;
-  const displayPct = clampPct(combinedPct);
+  const displayPct = finished ? 100 : smoothPct;
 
   return (
     <section className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
@@ -91,7 +118,7 @@ export function JobProgressGauge({
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-[#0f141f]">
           <div
-            className="h-full rounded-full bg-[#2962ff] transition-[width] duration-300"
+            className="h-full rounded-full bg-[#2962ff]"
             style={{ width: `${displayPct}%` }}
           />
         </div>

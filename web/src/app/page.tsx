@@ -1,8 +1,26 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 export default function LandingPage() {
+  const { t } = useI18n();
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/session", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const data = (await res.json()) as { user?: unknown };
+        return !!data?.user;
+      })
+      .then(setIsLoggedIn)
+      .catch(() => setIsLoggedIn(false));
+  }, []);
+
+  const showCTA = isLoggedIn === false;
+
   return (
     <div className="min-h-screen">
       <section className="relative overflow-hidden px-6 pt-16 pb-24 md:pt-24 md:pb-32">
@@ -13,71 +31,86 @@ export default function LandingPage() {
           <div className="absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#2962ff]/5 blur-3xl" />
         </div>
         <div className="mx-auto max-w-4xl text-center">
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#2962ff]/30 bg-[#2962ff]/10 px-4 py-1.5 text-xs font-medium text-[#2962ff]">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#26a69a] opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#26a69a]" />
-            </span>
-            Binance Futures · Testnet & Mainnet
+          <div className="mb-6 flex flex-wrap items-center justify-center gap-3">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#a855f7]/40 bg-[#a855f7]/15 px-4 py-1.5 text-xs font-semibold text-[#a855f7]">
+              {t.landing.hero.badge1}
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2962ff]/30 bg-[#2962ff]/10 px-4 py-1.5 text-xs font-medium text-[#2962ff]">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#26a69a] opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#26a69a]" />
+              </span>
+              {t.landing.hero.badge2}
+            </div>
           </div>
           <h1 className="text-4xl font-bold tracking-tight text-[#d1d4dc] sm:text-5xl md:text-6xl">
-            AI-Powered
-            <span className="bg-gradient-to-r from-[#2962ff] via-[#26a69a] to-[#2962ff] bg-clip-text text-transparent">
-              {" "}Crypto Trading
+            Describe.
+            <span className="bg-gradient-to-r from-[#a855f7] via-[#06b6d4] to-[#10b981] bg-clip-text text-transparent">
+              {" "}Backtest.
             </span>
+            <span className="text-[#d1d4dc]"> Trade.</span>
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg text-[#868993] sm:text-xl">
-            백테스트로 전략을 검증하고, 테스트넷에서 안전하게 검증한 뒤, 메인넷에서 라이브 트레이딩을 실행하세요.
+            {t.landing.hero.subtitle}
           </p>
-          <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            <Link
-              className="w-full rounded-lg bg-[#2962ff] px-8 py-4 text-center font-semibold text-white transition-all hover:bg-[#1e53e5] hover:shadow-lg hover:shadow-[#2962ff]/25 sm:w-auto"
-              href="/dashboard"
-            >
-              Dashboard 시작하기
-            </Link>
-            <Link
-              className="w-full rounded-lg border border-[#2a2e39] bg-[#1e222d] px-8 py-4 text-center font-semibold text-[#d1d4dc] transition-all hover:border-[#2962ff] hover:bg-[#252936] sm:w-auto"
-              href="/auth"
-            >
-              로그인
-            </Link>
-          </div>
+          {showCTA && (
+            <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
+              <Link
+                className="w-full rounded-lg bg-[#2962ff] px-8 py-4 text-center font-semibold text-white transition-all hover:bg-[#1e53e5] hover:shadow-lg hover:shadow-[#2962ff]/25 sm:w-auto"
+                href="/dashboard"
+              >
+                {t.landing.hero.getStarted}
+              </Link>
+              <Link
+                className="w-full rounded-lg border border-[#2a2e39] bg-[#1e222d] px-8 py-4 text-center font-semibold text-[#d1d4dc] transition-all hover:border-[#2962ff] hover:bg-[#252936] sm:w-auto"
+                href="/auth"
+              >
+                {t.landing.hero.login}
+              </Link>
+            </div>
+          )}
         </div>
       </section>
 
       <section id="features" className="border-t border-[#2a2e39] px-6 py-20 md:py-28">
         <div className="mx-auto max-w-6xl">
           <h2 className="text-center text-3xl font-bold text-[#d1d4dc] md:text-4xl">
-            핵심 기능
+            {t.landing.features.title}
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-[#868993]">
-            전략 개발부터 라이브 트레이딩까지, 한 플랫폼에서 모든 것을 수행하세요
+            {t.landing.features.subtitle}
           </p>
 
-          <div className="mt-16 grid gap-8 md:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-16 grid gap-8 md:grid-cols-2 lg:grid-cols-5">
+            <FeatureCard
+              icon={<NaturalLanguageIcon />}
+              title={t.landing.features.naturalLanguage.title}
+              description={t.landing.features.naturalLanguage.description}
+              accent="#a855f7"
+              featured
+            />
             <FeatureCard
               icon={<BacktestIcon />}
-              title="백테스트"
-              description="과거 데이터로 전략 성과를 검증하고 최적화하세요. 수익률, 승률, MDD 등 상세한 분석을 제공합니다."
+              title={t.landing.features.backtest.title}
+              description={t.landing.features.backtest.description}
               accent="#2962ff"
             />
             <FeatureCard
               icon={<LiveIcon />}
-              title="라이브 트레이딩"
-              description="테스트넷에서 안전하게 검증 후 메인넷으로 배포. 실시간 포지션 추적과 자동 주문 실행."
+              title={t.landing.features.live.title}
+              description={t.landing.features.live.description}
               accent="#26a69a"
             />
             <FeatureCard
               icon={<StrategyIcon />}
-              title="전략 개발"
-              description="Python 기반 전략 템플릿. RSI, MACD, EMA 등 TA-Lib 인디케이터와 커스텀 로직을 조합하세요."
+              title={t.landing.features.strategy.title}
+              description={t.landing.features.strategy.description}
               accent="#ff9800"
             />
             <FeatureCard
               icon={<RiskIcon />}
-              title="리스크 관리"
-              description="레버리지 제한, 일일 손실 한도, 연속 손실 보호, Stop Loss로 리스크를 체계적으로 관리하세요."
+              title={t.landing.features.risk.title}
+              description={t.landing.features.risk.description}
               accent="#ef5350"
             />
           </div>
@@ -90,24 +123,27 @@ export default function LandingPage() {
             <div className="grid md:grid-cols-2">
               <div className="flex flex-col justify-center p-8 md:p-12">
                 <h3 className="text-2xl font-bold text-[#d1d4dc] md:text-3xl">
-                  전략 → 백테스트 → 라이브
+                  {t.landing.workflow.title}
                 </h3>
                 <p className="mt-4 text-[#868993]">
-                  하나의 전략 파일로 전체 워크플로우를 구축합니다. 인디케이터 기반 전략 템플릿을 복사해
-                  나만의 시그널 로직을 추가하고, 백테스트로 검증한 뒤 테스트넷과 메인넷에서 실행하세요.
+                  {t.landing.workflow.description}
                 </p>
                 <ul className="mt-6 space-y-3 text-sm text-[#d1d4dc]">
                   <li className="flex items-center gap-2">
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#26a69a]" />
-                    멀티 심볼 · 멀티 타임프레임 포트폴리오 모드
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#a855f7]" />
+                    {t.landing.workflow.item1}
                   </li>
                   <li className="flex items-center gap-2">
                     <span className="h-1.5 w-1.5 rounded-full bg-[#26a69a]" />
-                    바이낸스 선물 API 완벽 연동
+                    {t.landing.workflow.item2}
                   </li>
                   <li className="flex items-center gap-2">
                     <span className="h-1.5 w-1.5 rounded-full bg-[#26a69a]" />
-                    모든 주문 기록 감사 로그
+                    {t.landing.workflow.item3}
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#26a69a]" />
+                    {t.landing.workflow.item4}
                   </li>
                 </ul>
               </div>
@@ -115,7 +151,7 @@ export default function LandingPage() {
                 <div className="relative">
                   <div className="absolute -inset-4 rounded-2xl bg-gradient-to-br from-[#2962ff]/20 to-[#26a69a]/20 blur-2xl" />
                   <div className="relative rounded-xl border border-[#2a2e39] bg-[#131722] p-6 font-mono text-xs">
-                    <FlowDiagram />
+                    <FlowDiagram t={t} />
                   </div>
                 </div>
               </div>
@@ -127,40 +163,42 @@ export default function LandingPage() {
       <section className="border-t border-[#2a2e39] px-6 py-20 md:py-28">
         <div className="mx-auto max-w-3xl text-center">
           <h2 className="text-3xl font-bold text-[#d1d4dc] md:text-4xl">
-            지금 시작하세요
+            {t.landing.cta.title}
           </h2>
           <p className="mt-4 text-[#868993]">
-            무료로 전략을 백테스트하고 테스트넷에서 라이브 트레이딩을 경험해 보세요.
+            {t.landing.cta.subtitle}
           </p>
-          <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            <Link
-              className="w-full rounded-lg bg-[#2962ff] px-8 py-4 text-center font-semibold text-white transition-all hover:bg-[#1e53e5] sm:w-auto"
-              href="/dashboard"
-            >
-              Dashboard 시작하기
-            </Link>
-            <Link
-              className="w-full rounded-lg border border-[#2a2e39] px-8 py-4 text-center font-semibold text-[#d1d4dc] transition-all hover:border-[#2962ff] sm:w-auto"
-              href="/auth"
-            >
-              로그인
-            </Link>
-          </div>
+          {showCTA && (
+            <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
+              <Link
+                className="w-full rounded-lg bg-[#2962ff] px-8 py-4 text-center font-semibold text-white transition-all hover:bg-[#1e53e5] sm:w-auto"
+                href="/dashboard"
+              >
+                {t.landing.cta.getStarted}
+              </Link>
+              <Link
+                className="w-full rounded-lg border border-[#2a2e39] px-8 py-4 text-center font-semibold text-[#d1d4dc] transition-all hover:border-[#2962ff] sm:w-auto"
+                href="/auth"
+              >
+                {t.landing.cta.login}
+              </Link>
+            </div>
+          )}
         </div>
       </section>
 
       <footer className="border-t border-[#2a2e39] px-6 py-8">
         <div className="mx-auto max-w-6xl flex flex-col items-center justify-between gap-4 sm:flex-row">
-          <span className="text-sm text-[#868993]">© LLMTrader · Binance Futures Trading Platform</span>
+          <span className="text-sm text-[#868993]">{t.landing.footer.copyright}</span>
           <div className="flex gap-6 text-sm">
             <Link className="text-[#868993] hover:text-[#d1d4dc]" href="/dashboard">
-              Dashboard
+              {t.landing.footer.dashboard}
             </Link>
             <Link className="text-[#868993] hover:text-[#d1d4dc]" href="/strategies">
-              Strategies
+              {t.landing.footer.strategies}
             </Link>
             <Link className="text-[#868993] hover:text-[#d1d4dc]" href="/auth">
-              Login
+              {t.landing.footer.login}
             </Link>
           </div>
         </div>
@@ -169,19 +207,35 @@ export default function LandingPage() {
   );
 }
 
+function NaturalLanguageIcon() {
+  return (
+    <svg className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+    </svg>
+  );
+}
+
 function FeatureCard({
   icon,
   title,
   description,
   accent,
+  featured,
 }: {
   icon: React.ReactNode;
   title: string;
   description: string;
   accent: string;
+  featured?: boolean;
 }) {
   return (
-    <div className="group rounded-xl border border-[#2a2e39] bg-[#1e222d] p-6 transition-all hover:border-[#2962ff]/50 hover:shadow-lg hover:shadow-[#2962ff]/5">
+    <div
+      className={`group rounded-xl border bg-[#1e222d] p-6 transition-all hover:shadow-lg ${
+        featured
+          ? "border-[#a855f7]/50 bg-gradient-to-b from-[#a855f7]/5 to-transparent hover:border-[#a855f7] hover:shadow-[#a855f7]/10"
+          : "border-[#2a2e39] hover:border-[#2962ff]/50 hover:shadow-[#2962ff]/5"
+      }`}
+    >
       <div
         className="mb-4 inline-flex rounded-lg p-3"
         style={{ backgroundColor: `${accent}15` }}
@@ -226,31 +280,31 @@ function RiskIcon() {
   );
 }
 
-function FlowDiagram() {
+function FlowDiagram({ t }: { t: import("@/lib/i18n").TranslationKeys }) {
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4 py-3">
-        <span className="rounded bg-[#ff9800]/20 px-2 py-0.5 text-[#ff9800]">1</span>
-        <span className="text-[#d1d4dc]">strategy.py</span>
-        <span className="text-[#868993]">전략 작성</span>
+      <div className="flex items-center gap-3 rounded-lg border border-[#a855f7]/40 bg-[#1e222d] px-4 py-3">
+        <span className="rounded bg-[#a855f7]/20 px-2 py-0.5 text-[#a855f7]">1</span>
+        <span className="text-[#d1d4dc]">{t.landing.flowDiagram.step1}</span>
+        <span className="text-[#868993]">{t.landing.flowDiagram.step1Sub}</span>
       </div>
       <div className="ml-6 h-4 w-px bg-[#2a2e39]" />
       <div className="flex items-center gap-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4 py-3">
         <span className="rounded bg-[#2962ff]/20 px-2 py-0.5 text-[#2962ff]">2</span>
-        <span className="text-[#d1d4dc]">Backtest</span>
-        <span className="text-[#868993]">과거 데이터 검증</span>
+        <span className="text-[#d1d4dc]">{t.landing.flowDiagram.step2}</span>
+        <span className="text-[#868993]">{t.landing.flowDiagram.step2Sub}</span>
       </div>
       <div className="ml-6 h-4 w-px bg-[#2a2e39]" />
       <div className="flex items-center gap-3 rounded-lg border border-[#26a69a]/40 bg-[#1e222d] px-4 py-3">
         <span className="rounded bg-[#26a69a]/20 px-2 py-0.5 text-[#26a69a]">3</span>
-        <span className="text-[#d1d4dc]">Live (Testnet)</span>
-        <span className="text-[#868993]">실전 검증</span>
+        <span className="text-[#d1d4dc]">{t.landing.flowDiagram.step3}</span>
+        <span className="text-[#868993]">{t.landing.flowDiagram.step3Sub}</span>
       </div>
       <div className="ml-6 h-4 w-px bg-[#2a2e39]" />
       <div className="flex items-center gap-3 rounded-lg border border-[#26a69a]/40 bg-[#1e222d] px-4 py-3">
         <span className="rounded bg-[#26a69a]/20 px-2 py-0.5 text-[#26a69a]">4</span>
-        <span className="text-[#d1d4dc]">Live (Mainnet)</span>
-        <span className="text-[#868993]">실거래</span>
+        <span className="text-[#d1d4dc]">{t.landing.flowDiagram.step4}</span>
+        <span className="text-[#868993]">{t.landing.flowDiagram.step4Sub}</span>
       </div>
     </div>
   );

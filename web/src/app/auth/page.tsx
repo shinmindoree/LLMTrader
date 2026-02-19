@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type AuthMode = "login" | "signup";
 
@@ -10,6 +11,7 @@ function isAuthEnabled(): boolean {
 }
 
 export default function AuthPage() {
+  const { t } = useI18n();
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -34,16 +36,16 @@ export default function AuthPage() {
         needs_email_confirmation?: boolean;
       };
       if (!res.ok) {
-        setError(payload.error ?? "Authentication failed");
+        setError(payload.error ?? t.auth.authFailed);
         return;
       }
       if (mode === "signup" && payload.needs_email_confirmation) {
-        setMessage("회원가입 완료. 이메일 인증 후 로그인하세요.");
+        setMessage(t.auth.signupSuccess);
         return;
       }
       window.location.href = "/dashboard";
     } catch {
-      setError("요청 처리 중 오류가 발생했습니다.");
+      setError(t.auth.requestError);
     } finally {
       setSubmitting(false);
     }
@@ -53,9 +55,9 @@ export default function AuthPage() {
     return (
       <main className="mx-auto w-full max-w-md px-6 py-16">
         <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
-          <h1 className="text-lg font-semibold text-[#d1d4dc]">Auth Disabled</h1>
+          <h1 className="text-lg font-semibold text-[#d1d4dc]">{t.authDisabled.title}</h1>
           <p className="mt-2 text-sm text-[#868993]">
-            Supabase auth is disabled. Set <code>NEXT_PUBLIC_SUPABASE_AUTH_ENABLED=true</code>.
+            {t.authDisabled.description}
           </p>
         </div>
       </main>
@@ -66,10 +68,10 @@ export default function AuthPage() {
     <main className="mx-auto w-full max-w-md px-6 py-16">
       <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
         <h1 className="text-lg font-semibold text-[#d1d4dc]">
-          {mode === "login" ? "로그인" : "회원가입"}
+          {mode === "login" ? t.auth.login : t.auth.signup}
         </h1>
         <p className="mt-2 text-sm text-[#868993]">
-          Supabase 이메일/비밀번호 인증을 사용합니다.
+          {t.auth.description}
         </p>
 
         <div className="mt-4 space-y-3">
@@ -108,7 +110,7 @@ export default function AuthPage() {
           onClick={submit}
           type="button"
         >
-          {submitting ? "처리 중..." : mode === "login" ? "로그인" : "회원가입"}
+          {submitting ? t.auth.submitting : mode === "login" ? t.auth.login : t.auth.signup}
         </button>
 
         <button
@@ -120,7 +122,7 @@ export default function AuthPage() {
           }}
           type="button"
         >
-          {mode === "login" ? "회원가입으로 전환" : "로그인으로 전환"}
+          {mode === "login" ? t.auth.switchToSignup : t.auth.switchToLogin}
         </button>
       </div>
     </main>

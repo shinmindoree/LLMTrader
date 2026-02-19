@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 import {
   deleteStrategyChatSession,
@@ -367,12 +368,11 @@ function toRemoteSessionData(session: ChatSessionRecord): Record<string, unknown
 }
 
 type TabId = "chat" | "list";
-const SUMMARY_EXPAND_PROMPT =
-  "방금 전략 요약을 이어서 더 자세히 설명해줘. 전략 개요 → 진입 흐름 → 청산 흐름 → 리스크 관리 → 실전 주의사항 순서로 써줘. 코드는 변경하지 마.";
 const LOADED_STRATEGY_SUMMARY_PROMPT =
   "Briefly explain this strategy in plain English in 5 bullets: overview, entry logic, exit logic, risk management, and practical cautions. Keep it concise.";
 
 export default function StrategiesPage() {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<TabId>("chat");
   const [items, setItems] = useState<StrategyInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -714,7 +714,7 @@ export default function StrategiesPage() {
                 content: partial,
                 textOnly: true,
                 status: cursor < fullText.length ? "typing" : null,
-                statusText: cursor < fullText.length ? "답변 작성 중..." : null,
+                statusText: cursor < fullText.length ? t.strategy.typing : null,
               }
             : m,
         ),
@@ -751,7 +751,7 @@ export default function StrategiesPage() {
       setChatMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, status: "streaming", statusText: "코드 생성 중..." }
+            ? { ...m, status: "streaming", statusText: t.strategy.codeGenerating }
             : m,
         ),
       );
@@ -768,7 +768,7 @@ export default function StrategiesPage() {
                   ...last,
                   content: last.content + token,
                   status: "streaming",
-                  statusText: "코드 생성 중...",
+                  statusText: t.strategy.codeGenerating,
                 },
               ];
             });
@@ -829,7 +829,7 @@ export default function StrategiesPage() {
       repair_attempts: 0,
       textOnly: false,
       status: "thinking",
-      statusText: "코드 생성 중...",
+      statusText: t.strategy.codeGenerating,
     };
 
     if (options?.forceChat && activeCode) {
@@ -877,7 +877,7 @@ export default function StrategiesPage() {
 
   const handleSummaryExpand = async () => {
     if (isSending) return;
-    await submitPrompt(SUMMARY_EXPAND_PROMPT, { forceChat: true });
+    await submitPrompt(t.strategy.expandSummary, { forceChat: true });
   };
 
   const handleWorkspaceChange = (nextCode: string) => {
@@ -1501,7 +1501,7 @@ export default function StrategiesPage() {
                     </div>
                   ) : (
                     <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[#868993]">
-                      전략 코드가 생성되면 이 영역에서 계속 편집할 수 있습니다.
+                      {t.strategy.codeGenHint}
                     </div>
                   )}
                 </div>

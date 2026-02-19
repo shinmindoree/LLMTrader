@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type SessionUser = {
   id: string;
@@ -14,6 +15,7 @@ function isAuthEnabled(): boolean {
 }
 
 export function AuthActions() {
+  const { t } = useI18n();
   const authEnabled = isAuthEnabled();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(authEnabled);
@@ -49,7 +51,7 @@ export function AuthActions() {
         className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#d1d4dc] transition-colors hover:border-[#2962ff]"
         href="/auth"
       >
-        Login
+        {t.auth.login}
       </Link>
     );
   }
@@ -67,7 +69,7 @@ export function AuthActions() {
         onClick={onLogout}
         type="button"
       >
-        Logout
+        {t.auth.logout}
       </button>
     </div>
   );

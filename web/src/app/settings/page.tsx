@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import {
   getUserProfile,
   getBinanceKeysStatus,
@@ -13,6 +14,7 @@ import type { UserProfile, BinanceKeysStatus } from "@/lib/types";
 type FormState = "idle" | "saving" | "deleting";
 
 export default function SettingsPage() {
+  const { t } = useI18n();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,7 +77,7 @@ export default function SettingsPage() {
       const res = await testLlmEndpoint(llmInput);
       setLlmOutput(res.output);
     } catch (err: unknown) {
-      setLlmError(err instanceof Error ? err.message : "LLM 테스트 실패");
+      setLlmError(err instanceof Error ? err.message : t.settings.llmTestFailed);
     } finally {
       setLlmLoading(false);
     }
@@ -263,17 +265,16 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* LLM 연결 테스트 */}
       <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
-        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-2">LLM 연결 테스트</h2>
+        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-2">{t.settings.llmTest}</h2>
         <p className="text-xs text-[#868993] mb-4">
-          배포된 LLM 엔드포인트가 정상 동작하는지 확인합니다. 입력 후 전송하면 응답을 출력합니다.
+          {t.settings.llmTestDesc}
         </p>
         <div className="space-y-3">
           <input
             className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] placeholder-[#4a4e59] focus:border-[#2962ff] focus:outline-none transition-colors"
             onChange={(e) => setLlmInput(e.target.value)}
-            placeholder="입력 (예: 안녕)"
+            placeholder={t.settings.llmTestPlaceholder}
             value={llmInput}
           />
           <button
@@ -281,7 +282,7 @@ export default function SettingsPage() {
             disabled={llmLoading}
             onClick={handleTestLlm}
           >
-            {llmLoading ? "테스트 중..." : "전송"}
+            {llmLoading ? t.settings.llmTesting : t.settings.llmTestSend}
           </button>
           {llmError && (
             <div className="rounded-lg px-4 py-3 text-sm bg-[#ef5350]/10 border border-[#ef5350]/30 text-[#ef5350]">

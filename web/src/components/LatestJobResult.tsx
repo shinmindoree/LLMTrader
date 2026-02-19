@@ -42,6 +42,7 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
     let active = true;
 
     const load = async () => {
+      if (focusJobId) setLoading(true);
       try {
         setError(null);
         const data = focusJobId
@@ -88,6 +89,8 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
 
   const finished = useMemo(() => (job ? FINISHED_STATUSES.has(job.status) : false), [job]);
   const hasLiveTrades = jobType === "LIVE" && trades.length > 0;
+  const showPlaceholderGauge =
+    showPendingSpinner || (!!focusJobId && loading && !job);
 
   return (
     <section className="mt-10">
@@ -95,43 +98,49 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-sm font-semibold text-[#d1d4dc]">{title}</div>
-            {!showPendingSpinner && job ? (
+            {!showPlaceholderGauge && job ? (
               <div className="mt-1 text-xs text-[#868993]">{strategyNameFromPath(job.strategy_path)}</div>
             ) : null}
           </div>
-          {!showPendingSpinner && job ? <JobStatusBadge status={job.status} /> : null}
+          {!showPlaceholderGauge && job ? <JobStatusBadge status={job.status} /> : null}
         </div>
 
-        {(loading && !job) || showPendingSpinner ? (
-          <div className="mt-4 flex flex-col items-center justify-center gap-3 py-6">
-            <div className="page-load-spinner" aria-hidden />
-            <div className="flex gap-1.5">
-              {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="page-load-dot"
-                  style={{ animationDelay: `${i * 0.15}s` }}
-                  aria-hidden
-                />
-              ))}
+        {showPlaceholderGauge ? (
+          <section className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
+            <div className="flex items-center justify-between text-xs text-[#868993]">
+              <span>Progress</span>
+              <span>preparing…</span>
             </div>
-            <span className="text-sm text-[#868993]">
-              {showPendingSpinner ? "Starting run…" : "Loading latest run…"}
-            </span>
-          </div>
+            <div className="mt-3">
+              <div className="mb-1 flex items-center justify-between text-xs text-[#d1d4dc]">
+                <span>Progress</span>
+                <span className="text-[#868993]">0%</span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-[#0f141f]">
+                <div
+                  className="h-full rounded-full bg-[#2962ff] transition-[width] duration-200 ease-out"
+                  style={{ width: "0%" }}
+                />
+              </div>
+            </div>
+          </section>
         ) : null}
 
-        {!showPendingSpinner && error ? (
+        {loading && !job && !showPlaceholderGauge ? (
+          <div className="mt-4 text-sm text-[#868993]">Loading latest run…</div>
+        ) : null}
+
+        {!showPlaceholderGauge && error ? (
           <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
             {error}
           </p>
         ) : null}
 
-        {!showPendingSpinner && !job && !loading && !error ? (
+        {!showPlaceholderGauge && !job && !loading && !error ? (
           <div className="mt-4 text-sm text-[#868993]">No runs yet. Start one to see results here.</div>
         ) : null}
 
-        {!showPendingSpinner && job ? (
+        {!showPlaceholderGauge && job ? (
           <div className="mt-3 text-xs text-[#868993]">
             <span>Created {formatDateTime(job.created_at)}</span>
             <span className="mx-2">•</span>
@@ -139,21 +148,21 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
           </div>
         ) : null}
 
-        {!showPendingSpinner && job?.error ? (
+        {!showPlaceholderGauge && job?.error ? (
           <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
             {job.error}
           </p>
         ) : null}
 
-        {!showPendingSpinner && job && !finished && !hasLiveTrades ? (
+        {!showPlaceholderGauge && job && !finished && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             Run in progress. Results will appear here once it finishes.
           </div>
         ) : null}
 
-        {!showPendingSpinner && job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
+        {!showPlaceholderGauge && job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
-        {!showPendingSpinner &&
+        {!showPlaceholderGauge &&
         ((job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
         (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result))))) ? (
           <JobResultSummary
@@ -163,27 +172,27 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
           />
         ) : null}
 
-        {!showPendingSpinner && job && finished && job.type === "BACKTEST" ? (
+        {!showPlaceholderGauge && job && finished && job.type === "BACKTEST" ? (
           <TradeAnalysis job={job} liveTrades={[]} />
         ) : null}
 
-        {!showPendingSpinner && job && job.type === "LIVE" ? (
+        {!showPlaceholderGauge && job && job.type === "LIVE" ? (
           <TradeAnalysis job={job} liveTrades={trades} />
         ) : null}
 
-        {!showPendingSpinner && job && finished && job.result && !isRecord(job.result) ? (
+        {!showPlaceholderGauge && job && finished && job.result && !isRecord(job.result) ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             Result payload is not structured for summary. See raw payload below.
           </div>
         ) : null}
 
-        {!showPendingSpinner && job && finished && !job.result && !hasLiveTrades ? (
+        {!showPlaceholderGauge && job && finished && !job.result && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
             No result payload found for this run.
           </div>
         ) : null}
 
-        {!showPendingSpinner && job?.result ? (
+        {!showPlaceholderGauge && job?.result ? (
           <details className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
             <summary className="cursor-pointer text-xs text-[#868993]">Technical result payload</summary>
             <pre className="mt-3 max-h-[240px] overflow-auto text-xs text-[#d1d4dc]">

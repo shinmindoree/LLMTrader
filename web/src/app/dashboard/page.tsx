@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 import { listJobs, getBillingStatus, getBinanceKeysStatus } from "@/lib/api";
 import { BinanceAccountPanel } from "@/components/BinanceAccountPanel";
 import type { Job, BillingStatus, BinanceKeysStatus } from "@/lib/types";
 
 export default function DashboardPage() {
+  const { t } = useI18n();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
@@ -31,8 +33,8 @@ export default function DashboardPage() {
 
   return (
     <main className="w-full px-6 py-10">
-      <h1 className="text-2xl font-semibold text-[#d1d4dc]">LLMTrader Dashboard</h1>
-      <p className="mt-2 text-sm text-[#868993]">Control center for backtesting and live trading</p>
+      <h1 className="text-2xl font-semibold text-[#d1d4dc]">{t.dashboard.title}</h1>
+      <p className="mt-2 text-sm text-[#868993]">{t.dashboard.subtitle}</p>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] transition-colors">

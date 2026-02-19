@@ -279,8 +279,8 @@ export async function generateStrategyStream(
 
   const timeoutMessage = () =>
     sawEvent
-      ? "스트림 응답이 중단되었습니다. 잠시 후 다시 시도해주세요."
-      : "생성 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.";
+      ? "Stream response was interrupted. Please try again later."
+      : "Generation server is slow to respond. Please try again later.";
 
   const armStallTimer = (ms: number) => {
     clearStallTimer();
