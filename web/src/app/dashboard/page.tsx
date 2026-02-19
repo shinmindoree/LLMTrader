@@ -63,7 +63,7 @@ export default function DashboardPage() {
               }`}
             />
             {ex.label}
-            {ex.connected ? null : " (연결안됨)"}
+            {ex.connected ? null : t.dashboard.notConnected}
           </span>
         ))}
       </div>
@@ -73,7 +73,7 @@ export default function DashboardPage() {
           href="/strategies"
           className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] transition-colors"
         >
-          <div className="text-xs text-[#868993]">생성된 전략 수</div>
+          <div className="text-xs text-[#868993]">{t.dashboard.strategyCount}</div>
           <div className="mt-1 text-2xl font-semibold text-[#d1d4dc]">
             {loading ? "..." : strategyCount}
           </div>
@@ -82,7 +82,7 @@ export default function DashboardPage() {
           href="/backtest"
           className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#2962ff] transition-colors"
         >
-          <div className="text-xs text-[#868993]">진행한 백테스트 수</div>
+          <div className="text-xs text-[#868993]">{t.dashboard.backtestCount}</div>
           <div className="mt-1 text-2xl font-semibold text-[#d1d4dc]">
             {loading ? "..." : backtestCount}
           </div>
@@ -91,7 +91,7 @@ export default function DashboardPage() {
           href="/live"
           className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5 hover:border-[#26a69a] transition-colors"
         >
-          <div className="text-xs text-[#868993]">실행 중인 Live</div>
+          <div className="text-xs text-[#868993]">{t.dashboard.runningLive}</div>
           <div className="mt-1 text-2xl font-semibold text-[#26a69a]">
             {loading ? "..." : runningLiveCount}
           </div>

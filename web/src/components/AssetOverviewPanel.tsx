@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { BinanceAccountPanel } from "@/components/BinanceAccountPanel";
+import { useI18n } from "@/lib/i18n";
 import type { BinanceKeysStatus } from "@/lib/types";
 
 const EXCHANGE_TABS = [
@@ -13,14 +14,14 @@ const EXCHANGE_TABS = [
 
 export function AssetOverviewPanel({ keysStatus }: { keysStatus: BinanceKeysStatus | null }) {
   const [activeTab, setActiveTab] = useState<string>("binance");
-
+  const { t } = useI18n();
   const binanceConnected = !!keysStatus?.configured;
 
   return (
     <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5">
       <h2 className="text-lg font-semibold text-[#d1d4dc]">Asset Overview</h2>
       <p className="mt-1 text-xs text-[#868993]">
-        거래소별 자산 현황 (15초 자동 새로고침)
+        {t.assetOverview.subtitle}
       </p>
 
       <div className="mt-4 flex gap-1 border-b border-[#2a2e39]">
@@ -53,7 +54,7 @@ export function AssetOverviewPanel({ keysStatus }: { keysStatus: BinanceKeysStat
           <BinanceAccountPanel embedded />
         ) : (
           <div className="rounded border border-[#2a2e39] bg-[#131722] px-4 py-8 text-center text-sm text-[#868993]">
-            연동 준비중입니다. 주요 코인거래소 연동을 확장할 예정입니다.
+            {t.assetOverview.comingSoon}
           </div>
         )}
       </div>

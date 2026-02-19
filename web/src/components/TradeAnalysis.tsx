@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { useI18n } from "@/lib/i18n";
 import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
 
@@ -445,6 +446,7 @@ function Chart({
 }
 
 export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade[] }) {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<"chart" | "trades">("chart");
   const result = job.result ?? null;
 
@@ -598,7 +600,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             onClick={() => setActiveTab("chart")}
             aria-pressed={activeTab === "chart"}
           >
-            차트
+            {t.tradeAnalysis.chart}
           </button>
           <button
             type="button"
@@ -606,7 +608,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             onClick={() => setActiveTab("trades")}
             aria-pressed={activeTab === "trades"}
           >
-            거래 내역
+            {t.tradeAnalysis.trades}
           </button>
         </nav>
       </div>
@@ -696,7 +698,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                   onClick={downloadCsv}
                   className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-1.5 text-xs text-[#d1d4dc] hover:bg-[#252a37]"
                 >
-                  CSV 다운로드
+                  {t.tradeAnalysis.csvDownload}
                 </button>
               </div>
               <div className="max-h-[520px] overflow-auto">

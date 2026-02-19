@@ -85,10 +85,11 @@ const en = {
       dashboardDesc: "Track strategy count, backtest runs, and live trading status at a glance.",
       strategies: "Strategies",
       strategiesDesc: "Generate and edit strategies with natural language. AI writes Python code for you.",
-      backtest: "Backtest",
-      backtestDesc: "Run historical simulations. Analyze returns, win rate, and drawdown.",
-      live: "Live Trading",
-      liveDesc: "Execute on testnet or mainnet. Real-time monitoring and order tracking.",
+      backtestLive: "Backtest & Live Trading",
+      backtestLiveDesc:
+        "Set key parameters (strategy, symbol, interval, leverage, etc.) and run with one click. View key metrics, equity/PnL charts, and full trade history.",
+      altDashboard: "Dashboard - Stats and asset overview",
+      altStrategies: "Strategies - Natural language strategy generation",
     },
   },
   nav: {
@@ -118,6 +119,23 @@ const en = {
   dashboard: {
     title: "YHLAB Dashboard",
     subtitle: "Control center for backtesting and live trading",
+    notConnected: " (Not connected)",
+    strategyCount: "Strategies created",
+    backtestCount: "Backtests run",
+    runningLive: "Running Live",
+  },
+  sidebar: {
+    close: "Close sidebar",
+    open: "Open sidebar",
+  },
+  assetOverview: {
+    subtitle: "Assets by exchange (auto-refresh every 15s)",
+    comingSoon: "Integration coming soon. We plan to add more major exchanges.",
+  },
+  tradeAnalysis: {
+    chart: "Chart",
+    trades: "Trades",
+    csvDownload: "Download CSV",
   },
   settings: {
     llmTest: "LLM Connection Test",
@@ -136,6 +154,8 @@ const en = {
     serverDelay: "Generation server is slow to respond. Please try again later.",
     typing: "Typing...",
     codeGenerating: "Generating code...",
+    previousCodeContext:
+      "Below is the strategy code you were using previously. If the user's latest request is a modification or improvement, regenerate based on this code.\n\n",
   },
 };
 
@@ -216,10 +236,11 @@ const ko: TranslationKeys = {
       dashboardDesc: "생성된 전략 수, 백테스트 진행 현황, 라이브 실행 상태를 한눈에 파악합니다.",
       strategies: "전략",
       strategiesDesc: "자연어로 전략을 생성·수정합니다. AI가 Python 코드를 작성해 드립니다.",
-      backtest: "백테스트",
-      backtestDesc: "과거 데이터로 시뮬레이션 실행. 수익률, 승률, 낙폭 분석.",
-      live: "라이브 트레이딩",
-      liveDesc: "테스트넷 또는 메인넷에서 실행. 실시간 모니터링과 주문 추적.",
+      backtestLive: "백테스트 & 라이브 트레이딩",
+      backtestLiveDesc:
+        "주요 인자(전략·심볼·레버리지 등) 설정 후 버튼 클릭으로 실행. 수익률·차트·거래 내역을 한눈에 확인하세요.",
+      altDashboard: "대시보드 - 통계 및 자산 요약",
+      altStrategies: "전략 - 자연어로 전략 생성",
     },
   },
   nav: {
@@ -249,6 +270,23 @@ const ko: TranslationKeys = {
   dashboard: {
     title: "YHLAB Dashboard",
     subtitle: "백테스트 및 라이브 트레이딩 제어 센터",
+    notConnected: " (연결안됨)",
+    strategyCount: "생성된 전략 수",
+    backtestCount: "진행한 백테스트 수",
+    runningLive: "실행 중인 Live",
+  },
+  sidebar: {
+    close: "사이드바 닫기",
+    open: "사이드바 열기",
+  },
+  assetOverview: {
+    subtitle: "거래소별 자산 현황 (15초 자동 새로고침)",
+    comingSoon: "연동 준비중입니다. 주요 코인거래소 연동을 확장할 예정입니다.",
+  },
+  tradeAnalysis: {
+    chart: "차트",
+    trades: "거래 내역",
+    csvDownload: "CSV 다운로드",
   },
   settings: {
     llmTest: "LLM 연결 테스트",
@@ -267,6 +305,8 @@ const ko: TranslationKeys = {
     serverDelay: "생성 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.",
     typing: "답변 작성 중...",
     codeGenerating: "코드 생성 중...",
+    previousCodeContext:
+      "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n",
   },
 };
 

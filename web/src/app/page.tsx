@@ -178,7 +178,7 @@ export default function LandingPage() {
               <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
                 <Image
                   src="/landing/dashboard.png"
-                  alt="Dashboard - 통계 및 자산 요약"
+                  alt={t.landing.screenshots.altDashboard}
                   width={960}
                   height={400}
                   className="w-full object-cover"
@@ -194,7 +194,7 @@ export default function LandingPage() {
               <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
                 <Image
                   src="/landing/strategies.png"
-                  alt="Strategies - 자연어로 전략 생성"
+                  alt={t.landing.screenshots.altStrategies}
                   width={1200}
                   height={800}
                   className="w-full object-cover"
@@ -203,85 +203,37 @@ export default function LandingPage() {
             </ScreenshotBlock>
 
             <ScreenshotBlock
-              title={t.landing.screenshots.backtest}
-              description={t.landing.screenshots.backtestDesc}
+              title={t.landing.screenshots.backtestLive}
+              description={t.landing.screenshots.backtestLiveDesc}
             >
-              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#131722] shadow-2xl">
-                <div className="border-b border-[#2a2e39] p-4">
-                  <div className="flex flex-wrap gap-2">
-                    <div className="h-8 w-32 rounded bg-[#2962ff]/20" />
-                    <div className="h-8 w-24 rounded bg-[#2a2e39]" />
-                    <div className="h-8 w-20 rounded bg-[#26a69a]/20" />
-                  </div>
+              <div className="space-y-6">
+                <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
+                  <Image
+                    src="/landing/backtest-live-form.png"
+                    alt="Run settings - Strategy, Symbol, Interval"
+                    width={1200}
+                    height={600}
+                    className="w-full object-cover"
+                  />
                 </div>
-                <div className="p-5">
-                  <div className="space-y-3">
-                    {[
-                      { w: "90%", c: "#2a2e39" },
-                      { w: "70%", c: "#2a2e39" },
-                      { w: "85%", c: "#2a2e39" },
-                      { w: "60%", c: "#2a2e39" },
-                    ].map((r, i) => (
-                      <div key={i} className="flex items-center gap-3">
-                        <div className="h-4 w-4 rounded bg-[#2a2e39]" />
-                        <div
-                          className="h-6 rounded bg-[#2a2e39]"
-                          style={{ width: r.w }}
-                        />
-                      </div>
-                    ))}
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
+                    <Image
+                      src="/landing/backtest-live-chart.png"
+                      alt="Results - Key metrics and equity chart"
+                      width={800}
+                      height={500}
+                      className="w-full object-cover"
+                    />
                   </div>
-                  <div className="mt-6 grid grid-cols-3 gap-3">
-                    <div className="rounded-lg border border-[#2a2e39] p-3">
-                      <div className="text-xs text-[#868993]">Total Return</div>
-                      <div className="text-lg font-semibold text-[#26a69a]">+12.4%</div>
-                    </div>
-                    <div className="rounded-lg border border-[#2a2e39] p-3">
-                      <div className="text-xs text-[#868993]">Win Rate</div>
-                      <div className="text-lg font-semibold text-[#d1d4dc]">68%</div>
-                    </div>
-                    <div className="rounded-lg border border-[#2a2e39] p-3">
-                      <div className="text-xs text-[#868993]">Max DD</div>
-                      <div className="text-lg font-semibold text-[#ef5350]">-4.2%</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </ScreenshotBlock>
-
-            <ScreenshotBlock
-              title={t.landing.screenshots.live}
-              description={t.landing.screenshots.liveDesc}
-            >
-              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#131722] shadow-2xl">
-                <div className="border-b border-[#2a2e39] p-4">
-                  <div className="flex gap-2">
-                    <div className="h-8 w-28 rounded bg-[#26a69a]/20" />
-                    <div className="h-8 w-24 rounded bg-[#2a2e39]" />
-                  </div>
-                </div>
-                <div className="p-5">
-                  <div className="flex gap-2 mb-4">
-                    <span className="rounded bg-[#26a69a]/20 px-2 py-1 text-xs text-[#26a69a]">
-                      RUNNING
-                    </span>
-                    <span className="rounded bg-[#2a2e39] px-2 py-1 text-xs text-[#868993]">
-                      STOPPED
-                    </span>
-                  </div>
-                  <div className="space-y-3">
-                    {[1, 2, 3].map((i) => (
-                      <div key={i} className="flex items-center justify-between rounded-lg border border-[#2a2e39] p-3">
-                        <div className="flex items-center gap-3">
-                          <div className="h-4 w-4 rounded bg-[#2a2e39]" />
-                          <div>
-                            <div className="h-3 w-20 rounded bg-[#2a2e39]" />
-                            <div className="mt-1 h-2 w-16 rounded bg-[#2a2e39] opacity-60" />
-                          </div>
-                        </div>
-                        <div className="h-5 w-16 rounded bg-[#2a2e39]" />
-                      </div>
-                    ))}
+                  <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
+                    <Image
+                      src="/landing/backtest-live-trades.png"
+                      alt="Results - Trade history"
+                      width={800}
+                      height={500}
+                      className="w-full object-cover"
+                    />
                   </div>
                 </div>
               </div>

@@ -47,6 +47,7 @@ function toApiMessages(messages: ChatMessage[]): { role: string; content: string
 function buildMessagesForGeneration(
   messages: ChatMessage[],
   latestCode: string | null,
+  previousCodeContext: string,
 ): { role: string; content: string }[] | undefined {
   const base = toApiMessages(messages);
   if (!latestCode) {
@@ -60,9 +61,7 @@ function buildMessagesForGeneration(
     ...base,
     {
       role: "assistant",
-      content:
-        "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n"
-        + latestCode,
+      content: previousCodeContext + latestCode,
     },
     last,
   ];
@@ -856,6 +855,7 @@ export default function StrategiesPage() {
       const messagesToSend = buildMessagesForGeneration(
         nextMessages,
         activeCode || null,
+        t.strategy.previousCodeContext,
       );
       await doGenerate(messagesToSend);
     } catch (e) {
