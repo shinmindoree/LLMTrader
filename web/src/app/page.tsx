@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -160,6 +161,171 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <section className="border-t border-[#2a2e39] px-6 py-20 md:py-28">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="text-center text-3xl font-bold text-[#d1d4dc] md:text-4xl">
+            {t.landing.screenshots.title}
+          </h2>
+          <p className="mx-auto mt-4 max-w-2xl text-center text-[#868993]">
+            {t.landing.screenshots.subtitle}
+          </p>
+
+          <div className="mt-16 space-y-24">
+            <ScreenshotBlock
+              title={t.landing.screenshots.dashboard}
+              description={t.landing.screenshots.dashboardDesc}
+            >
+              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#1e222d] shadow-2xl">
+                <Image
+                  src="/landing/dashboard-stats.png"
+                  alt="Dashboard - 통계 요약"
+                  width={960}
+                  height={400}
+                  className="w-full object-cover"
+                  priority
+                />
+              </div>
+            </ScreenshotBlock>
+
+            <ScreenshotBlock
+              title={t.landing.screenshots.strategies}
+              description={t.landing.screenshots.strategiesDesc}
+            >
+              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#131722] shadow-2xl">
+                <div className="grid md:grid-cols-2">
+                  <div className="border-r border-[#2a2e39] p-5">
+                    <div className="mb-3 h-3 w-24 rounded bg-[#2a2e39]" />
+                    <div className="space-y-2">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="flex gap-2">
+                          <div className="h-8 w-8 shrink-0 rounded-full bg-[#a855f7]/30" />
+                          <div className="flex-1 space-y-1">
+                            <div className="h-2 w-full rounded bg-[#2a2e39]" />
+                            <div className="h-2 w-[75%] rounded bg-[#2a2e39] opacity-70" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4 rounded-lg border border-[#a855f7]/30 bg-[#1e222d] p-3">
+                      <div className="h-2 w-full rounded bg-[#2a2e39]" />
+                      <div className="mt-2 h-2 w-[80%] rounded bg-[#2a2e39] opacity-60" />
+                    </div>
+                  </div>
+                  <div className="p-5 font-mono text-xs">
+                    <div className="mb-2 flex gap-1">
+                      <span className="h-2 w-2 rounded-full bg-[#ef5350]" />
+                      <span className="h-2 w-2 rounded-full bg-[#ffc107]" />
+                      <span className="h-2 w-2 rounded-full bg-[#26a69a]" />
+                    </div>
+                    <div className="space-y-1 text-[#868993]">
+                      <span className="text-[#a855f7]">def</span>{" "}
+                      <span className="text-[#26a69a]">on_bar</span>
+                      <span className="text-[#d1d4dc]">(self, bar):</span>
+                      <br />
+                      <span className="text-[#868993] pl-4">  </span>
+                      <span className="text-[#a855f7]">if</span>{" "}
+                      <span className="text-[#d1d4dc]">self.rsi</span>
+                      <span className="text-[#d1d4dc]"> &lt; </span>
+                      <span className="text-[#ff9800]">30</span>
+                      <span className="text-[#d1d4dc]">:</span>
+                      <br />
+                      <span className="text-[#868993] pl-4">    </span>
+                      <span className="text-[#26a69a]">self.buy</span>
+                      <span className="text-[#d1d4dc]">()</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </ScreenshotBlock>
+
+            <ScreenshotBlock
+              title={t.landing.screenshots.backtest}
+              description={t.landing.screenshots.backtestDesc}
+            >
+              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#131722] shadow-2xl">
+                <div className="border-b border-[#2a2e39] p-4">
+                  <div className="flex flex-wrap gap-2">
+                    <div className="h-8 w-32 rounded bg-[#2962ff]/20" />
+                    <div className="h-8 w-24 rounded bg-[#2a2e39]" />
+                    <div className="h-8 w-20 rounded bg-[#26a69a]/20" />
+                  </div>
+                </div>
+                <div className="p-5">
+                  <div className="space-y-3">
+                    {[
+                      { w: "90%", c: "#2a2e39" },
+                      { w: "70%", c: "#2a2e39" },
+                      { w: "85%", c: "#2a2e39" },
+                      { w: "60%", c: "#2a2e39" },
+                    ].map((r, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <div className="h-4 w-4 rounded bg-[#2a2e39]" />
+                        <div
+                          className="h-6 rounded bg-[#2a2e39]"
+                          style={{ width: r.w }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-6 grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-[#2a2e39] p-3">
+                      <div className="text-xs text-[#868993]">Total Return</div>
+                      <div className="text-lg font-semibold text-[#26a69a]">+12.4%</div>
+                    </div>
+                    <div className="rounded-lg border border-[#2a2e39] p-3">
+                      <div className="text-xs text-[#868993]">Win Rate</div>
+                      <div className="text-lg font-semibold text-[#d1d4dc]">68%</div>
+                    </div>
+                    <div className="rounded-lg border border-[#2a2e39] p-3">
+                      <div className="text-xs text-[#868993]">Max DD</div>
+                      <div className="text-lg font-semibold text-[#ef5350]">-4.2%</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </ScreenshotBlock>
+
+            <ScreenshotBlock
+              title={t.landing.screenshots.live}
+              description={t.landing.screenshots.liveDesc}
+            >
+              <div className="overflow-hidden rounded-xl border border-[#2a2e39] bg-[#131722] shadow-2xl">
+                <div className="border-b border-[#2a2e39] p-4">
+                  <div className="flex gap-2">
+                    <div className="h-8 w-28 rounded bg-[#26a69a]/20" />
+                    <div className="h-8 w-24 rounded bg-[#2a2e39]" />
+                  </div>
+                </div>
+                <div className="p-5">
+                  <div className="flex gap-2 mb-4">
+                    <span className="rounded bg-[#26a69a]/20 px-2 py-1 text-xs text-[#26a69a]">
+                      RUNNING
+                    </span>
+                    <span className="rounded bg-[#2a2e39] px-2 py-1 text-xs text-[#868993]">
+                      STOPPED
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="flex items-center justify-between rounded-lg border border-[#2a2e39] p-3">
+                        <div className="flex items-center gap-3">
+                          <div className="h-4 w-4 rounded bg-[#2a2e39]" />
+                          <div>
+                            <div className="h-3 w-20 rounded bg-[#2a2e39]" />
+                            <div className="mt-1 h-2 w-16 rounded bg-[#2a2e39] opacity-60" />
+                          </div>
+                        </div>
+                        <div className="h-5 w-16 rounded bg-[#2a2e39]" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </ScreenshotBlock>
+          </div>
+        </div>
+      </section>
+
       {showCTA && (
         <section className="border-t border-[#2a2e39] px-6 py-20 md:py-28">
           <div className="mx-auto max-w-3xl text-center">
@@ -277,6 +443,26 @@ function RiskIcon() {
     <svg className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
     </svg>
+  );
+}
+
+function ScreenshotBlock({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-6">
+        <h3 className="text-xl font-semibold text-[#d1d4dc] md:text-2xl">{title}</h3>
+        <p className="mt-2 text-[#868993]">{description}</p>
+      </div>
+      {children}
+    </div>
   );
 }
 
