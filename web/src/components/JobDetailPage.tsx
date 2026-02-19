@@ -183,15 +183,6 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
         </div>
       ) : null}
 
-      {job?.result ? (
-        <details className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
-          <summary className="cursor-pointer text-xs text-[#868993]">Technical result payload</summary>
-          <pre className="mt-3 max-h-[240px] overflow-auto text-xs text-[#d1d4dc]">
-            {JSON.stringify(job.result, null, 2)}
-          </pre>
-        </details>
-      ) : null}
-
       {job ? <TradeAnalysis job={job} liveTrades={trades} /> : null}
 
       {job?.type === "LIVE" && validJobId && jobId ? (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
@@ -112,6 +112,13 @@ function computeTradeStats(pnls: number[]): TradeStats | null {
     maxConsecutiveWins,
     maxConsecutiveLosses,
   };
+}
+
+function escapeCsvValue(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
 }
 
 function formatDateTime(ms: number | null): string {
@@ -373,6 +380,7 @@ function Chart({
 }
 
 export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade[] }) {
+  const [activeTab, setActiveTab] = useState<"chart" | "trades">("chart");
   const result = job.result ?? null;
 
   const summary = useMemo(() => {
@@ -450,6 +458,51 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     return isRecord(first) ? asString(first.symbol) : null;
   }, [job.type, job.config]);
 
+  const downloadCsv = useCallback(() => {
+    const enriched =
+      job.type === "BACKTEST" ? enrichedBacktest : enrichedLive;
+    const headers = [
+      "#",
+      "Time",
+      "Symbol",
+      "Price",
+      "Side",
+      "Position(Qty)",
+      "Position(USDT)",
+      "PnL",
+      "Commission",
+      "Equity Change",
+      "Equity",
+      "Reason",
+    ];
+    const rows = enriched.map((t, idx) => {
+      const sym = t.symbol ?? (job.type === "BACKTEST" ? backtestSymbol : null) ?? "-";
+      const reason = (t.exitReason ?? t.reason ?? "-") as string;
+      return [
+        String(idx + 1),
+        t.timeLabel,
+        sym,
+        t.price !== null ? formatNumber(t.price, 2) : "-",
+        t.side ?? "-",
+        t.quantity !== null ? formatNumber(t.quantity, 6) : "-",
+        t.positionSizeUsdt !== null ? formatNumber(t.positionSizeUsdt, 2) : "-",
+        t.pnl !== null ? formatSigned(t.pnl, "USDT") : "-",
+        t.commission !== null ? formatNumber(t.commission, 4) : "-",
+        t.balanceChange !== null ? formatSigned(t.balanceChange, "USDT") : "-",
+        t.balanceAfter !== null ? formatNumber(t.balanceAfter, 2) : "-",
+        reason,
+      ].map(escapeCsvValue);
+    });
+    const csv = [headers.map(escapeCsvValue).join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trades_${job.type.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [job.type, backtestSymbol, enrichedBacktest, enrichedLive]);
+
   if (!sortedTrades.length) {
     return (
       <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
@@ -462,22 +515,19 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   const balanceLabel = job.type === "BACKTEST" ? "Initial Balance" : "Initial Equity";
   const finalLabel = job.type === "BACKTEST" ? "Final Balance" : "Final Equity";
 
-  const [activeTab, setActiveTab] = useState<"chart" | "trades">("chart");
-
   const tabButtonBase =
-    "w-full border border-[#2a2e39] border-r-0 px-4 py-2.5 text-left text-xs font-medium transition-colors";
+    "rounded border border-[#2a2e39] px-3 py-1.5 text-xs font-medium transition-colors";
   const tabButtonActive = "bg-[#131722] text-[#d1d4dc]";
   const tabButtonInactive = "bg-[#1e222d] text-[#868993] hover:bg-[#252a37]";
 
   return (
     <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
-      <div className="mb-4 text-sm font-medium text-[#d1d4dc]">Trade Analysis</div>
-
-      <div className="flex">
-        <nav className="flex shrink-0 flex-col">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-[#d1d4dc]">Trade Analysis</span>
+        <nav className="flex gap-1">
           <button
             type="button"
-            className={`${tabButtonBase} rounded-tl ${activeTab === "chart" ? tabButtonActive : tabButtonInactive}`}
+            className={`${tabButtonBase} ${activeTab === "chart" ? tabButtonActive : tabButtonInactive}`}
             onClick={() => setActiveTab("chart")}
             aria-pressed={activeTab === "chart"}
           >
@@ -485,15 +535,16 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
           </button>
           <button
             type="button"
-            className={`${tabButtonBase} rounded-bl ${activeTab === "trades" ? tabButtonActive : tabButtonInactive}`}
+            className={`${tabButtonBase} ${activeTab === "trades" ? tabButtonActive : tabButtonInactive}`}
             onClick={() => setActiveTab("trades")}
             aria-pressed={activeTab === "trades"}
           >
             거래 내역
           </button>
         </nav>
+      </div>
 
-        <div className="min-w-0 flex-1 rounded-r border border-[#2a2e39] bg-[#131722] p-4">
+      <div className="rounded border border-[#2a2e39] bg-[#131722] p-4">
           {activeTab === "chart" ? (
             <>
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -565,8 +616,15 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             </>
           ) : (
             <div className="rounded border border-[#2a2e39] bg-[#0f141f]">
-              <div className="border-b border-[#2a2e39] px-4 py-2 text-xs font-medium text-[#d1d4dc]">
-                Trades ({sortedTrades.length})
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2a2e39] px-4 py-2">
+                <span className="text-xs font-medium text-[#d1d4dc]">Trades ({sortedTrades.length})</span>
+                <button
+                  type="button"
+                  onClick={downloadCsv}
+                  className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-1.5 text-xs text-[#d1d4dc] hover:bg-[#252a37]"
+                >
+                  CSV 다운로드
+                </button>
               </div>
               <div className="max-h-[520px] overflow-auto">
                 {job.type === "BACKTEST" ? (
@@ -701,7 +759,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
               </div>
             </div>
           )}
-        </div>
       </div>
     </section>
   );
