@@ -12,6 +12,7 @@ import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobEventsConsole } from "@/app/jobs/[jobId]/JobEventsConsole";
 import { TradeAnalysis } from "@/components/TradeAnalysis";
 import { JobProgressGauge } from "@/components/JobProgressGauge";
+import { JobConfigSummary } from "@/components/JobConfigSummary";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -139,6 +140,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
               </div>
             </div>
           ) : null}
+          {job ? <JobConfigSummary type={job.type} config={job.config} /> : null}
         </div>
         <button
           className="rounded border border-[#ef5350] bg-[#ef5350] px-4 py-2 text-sm text-white hover:bg-[#d32f2f] hover:border-[#d32f2f] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"

@@ -7,6 +7,7 @@ import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from 
 import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
+import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
 import { BacktestForm } from "./new/BacktestForm";
 
@@ -244,9 +245,12 @@ export default function BacktestJobsPage() {
                     </button>
                   </div>
                 </div>
-                <div className="mt-1 text-xs text-[#868993]">
-                  {new Date(j.created_at).toLocaleString()}
-                  {j.error ? ` • error: ${j.error}` : ""}
+                <div className="mt-1 text-xs">
+                  <span className="text-[#868993]">{new Date(j.created_at).toLocaleString()}</span>
+                  {j.config ? (
+                    <span className="ml-2 text-xs"><JobConfigInline type="BACKTEST" config={j.config} /></span>
+                  ) : null}
+                  {j.error ? <span className="text-[#868993]"> · error: {j.error}</span> : ""}
                 </div>
               </li>
             ))}
