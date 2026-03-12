@@ -58,6 +58,7 @@ export function LiveForm({
   const [dailyLossLimit, setDailyLossLimit] = useState(500);
   const [stopLossPct, setStopLossPct] = useState(0.05);
   const [stoplossCooldownCandles, setStoplossCooldownCandles] = useState(0);
+  const [maxPyramidEntries, setMaxPyramidEntries] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -77,6 +78,7 @@ export function LiveForm({
             stop_loss_pct: stopLossPct,
             max_consecutive_losses: 0,
             stoploss_cooldown_candles: stoplossCooldownCandles,
+            max_pyramid_entries: maxPyramidEntries,
           },
         ],
       };
@@ -224,6 +226,20 @@ export function LiveForm({
           />
           <div className="mt-1 text-xs text-[#868993]">
             0 = off. After a stop-loss exit, new entries are blocked for N candles.
+          </div>
+        </label>
+        <label className="text-sm">
+          <div className="mb-1 text-xs text-[#868993]">Max Pyramid Entries</div>
+          <input
+            className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
+            type="number"
+            value={maxPyramidEntries}
+            min={0}
+            max={10}
+            onChange={(e) => setMaxPyramidEntries(Number(e.target.value))}
+          />
+          <div className="mt-1 text-xs text-[#868993]">
+            0 = off. Max additional entries in the same direction (strategy must call add_to_long/add_to_short).
           </div>
         </label>
       </div>

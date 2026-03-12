@@ -22,6 +22,7 @@ function extractLiveConfig(config: Record<string, unknown>) {
     dailyLossLimit: stream.daily_loss_limit != null ? `${stream.daily_loss_limit} USDT` : "-",
     stopLossPct: stream.stop_loss_pct != null ? `${(Number(stream.stop_loss_pct) * 100).toFixed(1)}%` : "-",
     cooldownCandles: stream.stoploss_cooldown_candles != null ? String(stream.stoploss_cooldown_candles) : null,
+    maxPyramidEntries: stream.max_pyramid_entries != null ? String(stream.max_pyramid_entries) : null,
   };
 }
 
@@ -33,6 +34,7 @@ function extractBacktestConfig(config: Record<string, unknown>) {
     initialBalance: config.initial_balance != null ? `${config.initial_balance} USDT` : "-",
     commission: config.commission != null ? `${(Number(config.commission) * 100).toFixed(2)}%` : "-",
     stopLossPct: config.stop_loss_pct != null ? `${(Number(config.stop_loss_pct) * 100).toFixed(1)}%` : "-",
+    maxPyramidEntries: config.max_pyramid_entries != null ? String(config.max_pyramid_entries) : null,
     startDate: formatTs(config.start_ts),
     endDate: formatTs(config.end_ts),
   };
@@ -72,6 +74,9 @@ export function JobConfigSummary({
           {c.cooldownCandles && c.cooldownCandles !== "0" ? (
             <ConfigEntry label="SL Cooldown" value={`${c.cooldownCandles} candles`} />
           ) : null}
+          {c.maxPyramidEntries && c.maxPyramidEntries !== "0" ? (
+            <ConfigEntry label="Pyramid" value={`max ${c.maxPyramidEntries}`} />
+          ) : null}
         </div>
       </div>
     );
@@ -88,6 +93,9 @@ export function JobConfigSummary({
         <ConfigEntry label="Initial Balance" value={c.initialBalance} />
         <ConfigEntry label="Commission" value={c.commission} />
         <ConfigEntry label="Stop Loss" value={c.stopLossPct} />
+        {c.maxPyramidEntries && c.maxPyramidEntries !== "0" ? (
+          <ConfigEntry label="Pyramid" value={`max ${c.maxPyramidEntries}`} />
+        ) : null}
         <ConfigEntry label="Period" value={`${c.startDate} ~ ${c.endDate}`} />
       </div>
     </div>

@@ -77,6 +77,7 @@ export function BacktestForm({
   const [initialBalance, setInitialBalance] = useState(1000);
   const [commission, setCommission] = useState(0.0004);
   const [stopLossPct, setStopLossPct] = useState(0.05);
+  const [maxPyramidEntries, setMaxPyramidEntries] = useState(0);
   const now = new Date();
   const [startDate, setStartDate] = useState(() => formatDateInputValue(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
   const [endDate, setEndDate] = useState(() => formatDateInputValue(now));
@@ -115,6 +116,7 @@ export function BacktestForm({
         initial_balance: initialBalance,
         commission,
         stop_loss_pct: stopLossPct,
+        max_pyramid_entries: maxPyramidEntries,
         start_ts: startTs,
         end_ts: endTs,
       };
@@ -272,6 +274,20 @@ export function BacktestForm({
             value={stopLossPct * 100}
             onChange={(e) => setStopLossPct(Number(e.target.value) / 100)}
           />
+        </label>
+        <label className="text-sm">
+          <div className="mb-1 text-xs text-[#868993]">Max Pyramid Entries</div>
+          <input
+            className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
+            type="number"
+            value={maxPyramidEntries}
+            min={0}
+            max={10}
+            onChange={(e) => setMaxPyramidEntries(Number(e.target.value))}
+          />
+          <div className="mt-1 text-xs text-[#868993]">
+            0 = off. Max additional entries in the same direction (strategy must call add_to_long/add_to_short).
+          </div>
         </label>
       </div>
 
