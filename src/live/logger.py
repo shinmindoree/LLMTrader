@@ -159,11 +159,13 @@ class SimpleLogger:
         balance: float,
         pnl: float,
         indicators: dict[str, Any] | None = None,
+        strategy_name: str | None = None,
         **extra: Any,
     ) -> None:
         """틱 데이터 로그."""
+        header = f"TICK | strategy={strategy_name} | " if strategy_name else "TICK | "
         msg = (
-            f"TICK | symbol={symbol}, bar_time={bar_time}, price={price:,.2f}"
+            f"{header}symbol={symbol}, bar_time={bar_time}, price={price:,.2f}"
             f", position={position:.4f}, balance={balance:,.2f}, pnl={pnl:,.2f}"
         )
         indicator_str = self._format_indicators(indicators)

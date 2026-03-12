@@ -44,6 +44,7 @@ class LiveTradingEngine:
         self._run_on_tick: bool = bool(getattr(strategy, "run_on_tick", False))
         self._start_time: float = 0.0
         self._logger = get_logger("llmtrader.live")
+        self._strategy_name: str = strategy.__class__.__name__
         self.log_interval: int | None = log_interval if log_interval and log_interval > 0 else None
         self._indicator_config = dict(indicator_config or {})
         if hasattr(self.ctx, "set_indicator_config"):
@@ -332,6 +333,7 @@ class LiveTradingEngine:
 
         self._logger.log_tick(
             symbol=self.price_feed.symbol,
+            strategy_name=self._strategy_name,
             bar_time=snapshot["bar_datetime"],
             price=snapshot["price"],
             indicators=indicator_values,

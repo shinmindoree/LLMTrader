@@ -133,6 +133,7 @@ class PortfolioLiveTradingEngine:
         self.log_interval: int | None = log_interval if log_interval and log_interval > 0 else None
 
         self._logger = get_logger("llmtrader.live.portfolio")
+        self._strategy_name: str = strategy.__class__.__name__
         self._run_on_tick: bool = bool(getattr(strategy, "run_on_tick", False))
         self._running = False
         self._initialized = False
@@ -353,12 +354,9 @@ class PortfolioLiveTradingEngine:
 
     def _save_snapshot(self, tick: dict[str, Any]) -> None:
         ts = int(tick.get("timestamp", 0) or 0)
-        now = datetime.now()
         trigger_stream = f"{str(tick.get('symbol', '')).upper()}@{str(tick.get('interval', '')).strip()}"
-        bar_time = now.isoformat(timespec="seconds")
         portfolio_total_equity = self.ctx.portfolio_total_equity()
 
-        # 터미널 출력(로그 인터벌 반영)
         parts: list[str] = []
         for symbol, ctx in self.trade_contexts.items():
             price = float(ctx.current_price)
@@ -366,8 +364,7 @@ class PortfolioLiveTradingEngine:
             pnl = float(ctx.unrealized_pnl)
             parts.append(f"{symbol} price={price:,.2f} pos={pos:+.4f} pnl={pnl:+.2f}")
         self._logger.info(
-            f"PORTFOLIO_TICK | time={bar_time} | total_equity={portfolio_total_equity:,.2f} | " + " | ".join(parts),
-            trigger_stream=trigger_stream,
+            f"PORTFOLIO_TICK | strategy={self._strategy_name} | {trigger_stream} | total_equity={portfolio_total_equity:,.2f} | " + " | ".join(parts),
         )
 
         snapshot: dict[str, Any] = {
