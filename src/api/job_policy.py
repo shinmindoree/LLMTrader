@@ -111,6 +111,15 @@ def _check_backtest(config: dict[str, Any], result: JobPolicyCheckResult) -> Non
         elif max_position > 0.5:
             result.warnings.append("max_position이 0.5 초과입니다. 포지션 집중도가 높습니다.")
 
+    max_pyramid_entries = _to_int(config.get("max_pyramid_entries"))
+    if max_pyramid_entries is not None:
+        if max_pyramid_entries < 0 or max_pyramid_entries > 10:
+            result.blockers.append("config.max_pyramid_entries: 0~10 범위여야 합니다.")
+        elif max_pyramid_entries >= 5:
+            result.warnings.append(
+                f"max_pyramid_entries가 {max_pyramid_entries}회로 큽니다. 포지션 집중 위험이 있습니다."
+            )
+
     start_ts = _to_int(config.get("start_ts"))
     end_ts = _to_int(config.get("end_ts"))
     if start_ts is None or end_ts is None:
@@ -215,6 +224,15 @@ def _check_live(config: dict[str, Any], result: JobPolicyCheckResult) -> None:
             result.blockers.append(
                 f"{field_prefix}.stoploss_cooldown_candles: 0~2000 범위여야 합니다."
             )
+
+        max_pyramid_entries = _to_int(stream.get("max_pyramid_entries"))
+        if max_pyramid_entries is not None:
+            if max_pyramid_entries < 0 or max_pyramid_entries > 10:
+                result.blockers.append(f"{field_prefix}.max_pyramid_entries: 0~10 범위여야 합니다.")
+            elif max_pyramid_entries >= 5:
+                result.warnings.append(
+                    f"{field_prefix}.max_pyramid_entries가 {max_pyramid_entries}회로 큽니다. 포지션 집중 위험이 있습니다."
+                )
 
     if total_max_position > 1.5:
         result.blockers.append(

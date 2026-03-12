@@ -49,6 +49,7 @@ class BacktestContext:
         self._volumes: list[float] = []
         self._indicator_registry: dict[str, Callable[..., Any]] = {}
         self._indicator_error_logged: set[str] = set()
+        self._pyramid_count: int = 0
     
     @property
     def current_price(self) -> float:
@@ -160,7 +161,42 @@ class BacktestContext:
         if qty <= 0:
             return
         self.sell(qty, reason=reason)
-    
+
+    @property
+    def pyramid_count(self) -> int:
+        """현재 피라미딩 횟수 (최초 진입 제외)."""
+        return self._pyramid_count
+
+    def add_to_long(self, reason: str | None = None, entry_pct: float | None = None) -> None:
+        """기존 롱 포지션에 피라미딩 추가 진입."""
+        if self.position.size <= 1e-12:
+            return
+        max_entries = self.risk_manager.config.max_pyramid_entries
+        if max_entries <= 0:
+            return
+        if self._pyramid_count >= max_entries:
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self._pyramid_count += 1
+        self.buy(qty, reason=reason or f"Pyramid Long #{self._pyramid_count}")
+
+    def add_to_short(self, reason: str | None = None, entry_pct: float | None = None) -> None:
+        """기존 숏 포지션에 피라미딩 추가 진입."""
+        if self.position.size >= -1e-12:
+            return
+        max_entries = self.risk_manager.config.max_pyramid_entries
+        if max_entries <= 0:
+            return
+        if self._pyramid_count >= max_entries:
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self._pyramid_count += 1
+        self.sell(qty, reason=reason or f"Pyramid Short #{self._pyramid_count}")
+
     def update_bar(
         self, open_price: float, high_price: float, low_price: float, close_price: float, volume: float = 0.0
     ) -> None:
@@ -232,6 +268,7 @@ class BacktestContext:
                 self.position.size = 0.0
                 self.position.entry_price = 0.0
                 self.position.entry_balance = 0.0
+                self._pyramid_count = 0
             
             position_size_usdt = fill_qty * price
             balance_after = self.balance
@@ -268,7 +305,8 @@ class BacktestContext:
         if self.position.size == 0:
             self.position.size = quantity
             self.position.entry_price = price
-            self.position.entry_balance = self._balance  # 포지션 진입 시점의 balance 저장
+            self.position.entry_balance = self._balance
+            self._pyramid_count = 0
         else:
             total_value = self.position.size * self.position.entry_price + quantity * price
             self.position.size += quantity
@@ -331,6 +369,7 @@ class BacktestContext:
                 self.position.size = 0.0
                 self.position.entry_price = 0.0
                 self.position.entry_balance = 0.0
+                self._pyramid_count = 0
             
             position_size_usdt = fill_qty * price
             balance_after = self.balance
@@ -367,7 +406,8 @@ class BacktestContext:
         if self.position.size == 0:
             self.position.size = -quantity
             self.position.entry_price = price
-            self.position.entry_balance = self._balance  # 포지션 진입 시점의 balance 저장
+            self.position.entry_balance = self._balance
+            self._pyramid_count = 0
         else:
             total_value = abs(self.position.size) * self.position.entry_price + quantity * price
             self.position.size -= quantity

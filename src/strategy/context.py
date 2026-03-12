@@ -75,6 +75,19 @@ class StrategyContext(Protocol):
         """시스템 리스크 설정 기반으로 숏 진입."""
         ...
 
+    def add_to_long(self, reason: str | None = None, entry_pct: float | None = None) -> None:
+        """기존 롱 포지션에 피라미딩 추가 진입. max_pyramid_entries 한도 내에서만 허용."""
+        ...
+
+    def add_to_short(self, reason: str | None = None, entry_pct: float | None = None) -> None:
+        """기존 숏 포지션에 피라미딩 추가 진입. max_pyramid_entries 한도 내에서만 허용."""
+        ...
+
+    @property
+    def pyramid_count(self) -> int:
+        """현재 피라미딩 횟수 (최초 진입 제외)."""
+        ...
+
     def get_indicator(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """지표 조회 (예: SMA, RSI 등)."""
         ...

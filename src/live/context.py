@@ -98,6 +98,9 @@ class LiveContext:
         self._processed_order_ids: set[int] = set()
         self._chase_order_ids: list[int] = []
         
+        # 피라미딩 카운터 (최초 진입 제외, 추가 진입 횟수)
+        self._pyramid_count: int = 0
+
         # StopLoss cooldown 관련 변수
         self._stoploss_cooldown_until_bar_timestamp: int | None = None
         self._last_bar_timestamp: int | None = None
@@ -1158,7 +1161,12 @@ class LiveContext:
             event = "ENTRY"
         elif abs(before_pos) >= 1e-12 and abs(after_pos) < 1e-12:
             event = "EXIT"
-        
+
+        if event == "ENTRY":
+            self._pyramid_count = 0
+        elif event == "EXIT":
+            self._pyramid_count = 0
+
         if event:
             print(f"🔔 이벤트 분류: {event} (before_pos={before_pos:+.6f}, after_pos={after_pos:+.6f}, after_pos_api={after_pos_api:+.6f}, side={side}, executed_qty={executed_qty_float:+.6f})")
         elif abs(before_pos) >= 1e-12 or abs(after_pos) >= 1e-12:
@@ -2099,6 +2107,73 @@ class LiveContext:
         if qty <= 0:
             return
         self.sell(qty, reason=reason, use_chase=use_chase)
+
+    @property
+    def pyramid_count(self) -> int:
+        """현재 피라미딩 횟수 (최초 진입 제외)."""
+        return self._pyramid_count
+
+    def add_to_long(
+        self,
+        reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        """기존 롱 포지션에 피라미딩 추가 진입."""
+        if self.position.size <= 1e-12:
+            return
+        max_entries = self.risk_manager.config.max_pyramid_entries
+        if max_entries <= 0:
+            self._log_audit("PYRAMID_REJECTED", {"reason": "pyramiding disabled (max_pyramid_entries=0)"})
+            return
+        if self._pyramid_count >= max_entries:
+            self._log_audit("PYRAMID_REJECTED", {
+                "reason": f"max pyramid entries reached ({self._pyramid_count}/{max_entries})",
+            })
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self._pyramid_count += 1
+        self._log_audit("PYRAMID_ENTRY", {
+            "direction": "LONG",
+            "pyramid_count": self._pyramid_count,
+            "max_pyramid_entries": max_entries,
+            "quantity": qty,
+            "reason": reason,
+        })
+        self.buy(qty, reason=reason or f"Pyramid Long #{self._pyramid_count}", use_chase=use_chase)
+
+    def add_to_short(
+        self,
+        reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        """기존 숏 포지션에 피라미딩 추가 진입."""
+        if self.position.size >= -1e-12:
+            return
+        max_entries = self.risk_manager.config.max_pyramid_entries
+        if max_entries <= 0:
+            self._log_audit("PYRAMID_REJECTED", {"reason": "pyramiding disabled (max_pyramid_entries=0)"})
+            return
+        if self._pyramid_count >= max_entries:
+            self._log_audit("PYRAMID_REJECTED", {
+                "reason": f"max pyramid entries reached ({self._pyramid_count}/{max_entries})",
+            })
+            return
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
+            return
+        self._pyramid_count += 1
+        self._log_audit("PYRAMID_ENTRY", {
+            "direction": "SHORT",
+            "pyramid_count": self._pyramid_count,
+            "max_pyramid_entries": max_entries,
+            "quantity": qty,
+            "reason": reason,
+        })
+        self.sell(qty, reason=reason or f"Pyramid Short #{self._pyramid_count}", use_chase=use_chase)
 
     def _get_candle_interval_seconds(self) -> int:
         """캔들 간격을 초 단위로 반환.

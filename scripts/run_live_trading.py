@@ -202,6 +202,7 @@ def _normalize_stream_configs(
             "max_consecutive_losses": int(it.get("max_consecutive_losses", 0)),
             "stoploss_cooldown_candles": int(it.get("stoploss_cooldown_candles", 0)),
             "stop_loss_pct": float(it.get("stop_loss_pct", 0.05)),
+            "max_pyramid_entries": int(it.get("max_pyramid_entries", 0)),
         }
         out.append(cfg)
 
@@ -228,6 +229,7 @@ def _validate_symbol_settings_consistency(streams: list[dict[str, Any]]) -> dict
         max_consecutive_losses = int(cfg["max_consecutive_losses"])
         stoploss_cooldown_candles = int(cfg["stoploss_cooldown_candles"])
         stop_loss_pct = float(cfg["stop_loss_pct"])
+        max_pyramid_entries = int(cfg.get("max_pyramid_entries", 0))
 
         existing = per_symbol.get(symbol)
         current = {
@@ -238,6 +240,7 @@ def _validate_symbol_settings_consistency(streams: list[dict[str, Any]]) -> dict
             "max_consecutive_losses": max_consecutive_losses,
             "stoploss_cooldown_candles": stoploss_cooldown_candles,
             "stop_loss_pct": stop_loss_pct,
+            "max_pyramid_entries": max_pyramid_entries,
         }
         if existing is None:
             per_symbol[symbol] = current
@@ -251,6 +254,7 @@ def _validate_symbol_settings_consistency(streams: list[dict[str, Any]]) -> dict
             "max_consecutive_losses",
             "stoploss_cooldown_candles",
             "stop_loss_pct",
+            "max_pyramid_entries",
         ):
             if existing.get(key) != current.get(key):
                 raise typer.BadParameter(
@@ -403,7 +407,8 @@ async def _run(
             f"daily_loss_limit=${float(s['daily_loss_limit']):.0f}, "
             f"max_consecutive_losses={int(s['max_consecutive_losses'])}, "
             f"stop_loss_pct={float(s['stop_loss_pct']) * 100:.2f}%, "
-            f"stoploss_cooldown_candles={int(s['stoploss_cooldown_candles'])}"
+            f"stoploss_cooldown_candles={int(s['stoploss_cooldown_candles'])}, "
+            f"max_pyramid_entries={int(s.get('max_pyramid_entries', 0))}"
         )
     print()
 
@@ -421,6 +426,7 @@ async def _run(
     portfolio_max_position = max(float(s["max_position"]) for s in symbol_settings.values())
     portfolio_stoploss_cooldown = max(int(s["stoploss_cooldown_candles"]) for s in symbol_settings.values())
     portfolio_stop_loss_pct = max(float(s["stop_loss_pct"]) for s in symbol_settings.values())
+    portfolio_max_pyramid = max(int(s.get("max_pyramid_entries", 0)) for s in symbol_settings.values())
     portfolio_risk_config = RiskConfig(
         max_leverage=portfolio_max_leverage,
         max_position_size=portfolio_max_position,
@@ -429,6 +435,7 @@ async def _run(
         max_consecutive_losses=portfolio_max_consecutive,
         stoploss_cooldown_candles=portfolio_stoploss_cooldown,
         stop_loss_pct=portfolio_stop_loss_pct,
+        max_pyramid_entries=portfolio_max_pyramid,
     )
     portfolio_risk_manager = LiveRiskManager(portfolio_risk_config)
 
@@ -441,6 +448,7 @@ async def _run(
         max_consecutive_losses = int(s["max_consecutive_losses"])
         stoploss_cooldown_candles = int(s["stoploss_cooldown_candles"])
         stop_loss_pct = float(s["stop_loss_pct"])
+        max_pyramid_entries = int(s.get("max_pyramid_entries", 0))
 
         symbol_risk_config = RiskConfig(
             max_leverage=float(leverage),
@@ -450,6 +458,7 @@ async def _run(
             max_consecutive_losses=max_consecutive_losses,
             stoploss_cooldown_candles=stoploss_cooldown_candles,
             stop_loss_pct=stop_loss_pct,
+            max_pyramid_entries=max_pyramid_entries,
         )
         symbol_risk_manager = LiveRiskManager(symbol_risk_config)
         ctx = LiveContext(

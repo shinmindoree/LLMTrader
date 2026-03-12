@@ -66,6 +66,7 @@ async def run_backtest(
             max_position_size=float(config.get("max_position") or 0.5),
             max_order_size=float(config.get("max_position") or 0.5),
             stop_loss_pct=stop_loss_pct,
+            max_pyramid_entries=int(config.get("max_pyramid_entries") or 0),
         )
         risk_manager = BacktestRiskManager(risk_config)
         ctx = BacktestContext(

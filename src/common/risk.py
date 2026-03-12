@@ -15,6 +15,7 @@ class RiskConfig:
         max_order_size: float = 0.5,
         stoploss_cooldown_candles: int = 0,
         stop_loss_pct: float = 0.05,
+        max_pyramid_entries: int = 0,
     ) -> None:
         """리스크 설정 초기화.
 
@@ -26,6 +27,7 @@ class RiskConfig:
             max_order_size: 단일 주문 최대 크기 (자산 대비)
             stoploss_cooldown_candles: StopLoss 청산 후 거래 중단 캔들 수 (0이면 비활성화)
             stop_loss_pct: StopLoss 비율 (0.0~1.0, 예: 0.05 = 5%)
+            max_pyramid_entries: 최대 피라미딩 횟수 (0이면 비활성화, 최초 진입 제외)
         """
         self.max_leverage = max_leverage
         self.max_position_size = max_position_size
@@ -34,6 +36,7 @@ class RiskConfig:
         self.max_order_size = max_order_size
         self.stoploss_cooldown_candles = stoploss_cooldown_candles
         self.stop_loss_pct = stop_loss_pct
+        self.max_pyramid_entries = max_pyramid_entries
 
 
 class BaseRiskManager:
