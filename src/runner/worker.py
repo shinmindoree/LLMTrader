@@ -35,7 +35,7 @@ class RunnerWorker:
 
     async def run_forever(self) -> None:
         # On runner startup, reconcile jobs left RUNNING/STOP_REQUESTED from a previous crash/restart.
-        # LIVE jobs are force-stopped to avoid unintended automatic resume/trading.
+        # LIVE jobs are re-queued so the runner can resume them automatically.
         async with self._session_maker() as session:
             counts = await finalize_orphaned_jobs(session, reason="runner_startup")
             if counts.get("finalized_failed") or counts.get("requeued_live") or counts.get("finalized_stopped"):

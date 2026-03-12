@@ -276,17 +276,12 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
             .values(status=JobStatus.FAILED, ended_at=now, updated_at=now, error=f"Orphaned job ({reason})")
         )
 
-    res_live_stopped = None
+    res_live_requeued = None
     if running_live_ids:
-        res_live_stopped = await session.execute(
+        res_live_requeued = await session.execute(
             update(Job)
             .where(Job.job_id.in_(running_live_ids))
-            .values(
-                status=JobStatus.STOPPED,
-                ended_at=now,
-                updated_at=now,
-                error=f"Orphaned LIVE job stopped ({reason})",
-            )
+            .values(status=JobStatus.PENDING, started_at=None, ended_at=None, updated_at=now, error=None)
         )
 
     res_stop_requested = None
@@ -301,25 +296,16 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
         await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_FAILED",
                            payload_json={"error": f"Orphaned job ({reason})"})
     for jid in running_live_ids:
-        await append_event(
-            session,
-            job_id=jid,
-            kind=EventKind.STATUS,
-            message="JOB_STOPPED",
-            payload_json={"reason": reason, "resume": False, "auto_resume_disabled": True},
-        )
+        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_REQUEUED",
+                           payload_json={"reason": reason, "resume": True})
     for jid in stop_requested_ids:
         await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_STOPPED",
                            payload_json={"reason": reason})
 
     return {
         "finalized_failed": int(res_running.rowcount or 0) if res_running is not None else 0,
-        "requeued_live": 0,
-        "finalized_stopped": (
-            int(res_stop_requested.rowcount or 0) if res_stop_requested is not None else 0
-        ) + (
-            int(res_live_stopped.rowcount or 0) if res_live_stopped is not None else 0
-        ),
+        "requeued_live": int(res_live_requeued.rowcount or 0) if res_live_requeued is not None else 0,
+        "finalized_stopped": int(res_stop_requested.rowcount or 0) if res_stop_requested is not None else 0,
     }
 
 
