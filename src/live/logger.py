@@ -24,6 +24,7 @@ class SimpleLogger:
         self.console_output = console_output
         self.logger = std_logging.getLogger(name)
         self.logger.setLevel(log_level)
+        self.logger.propagate = False
 
         if not self.logger.handlers:
             handler = std_logging.StreamHandler()
