@@ -212,7 +212,7 @@ export default function LiveJobsPage() {
       <section className="mt-6">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">New Live Run</div>
         <p className="mb-3 text-xs text-[#efb6b2]">
-          Caution: this places real testnet orders. Only one stream is supported in this MVP.
+          Caution: this places real testnet orders. You can add up to 5 streams for portfolio trading.
         </p>
         {strategies.length ? (
           <LiveForm

@@ -24,7 +24,7 @@ PLANS: dict[str, PlanLimits] = {
         max_live_jobs=1,
         max_backtest_per_month=100,
         max_llm_generate_per_month=50,
-        portfolio_mode=False,
+        portfolio_mode=True,
         priority_queue=True,
     ),
     "enterprise": PlanLimits(

@@ -1,0 +1,36 @@
+[
+  {
+    "strategy": "rsi_long_short_strategy.py",
+    "params": {},
+    "streams": [
+      {
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "leverage": 5,
+        "max_position": 0.3,
+        "daily_loss_limit": 500,
+        "max_consecutive_losses": 0,
+        "stop_loss_pct": 0.05,
+        "stoploss_cooldown_candles": 0,
+        "max_pyramid_entries": 0
+      }
+    ]
+  },
+  {
+    "strategy": "macd_long_short_strategy.py",
+    "params": {},
+    "streams": [
+      {
+        "symbol": "ETHUSDT",
+        "interval": "1m",
+        "leverage": 3,
+        "max_position": 0.2,
+        "daily_loss_limit": 300,
+        "max_consecutive_losses": 0,
+        "stop_loss_pct": 0.05,
+        "stoploss_cooldown_candles": 0,
+        "max_pyramid_entries": 0
+      }
+    ]
+  }
+]

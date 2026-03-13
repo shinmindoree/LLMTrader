@@ -5,7 +5,8 @@
 Entry points for running live trading and diagnostic utilities.
 
 **Files:**
-- `run_live_trading.py` — Main live trading script with CLI args
+- `run_live_trading.py` — Main live trading script with CLI args (single strategy)
+- `run_portfolio_trading.py` — Multi-strategy portfolio live trading (up to 5 slots)
 - `smoke_live_constraints.py` — Quick order test without strategy
 - `check_realtime_btcusdt_rsi.py` — RSI monitoring utility
 - `min_order_test.py` — Minimal order placement test
@@ -78,6 +79,18 @@ uv run python scripts/smoke_live_constraints.py \
   --leverage 5 \
   --max-position 1.0 \
   --fraction 0.05
+```
+
+### run_portfolio_trading.py
+
+```bash
+# Config file (recommended)
+uv run python scripts/run_portfolio_trading.py --config scripts/portfolio_example.json --yes
+
+# Inline JSON
+uv run python scripts/run_portfolio_trading.py \
+  --slots '[{"strategy":"rsi_long_short_strategy.py","streams":[{"symbol":"BTCUSDT","interval":"1m","leverage":5}]},{"strategy":"macd_long_short_strategy.py","streams":[{"symbol":"ETHUSDT","interval":"1m","leverage":3}]}]' \
+  --yes
 ```
 
 ### check_realtime_btcusdt_rsi.py
