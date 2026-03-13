@@ -223,7 +223,7 @@ class MacdHistImmediateEntryTakeProfitStrategy(Strategy):
                     self.is_closing = True
                     ctx.close_position(
                         reason=f"TakeProfit {pnl_pct * 100:.3f}% (target {self.take_profit_pct * 100:.3f}%)",
-                        use_chase=False,
+                        use_chase=True,
                     )
                     return
 
@@ -238,9 +238,9 @@ class MacdHistImmediateEntryTakeProfitStrategy(Strategy):
         if hist > 0:
             qty = float(ctx.calc_entry_quantity())
             if qty > 0:
-                ctx.buy(qty, price=None, reason=f"MACD hist>0 ({hist:.6f})", use_chase=False)
+                ctx.buy(qty, price=None, reason=f"MACD hist>0 ({hist:.6f})", use_chase=True)
             return
 
         qty = float(ctx.calc_entry_quantity())
         if qty > 0:
-            ctx.sell(qty, price=None, reason=f"MACD hist<0 ({hist:.6f})", use_chase=False)
+            ctx.sell(qty, price=None, reason=f"MACD hist<0 ({hist:.6f})", use_chase=True)
