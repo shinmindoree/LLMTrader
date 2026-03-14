@@ -14,10 +14,10 @@ class PlanLimits:
 
 PLANS: dict[str, PlanLimits] = {
     "free": PlanLimits(
-        max_live_jobs=0,
+        max_live_jobs=5,
         max_backtest_per_month=10,
         max_llm_generate_per_month=5,
-        portfolio_mode=False,
+        portfolio_mode=True,
         priority_queue=False,
     ),
     "pro": PlanLimits(
