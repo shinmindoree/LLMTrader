@@ -1212,6 +1212,9 @@ def create_app() -> FastAPI:
                 },
             )
 
+        from api.quota import check_job_quota
+        await check_job_quota(session, user_id=user.user_id, plan=user.plan, job_type=body.type)
+
         root = _repo_root()
         dirs = _strategy_dirs()
         try:
@@ -1222,17 +1225,6 @@ def create_app() -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        from control.repo import count_active_jobs
-        if body.type == JobType.LIVE:
-            active_count = await count_active_jobs(session, user_id=user.user_id, job_type=JobType.LIVE)
-            if active_count > 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "message": "A LIVE job is already running (or stopping). Stop it before starting a new one.",
-                    },
-                )
 
         job = await create_job(
             session,

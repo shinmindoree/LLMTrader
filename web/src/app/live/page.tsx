@@ -1,16 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { deleteAllJobs, deleteJob, getBinanceKeysStatus, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
-import type { BinanceKeysStatus, Job, JobStatus, StrategyInfo } from "@/lib/types";
+import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJobs, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
+import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
 import { LiveForm } from "./new/LiveForm";
 
+const MAX_SLOTS_FALLBACK = 5;
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
 
@@ -30,6 +31,7 @@ export default function LiveJobsPage() {
   const [busy, setBusy] = useState(false);
   const [latestJob, setLatestJob] = useState<Job | null>(null);
   const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
+  const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [runPending, setRunPending] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -45,14 +47,18 @@ export default function LiveJobsPage() {
   useEffect(() => {
     refresh();
     getBinanceKeysStatus().then(setKeysStatus).catch(() => {});
+    getBillingStatus().then(setBilling).catch(() => {});
   }, [refresh]);
 
-  const hasActiveJobs = items.some((j) => ACTIVE_STATUSES.has(j.status));
+  const activeJobs = useMemo(() => items.filter((j) => ACTIVE_STATUSES.has(j.status)), [items]);
+  const activeCount = activeJobs.length;
+  const maxSlots = billing?.limits?.max_live_jobs ?? MAX_SLOTS_FALLBACK;
+
   useEffect(() => {
-    if (!hasActiveJobs) return;
+    if (activeCount === 0) return;
     const interval = setInterval(refresh, 2000);
     return () => clearInterval(interval);
-  }, [hasActiveJobs, refresh]);
+  }, [activeCount, refresh]);
 
   useEffect(() => {
     listStrategies()
@@ -64,6 +70,21 @@ export default function LiveJobsPage() {
     setLatestJob(job);
     setNotice("Live run started.");
     refresh();
+  };
+
+  const onStopJob = async (job: Job) => {
+    if (busy) return;
+    try {
+      setBusy(true);
+      setError(null);
+      await stopJob(job.job_id);
+      setNotice("Stop requested.");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onDeleteJob = async (job: Job) => {
@@ -155,7 +176,7 @@ export default function LiveJobsPage() {
         <div>
           <h1 className="text-xl font-semibold text-[#d1d4dc]">Live</h1>
           <p className="mt-1 text-xs text-[#868993]">
-            Live runs use a separate queue from backtests.
+            Run up to {maxSlots} strategies simultaneously. Each strategy runs as an independent job.
           </p>
         </div>
         <div className="flex gap-2 text-sm">
@@ -186,6 +207,56 @@ export default function LiveJobsPage() {
         </div>
       </div>
 
+      {/* Active strategies panel */}
+      {activeCount > 0 && (
+        <section className="mt-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium text-[#d1d4dc]">
+            Active Strategies
+            <span className="rounded bg-[#2962ff]/20 px-2 py-0.5 text-xs text-[#2962ff]">
+              {activeCount}/{maxSlots}
+            </span>
+          </div>
+          <ul className="space-y-2">
+            {activeJobs.map((j) => (
+              <li
+                key={j.job_id}
+                className="rounded border border-[#2962ff]/30 bg-[#1a2340]/50 px-4 py-3"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Link
+                      className="font-medium text-[#d1d4dc] hover:text-[#2962ff] hover:underline transition-colors"
+                      href={jobDetailPath("LIVE", j.job_id)}
+                    >
+                      {strategyNameFromPath(j.strategy_path)}
+                    </Link>
+                    {j.config ? (
+                      <span className="text-xs"><JobConfigInline type="LIVE" config={j.config} /></span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <JobStatusBadge status={j.status} />
+                    {(j.status === "PENDING" || j.status === "RUNNING") && (
+                      <button
+                        className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#d1d4dc] hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50 transition-colors"
+                        disabled={busy}
+                        onClick={() => onStopJob(j)}
+                        type="button"
+                      >
+                        Stop
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-1 text-xs text-[#868993]">
+                  Started {new Date(j.created_at).toLocaleString()}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {notice ? (
         <div className="mt-4 rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-3 text-sm text-[#d1d4dc]">
           {notice}
@@ -210,15 +281,24 @@ export default function LiveJobsPage() {
       ) : null}
 
       <section className="mt-6">
-        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">New Live Run</div>
+        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[#d1d4dc]">
+          Add Strategy
+          {activeCount > 0 && (
+            <span className="text-xs font-normal text-[#868993]">
+              ({activeCount}/{maxSlots} slots used)
+            </span>
+          )}
+        </div>
         <p className="mb-3 text-xs text-[#efb6b2]">
-          Caution: this places real testnet orders. You can add up to 5 streams for portfolio trading.
+          Each strategy runs independently with its own symbol and settings. You can run up to {maxSlots} at once.
         </p>
         {strategies.length ? (
           <LiveForm
             strategies={strategies}
             onCreated={onCreated}
             onSubmittingChange={setRunPending}
+            activeCount={activeCount}
+            maxSlots={maxSlots}
           />
         ) : (
           <div className="text-sm text-[#868993]">Loading…</div>
@@ -246,7 +326,7 @@ export default function LiveJobsPage() {
           </div>
         ) : (
           <ul className="space-y-2">
-            {items.map((j) => (
+            {items.filter((j) => !ACTIVE_STATUSES.has(j.status)).map((j) => (
               <li
                 key={j.job_id}
                 className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-3 hover:border-[#2962ff] hover:bg-[#252936] transition-colors"
