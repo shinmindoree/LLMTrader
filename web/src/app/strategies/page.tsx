@@ -237,6 +237,101 @@ type StoredChatSessionsPayload = {
   activeSessionId: string | null;
 };
 
+type PromptComposerProps = {
+  centered?: boolean;
+  disabled?: boolean;
+  isSending: boolean;
+  onChange: (value: string) => void;
+  onCompositionEnd: () => void;
+  onCompositionStart: () => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onSubmit: (event?: React.FormEvent<HTMLFormElement>) => void | Promise<void>;
+  placeholder: string;
+  prompt: string;
+};
+
+function PendingReply() {
+  return (
+    <div className="inline-flex items-center gap-1.5 rounded-full bg-[#2a2d35] px-4 py-3">
+      {[0, 1, 2].map((idx) => (
+        <span
+          key={`pending-dot-${idx}`}
+          className="h-2 w-2 rounded-full bg-[#8f96a3] animate-pulse"
+          style={{ animationDelay: `${idx * 160}ms` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PromptComposer({
+  centered = false,
+  disabled = false,
+  isSending,
+  onChange,
+  onCompositionEnd,
+  onCompositionStart,
+  onKeyDown,
+  onSubmit,
+  placeholder,
+  prompt,
+}: PromptComposerProps) {
+  const busy = disabled || isSending;
+
+  return (
+    <div className={`w-full ${centered ? "max-w-3xl" : "max-w-4xl"}`}>
+      <form
+        className={`rounded-[28px] border border-[#343946] bg-[#2a2d35] shadow-[0_18px_50px_rgba(0,0,0,0.28)] ${
+          centered ? "px-5 py-5" : "px-4 py-3"
+        }`}
+        onSubmit={onSubmit}
+      >
+        <div className="flex items-end gap-3">
+          <textarea
+            className={`flex-1 resize-none bg-transparent text-[15px] leading-7 text-[#ececf1] placeholder:text-[#8f96a3] focus:outline-none ${
+              centered ? "min-h-[160px] px-1 py-1" : "min-h-[28px] max-h-[220px] px-1 py-2"
+            }`}
+            disabled={busy}
+            onChange={(e) => onChange(e.target.value)}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={onCompositionEnd}
+            onKeyDown={onKeyDown}
+            placeholder={placeholder}
+            rows={centered ? 7 : 1}
+            value={prompt}
+          />
+          <button
+            aria-label="Send message"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#f4f4f4] text-[#111318] transition hover:bg-white disabled:cursor-not-allowed disabled:bg-[#3b404c] disabled:text-[#7b8393]"
+            disabled={!prompt.trim() || busy}
+            type="submit"
+          >
+            <svg
+              aria-hidden="true"
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 16 16"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M8 13V3M8 3L4.5 6.5M8 3l3.5 3.5"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.6"
+              />
+            </svg>
+          </button>
+        </div>
+      </form>
+      <p className={`mt-3 text-xs text-[#8f96a3] ${centered ? "text-center" : ""}`}>
+        Note: execution settings in the Backtest/Live forms override values mentioned in this
+        prompt.
+      </p>
+    </div>
+  );
+}
+
 const createId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -388,9 +483,7 @@ export default function StrategiesPage() {
     code: string;
     name: string;
   } | null>(null);
-  const [loadStrategyPath, setLoadStrategyPath] = useState("");
   const [isLoadingStrategy, setIsLoadingStrategy] = useState(false);
-  const [loadStrategyError, setLoadStrategyError] = useState<string | null>(null);
   const [workspaceCode, setWorkspaceCode] = useState("");
   const [workspaceSourceMessageId, setWorkspaceSourceMessageId] = useState<string | null>(null);
   const [initialGeneratedCode, setInitialGeneratedCode] = useState<string | null>(null);
@@ -499,16 +592,6 @@ export default function StrategiesPage() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (items.length === 0) {
-      setLoadStrategyPath("");
-      return;
-    }
-    if (!loadStrategyPath || !items.some((item) => item.path === loadStrategyPath)) {
-      setLoadStrategyPath(items[0].path);
-    }
-  }, [items, loadStrategyPath]);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -725,7 +808,7 @@ export default function StrategiesPage() {
   };
 
   const submitPrompt = async (trimmed: string, options?: { forceChat?: boolean }) => {
-    if (!trimmed || isSending) {
+    if (!trimmed || isSending || isLoadingStrategy) {
       return;
     }
 
@@ -868,7 +951,7 @@ export default function StrategiesPage() {
   const handleSubmit = async (event?: React.FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     const trimmed = prompt.trim();
-    if (!trimmed || isSending) {
+    if (!trimmed || isSending || isLoadingStrategy) {
       return;
     }
     setPrompt("");
@@ -945,13 +1028,14 @@ export default function StrategiesPage() {
     ) {
       event.preventDefault();
       const next = event.currentTarget.value.trim();
-      if (!next || isSending) return;
+      if (!next || isSending || isLoadingStrategy) return;
       setPrompt("");
       void submitPrompt(next);
     }
   };
 
   const handleClear = () => {
+    if (isSending || isLoadingStrategy) return;
     setChatMessages([]);
     setChatError(null);
     setPrompt("");
@@ -965,19 +1049,19 @@ export default function StrategiesPage() {
   };
 
   const handleNewChatSession = () => {
-    if (isSending) return;
+    if (isSending || isLoadingStrategy) return;
     const nextSession = createEmptySession();
     setChatSessions((prev) => [nextSession, ...prev]);
     setActiveSessionId(nextSession.id);
   };
 
   const handleSelectSession = (sessionId: string) => {
-    if (sessionId === activeSessionId || isSending) return;
+    if (sessionId === activeSessionId || isSending || isLoadingStrategy) return;
     setActiveSessionId(sessionId);
   };
 
   const handleDeleteSession = (sessionId: string) => {
-    if (isSending) return;
+    if (isSending || isLoadingStrategy) return;
     setChatSessions((prev) => {
       const remaining = prev.filter((session) => session.id !== sessionId);
       if (remaining.length === 0) {
@@ -1017,7 +1101,6 @@ export default function StrategiesPage() {
 
   const handleOpenStrategyInWorkspace = async (path: string) => {
     if (isLoadingStrategy || isSending) return;
-    setLoadStrategyError(null);
     setChatError(null);
     setIsLoadingStrategy(true);
     setActiveTab("chat");
@@ -1062,7 +1145,7 @@ export default function StrategiesPage() {
         },
       ]);
     } catch (e) {
-      setLoadStrategyError(String(e));
+      setChatError(String(e));
     } finally {
       setIsLoadingStrategy(false);
     }
@@ -1077,58 +1160,6 @@ export default function StrategiesPage() {
       setDeleteError(null);
     } catch (e) {
       setDeleteError(String(e));
-    }
-  };
-
-  const handleLoadStrategy = async () => {
-    if (!loadStrategyPath || isLoadingStrategy || isSending) return;
-    setLoadStrategyError(null);
-    setChatError(null);
-    setIsLoadingStrategy(true);
-
-    try {
-      const loaded = await getStrategyContent(loadStrategyPath);
-      const code = loaded.code ?? "";
-      if (!code.trim()) {
-        throw new Error("Loaded strategy is empty.");
-      }
-
-      setWorkspaceCode(code);
-      setInitialGeneratedCode(code);
-      setWorkspaceSourceMessageId(null);
-      setWorkspaceSummary(null);
-      setWorkspaceDirty(false);
-      setWorkspaceOpen(true);
-      setWorkspaceSyntax(null);
-      setWorkspaceSyntaxError(null);
-      setPrompt("");
-
-      const strategyLabel = strategyNameFromPath(loaded.path || loadStrategyPath);
-      let summaryText = "Summary is unavailable right now.";
-      try {
-        const summaryRes = await strategyChat(code, null, [
-          { role: "user", content: LOADED_STRATEGY_SUMMARY_PROMPT },
-        ]);
-        summaryText = summaryRes.content;
-        setWorkspaceSummary(summaryRes.content);
-      } catch {
-        // continue without summary
-      }
-
-      setChatMessages([
-        {
-          id: createId(),
-          role: "assistant",
-          content: `Loaded strategy: ${strategyLabel}\n\n${summaryText}`,
-          textOnly: true,
-          status: null,
-          statusText: null,
-        },
-      ]);
-    } catch (e) {
-      setLoadStrategyError(String(e));
-    } finally {
-      setIsLoadingStrategy(false);
     }
   };
 
@@ -1148,6 +1179,7 @@ export default function StrategiesPage() {
   const activeSession = activeSessionId
     ? chatSessions.find((session) => session.id === activeSessionId) ?? null
     : null;
+  const chatBusy = isSending || isLoadingStrategy;
 
   return (
     <main className="flex h-[calc(100vh-3.5rem)] min-h-0 w-full flex-col overflow-hidden px-6 py-6">
@@ -1178,20 +1210,20 @@ export default function StrategiesPage() {
       </div>
 
       {activeTab === "chat" ? (
-      <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-t-0 border-[#2a2e39] bg-[#1e222d]">
+      <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-[24px] border border-t-0 border-[#2f3440] bg-[#21242b]">
         <div className="flex min-h-0 flex-1">
-          <aside className="hidden w-72 shrink-0 border-r border-[#2a2e39] bg-[#171b25] md:flex md:flex-col">
-            <div className="border-b border-[#2a2e39] px-3 py-3">
+          <aside className="hidden w-72 shrink-0 border-r border-[#2f3440] bg-[#1a1d23] md:flex md:flex-col">
+            <div className="border-b border-[#2f3440] px-3 py-3">
               <button
                 type="button"
-                className="w-full rounded border border-[#2962ff] px-3 py-2 text-sm text-[#8fa8ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
+                className="w-full rounded-xl border border-[#343946] bg-[#2a2d35] px-3 py-2 text-sm text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
                 onClick={handleNewChatSession}
-                disabled={isSending || !sessionsReady}
+                disabled={chatBusy || !sessionsReady}
               >
                 + New chat
               </button>
             </div>
-            <div className="border-b border-[#2a2e39] px-3 py-2 text-xs text-[#868993]">
+            <div className="border-b border-[#2f3440] px-3 py-2 text-xs text-[#8f96a3]">
               {activeSession ? `Current: ${activeSession.title}` : "No active chat"}
             </div>
             {sessionSyncError ? (
@@ -1209,20 +1241,20 @@ export default function StrategiesPage() {
                     return (
                       <div
                         key={session.id}
-                        className={`rounded border p-2 ${
+                        className={`rounded-2xl border p-2 ${
                           isActive
-                            ? "border-[#2962ff]/70 bg-[#1a2442]"
-                            : "border-[#2a2e39] bg-[#131722]"
+                            ? "border-[#4d5565] bg-[#2a2d35]"
+                            : "border-[#2f3440] bg-[#1f232b]"
                         }`}
                       >
                         <button
                           type="button"
                           className="w-full text-left"
                           onClick={() => handleSelectSession(session.id)}
-                          disabled={isSending}
+                          disabled={chatBusy}
                         >
                           <p className="truncate text-sm text-[#d1d4dc]">{session.title}</p>
-                          <p className="mt-1 text-[11px] text-[#868993]">
+                          <p className="mt-1 text-[11px] text-[#8f96a3]">
                             {formatSessionTimestamp(session.updatedAt)}
                           </p>
                           <p className="mt-1 text-[11px] text-[#5f6472]">
@@ -1234,7 +1266,7 @@ export default function StrategiesPage() {
                             type="button"
                             className="rounded border border-[#ef5350]/40 px-2 py-1 text-[11px] text-[#ef9a9a] transition hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50"
                             onClick={() => handleDeleteSession(session.id)}
-                            disabled={isSending}
+                            disabled={chatBusy}
                           >
                             Delete
                           </button>
@@ -1247,12 +1279,12 @@ export default function StrategiesPage() {
             </div>
           </aside>
           <div className="min-w-0 flex-1 flex flex-col">
-            <div className="flex items-center gap-2 border-b border-[#2a2e39] px-4 py-2 md:hidden">
+            <div className="flex items-center gap-2 border-b border-[#2f3440] px-4 py-2 md:hidden">
               <select
-                className="min-w-0 flex-1 rounded border border-[#2a2e39] bg-[#171b25] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
                 value={activeSessionId ?? ""}
                 onChange={(e) => handleSelectSession(e.target.value)}
-                disabled={isSending || !sessionsReady}
+                disabled={chatBusy || !sessionsReady}
               >
                 {chatSessions.map((session) => (
                   <option key={`mobile-session-${session.id}`} value={session.id}>
@@ -1262,234 +1294,194 @@ export default function StrategiesPage() {
               </select>
               <button
                 type="button"
-                className="shrink-0 rounded border border-[#2962ff] px-2 py-1.5 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
+                className="shrink-0 rounded-xl border border-[#343946] bg-[#2a2d35] px-2 py-1.5 text-xs text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
                 onClick={handleNewChatSession}
-                disabled={isSending || !sessionsReady}
+                disabled={chatBusy || !sessionsReady}
               >
                 New
               </button>
             </div>
             {chatMessages.length > 0 ? (
               <>
-                <div className="flex flex-shrink-0 justify-end px-4 pt-3">
-                  <button
-                    type="button"
-                    className="rounded border border-[#2a2e39] px-3 py-1 text-xs text-[#868993] transition hover:border-[#2962ff] hover:text-white"
-                    onClick={handleClear}
-                  >
-                    Clear
-                  </button>
-                </div>
-                {chatError ? (
-                  <p className="mx-4 mt-2 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-                    {chatError}
-                  </p>
-                ) : null}
                 <div
                   ref={chatScrollRef}
-                  className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+                  className="min-h-0 flex-1 overflow-y-auto px-6 py-6"
                 >
-                  <div className="mx-auto max-w-3xl space-y-4">
-                  {chatMessages.map((message) => {
-                    const isLatestAssistantCode = message.id === latestAssistantCodeId;
-                    return (
-                    <div
-                      key={message.id}
-                      className={`rounded-lg border px-4 py-3 ${
-                        message.role === "user"
-                          ? "border-[#2962ff]/40 bg-[#0f1b3a]"
-                          : "border-[#2a2e39] bg-[#1e222d]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-[#868993]">
-                        <span>{message.role === "user" ? "You" : "LLM"}</span>
-                        {message.role === "assistant" && message.content ? (
-                          <button
-                            className="rounded border border-transparent px-2 py-1 text-xs text-[#9aa0ad] transition hover:border-[#2962ff] hover:text-white"
-                            onClick={() => void handleCopy(message.content, message.id)}
-                            type="button"
-                          >
-                            {copiedId === message.id ? "Copied" : "Copy"}
-                          </button>
-                        ) : null}
-                      </div>
-                      {message.statusText ? (
-                        <div className="mt-2 inline-flex items-center gap-2 rounded border border-[#2a2e39] bg-[#171b25] px-2 py-1 text-xs text-[#8fa8ff]">
-                          <span className="h-1.5 w-1.5 rounded-full bg-[#8fa8ff] animate-pulse" />
-                          {message.statusText}
-                        </div>
-                      ) : null}
-                      {message.role === "assistant" ? (
-                        message.textOnly ? (
-                          message.content ? (
-                            <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
-                              {message.content}
-                            </p>
-                          ) : null
-                        ) : (
-                          <>
-                            {message.summary ? (
-                              <>
-                                <p className="mt-2 whitespace-pre-wrap text-sm text-[#d1d4dc]">
-                                  {message.summary}
+                  <div className="mx-auto flex w-full max-w-4xl flex-col gap-8">
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        className="rounded-full border border-[#343946] px-4 py-2 text-xs text-[#8f96a3] transition hover:border-[#505765] hover:text-[#ececf1] disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={chatBusy}
+                        onClick={handleClear}
+                      >
+                        Clear chat
+                      </button>
+                    </div>
+                    {chatError ? (
+                      <p className="rounded-2xl border border-[#ef5350]/30 bg-[#351f24] px-4 py-3 text-sm text-[#ef9a9a]">
+                        {chatError}
+                      </p>
+                    ) : null}
+                    {chatMessages.map((message) => {
+                      const isLatestAssistantCode = message.id === latestAssistantCodeId;
+                      const shouldShowPending =
+                        message.role === "assistant" && !message.content && !message.summary;
+
+                      if (message.role === "user") {
+                        return (
+                          <div key={message.id} className="flex justify-end">
+                            <div className="max-w-[85%] rounded-[28px] bg-[#2d3139] px-5 py-3 text-[15px] leading-7 text-[#ececf1] shadow-[0_10px_30px_rgba(0,0,0,0.18)]">
+                              <p className="whitespace-pre-wrap">{message.content}</p>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={message.id} className="flex items-start gap-4">
+                          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#343946] text-[11px] font-semibold text-[#ececf1]">
+                            AI
+                          </div>
+                          <div className="min-w-0 flex-1 space-y-4">
+                            {message.textOnly ? (
+                              message.content ? (
+                                <p className="whitespace-pre-wrap text-[15px] leading-7 text-[#ececf1]">
+                                  {message.content}
                                 </p>
-                                {isLatestAssistantCode ? (
-                                  <button
-                                    type="button"
-                                    className="mt-2 rounded border border-[#26a69a]/60 px-3 py-1 text-xs text-[#26a69a] transition hover:bg-[#26a69a]/15 disabled:opacity-50"
-                                  onClick={() => void handleSummaryExpand()}
-                                  disabled={isSending}
-                                >
-                                    Expand summary
-                                  </button>
+                              ) : shouldShowPending ? (
+                                <PendingReply />
+                              ) : null
+                            ) : (
+                              <>
+                                {message.summary ? (
+                                  <div className="space-y-3">
+                                    <p className="whitespace-pre-wrap text-[15px] leading-7 text-[#ececf1]">
+                                      {message.summary}
+                                    </p>
+                                    {isLatestAssistantCode ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-full border border-[#3f7a68] px-3 py-1.5 text-xs text-[#8bd1ba] transition hover:bg-[#1e312c] disabled:opacity-50"
+                                        onClick={() => void handleSummaryExpand()}
+                                        disabled={chatBusy}
+                                      >
+                                        Expand summary
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+
+                                {message.content ? (
+                                  <div className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]">
+                                    <div className="flex items-center justify-between gap-3 border-b border-[#2d313b] px-4 py-3">
+                                      <span className="text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
+                                        Python
+                                      </span>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <button
+                                          type="button"
+                                          className="rounded-full border border-[#343946] px-3 py-1.5 text-xs text-[#c6cad3] transition hover:border-[#505765] hover:text-white"
+                                          onClick={() => void handleCopy(message.content, message.id)}
+                                        >
+                                          {copiedId === message.id ? "Copied" : "Copy"}
+                                        </button>
+                                        {!message.path && isLatestAssistantCode && message.status == null ? (
+                                          <button
+                                            type="button"
+                                            className="rounded-full border border-[#2962ff]/70 px-3 py-1.5 text-xs text-[#8fa8ff] transition hover:bg-[#1f3367] hover:text-white disabled:opacity-50"
+                                            onClick={() => void handleSaveClick(message.id, message.content)}
+                                            disabled={savingId !== null}
+                                          >
+                                            Save strategy
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                    <pre className="max-h-[560px] overflow-auto px-4 py-4 font-mono text-xs leading-6 text-[#ececf1]">
+                                      {message.content}
+                                    </pre>
+                                  </div>
+                                ) : shouldShowPending ? (
+                                  <PendingReply />
+                                ) : null}
+
+                                {(message.backtest_ok || message.repaired || message.path || message.model) ? (
+                                  <div className="flex flex-wrap items-center gap-2 text-xs text-[#8f96a3]">
+                                    {message.backtest_ok ? (
+                                      <span className="rounded-full bg-[#183127] px-3 py-1 text-[#8ad0a4]">
+                                        Backtest passed
+                                      </span>
+                                    ) : null}
+                                    {message.repaired ? (
+                                      <span className="rounded-full bg-[#3b2a17] px-3 py-1 text-[#f4bf75]">
+                                        Auto-fix applied ({message.repair_attempts ?? 0})
+                                      </span>
+                                    ) : null}
+                                    {message.path ? <span>Saved to Strategy Library</span> : null}
+                                    {message.model ? <span>Model: {message.model}</span> : null}
+                                  </div>
                                 ) : null}
                               </>
-                            ) : null}
-                            <details className="mt-2">
-                              <summary className="cursor-pointer text-xs text-[#868993]">
-                                Code
-                              </summary>
-                              <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-[#d1d4dc]">
-                                {message.content}
-                              </pre>
-                            </details>
-                            {message.backtest_ok ? (
-                              <p className="mt-2 text-xs text-[#26a69a]">
-                                Backtest passed. Strategy runs correctly.
-                              </p>
-                            ) : null}
-                            {message.repaired ? (
-                              <p className="mt-1 text-xs text-[#f9a825]">
-                                Auto-fix applied and verification passed ({message.repair_attempts ?? 0} attempts)
-                              </p>
-                            ) : null}
-                            {message.content && !message.path && isLatestAssistantCode ? (
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <button
-                                  type="button"
-                                  className="rounded border border-[#2962ff] px-3 py-1 text-xs text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
-                                  onClick={() => void handleSaveClick(message.id, message.content)}
-                                  disabled={savingId !== null}
-                                >
-                                  Save strategy
-                                </button>
-                              </div>
-                            ) : null}
-                            <div className="mt-2 space-y-1 text-xs text-[#868993]">
-                              {message.path ? <div>Saved to Strategy Library</div> : null}
-                              {message.model ? <div>Model: {message.model}</div> : null}
-                            </div>
-                          </>
-                        )
-                      ) : (
-                        <p className="mt-2 text-sm text-[#d1d4dc]">{message.content}</p>
-                      )}
-                    </div>
-                    );
-                  })}
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-                <div className="flex-shrink-0 border-t border-[#2a2e39] px-4 py-4">
-                  <form
-                    className="mx-auto max-w-3xl flex gap-2 rounded-xl border border-[#2a2e39] bg-[#131722] p-2"
-                    onSubmit={handleSubmit}
-                  >
-                    <textarea
-                      className="min-h-[44px] max-h-[200px] flex-1 resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
-                      onChange={(e) => setPrompt(e.target.value)}
-                      onCompositionStart={() => setIsComposingPrompt(true)}
+                <div className="flex-shrink-0 border-t border-[#2a2e39] px-6 py-5">
+                  <div className="mx-auto flex w-full max-w-4xl justify-center">
+                    <PromptComposer
+                      disabled={chatBusy}
+                      isSending={isSending}
+                      onChange={setPrompt}
                       onCompositionEnd={() => setIsComposingPrompt(false)}
+                      onCompositionStart={() => setIsComposingPrompt(true)}
                       onKeyDown={handleKeyDown}
-                      placeholder="Describe your strategy..."
-                      value={prompt}
-                      rows={1}
+                      onSubmit={handleSubmit}
+                      placeholder="Message the strategy builder..."
+                      prompt={prompt}
                     />
-                    <button
-                      className="rounded-lg bg-[#2962ff] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={!prompt.trim() || isSending}
-                      type="submit"
-                    >
-                      {isSending ? "..." : "Generate"}
-                    </button>
-                  </form>
-                  <p className="mx-auto mt-2 max-w-3xl text-xs text-[#868993]">
-                    Note: execution settings in the Backtest/Live forms override values mentioned in this prompt.
-                  </p>
+                  </div>
                 </div>
               </>
             ) : (
-              <>
+              <div className="flex flex-1 flex-col items-center justify-center px-6 py-12">
                 {chatError ? (
-                  <p className="mx-4 mt-4 flex-shrink-0 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
+                  <p className="mb-6 w-full max-w-3xl rounded-2xl border border-[#ef5350]/30 bg-[#351f24] px-4 py-3 text-sm text-[#ef9a9a]">
                     {chatError}
                   </p>
                 ) : null}
-            <div className="flex flex-1 flex-col items-center justify-center px-4 py-12">
-              <div className="mb-4 w-full max-w-2xl rounded-xl border border-[#2a2e39] bg-[#131722] p-4">
-                <h3 className="text-sm font-semibold text-[#d1d4dc]">Continue From Existing Strategy</h3>
-                <p className="mt-1 text-xs text-[#868993]">
-                  Load a saved strategy into the workspace and get a quick LLM summary.
-                </p>
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <select
-                    className="w-full rounded border border-[#2a2e39] bg-[#171b25] px-3 py-2 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
-                    value={loadStrategyPath}
-                    onChange={(e) => setLoadStrategyPath(e.target.value)}
-                    disabled={items.length === 0 || isLoadingStrategy || isSending}
-                  >
-                    {items.length === 0 ? (
-                      <option value="">No saved strategies</option>
-                    ) : (
-                      items.map((item) => (
-                        <option key={`load-${item.path}`} value={item.path}>
-                          {strategyNameFromPath(item.name)}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                  <button
-                    type="button"
-                    className="rounded border border-[#2962ff] px-3 py-2 text-sm text-[#2962ff] transition hover:bg-[#2962ff] hover:text-white disabled:opacity-50"
-                    onClick={() => void handleLoadStrategy()}
-                    disabled={!loadStrategyPath || items.length === 0 || isLoadingStrategy || isSending}
-                  >
-                    {isLoadingStrategy ? "Loading..." : "Load"}
-                  </button>
+                <div className="max-w-3xl text-center">
+                  <h2 className="text-[34px] font-medium tracking-[-0.03em] text-[#ececf1]">
+                    What strategy do you want to build?
+                  </h2>
+                  <p className="mt-4 text-sm leading-7 text-[#8f96a3]">
+                    Describe entries, exits, timeframe, and risk rules in plain language. The
+                    assistant will turn it into runnable Python strategy code.
+                  </p>
                 </div>
-                {loadStrategyError ? (
-                  <p className="mt-2 text-xs text-[#ef5350]">{loadStrategyError}</p>
+                {isLoadingStrategy ? (
+                  <div className="mt-8">
+                    <PendingReply />
+                  </div>
                 ) : null}
-              </div>
-              <form
-                className="w-full max-w-2xl"
-                onSubmit={handleSubmit}
-              >
-                    <div className="rounded-2xl border border-[#2a2e39] bg-[#131722] p-3 shadow-lg">
-                      <textarea
-                        className="min-h-[120px] w-full resize-none bg-transparent px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:outline-none"
-                        onChange={(e) => setPrompt(e.target.value)}
-                        onCompositionStart={() => setIsComposingPrompt(true)}
-                        onCompositionEnd={() => setIsComposingPrompt(false)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Describe your strategy in plain language. e.g. Buy when RSI crosses above 30, sell at 70, 1h candles."
-                        value={prompt}
-                      />
-                      <div className="flex justify-end pt-2">
-                        <button
-                          className="rounded-lg bg-[#2962ff] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#2a52e0] disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={!prompt.trim() || isSending}
-                          type="submit"
-                        >
-                          {isSending ? "Generating..." : "Generate"}
-                        </button>
-                      </div>
-                    </div>
-                    <p className="mt-2 text-xs text-[#868993]">
-                      Note: execution settings in the Backtest/Live forms override values mentioned in this prompt.
-                    </p>
-                  </form>
+                <div className="mt-10 flex w-full justify-center">
+                  <PromptComposer
+                    centered
+                    disabled={chatBusy}
+                    isSending={isSending}
+                    onChange={setPrompt}
+                    onCompositionEnd={() => setIsComposingPrompt(false)}
+                    onCompositionStart={() => setIsComposingPrompt(true)}
+                    onKeyDown={handleKeyDown}
+                    onSubmit={handleSubmit}
+                    placeholder="Describe your strategy in plain language. e.g. Buy when RSI crosses above 30, sell at 70, 1h candles."
+                    prompt={prompt}
+                  />
                 </div>
-              </>
+              </div>
             )}
           </div>
 
