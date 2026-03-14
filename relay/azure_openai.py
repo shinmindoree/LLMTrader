@@ -44,7 +44,7 @@ def _create_client(config: RelayConfig) -> OpenAI:
         "https://cognitiveservices.azure.com/.default",
     )
     return OpenAI(
-        base_url=config.openai_base_url.rstrip("/") + "/",
+        base_url=config.resolved_openai_base_url.rstrip("/") + "/",
         api_key=token_provider,
     )
 
@@ -56,7 +56,7 @@ def _create_async_client(config: RelayConfig) -> AsyncOpenAI:
         "https://cognitiveservices.azure.com/.default",
     )
     return AsyncOpenAI(
-        base_url=config.openai_base_url.rstrip("/") + "/",
+        base_url=config.resolved_openai_base_url.rstrip("/") + "/",
         api_key=token_provider,
     )
 
@@ -108,7 +108,7 @@ def _build_response_kwargs(
     stream: bool = False,
 ) -> dict[str, object]:
     kwargs: dict[str, object] = {
-        "model": config.openai_model,
+        "model": config.resolved_openai_model,
         "instructions": system_content,
         "input": _build_response_input(user_content=user_content, messages=messages),
     }
@@ -248,7 +248,7 @@ def chat_completion(
     content = _extract_response_output_text(response)
     if not content:
         _raise_empty_completion(response)
-    model_used = getattr(response, "model", None) or config.openai_model
+    model_used = getattr(response, "model", None) or config.resolved_openai_model
     return content, model_used
 
 
@@ -270,5 +270,5 @@ def chat_completion_messages(
     content = _extract_response_output_text(response)
     if not content:
         _raise_empty_completion(response)
-    model_used = getattr(response, "model", None) or config.openai_model
+    model_used = getattr(response, "model", None) or config.resolved_openai_model
     return content, model_used

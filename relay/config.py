@@ -1,5 +1,7 @@
 """Relay server configuration from environment."""
 
+import os
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,10 +27,32 @@ class RelayConfig(BaseSettings):
     def has_client_secret_credential(self) -> bool:
         return bool(self.azure_tenant_id and self.azure_client_id and self.azure_client_secret)
 
+    @staticmethod
+    def _first_env_value(*names: str) -> str:
+        for name in names:
+            value = os.getenv(name, "").strip()
+            if value:
+                return value
+        return ""
+
+    @property
+    def resolved_openai_base_url(self) -> str:
+        configured = self.openai_base_url.strip()
+        if configured:
+            return configured
+        return self._first_env_value("OPENAI_BASE_URL", "AZURE_OPENAI_BASE_URL")
+
+    @property
+    def resolved_openai_model(self) -> str:
+        configured = self.openai_model.strip()
+        if configured:
+            return configured
+        return self._first_env_value("OPENAI_MODEL", "AZURE_OPENAI_MODEL")
+
     def is_azure_configured(self) -> bool:
-        if not self.openai_model.strip():
+        if not self.resolved_openai_model:
             return False
-        return bool(self.openai_base_url.strip())
+        return bool(self.resolved_openai_base_url)
 
     def is_api_key_required(self) -> bool:
         return bool(self.relay_api_key)
