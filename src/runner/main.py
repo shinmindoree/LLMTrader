@@ -22,9 +22,13 @@ async def _amain() -> None:
         repo_root=_repo_root(),
         session_maker=session_maker,
         poll_interval_ms=settings.runner_poll_interval_ms,
+        live_concurrency=settings.runner_live_concurrency,
     )
 
-    print("[runner] starting worker (user-specific Binance keys mode)")
+    print(
+        f"[runner] starting worker (user-specific Binance keys mode, "
+        f"live_concurrency={settings.runner_live_concurrency})"
+    )
     await worker.run_forever()
 
 

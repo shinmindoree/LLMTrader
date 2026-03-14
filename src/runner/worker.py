@@ -28,10 +28,12 @@ class RunnerWorker:
         repo_root: Path,
         session_maker: async_sessionmaker[AsyncSession],
         poll_interval_ms: int,
+        live_concurrency: int = 1,
     ) -> None:
         self._repo_root = repo_root
         self._session_maker = session_maker
         self._poll_interval = max(50, poll_interval_ms) / 1000.0
+        self._live_concurrency = max(1, int(live_concurrency))
 
     async def run_forever(self) -> None:
         # On runner startup, reconcile jobs left RUNNING/STOP_REQUESTED from a previous crash/restart.
@@ -42,10 +44,12 @@ class RunnerWorker:
                 print(f"[runner] reconciled orphaned jobs: {counts}")
             await session.commit()
 
-        await asyncio.gather(
-            self._run_loop(JobType.BACKTEST),
-            self._run_loop(JobType.LIVE),
-        )
+        loops: list[asyncio.Task[None]] = [
+            asyncio.create_task(self._run_loop(JobType.BACKTEST), name="runner-backtest-0"),
+        ]
+        for i in range(self._live_concurrency):
+            loops.append(asyncio.create_task(self._run_loop(JobType.LIVE), name=f"runner-live-{i}"))
+        await asyncio.gather(*loops)
 
     async def _run_loop(self, job_type: JobType) -> None:
         while True:

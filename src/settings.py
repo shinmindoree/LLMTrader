@@ -105,6 +105,7 @@ class Settings(BaseSettings):
     admin_token: str = Field(default="dev-admin-token", alias="ADMIN_TOKEN")
     strategy_dirs: str = Field(default="scripts/strategies", alias="STRATEGY_DIRS")
     runner_poll_interval_ms: int = Field(default=500, alias="RUNNER_POLL_INTERVAL_MS")
+    runner_live_concurrency: int = Field(default=5, alias="RUNNER_LIVE_CONCURRENCY")
     frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")
     crypto_backend: str = Field(default="fernet", alias="CRYPTO_BACKEND")
 
