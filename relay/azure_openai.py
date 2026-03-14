@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from azure.core.credentials import TokenCredential
+from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
+from azure.identity.aio import ClientSecretCredential as AsyncClientSecretCredential
+from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+from azure.identity.aio import get_bearer_token_provider as get_async_bearer_token_provider
 from openai import AsyncOpenAI, OpenAI
 
 from relay.config import RelayConfig
@@ -37,6 +42,20 @@ def _build_credential(config: RelayConfig) -> TokenCredential:
     return DefaultAzureCredential(**kwargs)
 
 
+def _build_async_credential(config: RelayConfig) -> AsyncTokenCredential:
+    if config.has_client_secret_credential():
+        return AsyncClientSecretCredential(
+            tenant_id=config.azure_tenant_id,
+            client_id=config.azure_client_id,
+            client_secret=config.azure_client_secret,
+        )
+
+    kwargs: dict[str, str] = {}
+    if config.azure_client_id:
+        kwargs["managed_identity_client_id"] = config.azure_client_id
+    return AsyncDefaultAzureCredential(**kwargs)
+
+
 def _create_client(config: RelayConfig) -> OpenAI:
     credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
@@ -49,16 +68,22 @@ def _create_client(config: RelayConfig) -> OpenAI:
     )
 
 
-def _create_async_client(config: RelayConfig) -> AsyncOpenAI:
-    credential = _build_credential(config)
-    token_provider = get_bearer_token_provider(
+@asynccontextmanager
+async def _create_async_client(config: RelayConfig):
+    credential = _build_async_credential(config)
+    token_provider = get_async_bearer_token_provider(
         credential,
         "https://cognitiveservices.azure.com/.default",
     )
-    return AsyncOpenAI(
+    client = AsyncOpenAI(
         base_url=config.resolved_openai_base_url.rstrip("/") + "/",
         api_key=token_provider,
     )
+    try:
+        yield client
+    finally:
+        await client.close()
+        await credential.close()
 
 
 def _serialize_diagnostic(value: object) -> object:
@@ -212,15 +237,15 @@ async def chat_completion_stream(
 
     emitted = False
     final_text: str | None = None
-    client = _create_async_client(config)
-    stream = await client.responses.create(**request_kwargs)
-    async for event in stream:
-        event_type = getattr(event, "type", None)
-        if event_type == "response.output_text.delta" and getattr(event, "delta", None):
-            emitted = True
-            yield event.delta
-        elif event_type == "response.output_text.done" and getattr(event, "text", None):
-            final_text = event.text
+    async with _create_async_client(config) as client:
+        stream = await client.responses.create(**request_kwargs)
+        async for event in stream:
+            event_type = getattr(event, "type", None)
+            if event_type == "response.output_text.delta" and getattr(event, "delta", None):
+                emitted = True
+                yield event.delta
+            elif event_type == "response.output_text.done" and getattr(event, "text", None):
+                final_text = event.text
     if not emitted:
         if final_text and final_text.strip():
             yield final_text
