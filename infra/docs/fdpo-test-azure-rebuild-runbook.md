@@ -442,15 +442,15 @@ az containerapp secret set \
   --name "${AZ_CA_RELAY}" \
   --resource-group "${AZ_RG}" \
   --secrets \
-  azure-openai-endpoint="${AZ_OAI_ENDPOINT}" \
-  azure-openai-model="${AZ_OAI_DEPLOYMENT}"
+  openai-base-url="${AZ_OAI_ENDPOINT%/}/openai/v1/" \
+  openai-model="${AZ_OAI_DEPLOYMENT}"
 
 az containerapp update \
   --name "${AZ_CA_RELAY}" \
   --resource-group "${AZ_RG}" \
   --set-env-vars \
-  AZURE_OPENAI_ENDPOINT=secretref:azure-openai-endpoint \
-  AZURE_OPENAI_MODEL=secretref:azure-openai-model
+  OPENAI_BASE_URL=secretref:openai-base-url \
+  OPENAI_MODEL=secretref:openai-model
 ```
 
 ## 14) 검증

@@ -175,9 +175,8 @@ docker push llmtraderrelayacr.azurecr.io/llmtrader-relay:latest
 1. 5단계에서 만든 **Container App(relay)** 리소스로 이동.
 2. 왼쪽 메뉴 **설정** → **환경 변수**.
 3. **+ 추가** → **일반 변수**로 아래 추가 (노출되어도 되는 값):
-   - `AZURE_OPENAI_ENDPOINT` = Azure OpenAI 엔드포인트 (예: `https://xxx.cognitiveservices.azure.com/`).
-   - `AZURE_OPENAI_MODEL` = 배포(모델) 이름 (예: `gpt-4o`, `gpt-5.2-chat` 등).
-   - (선택) `AZURE_OPENAI_API_VERSION` = `2024-08-01-preview`.
+   - `OPENAI_BASE_URL` = Azure OpenAI v1 base URL (예: `https://xxx.openai.azure.com/openai/v1/`).
+   - `OPENAI_MODEL` = 배포(모델) 이름 (예: `gpt-5.4-pro`, `gpt-5-chat` 등).
 4. **권장 방식(Managed Identity)**:
    - Container App의 **ID(Identity)** 메뉴에서 **System assigned**를 켭니다.
    - 해당 Managed Identity에 Azure OpenAI 리소스 접근 권한(필요 Role)을 부여합니다.

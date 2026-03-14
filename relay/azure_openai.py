@@ -1,4 +1,4 @@
-"""Azure OpenAI/Foundry OpenAI client using Entra ID credentials.
+"""Azure OpenAI v1 client using Entra ID credentials.
 
 Auth strategy:
 1) Use ClientSecretCredential when tenant/client/secret env vars are provided.
@@ -7,20 +7,13 @@ Auth strategy:
 
 from __future__ import annotations
 
-import inspect
 import json
 import logging
-from contextlib import asynccontextmanager, contextmanager
 from typing import AsyncIterator
 
-from azure.ai.projects import AIProjectClient
-from azure.ai.projects.aio import AIProjectClient as AsyncAIProjectClient
 from azure.core.credentials import TokenCredential
-from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
-from azure.identity.aio import ClientSecretCredential as AsyncClientSecretCredential
-from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from relay.config import RelayConfig
 
@@ -44,104 +37,27 @@ def _build_credential(config: RelayConfig) -> TokenCredential:
     return DefaultAzureCredential(**kwargs)
 
 
-def _build_async_credential(config: RelayConfig) -> AsyncTokenCredential:
-    if config.has_client_secret_credential():
-        return AsyncClientSecretCredential(
-            tenant_id=config.azure_tenant_id,
-            client_id=config.azure_client_id,
-            client_secret=config.azure_client_secret,
-        )
-
-    kwargs: dict[str, str] = {}
-    if config.azure_client_id:
-        kwargs["managed_identity_client_id"] = config.azure_client_id
-    return AsyncDefaultAzureCredential(**kwargs)
-
-
-def _foundry_openai_kwargs(config: RelayConfig) -> dict[str, str]:
-    kwargs: dict[str, str] = {}
-    if config.azure_ai_project_connection_name:
-        kwargs["connection_name"] = config.azure_ai_project_connection_name
-    api_version = (config.azure_ai_project_openai_api_version or config.azure_openai_api_version).strip()
-    if not api_version:
-        raise ValueError(
-            "Missing API version: set AZURE_AI_PROJECT_OPENAI_API_VERSION or AZURE_OPENAI_API_VERSION."
-        )
-    kwargs["api_version"] = api_version
-    return kwargs
-
-
-@contextmanager
-def _foundry_sync_client(config: RelayConfig):
-    credential = _build_credential(config)
-    with AIProjectClient(
-        endpoint=config.azure_ai_project_endpoint.rstrip("/"),
-        credential=credential,
-    ) as project_client:
-        client = project_client.get_openai_client(**_foundry_openai_kwargs(config))
-        try:
-            yield client
-        finally:
-            closer = getattr(client, "close", None)
-            if callable(closer):
-                closer()
-
-
-@asynccontextmanager
-async def _foundry_async_client(config: RelayConfig):
-    credential = _build_async_credential(config)
-    try:
-        async with AsyncAIProjectClient(
-            endpoint=config.azure_ai_project_endpoint.rstrip("/"),
-            credential=credential,
-        ) as project_client:
-            client_or_awaitable = project_client.get_openai_client(**_foundry_openai_kwargs(config))
-            client = (
-                await client_or_awaitable
-                if inspect.isawaitable(client_or_awaitable)
-                else client_or_awaitable
-            )
-            try:
-                yield client
-            finally:
-                closer = getattr(client, "close", None)
-                if callable(closer):
-                    maybe_awaitable = closer()
-                    if inspect.isawaitable(maybe_awaitable):
-                        await maybe_awaitable
-    finally:
-        await credential.close()
-
-
-def _create_client(config: RelayConfig) -> AzureOpenAI:
-    api_version = config.azure_openai_api_version.strip()
-    if not api_version:
-        raise ValueError("Missing API version: set AZURE_OPENAI_API_VERSION.")
+def _create_client(config: RelayConfig) -> OpenAI:
     credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
         credential,
         "https://cognitiveservices.azure.com/.default",
     )
-    return AzureOpenAI(
-        azure_endpoint=config.azure_openai_endpoint.rstrip("/"),
-        azure_ad_token_provider=token_provider,
-        api_version=api_version,
+    return OpenAI(
+        base_url=config.openai_base_url.rstrip("/") + "/",
+        api_key=token_provider,
     )
 
 
-def _create_async_client(config: RelayConfig) -> AsyncAzureOpenAI:
-    api_version = config.azure_openai_api_version.strip()
-    if not api_version:
-        raise ValueError("Missing API version: set AZURE_OPENAI_API_VERSION.")
+def _create_async_client(config: RelayConfig) -> AsyncOpenAI:
     credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
         credential,
         "https://cognitiveservices.azure.com/.default",
     )
-    return AsyncAzureOpenAI(
-        azure_endpoint=config.azure_openai_endpoint.rstrip("/"),
-        azure_ad_token_provider=token_provider,
-        api_version=api_version,
+    return AsyncOpenAI(
+        base_url=config.openai_base_url.rstrip("/") + "/",
+        api_key=token_provider,
     )
 
 
@@ -192,7 +108,7 @@ def _build_response_kwargs(
     stream: bool = False,
 ) -> dict[str, object]:
     kwargs: dict[str, object] = {
-        "model": config.azure_openai_model,
+        "model": config.openai_model,
         "instructions": system_content,
         "input": _build_response_input(user_content=user_content, messages=messages),
     }
@@ -296,25 +212,6 @@ async def chat_completion_stream(
 
     emitted = False
     final_text: str | None = None
-    if config.is_foundry_project_mode():
-        async with _foundry_async_client(config) as client:
-            stream = await client.responses.create(**request_kwargs)
-            async for event in stream:
-                event_type = getattr(event, "type", None)
-                if event_type == "response.output_text.delta" and getattr(event, "delta", None):
-                    emitted = True
-                    yield event.delta
-                elif event_type == "response.output_text.done" and getattr(event, "text", None):
-                    final_text = event.text
-        if not emitted:
-            if final_text and final_text.strip():
-                yield final_text
-                return
-            diag = {"reason": "empty_stream"}
-            logger.warning("LLM returned empty stream: %s", json.dumps(diag, ensure_ascii=False))
-            raise ValueError(f"Empty streamed completion from model. diagnostics={json.dumps(diag)}")
-        return
-
     client = _create_async_client(config)
     stream = await client.responses.create(**request_kwargs)
     async for event in stream:
@@ -345,17 +242,13 @@ def chat_completion(
         user_content=user_content,
     )
 
-    if config.is_foundry_project_mode():
-        with _foundry_sync_client(config) as client:
-            response = client.responses.create(**request_kwargs)
-    else:
-        client = _create_client(config)
-        response = client.responses.create(**request_kwargs)
+    client = _create_client(config)
+    response = client.responses.create(**request_kwargs)
 
     content = _extract_response_output_text(response)
     if not content:
         _raise_empty_completion(response)
-    model_used = getattr(response, "model", None) or config.azure_openai_model
+    model_used = getattr(response, "model", None) or config.openai_model
     return content, model_used
 
 
@@ -371,15 +264,11 @@ def chat_completion_messages(
         messages=messages,
     )
 
-    if config.is_foundry_project_mode():
-        with _foundry_sync_client(config) as client:
-            response = client.responses.create(**request_kwargs)
-    else:
-        client = _create_client(config)
-        response = client.responses.create(**request_kwargs)
+    client = _create_client(config)
+    response = client.responses.create(**request_kwargs)
 
     content = _extract_response_output_text(response)
     if not content:
         _raise_empty_completion(response)
-    model_used = getattr(response, "model", None) or config.azure_openai_model
+    model_used = getattr(response, "model", None) or config.openai_model
     return content, model_used
