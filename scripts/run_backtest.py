@@ -18,7 +18,7 @@ from backtest.context import BacktestContext
 from backtest.data_fetcher import fetch_all_klines
 from backtest.engine import BacktestEngine
 from backtest.risk import BacktestRiskManager
-from binance.client import BinanceHTTPClient
+from binance.client import BinanceHTTPClient, normalize_binance_base_url
 from common.risk import RiskConfig
 from settings import get_settings
 from strategy.base import Strategy
@@ -109,13 +109,16 @@ async def main():
     
     # 설정 로드
     settings = get_settings()
+    backtest_base_url = normalize_binance_base_url(
+        settings.binance.base_url_backtest or settings.binance.base_url,
+    )
     
     # 클라이언트 생성 (데이터 조회만 하므로 API 키는 선택사항이지만 기본값 사용)
     # 백테스트 전용 URL(BINANCE_BASE_URL_BACKTEST)을 사용한다.
     client = BinanceHTTPClient(
         api_key=settings.binance.api_key or "",
         api_secret=settings.binance.api_secret or "",
-        base_url=settings.binance.base_url_backtest,
+        base_url=backtest_base_url,
     )
     
     try:

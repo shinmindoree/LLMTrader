@@ -12,6 +12,15 @@ import httpx
 from binance.protocols import BinanceMarketDataClient, BinanceTradingClient
 
 
+def normalize_binance_base_url(base_url: str | None, *, fallback: str = "https://fapi.binance.com") -> str:
+    raw = (base_url or "").strip()
+    if not raw:
+        return fallback
+    if raw.startswith(("http://", "https://")):
+        return raw.rstrip("/")
+    return f"https://{raw.lstrip('/')}".rstrip("/")
+
+
 class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
     """바이낸스 선물 REST 클라이언트 (테스트넷/실서버 공용)."""
 
@@ -25,9 +34,10 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret.encode()
-        self.base_url = base_url
+        normalized_base_url = normalize_binance_base_url(base_url)
+        self.base_url = normalized_base_url
         self._client = httpx.AsyncClient(
-            base_url=base_url,
+            base_url=normalized_base_url,
             timeout=timeout,
             headers={"X-MBX-APIKEY": api_key} if api_key else None,
         )
