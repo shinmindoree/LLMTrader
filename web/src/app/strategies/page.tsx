@@ -250,6 +250,12 @@ type PromptComposerProps = {
   prompt: string;
 };
 
+type RichTextBlock =
+  | { type: "paragraph"; content: string }
+  | { type: "unordered-list"; items: { content: string; indent: number }[] }
+  | { type: "ordered-list"; items: { content: string; indent: number }[] }
+  | { type: "code"; language: string; content: string };
+
 function PendingReply() {
   return (
     <div className="inline-flex items-center gap-1.5 rounded-full bg-[#2a2d35] px-4 py-3">
@@ -260,6 +266,157 @@ function PendingReply() {
           style={{ animationDelay: `${idx * 160}ms` }}
         />
       ))}
+    </div>
+  );
+}
+
+function renderInlineRichText(text: string): React.ReactNode[] {
+  const tokens = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
+  return tokens.map((token, idx) => {
+    if (token.startsWith("`") && token.endsWith("`")) {
+      return (
+        <code
+          key={`inline-code-${idx}`}
+          className="rounded-md bg-[#e8eaee] px-1.5 py-0.5 font-mono text-[0.95em] text-[#111318]"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    }
+    if (token.startsWith("**") && token.endsWith("**")) {
+      return (
+        <strong key={`inline-strong-${idx}`} className="font-semibold text-white">
+          {token.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={`inline-text-${idx}`}>{token}</span>;
+  });
+}
+
+function parseRichTextBlocks(content: string): RichTextBlock[] {
+  const segments = content
+    .split(/(```[\s\S]*?```)/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const blocks: RichTextBlock[] = [];
+
+  for (const segment of segments) {
+    if (segment.startsWith("```") && segment.endsWith("```")) {
+      const body = segment.slice(3, -3).replace(/^\n+|\n+$/g, "");
+      const firstNewline = body.indexOf("\n");
+      const language = firstNewline >= 0 ? body.slice(0, firstNewline).trim() : "";
+      const code = firstNewline >= 0 ? body.slice(firstNewline + 1) : body;
+      blocks.push({
+        type: "code",
+        language,
+        content: code,
+      });
+      continue;
+    }
+
+    const proseBlocks = segment
+      .split(/\n\s*\n/g)
+      .map((block) => block.trim())
+      .filter(Boolean);
+
+    for (const proseBlock of proseBlocks) {
+      const lines = proseBlock.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+      if (lines.length === 0) continue;
+
+      const unorderedItems = lines
+        .map((line) => line.match(/^(\s*)[-*]\s+(.*)$/))
+        .filter((match): match is RegExpMatchArray => Boolean(match));
+      if (unorderedItems.length === lines.length) {
+        blocks.push({
+          type: "unordered-list",
+          items: unorderedItems.map((match) => ({
+            indent: Math.floor(match[1].length / 2),
+            content: match[2].trim(),
+          })),
+        });
+        continue;
+      }
+
+      const orderedItems = lines
+        .map((line) => line.match(/^(\s*)\d+\.\s+(.*)$/))
+        .filter((match): match is RegExpMatchArray => Boolean(match));
+      if (orderedItems.length === lines.length) {
+        blocks.push({
+          type: "ordered-list",
+          items: orderedItems.map((match) => ({
+            indent: Math.floor(match[1].length / 2),
+            content: match[2].trim(),
+          })),
+        });
+        continue;
+      }
+
+      blocks.push({
+        type: "paragraph",
+        content: lines.join("\n"),
+      });
+    }
+  }
+
+  return blocks;
+}
+
+function RichTextContent({ content }: { content: string }) {
+  const blocks = parseRichTextBlocks(content);
+
+  return (
+    <div className="space-y-4 text-[15px] leading-7 text-[#ececf1]">
+      {blocks.map((block, idx) => {
+        if (block.type === "code") {
+          return (
+            <div
+              key={`rich-code-${idx}`}
+              className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]"
+            >
+              <div className="border-b border-[#2d313b] px-4 py-3 text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
+                {block.language || "Code"}
+              </div>
+              <pre className="max-h-[560px] overflow-auto px-4 py-4 font-mono text-xs leading-6 text-[#ececf1]">
+                {block.content}
+              </pre>
+            </div>
+          );
+        }
+
+        if (block.type === "unordered-list" || block.type === "ordered-list") {
+          const ListTag = block.type === "ordered-list" ? "ol" : "ul";
+          return (
+            <ListTag
+              key={`rich-list-${idx}`}
+              className={`space-y-2 pl-6 ${
+                block.type === "ordered-list" ? "list-decimal" : "list-disc"
+              }`}
+            >
+              {block.items.map((item, itemIdx) => (
+                <li
+                  key={`rich-list-item-${idx}-${itemIdx}`}
+                  className="marker:text-[#b9bec8]"
+                  style={item.indent > 0 ? { marginLeft: `${item.indent * 16}px` } : undefined}
+                >
+                  {renderInlineRichText(item.content)}
+                </li>
+              ))}
+            </ListTag>
+          );
+        }
+
+        return (
+          <p key={`rich-paragraph-${idx}`} className="whitespace-pre-wrap">
+            {block.content.split("\n").map((line, lineIdx) => (
+              <span key={`rich-line-${idx}-${lineIdx}`}>
+                {lineIdx > 0 ? <br /> : null}
+                {renderInlineRichText(line)}
+              </span>
+            ))}
+          </p>
+        );
+      })}
     </div>
   );
 }
@@ -464,6 +621,15 @@ function toRemoteSessionData(session: ChatSessionRecord): Record<string, unknown
 type TabId = "chat" | "list";
 const LOADED_STRATEGY_SUMMARY_PROMPT =
   "Briefly explain this strategy in plain English in 5 bullets: overview, entry logic, exit logic, risk management, and practical cautions. Keep it concise.";
+const buildGeneratedStrategySummaryPrompt = (userRequest: string) =>
+  [
+    `User request: ${userRequest}`,
+    "Explain the generated strategy in the same language as the user's request.",
+    "Write like a normal assistant reply, not a report.",
+    "Structure: short intro paragraph, then concise bullets for entry, exit, risk management, and cautions.",
+    "Use backticks for parameter or indicator names when useful.",
+    "Do not include code fences or repeat the full code.",
+  ].join("\n");
 
 export default function StrategiesPage() {
   const { t } = useI18n();
@@ -862,6 +1028,8 @@ export default function StrategiesPage() {
                 prev.filter((m) => m.id !== assistantId),
               );
             } else {
+              const resolvedCode = payload.code ?? "";
+              const resolvedSummary = payload.summary ?? null;
               setChatMessages((prev) => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== "assistant" || last.id !== assistantId) return prev;
@@ -869,8 +1037,8 @@ export default function StrategiesPage() {
                   ...prev.slice(0, -1),
                   {
                     ...last,
-                    content: payload.code ?? last.content,
-                    summary: payload.summary ?? null,
+                    content: resolvedCode || last.content,
+                    summary: resolvedSummary,
                     backtest_ok: payload.backtest_ok ?? false,
                     repaired: payload.repaired ?? false,
                     repair_attempts: payload.repair_attempts ?? 0,
@@ -879,12 +1047,32 @@ export default function StrategiesPage() {
                   },
                 ];
               });
-              if (payload.code) {
-                setWorkspaceCode(payload.code);
+              if (resolvedCode) {
+                setWorkspaceCode(resolvedCode);
                 setWorkspaceSourceMessageId(assistantId);
-                setWorkspaceSummary(payload.summary ?? null);
+                setWorkspaceSummary(resolvedSummary);
                 setWorkspaceDirty(false);
-                setInitialGeneratedCode((prev) => prev ?? payload.code ?? null);
+                setInitialGeneratedCode((prev) => prev ?? resolvedCode ?? null);
+                if (!resolvedSummary) {
+                  void strategyChat(
+                    resolvedCode,
+                    null,
+                    [{ role: "user", content: buildGeneratedStrategySummaryPrompt(trimmed) }],
+                  )
+                    .then((summaryRes) => {
+                      setChatMessages((prev) =>
+                        prev.map((message) =>
+                          message.id === assistantId
+                            ? { ...message, summary: summaryRes.content }
+                            : message,
+                        ),
+                      );
+                      setWorkspaceSummary(summaryRes.content);
+                    })
+                    .catch(() => {
+                      // keep code-only rendering if summary generation fails
+                    });
+                }
               }
               listStrategies()
                 .then(setItems)
@@ -1346,9 +1534,7 @@ export default function StrategiesPage() {
                           <div className="min-w-0 flex-1 space-y-4">
                             {message.textOnly ? (
                               message.content ? (
-                                <p className="whitespace-pre-wrap text-[15px] leading-7 text-[#ececf1]">
-                                  {message.content}
-                                </p>
+                                <RichTextContent content={message.content} />
                               ) : shouldShowPending ? (
                                 <PendingReply />
                               ) : null
@@ -1356,9 +1542,7 @@ export default function StrategiesPage() {
                               <>
                                 {message.summary ? (
                                   <div className="space-y-3">
-                                    <p className="whitespace-pre-wrap text-[15px] leading-7 text-[#ececf1]">
-                                      {message.summary}
-                                    </p>
+                                    <RichTextContent content={message.summary} />
                                     {isLatestAssistantCode ? (
                                       <button
                                         type="button"

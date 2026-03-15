@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -420,6 +421,65 @@ def _raise_llm_http_error(endpoint: str, exc: Exception) -> None:
     ) from exc
 
 
+_MAX_REPAIR_ATTEMPTS = 3
+
+
+def _extract_python_code(content: str) -> str:
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.split("\n")
+    start = 1
+    if start < len(lines) and lines[start].strip().lower() in ("python", "py", "python3"):
+        start += 1
+    end = len(lines)
+    for i in range(len(lines) - 1, 0, -1):
+        if lines[i].strip() == "```":
+            end = i
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def _verify_strategy_code(code: str) -> str | None:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return f"SyntaxError at line {e.lineno}: {e.msg}"
+
+    strategy_cls: ast.ClassDef | None = None
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef) and node.name.endswith("Strategy") and node.name != "Strategy":
+            strategy_cls = node
+            break
+
+    if strategy_cls is None:
+        return "No class ending with 'Strategy' found."
+
+    methods = {
+        n.name
+        for n in ast.walk(strategy_cls)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    missing = [m for m in ("initialize", "on_bar") if m not in methods]
+    if missing:
+        return f"Class '{strategy_cls.name}' is missing required methods: {', '.join(missing)}"
+
+    if "get_open_orders" not in code:
+        return "Missing open-orders guard (ctx.get_open_orders)."
+    if "is_new_bar" not in code:
+        return "Missing bar-confirmation guard (is_new_bar check)."
+
+    return None
+
+
+def _user_prompt_text(prompt: str, messages: list[ChatMessage]) -> str:
+    if prompt:
+        return prompt
+    if messages:
+        return " ".join(str(m.content or "") for m in messages if m.role == "user")
+    return ""
+
+
 @app.post("/test", response_model=TestResponse)
 async def test_llm(
     body: TestRequest,
@@ -643,8 +703,10 @@ async def generate(
             detail="Azure OpenAI not configured (missing env vars)",
         )
 
+    prompt_text = _user_prompt_text(prompt, messages)
+
     try:
-        system_content = build_system_prompt()
+        system_content = build_system_prompt(user_prompt=prompt_text)
         if messages:
             openai_messages = [{"role": m.role, "content": m.content} for m in messages]
             content, model_used = chat_completion_messages(
@@ -665,7 +727,39 @@ async def generate(
         logger.warning("LLM returned blank content at /generate")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
-    return StrategyResponse(code=content.strip(), model_used=model_used)
+    code = _extract_python_code(content)
+
+    for attempt in range(_MAX_REPAIR_ATTEMPTS):
+        error = _verify_strategy_code(code)
+        if not error:
+            break
+        logger.info(
+            "Strategy verification failed (attempt %d/%d): %s",
+            attempt + 1,
+            _MAX_REPAIR_ATTEMPTS,
+            error,
+        )
+        repair_parts = [
+            "Fix the strategy code based on the verification failure below.",
+            "",
+            f"Verification error:\n{error}",
+        ]
+        if prompt_text:
+            repair_parts.extend(["", f"Original user request:\n{prompt_text}"])
+        repair_parts.extend(["", "Current code:", code])
+        try:
+            repaired, model_used = chat_completion(
+                config,
+                system_content=build_repair_system_prompt(),
+                user_content="\n".join(repair_parts),
+            )
+            if repaired and repaired.strip():
+                code = _extract_python_code(repaired)
+        except Exception:
+            logger.exception("Repair attempt %d failed", attempt + 1)
+            break
+
+    return StrategyResponse(code=code, model_used=model_used)
 
 
 async def _generate_stream_body(body: StrategyRequest):
@@ -678,8 +772,11 @@ async def _generate_stream_body(body: StrategyRequest):
     if not config.is_azure_configured():
         yield f"data: {json.dumps({'error': 'Azure OpenAI not configured'})}\n\n"
         return
+
+    prompt_text = _user_prompt_text(prompt, messages)
+
     try:
-        system_content = build_system_prompt()
+        system_content = build_system_prompt(user_prompt=prompt_text)
         if messages:
             openai_messages = [{"role": m.role, "content": m.content} for m in messages]
             async for token in chat_completion_stream(
