@@ -1129,6 +1129,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "azure-identity" },
     { name = "azure-keyvault-keys" },
     { name = "azure-storage-blob" },
     { name = "cryptography" },
@@ -1157,7 +1158,6 @@ dev = [
 ]
 relay = [
     { name = "azure-ai-projects" },
-    { name = "azure-identity" },
     { name = "openai" },
 ]
 
@@ -1167,7 +1167,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "azure-ai-projects", marker = "extra == 'relay'", specifier = ">=1.0.0" },
-    { name = "azure-identity", marker = "extra == 'relay'", specifier = ">=1.15.0" },
+    { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-keyvault-keys", specifier = ">=4.9.0" },
     { name = "azure-storage-blob", specifier = ">=12.20.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.8.0" },

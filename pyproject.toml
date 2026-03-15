@@ -30,6 +30,7 @@ dependencies = [
     "cryptography>=43.0.0",
     "stripe>=11.0.0",
     "azure-storage-blob>=12.20.0",
+    "azure-identity>=1.15.0",
     "azure-keyvault-keys>=4.9.0",
 ]
 
@@ -40,7 +41,6 @@ dev = [
     "mypy>=1.9.0",
 ]
 relay = [
-    "azure-identity>=1.15.0",
     "azure-ai-projects>=1.0.0",
     "openai>=1.12.0",
 ]
