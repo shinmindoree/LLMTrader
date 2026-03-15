@@ -14,6 +14,7 @@ from control.models import (
     Job,
     JobEvent,
     Order,
+    StrategyMeta,
     StrategyChatSession,
     StrategyQualityLog,
     Trade,
@@ -104,6 +105,84 @@ async def get_user_by_stripe_customer_id(
         select(UserProfile).where(UserProfile.stripe_customer_id == stripe_customer_id)
     )
     return result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# StrategyMeta
+# ---------------------------------------------------------------------------
+
+
+async def get_strategy_meta_by_name(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    strategy_name: str,
+) -> StrategyMeta | None:
+    result = await session.execute(
+        select(StrategyMeta)
+        .where(StrategyMeta.user_id == user_id)
+        .where(StrategyMeta.strategy_name == strategy_name)
+        .order_by(StrategyMeta.updated_at.desc(), StrategyMeta.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_strategy_meta(
+    session: AsyncSession,
+    *,
+    user_id: str,
+) -> list[StrategyMeta]:
+    result = await session.execute(
+        select(StrategyMeta)
+        .where(StrategyMeta.user_id == user_id)
+        .order_by(StrategyMeta.updated_at.desc(), StrategyMeta.id.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def upsert_strategy_meta(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    strategy_name: str,
+    blob_path: str,
+    summary: str | None = None,
+) -> StrategyMeta:
+    existing = await get_strategy_meta_by_name(session, user_id=user_id, strategy_name=strategy_name)
+    now = datetime.now()
+    if existing is None:
+        existing = StrategyMeta(
+            user_id=user_id,
+            strategy_name=strategy_name,
+            blob_path=blob_path,
+            summary=summary,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(existing)
+        await session.flush()
+        return existing
+
+    existing.blob_path = blob_path
+    existing.summary = summary
+    existing.updated_at = now
+    await session.flush()
+    return existing
+
+
+async def delete_strategy_meta_by_name(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    strategy_name: str,
+) -> bool:
+    res = await session.execute(
+        delete(StrategyMeta)
+        .where(StrategyMeta.user_id == user_id)
+        .where(StrategyMeta.strategy_name == strategy_name)
+    )
+    return bool(res.rowcount)
 
 
 # ---------------------------------------------------------------------------

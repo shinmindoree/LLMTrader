@@ -16,7 +16,7 @@ from live.risk import LiveRiskManager
 from live.user_stream_hub import UserStreamHub
 from notifications.slack import SlackNotifier
 from runner.event_sink import DbEventSink
-from runner.strategy_loader import build_strategy, load_strategy_class
+from runner.strategy_loader import build_strategy, load_strategy_class, resolve_strategy_file
 from settings import get_settings
 
 
@@ -75,7 +75,12 @@ async def run_live(
     client = await _resolve_binance_client(user_id, session_maker)
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
-    strategy_file = (repo_root / strategy_path).resolve()
+    strategy_code_snapshot = config.get("_strategy_code")
+    strategy_file, cleanup_strategy_file = resolve_strategy_file(
+        repo_root=repo_root,
+        strategy_path=strategy_path,
+        fallback_code=str(strategy_code_snapshot) if isinstance(strategy_code_snapshot, str) else None,
+    )
     strategy_class = load_strategy_class(strategy_file)
     strategy_params = config.get("strategy_params") or {}
     strategy = build_strategy(strategy_class, dict(strategy_params) if isinstance(strategy_params, dict) else {})
@@ -205,5 +210,6 @@ async def run_live(
         return {"summary": engine.get_summary()}
     finally:
         watcher_task.cancel()
+        if cleanup_strategy_file:
+            strategy_file.unlink(missing_ok=True)
         await client.aclose()
-

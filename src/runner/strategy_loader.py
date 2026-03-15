@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -33,3 +34,24 @@ def build_strategy(strategy_class: type[Strategy], params: dict[str, Any]) -> St
     except TypeError as exc:
         raise ValueError(f"Strategy params mismatch: {exc}") from exc
 
+
+def resolve_strategy_file(
+    *,
+    repo_root: Path,
+    strategy_path: str,
+    fallback_code: str | None = None,
+) -> tuple[Path, bool]:
+    strategy_file = (repo_root / strategy_path).resolve()
+    if strategy_file.exists():
+        return strategy_file, False
+
+    code = (fallback_code or "").strip()
+    if not code:
+        raise FileNotFoundError(f"Strategy file not found: {strategy_file}")
+
+    runtime_dir = (repo_root / ".runtime_strategies").resolve()
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(strategy_path).stem or "runtime_strategy"
+    materialized = runtime_dir / f"{stem}_{uuid.uuid4().hex[:8]}.py"
+    materialized.write_text(code, encoding="utf-8")
+    return materialized, True

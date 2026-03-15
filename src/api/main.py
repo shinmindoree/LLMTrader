@@ -28,21 +28,26 @@ from control.repo import (
     append_event,
     create_job,
     create_strategy_quality_log,
+    delete_strategy_meta_by_name,
     delete_strategy_chat_session as repo_delete_strategy_chat_session,
     delete_job,
     delete_jobs,
     get_account_snapshot,
     get_job,
+    get_strategy_meta_by_name,
     list_events,
     list_jobs,
     list_orders,
+    list_strategy_meta,
     list_strategy_chat_sessions as repo_list_strategy_chat_sessions,
     list_strategy_quality_logs,
     list_trades,
     request_stop,
     stop_all_jobs,
+    upsert_strategy_meta,
     upsert_strategy_chat_session as repo_upsert_strategy_chat_session,
 )
+from common.blob_storage import get_blob_service
 from settings import get_settings
 from llm.client import LLMClient
 try:
@@ -103,6 +108,25 @@ from api.schemas import (
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 
+INTERNAL_JOB_CONFIG_KEYS = {"_strategy_code"}
+
+
+def _public_job_config(config: Any) -> dict[str, Any]:
+    if not isinstance(config, dict):
+        return {}
+    return {k: v for k, v in config.items() if k not in INTERNAL_JOB_CONFIG_KEYS}
+
+
+def _logical_strategy_path(strategy_name: str) -> str:
+    return f"scripts/strategies/{strategy_name}"
+
+
+def _strategy_name_from_path(path: str) -> str:
+    name = Path((path or "").strip()).name
+    if not name.endswith(".py"):
+        raise ValueError("strategy_path must point to a .py file")
+    return name
+
 
 def _job_to_response(job: Any) -> JobResponse:
     return JobResponse(
@@ -110,7 +134,7 @@ def _job_to_response(job: Any) -> JobResponse:
         type=JobType(str(job.type)),
         status=job.status,
         strategy_path=job.strategy_path,
-        config=job.config_json,
+        config=_public_job_config(job.config_json),
         result=job.result_json,
         error=job.error,
         created_at=job.created_at,
@@ -223,6 +247,94 @@ def _unique_strategy_path(base_dir: Path, filename: str) -> Path:
         if not alt.exists():
             return alt
     raise HTTPException(status_code=409, detail="Could not allocate a unique strategy filename")
+
+
+async def _list_strategies_for_user(
+    *,
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> list[StrategyInfo]:
+    blob = get_blob_service()
+    if blob is not None:
+        rows = await list_strategy_meta(session, user_id=user.user_id)
+        if rows:
+            deduped: dict[str, StrategyInfo] = {}
+            for row in rows:
+                deduped[row.strategy_name] = StrategyInfo(
+                    name=row.strategy_name,
+                    path=_logical_strategy_path(row.strategy_name),
+                )
+            return sorted(deduped.values(), key=lambda item: item.name)
+
+    root = _repo_root()
+    files = list_strategy_files(_strategy_dirs())
+    return [StrategyInfo(name=p.name, path=str(p.relative_to(root))) for p in files]
+
+
+async def _resolve_strategy_code_for_user(
+    *,
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    path: str,
+) -> tuple[str, str]:
+    blob = get_blob_service()
+    if blob is not None:
+        try:
+            strategy_name = _strategy_name_from_path(path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        meta = await get_strategy_meta_by_name(session, user_id=user.user_id, strategy_name=strategy_name)
+        if meta is not None:
+            try:
+                return strategy_name, blob.download_by_path(meta.blob_path)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Failed to read strategy blob: {exc}") from exc
+
+    root = _repo_root()
+    dirs = _strategy_dirs()
+    try:
+        target = validate_strategy_path(repo_root=root, strategy_dirs=dirs, strategy_path=path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return target.name, target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read strategy file: {exc}") from exc
+
+
+async def _delete_strategy_for_user(
+    *,
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    path: str,
+) -> bool:
+    blob = get_blob_service()
+    if blob is not None:
+        try:
+            strategy_name = _strategy_name_from_path(path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        meta = await get_strategy_meta_by_name(session, user_id=user.user_id, strategy_name=strategy_name)
+        if meta is not None:
+            deleted_blob = blob.delete_by_path(meta.blob_path)
+            deleted_meta = await delete_strategy_meta_by_name(
+                session,
+                user_id=user.user_id,
+                strategy_name=strategy_name,
+            )
+            return deleted_blob or deleted_meta
+
+    root = _repo_root()
+    dirs = _strategy_dirs()
+    try:
+        target = validate_strategy_path(repo_root=root, strategy_dirs=dirs, strategy_path=path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        target.unlink()
+        return True
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete file: {exc}") from exc
 
 
 def _strip_code_fences(content: str) -> str:
@@ -552,64 +664,38 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/strategies", response_model=list[StrategyInfo], dependencies=[Depends(require_auth)])
-    async def strategies() -> list[StrategyInfo]:
-        root = _repo_root()
-        dirs = _strategy_dirs()
-        files = list_strategy_files(dirs)
-        out: list[StrategyInfo] = []
-        for p in files:
-            out.append(StrategyInfo(name=p.name, path=str(p.relative_to(root))))
-        return out
+    async def strategies(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[StrategyInfo]:
+        return await _list_strategies_for_user(session=session, user=user)
 
     @app.get(
         "/api/strategies/content",
         response_model=StrategyContentResponse,
         dependencies=[Depends(require_auth)],
     )
-    async def strategy_content(path: str = Query(..., alias="path")) -> StrategyContentResponse:
-        root = _repo_root()
-        dirs = _strategy_dirs()
-        try:
-            target = validate_strategy_path(
-                repo_root=root,
-                strategy_dirs=dirs,
-                strategy_path=path,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        try:
-            code = target.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to read strategy file: {exc}") from exc
-
-        return StrategyContentResponse(
-            name=target.name,
-            path=str(target.relative_to(root)),
-            code=code,
-        )
+    async def strategy_content(
+        path: str = Query(..., alias="path"),
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StrategyContentResponse:
+        name, code = await _resolve_strategy_code_for_user(session=session, user=user, path=path)
+        return StrategyContentResponse(name=name, path=_logical_strategy_path(name), code=code)
 
     @app.delete(
         "/api/strategies",
         response_model=DeleteResponse,
         dependencies=[Depends(require_auth)],
     )
-    async def delete_strategy(path: str = Query(..., alias="path")) -> DeleteResponse:
-        root = _repo_root()
-        dirs = _strategy_dirs()
-        try:
-            target = validate_strategy_path(
-                repo_root=root,
-                strategy_dirs=dirs,
-                strategy_path=path,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            target.unlink()
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to delete file: {exc}") from exc
-        return DeleteResponse(ok=True)
+    async def delete_strategy(
+        path: str = Query(..., alias="path"),
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> DeleteResponse:
+        ok = await _delete_strategy_for_user(session=session, user=user, path=path)
+        await session.commit()
+        return DeleteResponse(ok=ok)
 
     @app.post(
         "/api/strategies/intake",
@@ -1114,24 +1200,17 @@ def create_app() -> FastAPI:
         response_model=StrategySaveResponse,
         dependencies=[Depends(require_auth)],
     )
-    async def save_strategy(body: StrategySaveRequest) -> StrategySaveResponse:
+    async def save_strategy(
+        body: StrategySaveRequest,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StrategySaveResponse:
         code = (body.code or "").strip()
         if not code:
             raise HTTPException(status_code=422, detail="code must be non-empty")
 
-        dirs = _strategy_dirs()
-        if not dirs:
-            raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
-
-        base_dir = dirs[0]
-        try:
-            base_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Failed to prepare strategy dir: {exc}") from exc
-
         code = _strip_code_fences(code)
         filename = _sanitize_strategy_filename(body.strategy_name)
-        final_target = _unique_strategy_path(base_dir, filename)
         repo_root = _repo_root()
         temp_path = _verify_tmp_dir() / f"_verify_{uuid.uuid4().hex}_strategy.py"
 
@@ -1146,15 +1225,39 @@ def create_app() -> FastAPI:
             _cleanup_verify_temp(temp_path)
             raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
 
+        _cleanup_verify_temp(temp_path)
+
+        blob = get_blob_service()
+        if blob is not None:
+            try:
+                blob_path = blob.upload(user.user_id, filename, code)
+                await upsert_strategy_meta(
+                    session,
+                    user_id=user.user_id,
+                    strategy_name=filename,
+                    blob_path=blob_path,
+                )
+                await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Failed to upload strategy blob: {exc}") from exc
+            return StrategySaveResponse(path=_logical_strategy_path(filename))
+
+        dirs = _strategy_dirs()
+        if not dirs:
+            raise HTTPException(status_code=500, detail="STRATEGY_DIRS is not configured")
+
+        base_dir = dirs[0]
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to prepare strategy dir: {exc}") from exc
+
+        final_target = _unique_strategy_path(base_dir, filename)
         try:
             final_target.write_text(code, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
-            _cleanup_verify_temp(temp_path)
             raise HTTPException(status_code=500, detail=f"Failed to write strategy file: {exc}") from exc
-        _cleanup_verify_temp(temp_path)
-
-        relative_path = str(final_target.relative_to(repo_root))
-        return StrategySaveResponse(path=relative_path)
+        return StrategySaveResponse(path=str(final_target.relative_to(repo_root)))
 
     @app.post(
         "/api/strategies/validate-syntax",
@@ -1215,23 +1318,23 @@ def create_app() -> FastAPI:
         from api.quota import check_job_quota
         await check_job_quota(session, user_id=user.user_id, plan=user.plan, job_type=body.type)
 
-        root = _repo_root()
-        dirs = _strategy_dirs()
         try:
-            validated = validate_strategy_path(
-                repo_root=root,
-                strategy_dirs=dirs,
-                strategy_path=body.strategy_path,
+            strategy_name, strategy_code = await _resolve_strategy_code_for_user(
+                session=session,
+                user=user,
+                path=body.strategy_path,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        config_json = dict(body.config)
+        config_json["_strategy_code"] = strategy_code
         job = await create_job(
             session,
             user_id=user.user_id,
             job_type=body.type,
-            strategy_path=str(validated.relative_to(root)),
-            config_json=body.config,
+            strategy_path=_logical_strategy_path(strategy_name),
+            config_json=config_json,
         )
         await append_event(
             session,

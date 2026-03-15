@@ -13,7 +13,7 @@ from binance.client import BinanceHTTPClient
 from common.risk import RiskConfig
 from control.enums import EventKind
 from runner.event_sink import DbEventSink
-from runner.strategy_loader import build_strategy, load_strategy_class
+from runner.strategy_loader import build_strategy, load_strategy_class, resolve_strategy_file
 from settings import get_settings
 
 
@@ -34,6 +34,7 @@ async def run_backtest(
     start_ts = int(config.get("start_ts") or 0)
     end_ts = int(config.get("end_ts") or 0)
     strategy_params = config.get("strategy_params") or {}
+    strategy_code_snapshot = config.get("_strategy_code")
 
     sink.emit(kind=EventKind.LOG, message="BACKTEST_START", payload={"symbol": symbol, "interval": interval})
 
@@ -77,7 +78,11 @@ async def run_backtest(
             commission_rate=commission,
         )
 
-        strategy_file = (repo_root / strategy_path).resolve()
+        strategy_file, cleanup_strategy_file = resolve_strategy_file(
+            repo_root=repo_root,
+            strategy_path=strategy_path,
+            fallback_code=str(strategy_code_snapshot) if isinstance(strategy_code_snapshot, str) else None,
+        )
         strategy_class = load_strategy_class(strategy_file)
         strategy = build_strategy(strategy_class, dict(strategy_params) if isinstance(strategy_params, dict) else {})
 
@@ -96,4 +101,6 @@ async def run_backtest(
         results["finished_at"] = datetime.now().isoformat()
         return results
     finally:
+        if "cleanup_strategy_file" in locals() and cleanup_strategy_file:
+            strategy_file.unlink(missing_ok=True)
         await client.aclose()

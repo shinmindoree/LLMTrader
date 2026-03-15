@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import ContainerClient
 
 logger = logging.getLogger(__name__)
@@ -13,7 +14,10 @@ class StrategyBlobService:
 
     def __init__(self, connection_string: str, container_name: str = "strategies") -> None:
         self._container = ContainerClient.from_connection_string(connection_string, container_name)
-        self._container.create_container()  # idempotent
+        try:
+            self._container.create_container()
+        except ResourceExistsError:
+            pass
 
     def _blob_path(self, user_id: str, strategy_name: str) -> str:
         safe_name = strategy_name.replace("/", "_").replace("\\", "_")
@@ -53,6 +57,13 @@ class StrategyBlobService:
         path = self._blob_path(user_id, strategy_name)
         try:
             self._container.delete_blob(path)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def delete_by_path(self, blob_path: str) -> bool:
+        try:
+            self._container.delete_blob(blob_path)
             return True
         except Exception:  # noqa: BLE001
             return False
