@@ -81,6 +81,7 @@ class StripeSettings(BaseSettings):
 class AzureBlobSettings(BaseSettings):
     """Azure Blob Storage 설정."""
 
+    account_url: str = Field(default="", alias="AZURE_BLOB_ACCOUNT_URL")
     connection_string: str = Field(default="", alias="AZURE_BLOB_CONNECTION_STRING", repr=False)
     container_name: str = Field(default="strategies", alias="AZURE_BLOB_CONTAINER_NAME")
 

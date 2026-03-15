@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from azure.core.exceptions import ResourceExistsError
+from azure.identity import DefaultAzureCredential
 from azure.storage.blob import ContainerClient
 
 logger = logging.getLogger(__name__)
@@ -12,12 +14,25 @@ logger = logging.getLogger(__name__)
 class StrategyBlobService:
     """사용자별 전략 코드를 Azure Blob Storage에 저장/조회한다."""
 
-    def __init__(self, connection_string: str, container_name: str = "strategies") -> None:
-        self._container = ContainerClient.from_connection_string(connection_string, container_name)
+    def __init__(self, container: ContainerClient) -> None:
+        self._container = container
         try:
             self._container.create_container()
         except ResourceExistsError:
             pass
+
+    @classmethod
+    def from_connection_string(cls, connection_string: str, container_name: str = "strategies") -> StrategyBlobService:
+        return cls(ContainerClient.from_connection_string(connection_string, container_name))
+
+    @classmethod
+    def from_account_url(cls, account_url: str, container_name: str = "strategies") -> StrategyBlobService:
+        kwargs: dict[str, Any] = {}
+        client_id = os.getenv("AZURE_CLIENT_ID", "").strip()
+        if client_id:
+            kwargs["managed_identity_client_id"] = client_id
+        credential = DefaultAzureCredential(**kwargs)
+        return cls(ContainerClient(account_url=account_url, container_name=container_name, credential=credential))
 
     def _blob_path(self, user_id: str, strategy_name: str) -> str:
         safe_name = strategy_name.replace("/", "_").replace("\\", "_")
@@ -74,7 +89,10 @@ def get_blob_service() -> StrategyBlobService | None:
     from settings import get_settings
 
     settings = get_settings()
+    account_url = settings.azure_blob.account_url.strip()
     conn_str = settings.azure_blob.connection_string.strip()
+    if account_url:
+        return StrategyBlobService.from_account_url(account_url, settings.azure_blob.container_name)
     if not conn_str:
         return None
-    return StrategyBlobService(conn_str, settings.azure_blob.container_name)
+    return StrategyBlobService.from_connection_string(conn_str, settings.azure_blob.container_name)
