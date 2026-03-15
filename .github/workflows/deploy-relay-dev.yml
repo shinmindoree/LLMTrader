@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - relay/**
+      - pyproject.toml
+      - uv.lock
       - infra/Dockerfile.relay
   workflow_dispatch:
 

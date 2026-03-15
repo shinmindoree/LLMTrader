@@ -9,6 +9,8 @@ on:
     paths:
       - src/**
       - scripts/**
+      - pyproject.toml
+      - uv.lock
       - infra/Dockerfile.api
       - .github/workflows/llmtrader-api-AutoDeployTrigger-51b80701-055a-457e-a751-7ca8a724937c.yml
 
