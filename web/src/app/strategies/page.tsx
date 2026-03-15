@@ -21,13 +21,34 @@ import type {
   StrategySyntaxCheckResponse,
 } from "@/lib/types";
 
+function looksLikePythonCode(content: string): boolean {
+  const text = content.trim();
+  if (!text) return false;
+
+  const strongSignals = [
+    /^\s*from\s+[A-Za-z_][\w.]*\s+import\s+.+/m,
+    /^\s*import\s+[A-Za-z_][\w.]*/m,
+    /^\s*(async\s+def|def|class)\s+[A-Za-z_]\w*/m,
+    /^\s*if __name__ == ["']__main__["']:/m,
+    /^\s*@\w+/m,
+  ];
+
+  if (strongSignals.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  const controlFlowSignals = text.match(/^\s*(if|elif|else|for|while|try|except|with)\b.*:\s*$/gm);
+  const assignmentSignals = text.match(/^\s*[A-Za-z_]\w*\s*=\s*.+$/gm);
+  return Boolean(controlFlowSignals?.length && assignmentSignals?.length);
+}
+
 function getLastCodeAndSummary(messages: ChatMessage[]): {
   code: string;
   summary: string | null;
 } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role === "assistant" && m.content && !m.textOnly) {
+    if (m.role === "assistant" && m.content && !m.textOnly && looksLikePythonCode(m.content)) {
       return { code: m.content, summary: m.summary ?? null };
     }
   }
@@ -1030,6 +1051,7 @@ export default function StrategiesPage() {
             } else {
               const resolvedCode = payload.code ?? "";
               const resolvedSummary = payload.summary ?? null;
+              const resolvedIsPythonCode = looksLikePythonCode(resolvedCode);
               setChatMessages((prev) => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== "assistant" || last.id !== assistantId) return prev;
@@ -1042,12 +1064,13 @@ export default function StrategiesPage() {
                     backtest_ok: payload.backtest_ok ?? false,
                     repaired: payload.repaired ?? false,
                     repair_attempts: payload.repair_attempts ?? 0,
+                    textOnly: !resolvedIsPythonCode,
                     status: null,
                     statusText: null,
                   },
                 ];
               });
-              if (resolvedCode) {
+              if (resolvedCode && resolvedIsPythonCode) {
                 setWorkspaceCode(resolvedCode);
                 setWorkspaceSourceMessageId(assistantId);
                 setWorkspaceSummary(resolvedSummary);
@@ -1073,6 +1096,8 @@ export default function StrategiesPage() {
                       // keep code-only rendering if summary generation fails
                     });
                 }
+              } else if (resolvedCode && !resolvedIsPythonCode) {
+                setWorkspaceSummary(null);
               }
               listStrategies()
                 .then(setItems)
@@ -1354,7 +1379,7 @@ export default function StrategiesPage() {
   const latestAssistantCodeId =
     [...chatMessages]
       .reverse()
-      .find((m) => m.role === "assistant" && !m.textOnly && Boolean(m.content))?.id ?? null;
+      .find((m) => m.role === "assistant" && !m.textOnly && Boolean(m.content) && looksLikePythonCode(m.content))?.id ?? null;
   const workspaceLineCount = Math.max(1, workspaceCode.split("\n").length);
   const syntaxErrorLine = workspaceSyntax?.error?.line ?? null;
   const syntaxErrorColumn =
@@ -1515,6 +1540,7 @@ export default function StrategiesPage() {
                       const isLatestAssistantCode = message.id === latestAssistantCodeId;
                       const shouldShowPending =
                         message.role === "assistant" && !message.content && !message.summary;
+                      const hasPythonCode = looksLikePythonCode(message.content);
 
                       if (message.role === "user") {
                         return (
@@ -1540,23 +1566,7 @@ export default function StrategiesPage() {
                               ) : null
                             ) : (
                               <>
-                                {message.summary ? (
-                                  <div className="space-y-3">
-                                    <RichTextContent content={message.summary} />
-                                    {isLatestAssistantCode ? (
-                                      <button
-                                        type="button"
-                                        className="rounded-full border border-[#3f7a68] px-3 py-1.5 text-xs text-[#8bd1ba] transition hover:bg-[#1e312c] disabled:opacity-50"
-                                        onClick={() => void handleSummaryExpand()}
-                                        disabled={chatBusy}
-                                      >
-                                        Expand summary
-                                      </button>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-
-                                {message.content ? (
+                                {message.content && hasPythonCode ? (
                                   <div className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]">
                                     <div className="flex items-center justify-between gap-3 border-b border-[#2d313b] px-4 py-3">
                                       <span className="text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
@@ -1586,8 +1596,26 @@ export default function StrategiesPage() {
                                       {message.content}
                                     </pre>
                                   </div>
+                                ) : message.content ? (
+                                  <RichTextContent content={message.content} />
                                 ) : shouldShowPending ? (
                                   <PendingReply />
+                                ) : null}
+
+                                {message.summary && hasPythonCode ? (
+                                  <div className="space-y-3">
+                                    <RichTextContent content={message.summary} />
+                                    {isLatestAssistantCode ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-full border border-[#3f7a68] px-3 py-1.5 text-xs text-[#8bd1ba] transition hover:bg-[#1e312c] disabled:opacity-50"
+                                        onClick={() => void handleSummaryExpand()}
+                                        disabled={chatBusy}
+                                      >
+                                        Expand summary
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 ) : null}
 
                                 {(message.backtest_ok || message.repaired || message.path || message.model) ? (
