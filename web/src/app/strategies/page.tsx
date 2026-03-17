@@ -1359,8 +1359,8 @@ export default function StrategiesPage() {
 
       {activeTab === "chat" ? (
       <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-[24px] border border-t-0 border-[#2f3440] bg-[#21242b]">
-        <div className="flex min-h-0 flex-1">
-          <aside className="hidden w-72 shrink-0 border-r border-[#2f3440] bg-[#1a1d23] md:flex md:flex-col">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <aside className="hidden w-72 shrink-0 border-r border-[#2f3440] bg-[#1a1d23] md:flex md:flex-col overflow-hidden">
             <div className="border-b border-[#2f3440] px-3 py-3">
               <button
                 type="button"
@@ -1436,7 +1436,7 @@ export default function StrategiesPage() {
               )}
             </div>
           </aside>
-          <div className="min-w-0 flex-1 flex flex-col">
+          <div className="min-w-0 min-h-0 flex-1 flex flex-col overflow-hidden">
             <div className="flex items-center gap-2 border-b border-[#2f3440] px-4 py-2 md:hidden">
               <select
                 className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
@@ -1604,7 +1604,7 @@ export default function StrategiesPage() {
                 </div>
               </>
             ) : (
-              <div className="flex flex-1 flex-col items-center justify-center px-6 py-12">
+              <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-12">
                 {chatError ? (
                   <p className="mb-6 w-full max-w-3xl rounded-2xl border border-[#ef5350]/30 bg-[#351f24] px-4 py-3 text-sm text-[#ef9a9a]">
                     {chatError}
@@ -1649,7 +1649,7 @@ export default function StrategiesPage() {
             />
           ) : null}
           <aside
-            className={`relative hidden shrink-0 border-l border-[#2a2e39] bg-[#151924] lg:flex lg:flex-col ${
+            className={`relative hidden min-h-0 shrink-0 border-l border-[#2a2e39] bg-[#151924] lg:flex lg:flex-col ${
               workspaceOpen ? "" : "overflow-hidden border-l-0"
             }`}
             style={{ width: workspaceOpen ? workspaceWidth : 0 }}
@@ -1708,7 +1708,7 @@ export default function StrategiesPage() {
                   )}
                 </div>
 
-                <div className="border-t border-[#2a2e39] px-3 py-2 text-xs">
+                <div className="shrink-0 overflow-y-auto border-t border-[#2a2e39] px-3 py-2 text-xs" style={{ maxHeight: "30%" }}>
                   {workspaceChecking ? (
                     <span className="text-[#8fa8ff]">Checking syntax...</span>
                   ) : workspaceSyntaxError ? (
