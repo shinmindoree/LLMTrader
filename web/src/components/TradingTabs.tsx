@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 
 const TABS = [
+  { href: "/dashboard", labelKey: "dashboard" as const },
   { href: "/strategies", labelKey: "strategies" as const },
   { href: "/backtest", labelKey: "backtest" as const },
   { href: "/live", labelKey: "live" as const },
@@ -19,7 +20,7 @@ export function TradingTabs() {
   const { t } = useI18n();
 
   return (
-    <div className="flex border-b border-[#2a2e39] bg-[#1e222d]">
+    <div className="flex shrink-0 border-b border-[#2a2e39] bg-[#1e222d]">
       {TABS.map((tab) => {
         const active = isActive(pathname, tab.href);
         return (

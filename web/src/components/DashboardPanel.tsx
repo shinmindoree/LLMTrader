@@ -68,49 +68,43 @@ export function DashboardPanel() {
   ];
 
   return (
-    <aside className="flex h-full flex-col border-l border-[#2a2e39] bg-[#1e222d]">
-      <div className="border-b border-[#2a2e39] px-4 py-3">
-        <h2 className="text-sm font-semibold text-[#d1d4dc]">Dashboard</h2>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        <div className="flex flex-wrap gap-1.5">
-          {exchangesWithStatus.map((ex) => (
+    <div className="w-full px-4 py-3">
+      <div className="flex flex-wrap gap-1.5">
+        {exchangesWithStatus.map((ex) => (
+          <span
+            key={ex.id}
+            className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium ${
+              ex.connected
+                ? "bg-[#26a69a]/15 text-[#26a69a]"
+                : "bg-[#ef5350]/15 text-[#ef5350]"
+            }`}
+          >
             <span
-              key={ex.id}
-              className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium ${
-                ex.connected
-                  ? "bg-[#26a69a]/15 text-[#26a69a]"
-                  : "bg-[#ef5350]/15 text-[#ef5350]"
+              className={`inline-block h-1.5 w-1.5 rounded-full ${
+                ex.connected ? "bg-[#26a69a]" : "bg-[#ef5350]"
               }`}
-            >
-              <span
-                className={`inline-block h-1.5 w-1.5 rounded-full ${
-                  ex.connected ? "bg-[#26a69a]" : "bg-[#ef5350]"
-                }`}
-              />
-              {ex.label}
-            </span>
-          ))}
-        </div>
-
-        <div className="space-y-2">
-          {stats.map((s) => (
-            <Link
-              key={s.href}
-              href={s.href}
-              className={`block rounded-lg border border-[#2a2e39] bg-[#131722] p-3 transition-colors ${s.hoverBorder}`}
-            >
-              <div className="text-xs text-[#868993]">{s.label}</div>
-              <div className={`mt-0.5 text-xl font-semibold ${s.color}`}>
-                {loading ? "..." : s.value}
-              </div>
-            </Link>
-          ))}
-        </div>
-
-        <AssetOverviewPanel keysStatus={keysStatus} />
+            />
+            {ex.label}
+          </span>
+        ))}
       </div>
-    </aside>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        {stats.map((s) => (
+          <Link
+            key={s.href}
+            href={s.href}
+            className={`block rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4 transition-colors ${s.hoverBorder}`}
+          >
+            <div className="text-xs text-[#868993]">{s.label}</div>
+            <div className={`mt-1 text-2xl font-semibold ${s.color}`}>
+              {loading ? "..." : s.value}
+            </div>
+          </Link>
+        ))}
+      </div>
+
+      <AssetOverviewPanel keysStatus={keysStatus} />
+    </div>
   );
 }
