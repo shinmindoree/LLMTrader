@@ -5,19 +5,33 @@ import { TradingViewChart } from "@/components/TradingViewChart";
 import { TradingTabs } from "@/components/TradingTabs";
 
 const DEFAULT_CHART_RATIO = 0.45;
+const OVERLAY_THRESHOLD_RATIO = 1 / 3;
 const MIN_TAB_HEIGHT = 80;
 
 export function TradingLayout({ children }: { children: React.ReactNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [splitY, setSplitY] = useState<number | null>(null);
+  const [containerH, setContainerH] = useState(0);
   const isDraggingRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
-    if (containerRef.current && splitY === null) {
-      setSplitY(containerRef.current.clientHeight * DEFAULT_CHART_RATIO);
-    }
+    const el = containerRef.current;
+    if (!el) return;
+    const h = el.clientHeight;
+    setContainerH(h);
+    if (splitY === null) setSplitY(h * DEFAULT_CHART_RATIO);
   }, [splitY]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setContainerH(entry.contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
@@ -50,19 +64,29 @@ export function TradingLayout({ children }: { children: React.ReactNode }) {
   }, [isDragging]);
 
   const currentSplitY = splitY ?? 300;
+  const threshold = containerH * OVERLAY_THRESHOLD_RATIO;
+  const isOverlay = currentSplitY < threshold;
+  const chartHeight = isOverlay ? threshold : currentSplitY;
 
   return (
     <div
       ref={containerRef}
-      className="relative h-[calc(100vh-3.5rem)] overflow-hidden bg-[#131722]"
+      className="relative flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-[#131722]"
     >
-      <div className="absolute inset-0">
+      <div
+        className="shrink-0 overflow-hidden"
+        style={{ height: `${chartHeight}px` }}
+      >
         <TradingViewChart />
       </div>
 
       <div
-        className="absolute left-0 right-0 bottom-0 z-10 flex flex-col"
-        style={{ top: `${currentSplitY}px` }}
+        className={
+          isOverlay
+            ? "absolute left-0 right-0 bottom-0 z-10 flex flex-col"
+            : "flex min-h-0 flex-1 flex-col"
+        }
+        style={isOverlay ? { top: `${currentSplitY}px` } : undefined}
       >
         <div
           onPointerDown={handlePointerDown}
