@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { isAdminEmail } from "@/lib/admin";
 import {
   clearSessionCookies,
   isSupabaseAuthEnabled,
@@ -18,6 +19,7 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "dev-admin-token";
 type ProxyAuthState = {
   accessToken: string;
   userId: string;
+  email: string | null;
   refreshedSession:
     | {
         accessToken: string;
@@ -40,6 +42,7 @@ async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null
     return {
       accessToken: "",
       userId: "",
+      email: null,
       refreshedSession: null,
       clearCookies: true,
     };
@@ -49,6 +52,7 @@ async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null
     return {
       accessToken: session.accessToken,
       userId: session.userId,
+      email: session.email,
       refreshedSession: null,
       clearCookies: false,
     };
@@ -59,6 +63,7 @@ async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null
     return {
       accessToken: "",
       userId: "",
+      email: null,
       refreshedSession: null,
       clearCookies: true,
     };
@@ -67,9 +72,18 @@ async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null
   return {
     accessToken: refreshed.accessToken,
     userId: refreshed.userId,
+    email: refreshed.email,
     refreshedSession: refreshed,
     clearCookies: false,
   };
+}
+
+function isAdminOnlyPath(path: string): boolean {
+  return (
+    path === "api/llm-test"
+    || path === "api/strategies/capabilities"
+    || path === "api/strategies/quality/summary"
+  );
 }
 
 async function proxy(req: NextRequest, params: { path: string[] }): Promise<Response> {
@@ -93,6 +107,9 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
       clearSessionCookies(unauthorized.cookies);
     }
     return unauthorized;
+  }
+  if (isAdminOnlyPath(relPath) && !isAdminEmail(auth?.email)) {
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
   const headers = new Headers(req.headers);

@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
-import { getStrategyCapabilities, getStrategyQualitySummary } from "@/lib/api";
+import { getStrategyCapabilities, getStrategyQualitySummary, testLlmEndpoint } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type {
   CountItem,
   StrategyCapabilitiesResponse,
@@ -184,11 +186,18 @@ function TopList({
 }
 
 export default function AdminPage() {
+  const router = useRouter();
+  const { t } = useI18n();
+  const [accessState, setAccessState] = useState<"checking" | "allowed" | "denied">("checking");
   const [summary, setSummary] = useState<StrategyQualitySummaryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [capabilities, setCapabilities] = useState<StrategyCapabilitiesResponse | null>(null);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [llmInput, setLlmInput] = useState("Hello");
+  const [llmOutput, setLlmOutput] = useState<string | null>(null);
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [llmError, setLlmError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -200,14 +209,60 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    let active = true;
+    fetch("/api/auth/session", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) {
+          if (active) setAccessState("denied");
+          router.replace("/dashboard");
+          return;
+        }
+        const payload = (await res.json()) as { isAdmin?: boolean };
+        if (!payload.isAdmin) {
+          if (active) setAccessState("denied");
+          router.replace("/dashboard");
+          return;
+        }
+        if (active) setAccessState("allowed");
+      })
+      .catch(() => {
+        if (active) setAccessState("denied");
+        router.replace("/dashboard");
+      });
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   useEffect(() => {
+    if (accessState !== "allowed") return;
+    refresh();
     getStrategyCapabilities()
       .then(setCapabilities)
       .catch((e) => setCapabilityError(String(e)));
-  }, []);
+  }, [accessState, refresh]);
+
+  async function handleTestLlm() {
+    setLlmLoading(true);
+    setLlmOutput(null);
+    setLlmError(null);
+    try {
+      const res = await testLlmEndpoint(llmInput);
+      setLlmOutput(res.output);
+    } catch (err: unknown) {
+      setLlmError(err instanceof Error ? err.message : t.settings.llmTestFailed);
+    } finally {
+      setLlmLoading(false);
+    }
+  }
+
+  if (accessState !== "allowed") {
+    return (
+      <main className="w-full px-6 py-10">
+        <div className="text-[#868993]">Checking admin access...</div>
+      </main>
+    );
+  }
 
   const dataSourceLabels = capabilities
     ? uniqueNonEmpty(capabilities.supported_data_sources.map(formatDataSourceLabel))
@@ -328,6 +383,37 @@ export default function AdminPage() {
           </section>
         </>
       ) : null}
+
+      <section className="mt-8 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
+        <h2 className="text-sm font-semibold text-[#d1d4dc]">{t.settings.llmTest}</h2>
+        <p className="mt-1 text-xs text-[#868993]">{t.settings.llmTestDesc}</p>
+        <div className="mt-3 space-y-3">
+          <input
+            className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] placeholder-[#4a4e59] focus:border-[#2962ff] focus:outline-none transition-colors"
+            onChange={(e) => setLlmInput(e.target.value)}
+            placeholder={t.settings.llmTestPlaceholder}
+            value={llmInput}
+          />
+          <button
+            className="rounded-lg bg-[#2962ff] px-4 py-2 text-sm font-medium text-white hover:bg-[#2962ff]/80 transition-colors disabled:opacity-50"
+            disabled={llmLoading}
+            onClick={handleTestLlm}
+            type="button"
+          >
+            {llmLoading ? t.settings.llmTesting : t.settings.llmTestSend}
+          </button>
+          {llmError ? (
+            <div className="rounded-lg border border-[#ef5350]/30 bg-[#ef5350]/10 px-4 py-3 text-sm text-[#ef5350]">
+              {llmError}
+            </div>
+          ) : null}
+          {llmOutput !== null && !llmError ? (
+            <div className="rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm whitespace-pre-wrap text-[#d1d4dc]">
+              {llmOutput}
+            </div>
+          ) : null}
+        </div>
+      </section>
 
       <section className="mt-8 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
         <h2 className="text-sm font-semibold text-[#d1d4dc]">Current Strategy Generation Scope</h2>

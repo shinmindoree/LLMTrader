@@ -1,20 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useI18n } from "@/lib/i18n";
 import {
   getUserProfile,
   getBinanceKeysStatus,
   setBinanceKeys,
   deleteBinanceKeys,
-  testLlmEndpoint,
 } from "@/lib/api";
 import type { UserProfile, BinanceKeysStatus } from "@/lib/types";
 
 type FormState = "idle" | "saving" | "deleting";
 
 export default function SettingsPage() {
-  const { t } = useI18n();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,11 +23,6 @@ export default function SettingsPage() {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
-  const [llmInput, setLlmInput] = useState("Hello");
-  const [llmOutput, setLlmOutput] = useState<string | null>(null);
-  const [llmLoading, setLlmLoading] = useState(false);
-  const [llmError, setLlmError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([getUserProfile(), getBinanceKeysStatus()])
@@ -66,20 +58,6 @@ export default function SettingsPage() {
       setMessage({ type: "error", text: msg });
     } finally {
       setFormState("idle");
-    }
-  }
-
-  async function handleTestLlm() {
-    setLlmLoading(true);
-    setLlmOutput(null);
-    setLlmError(null);
-    try {
-      const res = await testLlmEndpoint(llmInput);
-      setLlmOutput(res.output);
-    } catch (err: unknown) {
-      setLlmError(err instanceof Error ? err.message : t.settings.llmTestFailed);
-    } finally {
-      setLlmLoading(false);
     }
   }
 
@@ -262,38 +240,6 @@ export default function SettingsPage() {
             <li>• Plain-text keys are never logged or stored</li>
             <li>• Only you can access your keys through your account</li>
           </ul>
-        </div>
-      </section>
-
-      <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
-        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-2">{t.settings.llmTest}</h2>
-        <p className="text-xs text-[#868993] mb-4">
-          {t.settings.llmTestDesc}
-        </p>
-        <div className="space-y-3">
-          <input
-            className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] placeholder-[#4a4e59] focus:border-[#2962ff] focus:outline-none transition-colors"
-            onChange={(e) => setLlmInput(e.target.value)}
-            placeholder={t.settings.llmTestPlaceholder}
-            value={llmInput}
-          />
-          <button
-            className="rounded-lg bg-[#2962ff] px-4 py-2 text-sm font-medium text-white hover:bg-[#2962ff]/80 transition-colors disabled:opacity-50"
-            disabled={llmLoading}
-            onClick={handleTestLlm}
-          >
-            {llmLoading ? t.settings.llmTesting : t.settings.llmTestSend}
-          </button>
-          {llmError && (
-            <div className="rounded-lg px-4 py-3 text-sm bg-[#ef5350]/10 border border-[#ef5350]/30 text-[#ef5350]">
-              {llmError}
-            </div>
-          )}
-          {llmOutput !== null && !llmError && (
-            <div className="rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc] whitespace-pre-wrap">
-              {llmOutput}
-            </div>
-          )}
         </div>
       </section>
     </main>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -20,11 +21,39 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function isAuthEnabled(): boolean {
+  const raw = (process.env.NEXT_PUBLIC_SUPABASE_AUTH_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 export default function SidebarNav() {
   const pathname = usePathname();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    if (!isAuthEnabled()) return;
+    let active = true;
+    fetch("/api/auth/session", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) {
+          if (active) setIsAdmin(false);
+          return;
+        }
+        const payload = (await res.json()) as { isAdmin?: boolean };
+        if (active) {
+          setIsAdmin(Boolean(payload.isAdmin));
+        }
+      })
+      .catch(() => {
+        if (active) setIsAdmin(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const mainItems = NAV_ITEMS.filter((i) => !i.section);
-  const accountItems = NAV_ITEMS.filter((i) => i.section === "account");
+  const accountItems = NAV_ITEMS.filter((i) => i.section === "account" && (i.href !== "/admin" || isAdmin));
 
   return (
     <nav className="px-3 py-4 text-sm">

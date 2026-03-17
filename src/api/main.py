@@ -67,7 +67,7 @@ except Exception:  # pragma: no cover - fallback for minimal runtime packaging
     def local_capability_summary_lines() -> list[str]:
         return []
 
-from api.deps import AuthenticatedUser, require_auth, set_session_maker
+from api.deps import AuthenticatedUser, require_admin, require_auth, set_session_maker
 from api.job_policy import evaluate_job_policy
 from api.schemas import (
     HealthResponse,
@@ -744,7 +744,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/llm-test",
         response_model=LlmTestResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_admin)],
     )
     async def llm_test(body: LlmTestRequest) -> LlmTestResponse:
         try:
@@ -761,7 +761,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/strategies/capabilities",
         response_model=StrategyCapabilityResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_admin)],
     )
     async def strategy_capabilities() -> StrategyCapabilityResponse:
         payload: dict[str, Any] | None = None
@@ -794,7 +794,7 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/strategies/quality/summary",
         response_model=StrategyQualitySummaryResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_admin)],
     )
     async def strategy_quality_summary(
         days: int = Query(default=7, ge=1, le=90),

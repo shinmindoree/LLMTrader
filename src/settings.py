@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default="", alias="DATABASE_URL")
     supabase_database_url: str = Field(default="", alias="SUPABASE_DATABASE_URL")
     admin_token: str = Field(default="dev-admin-token", alias="ADMIN_TOKEN")
+    admin_email: str = Field(default="elgd00@gmail.com", alias="ADMIN_EMAIL")
     strategy_dirs: str = Field(default="scripts/strategies", alias="STRATEGY_DIRS")
     runner_poll_interval_ms: int = Field(default=500, alias="RUNNER_POLL_INTERVAL_MS")
     runner_live_concurrency: int = Field(default=5, alias="RUNNER_LIVE_CONCURRENCY")

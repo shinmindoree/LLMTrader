@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 import httpx
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,6 +32,16 @@ class AuthenticatedUser:
     provider: str = "admin"
     plan: str = "free"
     _extra: dict[str, str] = field(default_factory=dict, repr=False)
+
+
+def _normalize_email(email: str | None) -> str:
+    return (email or "").strip().lower()
+
+
+def is_admin_email(email: str | None) -> bool:
+    settings = get_settings()
+    expected = _normalize_email(settings.admin_email)
+    return bool(expected) and _normalize_email(email) == expected
 
 
 def _extract_bearer_token(authorization: str | None) -> str:
@@ -131,8 +141,14 @@ async def require_auth(
     return await _ensure_user_profile(admin_user)
 
 
+async def require_admin_user(user: AuthenticatedUser = Depends(require_auth)) -> AuthenticatedUser:
+    if not is_admin_email(user.email):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
 # Backward compatibility alias
-require_admin = require_auth
+require_admin = require_admin_user
 
 
 async def get_db_session(

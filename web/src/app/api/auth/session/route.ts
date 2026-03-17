@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { isAdminEmail } from "@/lib/admin";
 import {
   clearSessionCookies,
   fetchSupabaseUser,
@@ -16,14 +17,14 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest): Promise<Response> {
   if (!isSupabaseAuthEnabled()) {
     return NextResponse.json(
-      { authenticated: false, reason: "disabled" },
+      { authenticated: false, isAdmin: false, reason: "disabled" },
       { status: 200 },
     );
   }
 
   const current = readSessionCookies(req.cookies);
   if (!current) {
-    const response = NextResponse.json({ authenticated: false }, { status: 401 });
+    const response = NextResponse.json({ authenticated: false, isAdmin: false }, { status: 401 });
     clearSessionCookies(response.cookies);
     return response;
   }
@@ -34,7 +35,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (shouldRefreshSession(current)) {
     const nextSession = await refreshSession(current.refreshToken, current.userId, current.email);
     if (!nextSession) {
-      const response = NextResponse.json({ authenticated: false }, { status: 401 });
+      const response = NextResponse.json({ authenticated: false, isAdmin: false }, { status: 401 });
       clearSessionCookies(response.cookies);
       return response;
     }
@@ -44,13 +45,17 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   const user = await fetchSupabaseUser(resolved.accessToken);
   if (!user) {
-    const response = NextResponse.json({ authenticated: false }, { status: 401 });
+    const response = NextResponse.json({ authenticated: false, isAdmin: false }, { status: 401 });
     clearSessionCookies(response.cookies);
     return response;
   }
 
   const response = NextResponse.json(
-    { authenticated: true, user: { id: user.id, email: user.email } },
+    {
+      authenticated: true,
+      isAdmin: isAdminEmail(user.email),
+      user: { id: user.id, email: user.email },
+    },
     { status: 200 },
   );
   if (refreshed || user.id !== resolved.userId || user.email !== resolved.email) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { isAdminEmail } from "@/lib/admin";
 import { isSupabaseAuthEnabled, readSessionCookies } from "@/lib/supabaseAuth";
 
 const PUBLIC_FILE = /\.[^/]+$/;
@@ -14,11 +15,19 @@ function isPublicPath(pathname: string): boolean {
 }
 
 export function middleware(req: NextRequest): NextResponse {
+  const { pathname } = req.nextUrl;
+
+  if ((pathname === "/admin" || pathname.startsWith("/admin/")) && !isSupabaseAuthEnabled()) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/dashboard";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
   if (!isSupabaseAuthEnabled()) {
     return NextResponse.next();
   }
 
-  const { pathname } = req.nextUrl;
   if (isPublicPath(pathname)) {
     const session = readSessionCookies(req.cookies);
     if (pathname === "/auth" && session) {
@@ -32,6 +41,14 @@ export function middleware(req: NextRequest): NextResponse {
 
   const session = readSessionCookies(req.cookies);
   if (session) {
+    if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+      if (!isAdminEmail(session.email)) {
+        const url = req.nextUrl.clone();
+        url.pathname = "/dashboard";
+        url.search = "";
+        return NextResponse.redirect(url);
+      }
+    }
     return NextResponse.next();
   }
 
