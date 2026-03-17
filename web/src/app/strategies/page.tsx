@@ -223,8 +223,6 @@ function buildCodeDiffLines(beforeCode: string, afterCode: string): DiffLine[] {
   return out;
 }
 
-const CHAT_SESSIONS_KEY = "llmtrader.strategy_chat_sessions.v1";
-
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -250,12 +248,6 @@ type ChatSessionRecord = {
   workspaceSummary: string | null;
   workspaceSourceMessageId: string | null;
   initialGeneratedCode: string | null;
-};
-
-type StoredChatSessionsPayload = {
-  version: 1;
-  sessions: ChatSessionRecord[];
-  activeSessionId: string | null;
 };
 
 type PromptComposerProps = {
@@ -701,49 +693,7 @@ export default function StrategiesPage() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
     let cancelled = false;
-
-    const applyFromLocalStorage = () => {
-      try {
-        const raw = window.localStorage.getItem(CHAT_SESSIONS_KEY);
-        let loadedSessions: ChatSessionRecord[] = [];
-        let loadedActiveSessionId: string | null = null;
-        if (raw) {
-          const parsed = JSON.parse(raw) as unknown;
-          if (Array.isArray(parsed)) {
-            loadedSessions = parsed.map((item) => sanitizeChatSession(item)).filter(isPresent);
-          } else if (parsed && typeof parsed === "object") {
-            const payload = parsed as Record<string, unknown>;
-            if (Array.isArray(payload.sessions)) {
-              loadedSessions = payload.sessions
-                .map((item) => sanitizeChatSession(item))
-                .filter(isPresent);
-            }
-            loadedActiveSessionId =
-              typeof payload.activeSessionId === "string" ? payload.activeSessionId : null;
-          }
-        }
-
-        if (loadedSessions.length === 0) {
-          const initialSession = createEmptySession();
-          setChatSessions([initialSession]);
-          setActiveSessionId(initialSession.id);
-          return;
-        }
-        const sorted = sortSessionsByUpdated(loadedSessions);
-        const resolvedActiveId =
-          loadedActiveSessionId && sorted.some((session) => session.id === loadedActiveSessionId)
-            ? loadedActiveSessionId
-            : sorted[0].id;
-        setChatSessions(sorted);
-        setActiveSessionId(resolvedActiveId);
-      } catch {
-        const fallbackSession = createEmptySession();
-        setChatSessions([fallbackSession]);
-        setActiveSessionId(fallbackSession.id);
-      }
-    };
 
     const loadSessions = async () => {
       try {
@@ -765,7 +715,9 @@ export default function StrategiesPage() {
         }
       }
       if (!cancelled) {
-        applyFromLocalStorage();
+        const empty = createEmptySession();
+        setChatSessions([empty]);
+        setActiveSessionId(empty.id);
       }
     };
 
@@ -846,22 +798,6 @@ export default function StrategiesPage() {
     workspaceSourceMessageId,
     workspaceSummary,
   ]);
-
-  useEffect(() => {
-    if (!sessionsReady || typeof window === "undefined") {
-      return;
-    }
-    try {
-      const payload: StoredChatSessionsPayload = {
-        version: 1,
-        sessions: chatSessions,
-        activeSessionId,
-      };
-      window.localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore storage errors
-    }
-  }, [activeSessionId, chatSessions, sessionsReady]);
 
   useEffect(() => {
     if (!sessionsReady || !activeSessionId || typeof window === "undefined") {
@@ -1444,7 +1380,17 @@ export default function StrategiesPage() {
               </p>
             ) : null}
             <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-              {chatSessions.length === 0 ? (
+              {!sessionsReady ? (
+                <div className="space-y-2 px-1">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="animate-pulse rounded-2xl border border-[#2f3440] bg-[#1f232b] p-3">
+                      <div className="h-3.5 w-3/4 rounded bg-[#2f3440]" />
+                      <div className="mt-2 h-2.5 w-1/2 rounded bg-[#2a2d35]" />
+                      <div className="mt-1.5 h-2.5 w-1/3 rounded bg-[#2a2d35]" />
+                    </div>
+                  ))}
+                </div>
+              ) : chatSessions.length === 0 ? (
                 <p className="px-2 py-3 text-xs text-[#868993]">No chats yet.</p>
               ) : (
                 <div className="space-y-1">
