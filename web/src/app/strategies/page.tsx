@@ -1395,9 +1395,8 @@ export default function StrategiesPage() {
   const chatBusy = isSending || isLoadingStrategy;
 
   return (
-    <main className="flex h-[calc(100vh-3.5rem)] min-h-0 w-full flex-col overflow-hidden px-6 py-6">
-      <h1 className="text-xl font-semibold text-[#d1d4dc]">Strategies</h1>
-      <div className="mt-4 flex gap-1 border-b border-[#2a2e39]">
+    <main className="flex min-h-0 w-full flex-1 flex-col overflow-hidden px-4 py-3">
+      <div className="flex gap-1 border-b border-[#2a2e39]">
         <button
           type="button"
           onClick={() => setActiveTab("chat")}

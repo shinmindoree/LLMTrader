@@ -138,14 +138,11 @@ export default function BacktestJobsPage() {
   };
 
   return (
-    <main className="w-full px-6 py-10">
+    <main className="w-full px-4 py-3">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-[#d1d4dc]">Backtest</h1>
-          <p className="mt-1 text-xs text-[#868993]">
-            Backtest runs use a separate queue from live runs.
-          </p>
-        </div>
+        <p className="text-xs text-[#868993]">
+          Backtest runs use a separate queue from live runs.
+        </p>
         <div className="flex gap-2 text-sm">
           <button
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#252936] hover:border-[#2962ff] disabled:opacity-60 transition-colors"

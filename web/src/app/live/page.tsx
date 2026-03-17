@@ -163,9 +163,9 @@ export default function LiveJobsPage() {
   const keysNotConfigured = keysStatus !== null && !keysStatus.configured;
 
   return (
-    <main className="w-full px-6 py-10">
+    <main className="w-full px-4 py-3">
       {keysNotConfigured && (
-        <div className="mb-4 rounded-lg border border-[#efb74d]/40 bg-[#2d2718] px-4 py-3 text-sm text-[#efb74d]">
+        <div className="mb-3 rounded-lg border border-[#efb74d]/40 bg-[#2d2718] px-4 py-2.5 text-sm text-[#efb74d]">
           Binance API keys are not configured. Live trading requires your own API keys.{" "}
           <a className="underline hover:text-[#d1d4dc] transition-colors" href="/settings">
             Go to Settings
@@ -173,12 +173,9 @@ export default function LiveJobsPage() {
         </div>
       )}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-[#d1d4dc]">Live</h1>
-          <p className="mt-1 text-xs text-[#868993]">
-            Run up to {maxSlots} strategies simultaneously. Each strategy runs as an independent job.
-          </p>
-        </div>
+        <p className="text-xs text-[#868993]">
+          Run up to {maxSlots} strategies simultaneously. Each strategy runs as an independent job.
+        </p>
         <div className="flex gap-2 text-sm">
           <button
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#252936] hover:border-[#2962ff] disabled:opacity-60 transition-colors"
