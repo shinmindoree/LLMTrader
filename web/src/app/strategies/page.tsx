@@ -775,10 +775,16 @@ export default function StrategiesPage() {
       const idx = prev.findIndex((session) => session.id === activeSessionId);
       if (idx < 0) return prev;
       const current = prev[idx];
+      const contentChanged =
+        current.messages !== chatMessages ||
+        current.workspaceCode !== workspaceCode ||
+        current.workspaceSummary !== workspaceSummary ||
+        current.workspaceSourceMessageId !== workspaceSourceMessageId ||
+        current.initialGeneratedCode !== initialGeneratedCode;
       const next: ChatSessionRecord = {
         ...current,
         title: deriveSessionTitle(chatMessages),
-        updatedAt: new Date().toISOString(),
+        updatedAt: contentChanged ? new Date().toISOString() : current.updatedAt,
         messages: chatMessages,
         workspaceCode,
         workspaceSummary,
@@ -787,7 +793,7 @@ export default function StrategiesPage() {
       };
       const updatedSessions = [...prev];
       updatedSessions[idx] = next;
-      return sortSessionsByUpdated(updatedSessions);
+      return contentChanged ? sortSessionsByUpdated(updatedSessions) : updatedSessions;
     });
   }, [
     activeSessionId,
