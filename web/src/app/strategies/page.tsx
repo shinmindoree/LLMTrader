@@ -390,7 +390,7 @@ function RichTextContent({ content }: { content: string }) {
               <div className="border-b border-[#2d313b] px-4 py-3 text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
                 {block.language || "Code"}
               </div>
-              <pre className="max-h-[560px] overflow-auto px-4 py-4 font-mono text-xs leading-6 text-[#ececf1]">
+              <pre className="scrollbar-hover max-h-[560px] overflow-auto px-4 py-4 font-mono text-xs leading-6 text-[#ececf1]">
                 {block.content}
               </pre>
             </div>
@@ -1397,7 +1397,7 @@ export default function StrategiesPage() {
                 {sessionSyncError}
               </p>
             ) : null}
-            <div ref={sessionListScrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+            <div ref={sessionListScrollRef} className="scrollbar-hover min-h-0 flex-1 overflow-y-auto px-2 py-2">
               {!sessionsReady ? (
                 <div className="space-y-2 px-1">
                   {Array.from({ length: 4 }).map((_, i) => (
@@ -1489,7 +1489,7 @@ export default function StrategiesPage() {
               <>
                 <div
                   ref={chatScrollRef}
-                  className="min-h-0 flex-1 overflow-y-auto px-6 py-6"
+                  className="scrollbar-hover min-h-0 flex-1 overflow-y-auto px-6 py-6"
                 >
                   <div className="mx-auto flex w-full max-w-4xl flex-col gap-8">
                     <div className="flex justify-end">
@@ -1563,7 +1563,7 @@ export default function StrategiesPage() {
                                         ) : null}
                                       </div>
                                     </div>
-                                    <pre className="max-h-[560px] overflow-auto px-4 py-4 font-mono text-xs leading-6 text-[#ececf1]">
+                                    <pre className="scrollbar-hover max-h-[560px] overflow-auto px-4 py-4 font-mono text-xs leading-6 text-[#ececf1]">
                                       {message.content}
                                     </pre>
                                   </div>
@@ -1632,7 +1632,7 @@ export default function StrategiesPage() {
             ) : (
               <div
                 ref={emptyChatScrollRef}
-                className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-12"
+                className="scrollbar-hover flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-12"
               >
                 {chatError ? (
                   <p className="mb-6 w-full max-w-3xl rounded-2xl border border-[#ef5350]/30 bg-[#351f24] px-4 py-3 text-sm text-[#ef9a9a]">
@@ -1714,7 +1714,7 @@ export default function StrategiesPage() {
                     <div className="flex h-full overflow-hidden">
                       <div
                         ref={workspaceGutterRef}
-                        className="w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
+                        className="scrollbar-hover w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
                       >
                         {Array.from({ length: workspaceLineCount }, (_, idx) => {
                           const lineNo = idx + 1;
@@ -1730,7 +1730,7 @@ export default function StrategiesPage() {
                       </div>
                       <textarea
                         ref={workspaceTextAreaRef}
-                        className="h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
+                        className="scrollbar-hover h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
                         spellCheck={false}
                         value={workspaceCode}
                         onChange={(e) => handleWorkspaceChange(e.target.value)}
@@ -1771,7 +1771,7 @@ export default function StrategiesPage() {
                       <summary className="cursor-pointer text-[11px] text-[#9aa0ad]">
                         Diff from initial code {hasWorkspaceDiff ? "(modified)" : "(no changes)"}
                       </summary>
-                      <div className="mt-2 max-h-48 overflow-auto rounded border border-[#2a2e39] bg-[#0d111a] font-mono text-[11px] leading-5">
+                      <div className="scrollbar-hover mt-2 max-h-48 overflow-auto rounded border border-[#2a2e39] bg-[#0d111a] font-mono text-[11px] leading-5">
                         {workspaceDiffLines.map((line, idx) => {
                           const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
                           const rowClass =
