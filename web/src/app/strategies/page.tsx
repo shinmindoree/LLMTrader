@@ -679,12 +679,21 @@ export default function StrategiesPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionsReady, setSessionsReady] = useState(false);
   const [sessionSyncError, setSessionSyncError] = useState<string | null>(null);
+  const sessionListScrollRef = useRef<HTMLDivElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const emptyChatScrollRef = useRef<HTMLDivElement | null>(null);
   const workspaceGutterRef = useRef<HTMLDivElement | null>(null);
   const workspaceTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const workspaceResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const skipSessionSyncRef = useRef(false);
   const chatSessionsRef = useRef<ChatSessionRecord[]>([]);
+
+  const routeWheelToScrollTarget = (event: React.WheelEvent, target: HTMLElement | null) => {
+    if (!target) return;
+    if (target.scrollHeight <= target.clientHeight) return;
+    event.preventDefault();
+    target.scrollTop += event.deltaY;
+  };
 
   useEffect(() => {
     listStrategies()
@@ -1366,7 +1375,10 @@ export default function StrategiesPage() {
       {activeTab === "chat" ? (
       <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-[24px] border border-t-0 border-[#2f3440] bg-[#21242b]">
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className="hidden w-72 shrink-0 border-r border-[#2f3440] bg-[#1a1d23] md:flex md:flex-col overflow-hidden">
+          <aside
+            className="hidden w-72 shrink-0 border-r border-[#2f3440] bg-[#1a1d23] md:flex md:flex-col overflow-hidden"
+            onWheel={(event) => routeWheelToScrollTarget(event, sessionListScrollRef.current)}
+          >
             <div className="border-b border-[#2f3440] px-3 py-3">
               <button
                 type="button"
@@ -1385,7 +1397,7 @@ export default function StrategiesPage() {
                 {sessionSyncError}
               </p>
             ) : null}
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+            <div ref={sessionListScrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
               {!sessionsReady ? (
                 <div className="space-y-2 px-1">
                   {Array.from({ length: 4 }).map((_, i) => (
@@ -1442,7 +1454,15 @@ export default function StrategiesPage() {
               )}
             </div>
           </aside>
-          <div className="min-w-0 min-h-0 flex-1 flex flex-col overflow-hidden">
+          <div
+            className="min-w-0 min-h-0 flex-1 flex flex-col overflow-hidden"
+            onWheel={(event) =>
+              routeWheelToScrollTarget(
+                event,
+                chatMessages.length > 0 ? chatScrollRef.current : emptyChatScrollRef.current,
+              )
+            }
+          >
             <div className="flex items-center gap-2 border-b border-[#2f3440] px-4 py-2 md:hidden">
               <select
                 className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
@@ -1610,7 +1630,10 @@ export default function StrategiesPage() {
                 </div>
               </>
             ) : (
-              <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-12">
+              <div
+                ref={emptyChatScrollRef}
+                className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-12"
+              >
                 {chatError ? (
                   <p className="mb-6 w-full max-w-3xl rounded-2xl border border-[#ef5350]/30 bg-[#351f24] px-4 py-3 text-sm text-[#ef9a9a]">
                     {chatError}
@@ -1659,6 +1682,13 @@ export default function StrategiesPage() {
               workspaceOpen ? "" : "overflow-hidden border-l-0"
             }`}
             style={{ width: workspaceOpen ? workspaceWidth : 0 }}
+            onWheel={(event) => {
+              if (!workspaceCode.trim()) return;
+              routeWheelToScrollTarget(event, workspaceTextAreaRef.current);
+              if (workspaceGutterRef.current && workspaceTextAreaRef.current) {
+                workspaceGutterRef.current.scrollTop = workspaceTextAreaRef.current.scrollTop;
+              }
+            }}
           >
             {workspaceOpen ? (
               <>
@@ -1714,7 +1744,7 @@ export default function StrategiesPage() {
                   )}
                 </div>
 
-                <div className="shrink-0 overflow-y-auto border-t border-[#2a2e39] px-3 py-2 text-xs" style={{ maxHeight: "30%" }}>
+                <div className="shrink-0 border-t border-[#2a2e39] px-3 py-2 text-xs">
                   {workspaceChecking ? (
                     <span className="text-[#8fa8ff]">Checking syntax...</span>
                   ) : workspaceSyntaxError ? (
