@@ -283,6 +283,34 @@ function PendingReply() {
   );
 }
 
+function ChatPanelLoading() {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex-1 px-6 py-6">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+          {Array.from({ length: 3 }).map((_, idx) => (
+            <div
+              key={`chat-loading-${idx}`}
+              className="animate-pulse rounded-[24px] border border-[#2f3440] bg-[#1f232b] p-5"
+            >
+              <div className="h-4 w-24 rounded bg-[#31353f]" />
+              <div className="mt-4 h-3 w-full rounded bg-[#2a2d35]" />
+              <div className="mt-2 h-3 w-5/6 rounded bg-[#2a2d35]" />
+              <div className="mt-2 h-3 w-2/3 rounded bg-[#2a2d35]" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="shrink-0 border-t border-[#2a2e39] px-6 py-5">
+        <div className="mx-auto w-full max-w-4xl animate-pulse rounded-[28px] border border-[#343946] bg-[#2a2d35] px-5 py-5">
+          <div className="h-4 w-40 rounded bg-[#343946]" />
+          <div className="mt-3 h-4 w-3/4 rounded bg-[#31353f]" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function renderInlineRichText(text: string): React.ReactNode[] {
   const tokens = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
   return tokens.map((token, idx) => {
@@ -1346,7 +1374,7 @@ export default function StrategiesPage() {
   const chatBusy = isSending || isLoadingStrategy;
 
   return (
-    <main className="flex min-h-0 w-full flex-1 flex-col overflow-hidden px-4 py-3">
+    <main className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden px-4 py-3">
       <div className="flex gap-1 border-b border-[#2a2e39]">
         <button
           type="button"
@@ -1376,7 +1404,7 @@ export default function StrategiesPage() {
       <section className="relative mt-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-[24px] border border-t-0 border-[#2f3440] bg-[#21242b]">
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <aside
-            className="hidden w-72 shrink-0 border-r border-[#2f3440] bg-[#1a1d23] md:flex md:flex-col overflow-hidden"
+            className="hidden min-h-0 w-72 shrink-0 overflow-hidden border-r border-[#2f3440] bg-[#1a1d23] md:flex md:flex-col"
             onWheel={(event) => routeWheelToScrollTarget(event, sessionListScrollRef.current)}
           >
             <div className="border-b border-[#2f3440] px-3 py-3">
@@ -1459,33 +1487,39 @@ export default function StrategiesPage() {
             onWheel={(event) =>
               routeWheelToScrollTarget(
                 event,
-                chatMessages.length > 0 ? chatScrollRef.current : emptyChatScrollRef.current,
+                !sessionsReady
+                  ? null
+                  : chatMessages.length > 0
+                    ? chatScrollRef.current
+                    : emptyChatScrollRef.current,
               )
             }
           >
-            <div className="flex items-center gap-2 border-b border-[#2f3440] px-4 py-2 md:hidden">
-              <select
-                className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
-                value={activeSessionId ?? ""}
-                onChange={(e) => handleSelectSession(e.target.value)}
-                disabled={chatBusy || !sessionsReady}
-              >
-                {chatSessions.map((session) => (
-                  <option key={`mobile-session-${session.id}`} value={session.id}>
-                    {session.title}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="shrink-0 rounded-xl border border-[#343946] bg-[#2a2d35] px-2 py-1.5 text-xs text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
-                onClick={handleNewChatSession}
-                disabled={chatBusy || !sessionsReady}
-              >
-                New
-              </button>
-            </div>
-            {chatMessages.length > 0 ? (
+            {sessionsReady ? (
+              <>
+                <div className="flex items-center gap-2 border-b border-[#2f3440] px-4 py-2 md:hidden">
+                  <select
+                    className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
+                    value={activeSessionId ?? ""}
+                    onChange={(e) => handleSelectSession(e.target.value)}
+                    disabled={chatBusy || !sessionsReady}
+                  >
+                    {chatSessions.map((session) => (
+                      <option key={`mobile-session-${session.id}`} value={session.id}>
+                        {session.title}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-xl border border-[#343946] bg-[#2a2d35] px-2 py-1.5 text-xs text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
+                    onClick={handleNewChatSession}
+                    disabled={chatBusy || !sessionsReady}
+                  >
+                    New
+                  </button>
+                </div>
+                {chatMessages.length > 0 ? (
               <>
                 <div
                   ref={chatScrollRef}
@@ -1668,6 +1702,10 @@ export default function StrategiesPage() {
                   />
                 </div>
               </div>
+                )}
+              </>
+            ) : (
+              <ChatPanelLoading />
             )}
           </div>
 

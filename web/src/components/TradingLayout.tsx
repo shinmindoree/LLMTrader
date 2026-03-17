@@ -101,7 +101,9 @@ export function TradingLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <TradingTabs />
-        <div className="flex-1 overflow-y-auto bg-[#131722]">{children}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#131722]">
+          {children}
+        </div>
       </div>
 
       {isDragging && (
