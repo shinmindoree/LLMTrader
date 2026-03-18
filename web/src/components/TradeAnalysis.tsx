@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
+import { BacktestExecutionChart } from "@/components/BacktestExecutionChart";
 
 type NormalizedTrade = {
   id: string | number;
@@ -32,6 +33,29 @@ type ChartPoint = {
   side: string | null;
   positionSizeUsdt: number | null;
   reason: string | null;
+};
+
+type BacktestChartPayload = {
+  symbol?: string;
+  interval?: string;
+  candles?: Array<{
+    open_time: number;
+    close_time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }>;
+  indicator_config?: Record<string, unknown>;
+  indicator_series?: Array<{
+    id: string;
+    indicator: string;
+    output: string | null;
+    label: string;
+    pane: "overlay" | "oscillator";
+    values: Array<number | null>;
+  }>;
 };
 
 const asNumber = (value: unknown): number | null =>
@@ -528,6 +552,13 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     return isRecord(first) ? asString(first.symbol) : null;
   }, [job.type, job.config]);
 
+  const backtestChartPayload = useMemo<BacktestChartPayload | null>(() => {
+    if (job.type !== "BACKTEST" || !isRecord(summary)) return null;
+    const chartRaw = summary.chart;
+    if (!isRecord(chartRaw)) return null;
+    return chartRaw as BacktestChartPayload;
+  }, [job.type, summary]);
+
   const downloadCsv = useCallback(() => {
     const enriched =
       job.type === "BACKTEST" ? enrichedBacktest : enrichedLive;
@@ -617,6 +648,19 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
       <div className="rounded border border-[#2a2e39] bg-[#131722] p-4">
           {activeTab === "chart" ? (
             <>
+              {job.type === "BACKTEST" && backtestChartPayload ? (
+                <BacktestExecutionChart
+                  chart={backtestChartPayload}
+                  trades={sortedTrades.map((trade) => ({
+                    timestamp: trade.timestamp,
+                    side: trade.side,
+                    price: trade.price,
+                    pnl: trade.pnl,
+                    reason: trade.reason,
+                    exitReason: trade.exitReason,
+                  }))}
+                />
+              ) : null}
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {totalReturnPct !== null && netProfit !== null && (
                   <MetricCard
