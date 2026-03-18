@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TradingViewChart } from "@/components/TradingViewChart";
 import { TradingTabs } from "@/components/TradingTabs";
@@ -9,11 +10,14 @@ const OVERLAY_THRESHOLD_RATIO = 1 / 3;
 const MIN_TAB_HEIGHT = 80;
 
 export function TradingLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [splitY, setSplitY] = useState<number | null>(null);
   const [containerH, setContainerH] = useState(0);
   const isDraggingRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
+  const tabRoot = `/${pathname.split("/").filter(Boolean)[0] ?? ""}`;
 
   useEffect(() => {
     const el = containerRef.current;
@@ -63,6 +67,31 @@ export function TradingLayout({ children }: { children: React.ReactNode }) {
     };
   }, [isDragging]);
 
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const storageKey = `trading-tab-scroll:${tabRoot}`;
+    const saved = window.sessionStorage.getItem(storageKey);
+    if (saved) {
+      const value = Number(saved);
+      if (!Number.isNaN(value)) {
+        requestAnimationFrame(() => {
+          if (contentRef.current) contentRef.current.scrollTop = value;
+        });
+      }
+    }
+
+    const onScroll = () => {
+      window.sessionStorage.setItem(storageKey, String(el.scrollTop));
+    };
+
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.sessionStorage.setItem(storageKey, String(el.scrollTop));
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [tabRoot]);
+
   const currentSplitY = splitY ?? 300;
   const threshold = containerH * OVERLAY_THRESHOLD_RATIO;
   const isOverlay = currentSplitY < threshold;
@@ -101,7 +130,10 @@ export function TradingLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <TradingTabs />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#131722]">
+        <div
+          ref={contentRef}
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-[#131722]"
+        >
           {children}
         </div>
       </div>
