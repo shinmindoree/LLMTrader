@@ -17,7 +17,6 @@ class StrategyObjectStorage:
         self._bucket_name = bucket_name
         self._headers = {
             "apikey": service_role_key,
-            "Authorization": f"Bearer {service_role_key}",
         }
         self._ensure_bucket()
 
