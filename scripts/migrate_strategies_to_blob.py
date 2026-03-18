@@ -1,4 +1,4 @@
-"""Local strategy files -> Azure Blob + strategy_metadata migration.
+"""Local strategy files -> Supabase Storage + strategy_metadata migration.
 
 Usage:
     python scripts/migrate_strategies_to_blob.py --user-id <user-id> --dry-run
@@ -6,7 +6,7 @@ Usage:
     python scripts/migrate_strategies_to_blob.py --mapping-file strategy_user_map.json
 
 Notes:
-    - Requires Azure Blob settings (`AZURE_BLOB_ACCOUNT_URL` or `AZURE_BLOB_CONNECTION_STRING`).
+    - Requires Supabase storage settings (`SUPABASE_URL` or `SUPABASE_STORAGE_URL`, `SUPABASE_SERVICE_ROLE_KEY`).
     - Requires DB connectivity so `strategy_metadata` can be updated.
     - `--user-id` applies the same owner to every local strategy file.
     - `--mapping-file` should be a JSON object like:
@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from api.strategy_catalog import list_strategy_files
-from common.blob_storage import get_blob_service
+from common.strategy_storage import get_strategy_storage
 from control.db import create_async_engine, init_db
 from control.repo import get_user_profile, upsert_strategy_meta
 from settings import get_settings
@@ -81,10 +81,10 @@ async def main(
     mapping_file: Path | None,
     dry_run: bool,
 ) -> None:
-    blob = get_blob_service()
-    if blob is None:
+    storage = get_strategy_storage()
+    if storage is None:
         raise ValueError(
-            "Azure Blob is not configured. Set AZURE_BLOB_ACCOUNT_URL or AZURE_BLOB_CONNECTION_STRING first."
+            "Supabase Storage is not configured. Set SUPABASE_URL or SUPABASE_STORAGE_URL and SUPABASE_SERVICE_ROLE_KEY first."
         )
 
     mapping = _load_mapping(mapping_file)
@@ -121,13 +121,13 @@ async def main(
 
         try:
             code = strategy_file.read_text(encoding="utf-8")
-            blob_path = blob._blob_path(owner, strategy_file.name)
+            blob_path = storage._object_path(owner, strategy_file.name)
             if dry_run:
                 logger.info("DRY RUN upload %s -> %s", strategy_file.name, blob_path)
                 migrated += 1
                 continue
 
-            uploaded_path = blob.upload(owner, strategy_file.name, code)
+            uploaded_path = storage.upload(owner, strategy_file.name, code)
             async with session_maker() as session:
                 await upsert_strategy_meta(
                     session,
@@ -154,7 +154,7 @@ async def main(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Migrate local strategy files into Azure Blob storage")
+    parser = argparse.ArgumentParser(description="Migrate local strategy files into Supabase Storage")
     parser.add_argument("--user-id", help="Default owner for every local strategy file")
     parser.add_argument(
         "--mapping-file",

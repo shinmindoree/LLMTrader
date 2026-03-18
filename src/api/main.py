@@ -48,7 +48,7 @@ from control.repo import (
     upsert_strategy_meta,
     upsert_strategy_chat_session as repo_upsert_strategy_chat_session,
 )
-from common.blob_storage import get_blob_service
+from common.strategy_storage import get_strategy_storage
 from settings import get_settings
 from llm.client import LLMClient
 try:
@@ -255,8 +255,8 @@ async def _list_strategies_for_user(
     session: AsyncSession,
     user: AuthenticatedUser,
 ) -> list[StrategyInfo]:
-    blob = get_blob_service()
-    if blob is not None:
+    storage = get_strategy_storage()
+    if storage is not None:
         rows = await list_strategy_meta(session, user_id=user.user_id)
         if rows:
             deduped: dict[str, StrategyInfo] = {}
@@ -278,8 +278,8 @@ async def _resolve_strategy_code_for_user(
     user: AuthenticatedUser,
     path: str,
 ) -> tuple[str, str]:
-    blob = get_blob_service()
-    if blob is not None:
+    storage = get_strategy_storage()
+    if storage is not None:
         try:
             strategy_name = _strategy_name_from_path(path)
         except ValueError as exc:
@@ -287,9 +287,9 @@ async def _resolve_strategy_code_for_user(
         meta = await get_strategy_meta_by_name(session, user_id=user.user_id, strategy_name=strategy_name)
         if meta is not None:
             try:
-                return strategy_name, blob.download_by_path(meta.blob_path)
+                return strategy_name, storage.download_by_path(meta.blob_path)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Failed to read strategy blob: {exc}") from exc
+                raise HTTPException(status_code=500, detail=f"Failed to read strategy object: {exc}") from exc
 
     root = _repo_root()
     dirs = _strategy_dirs()
@@ -309,15 +309,15 @@ async def _delete_strategy_for_user(
     user: AuthenticatedUser,
     path: str,
 ) -> bool:
-    blob = get_blob_service()
-    if blob is not None:
+    storage = get_strategy_storage()
+    if storage is not None:
         try:
             strategy_name = _strategy_name_from_path(path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         meta = await get_strategy_meta_by_name(session, user_id=user.user_id, strategy_name=strategy_name)
         if meta is not None:
-            deleted_blob = blob.delete_by_path(meta.blob_path)
+            deleted_blob = storage.delete_by_path(meta.blob_path)
             deleted_meta = await delete_strategy_meta_by_name(
                 session,
                 user_id=user.user_id,
@@ -1277,10 +1277,10 @@ def create_app() -> FastAPI:
 
         _cleanup_verify_temp(temp_path)
 
-        blob = get_blob_service()
-        if blob is not None:
+        storage = get_strategy_storage()
+        if storage is not None:
             try:
-                blob_path = blob.upload(user.user_id, filename, code)
+                blob_path = storage.upload(user.user_id, filename, code)
                 await upsert_strategy_meta(
                     session,
                     user_id=user.user_id,
@@ -1289,7 +1289,7 @@ def create_app() -> FastAPI:
                 )
                 await session.commit()
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Failed to upload strategy blob: {exc}") from exc
+                raise HTTPException(status_code=500, detail=f"Failed to upload strategy object: {exc}") from exc
             return StrategySaveResponse(path=_logical_strategy_path(filename))
 
         dirs = _strategy_dirs()

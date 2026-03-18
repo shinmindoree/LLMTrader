@@ -52,6 +52,16 @@ class SupabaseAuthSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+class SupabaseStorageSettings(BaseSettings):
+    """Supabase Storage 설정."""
+
+    url: str = Field(default="", alias="SUPABASE_STORAGE_URL")
+    service_role_key: str = Field(default="", alias="SUPABASE_SERVICE_ROLE_KEY", repr=False)
+    bucket_name: str = Field(default="strategies", alias="SUPABASE_STORAGE_BUCKET")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
 class EncryptionSettings(BaseSettings):
     """암호화 키 설정. 쉼표 구분 Fernet 키 목록 (첫번째=현재, 나머지=이전)."""
 
@@ -115,6 +125,7 @@ class Settings(BaseSettings):
     slack: SlackSettings = Field(default_factory=SlackSettings)
     relay_server: RelayServerSettings = Field(default_factory=RelayServerSettings)
     supabase_auth: SupabaseAuthSettings = Field(default_factory=SupabaseAuthSettings)
+    supabase_storage: SupabaseStorageSettings = Field(default_factory=SupabaseStorageSettings)
     encryption: EncryptionSettings = Field(default_factory=EncryptionSettings)
     stripe: StripeSettings = Field(default_factory=StripeSettings)
     azure_blob: AzureBlobSettings = Field(default_factory=AzureBlobSettings)
