@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useI18n } from "@/lib/i18n";
 import type { JobEvent, JobStatus, JobType } from "@/lib/types";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
@@ -23,6 +24,7 @@ export function JobProgressGauge({
   jobType: JobType;
   status: JobStatus;
 }) {
+  const { t } = useI18n();
   const [dataFetchPct, setDataFetchPct] = useState<number | null>(null);
   const [backtestPct, setBacktestPct] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
@@ -43,7 +45,7 @@ export function JobProgressGauge({
     };
     es.onerror = () => {
       setConnected(false);
-      setError("SSE disconnected");
+      setError(t.progress.sseDisconnected);
     };
     es.onmessage = (msg) => {
       try {
@@ -62,7 +64,7 @@ export function JobProgressGauge({
       }
     };
     return () => es.close();
-  }, [jobType, url]);
+  }, [jobType, url, t.progress.sseDisconnected]);
 
   const dataFetchDone = (dataFetchPct ?? 0) >= 100 || (backtestPct !== null && dataFetchPct === null) || finished;
   const targetPct = useMemo(() => {
@@ -104,16 +106,16 @@ export function JobProgressGauge({
   return (
     <section className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
       <div className="flex items-center justify-between text-xs text-[#868993]">
-        <span>Progress</span>
+        <span>{t.progress.progress}</span>
         <span>
-          {connected ? "live" : "offline"}
+          {connected ? t.progress.live : t.progress.offline}
           {error ? ` • ${error}` : ""}
         </span>
       </div>
 
       <div className="mt-3">
         <div className="mb-1 flex items-center justify-between text-xs text-[#d1d4dc]">
-          <span>Progress</span>
+          <span>{t.progress.progress}</span>
           <span className="text-[#868993]">{formatPct(displayPct)}</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-[#0f141f]">

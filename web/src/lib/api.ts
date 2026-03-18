@@ -385,6 +385,10 @@ export async function getBinanceAccountSummary(): Promise<BinanceAccountSummary>
   return json<BinanceAccountSummary>("/api/backend/api/binance/account/summary");
 }
 
+export async function listFuturesSymbols(): Promise<string[]> {
+  return json<string[]>("/api/backend/api/binance/futures/symbols");
+}
+
 export async function getJob(jobId: string): Promise<Job> {
   return json<Job>(`/api/backend/api/jobs/${jobId}`);
 }

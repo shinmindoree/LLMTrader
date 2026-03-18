@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { useI18n } from "@/lib/i18n";
 import { getJob, listTrades, stopJob } from "@/lib/api";
 import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { jobDetailPath } from "@/lib/routes";
@@ -42,6 +43,7 @@ function strategyNameFromPath(path: string): string {
 }
 
 export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
+  const { t } = useI18n();
   const params = useParams<{ jobId?: string | string[] }>();
   const raw = params?.jobId;
   const jobId = Array.isArray(raw) ? raw[0] : raw;
@@ -64,8 +66,8 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       getJob(jobId).then(setJob).catch(() => {});
     };
     tick();
-    const t = setInterval(tick, 2000);
-    return () => clearInterval(t);
+    const intervalId = setInterval(tick, 2000);
+    return () => clearInterval(intervalId);
   }, [jobId, validJobId]);
 
   const onStop = async () => {
@@ -100,15 +102,15 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
       {!validJobId ? (
         <div className="rounded border border-[#2a2e39] bg-[#1e222d] p-4 text-sm text-[#d1d4dc]">
-          Invalid run link: <span className="font-mono text-[#868993]">{String(jobId)}</span>
+          {t.jobDetail.invalidRunLink} <span className="font-mono text-[#868993]">{String(jobId)}</span>
         </div>
       ) : null}
 
       {mismatchedType && job ? (
         <div className="mb-4 rounded border border-[#f9a825]/30 bg-[#2d2414]/50 px-4 py-3 text-sm text-[#f9a825]">
-          This job is <strong>{job.type}</strong>.{" "}
+          {t.jobDetail.jobTypeMismatch} <strong>{job.type}</strong>.{" "}
           <Link className="text-[#2962ff] hover:underline" href={jobDetailPath(job.type, job.job_id)}>
-            Open correct page
+            {t.jobDetail.openCorrectPage}
           </Link>
           .
         </div>
@@ -117,25 +119,25 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-[#d1d4dc]">
-            {job?.type === "BACKTEST" ? "Backtest Run" : job?.type === "LIVE" ? "Live Run" : "Run Details"}
+            {job?.type === "BACKTEST" ? t.jobDetail.backtestRun : job?.type === "LIVE" ? t.jobDetail.liveRun : t.jobDetail.runDetails}
           </h1>
-          <div className="mt-1 font-mono text-sm text-[#868993]">Run Reference {toRunReference(jobId ?? "")}</div>
+          <div className="mt-1 font-mono text-sm text-[#868993]">{t.jobDetail.runReference} {toRunReference(jobId ?? "")}</div>
           {job ? (
             <div className="mt-4 space-y-2 text-sm">
               <div className="flex items-center gap-2">
-                <span className="text-[#868993]">Status:</span>
+                <span className="text-[#868993]">{t.jobDetail.status}:</span>
                 <JobStatusBadge status={job.status} />
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[#868993]">Strategy:</span>
+                <span className="text-[#868993]">{t.jobDetail.strategy}:</span>
                 <span className="text-[#d1d4dc]">{strategyNameFromPath(job.strategy_path)}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[#868993]">Created:</span>
+                <span className="text-[#868993]">{t.jobDetail.created}:</span>
                 <span className="text-[#d1d4dc]">{formatDateTime(job.created_at)}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[#868993]">Ended:</span>
+                <span className="text-[#868993]">{t.jobDetail.ended}:</span>
                 <span className="text-[#d1d4dc]">{formatDateTime(job.ended_at)}</span>
               </div>
             </div>
@@ -147,13 +149,13 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
           onClick={onStop}
           disabled={!validJobId || !job || (job.status !== "RUNNING" && job.status !== "PENDING")}
         >
-          Stop
+          {t.common.stop}
         </button>
       </div>
 
       {job && !finished ? (
         <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
-          Run in progress. Results will appear here once it finishes.
+          {t.jobDetail.runInProgress}
         </div>
       ) : null}
 
@@ -163,7 +165,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       (job?.type === "LIVE" && (trades.length > 0 || (finished && job.result && isRecord(job.result)))) &&
       !hasTrades ? (
         <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
-          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Trade Result Summary</div>
+          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">{t.jobDetail.tradeResultSummary}</div>
           <JobResultSummary
             type={job!.type}
             result={job!.result && isRecord(job!.result) ? job!.result : {}}
@@ -174,14 +176,14 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
       {job && finished && job.result && !isRecord(job.result) ? (
         <div className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4 text-xs">
-          <div className="mb-2 font-medium text-[#d1d4dc]">Result</div>
+          <div className="mb-2 font-medium text-[#d1d4dc]">{t.jobDetail.result}</div>
           <pre className="overflow-auto text-[#868993]">{JSON.stringify(job.result, null, 2)}</pre>
         </div>
       ) : null}
 
       {job && finished && !job.result && !(job.type === "LIVE" && trades.length > 0) ? (
         <div className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4 text-xs text-[#868993]">
-          No result payload found for this run.
+          {t.jobDetail.noResult}
         </div>
       ) : null}
 

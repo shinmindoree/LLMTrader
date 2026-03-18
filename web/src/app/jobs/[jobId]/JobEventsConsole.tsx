@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useI18n } from "@/lib/i18n";
 import type { JobEvent } from "@/lib/types";
 
 export function JobEventsConsole({ jobId }: { jobId: string }) {
+  const { t } = useI18n();
   const [events, setEvents] = useState<JobEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +23,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
     };
     es.onerror = () => {
       setConnected(false);
-      setError("SSE disconnected");
+      setError(t.events.sseDisconnected);
     };
     es.onmessage = (msg) => {
       try {
@@ -43,7 +45,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
       }
     };
     return () => es.close();
-  }, [url]);
+  }, [url, t.events.sseDisconnected]);
 
   const getEventColor = (event: JobEvent) => {
     if (event.kind === "STATUS") return "text-[#2962ff]";
@@ -58,7 +60,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
   return (
     <div className="rounded border border-[#2a2e39] bg-[#1e222d]">
       <div className="flex items-center justify-between border-b border-[#2a2e39] bg-[#131722] px-4 py-2 text-xs">
-        <span className="font-medium text-[#d1d4dc]">Events</span>
+        <span className="font-medium text-[#d1d4dc]">{t.events.title}</span>
         <div className="flex items-center gap-2">
           <div
             className={`h-2 w-2 rounded-full ${
@@ -66,7 +68,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
             }`}
           />
           <span className="text-[#868993]">
-            {connected ? "connected" : "disconnected"} • last event #{lastId}
+            {connected ? t.events.connected : t.events.disconnected} • last event #{lastId}
           </span>
         </div>
       </div>
@@ -80,7 +82,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
         className="max-h-[420px] overflow-auto bg-[#0a0a0a] px-4 py-3 font-mono text-xs"
       >
         {events.length === 0 ? (
-          <div className="text-center text-[#868993]">Waiting for events...</div>
+          <div className="text-center text-[#868993]">{t.events.waitingForEvents}</div>
         ) : (
           events.map((e) => (
             <div key={e.event_id} className={`whitespace-pre-wrap ${getEventColor(e)}`}>

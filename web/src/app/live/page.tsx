@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJobs, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
@@ -23,6 +24,7 @@ function strategyNameFromPath(path: string): string {
 }
 
 export default function LiveJobsPage() {
+  const { t } = useI18n();
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [items, setItems] = useState<Job[]>([]);
@@ -68,7 +70,7 @@ export default function LiveJobsPage() {
 
   const onCreated = (job: Job) => {
     setLatestJob(job);
-    setNotice("Live run started.");
+    setNotice(t.live.runStarted);
     refresh();
   };
 
@@ -78,7 +80,7 @@ export default function LiveJobsPage() {
       setBusy(true);
       setError(null);
       await stopJob(job.job_id);
-      setNotice("Stop requested.");
+      setNotice(t.live.stopRequested);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -90,12 +92,10 @@ export default function LiveJobsPage() {
   const onDeleteJob = async (job: Job) => {
     if (busy) return;
     if (!FINISHED_STATUSES.has(job.status)) {
-      setError("Only completed runs can be deleted.");
+      setError(t.live.onlyFinishedDelete);
       return;
     }
-    const ok = confirm(
-      "Delete this live run?\n\nThis also removes related events, orders, and trades.",
-    );
+    const ok = confirm(t.live.deleteConfirm);
     if (!ok) return;
 
     try {
@@ -104,7 +104,7 @@ export default function LiveJobsPage() {
       setNotice(null);
       await deleteJob(job.job_id);
       setLatestJob((prev) => (prev?.job_id === job.job_id ? null : prev));
-      setNotice("Run deleted.");
+      setNotice(t.live.runDeleted);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -115,9 +115,7 @@ export default function LiveJobsPage() {
 
   const onDeleteAll = async () => {
     if (busy) return;
-    const ok = confirm(
-      "Delete all live runs?\n\n- Only completed runs are deleted.\n- Queued/running/stopping runs are kept.",
-    );
+    const ok = confirm(t.live.deleteAllConfirm);
     if (!ok) return;
 
     try {
@@ -139,9 +137,7 @@ export default function LiveJobsPage() {
 
   const onStopAll = async () => {
     if (busy) return;
-    const ok = confirm(
-      "Request stop for all live runs?\n\n- Queued runs stop immediately.\n- Running runs move to Stopping.",
-    );
+    const ok = confirm(t.live.stopAllConfirm);
     if (!ok) return;
 
     try {
@@ -166,15 +162,15 @@ export default function LiveJobsPage() {
     <main className="w-full px-4 py-3">
       {keysNotConfigured && (
         <div className="mb-3 rounded-lg border border-[#efb74d]/40 bg-[#2d2718] px-4 py-2.5 text-sm text-[#efb74d]">
-          Binance API keys are not configured. Live trading requires your own API keys.{" "}
+          {t.live.keysNotConfigured}{" "}
           <a className="underline hover:text-[#d1d4dc] transition-colors" href="/settings">
-            Go to Settings
+            {t.live.goToSettings}
           </a>
         </div>
       )}
       <div className="flex items-center justify-between">
         <p className="text-xs text-[#868993]">
-          Run up to {maxSlots} strategies simultaneously. Each strategy runs as an independent job.
+          {t.live.slotsInfo.replace("{maxSlots}", String(maxSlots))}
         </p>
         <div className="flex gap-2 text-sm">
           <button
@@ -183,7 +179,7 @@ export default function LiveJobsPage() {
             onClick={refresh}
             type="button"
           >
-            Refresh
+            {t.common.refresh}
           </button>
           <button
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#2d1f1f] hover:border-[#ef5350] disabled:opacity-60 transition-colors"
@@ -191,7 +187,7 @@ export default function LiveJobsPage() {
             onClick={onDeleteAll}
             type="button"
           >
-            Delete All
+            {t.common.deleteAll}
           </button>
           <button
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#2d1f1f] hover:border-[#ef5350] disabled:opacity-60 transition-colors"
@@ -199,16 +195,15 @@ export default function LiveJobsPage() {
             onClick={onStopAll}
             type="button"
           >
-            Stop All
+            {t.common.stopAll}
           </button>
         </div>
       </div>
 
-      {/* Active strategies panel */}
       {activeCount > 0 && (
         <section className="mt-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-medium text-[#d1d4dc]">
-            Active Strategies
+            {t.live.activeStrategies}
             <span className="rounded bg-[#2962ff]/20 px-2 py-0.5 text-xs text-[#2962ff]">
               {activeCount}/{maxSlots}
             </span>
@@ -240,13 +235,13 @@ export default function LiveJobsPage() {
                         onClick={() => onStopJob(j)}
                         type="button"
                       >
-                        Stop
+                        {t.common.stop}
                       </button>
                     )}
                   </div>
                 </div>
                 <div className="mt-1 text-xs text-[#868993]">
-                  Started {new Date(j.created_at).toLocaleString()}
+                  {t.live.started} {new Date(j.created_at).toLocaleString()}
                 </div>
               </li>
             ))}
@@ -264,7 +259,7 @@ export default function LiveJobsPage() {
                 className="text-[#2962ff] hover:underline"
                 href={jobDetailPath("LIVE", latestJob.job_id)}
               >
-                Open run details
+                {t.live.openRunDetails}
               </Link>
             </>
           ) : null}
@@ -279,15 +274,15 @@ export default function LiveJobsPage() {
 
       <section className="mt-6">
         <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[#d1d4dc]">
-          Add Strategy
+          {t.live.addStrategy}
           {activeCount > 0 && (
             <span className="text-xs font-normal text-[#868993]">
-              ({activeCount}/{maxSlots} slots used)
+              {t.live.slotsUsed.replace("{activeCount}", String(activeCount)).replace("{maxSlots}", String(maxSlots))}
             </span>
           )}
         </div>
         <p className="mb-3 text-xs text-[#efb6b2]">
-          Each strategy runs independently with its own symbol and settings. You can run up to {maxSlots} at once.
+          {t.live.strategyIndependentInfo.replace("{maxSlots}", String(maxSlots))}
         </p>
         {strategies.length ? (
           <LiveForm
@@ -298,19 +293,19 @@ export default function LiveJobsPage() {
             maxSlots={maxSlots}
           />
         ) : (
-          <div className="text-sm text-[#868993]">Loading…</div>
+          <div className="text-sm text-[#868993]">{t.common.loading}</div>
         )}
       </section>
 
       <LatestJobResult
         jobType="LIVE"
         focusJobId={latestJob?.job_id ?? null}
-        title="Latest Live Result"
+        title={t.live.latestResult}
         showPendingSpinner={runPending}
       />
 
       <section className="mt-10">
-        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">Run History</div>
+        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.live.runHistory}</div>
         {error ? (
           <p className="mb-4 text-sm text-[#ef5350] rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3">
             {error}
@@ -319,7 +314,7 @@ export default function LiveJobsPage() {
 
         {items.length === 0 && !error ? (
           <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
-            No live jobs found. Create a new live run to get started.
+            {t.live.emptyState}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -343,7 +338,7 @@ export default function LiveJobsPage() {
                       onClick={() => onDeleteJob(j)}
                       type="button"
                     >
-                      Delete
+                      {t.common.delete}
                     </button>
                   </div>
                 </div>

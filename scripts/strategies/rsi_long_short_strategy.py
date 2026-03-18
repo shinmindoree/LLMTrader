@@ -35,7 +35,7 @@ class RsiLongShortStrategy(Strategy):
 
     def __init__(
         self,
-        rsi_period: int = 4,
+        rsi_period: int = 14,
         long_entry_rsi: float = 30.0,
         long_exit_rsi: float = 70.0,
         short_entry_rsi: float = 70.0,

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -506,6 +507,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     engine = create_async_engine(settings.effective_database_url)
     session_maker = create_session_maker(engine)
+    futures_symbols_cache: dict[str, Any] = {"expires_at": 0.0, "symbols": []}
 
     app = FastAPI(title="LLMTrader API", version="0.1.0")
     app.state.engine = engine
@@ -662,6 +664,54 @@ def create_app() -> FastAPI:
             positions=positions,
             error=data.get("error"),
         )
+
+    @app.get(
+        "/api/binance/futures/symbols",
+        response_model=list[str],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_binance_futures_symbols() -> list[str]:
+        now = time.monotonic()
+        cached_symbols = futures_symbols_cache.get("symbols", [])
+        if now < float(futures_symbols_cache.get("expires_at", 0.0)) and isinstance(cached_symbols, list):
+            return [str(item) for item in cached_symbols if isinstance(item, str)]
+
+        from binance.client import normalize_binance_base_url
+
+        base_url = normalize_binance_base_url(
+            settings.binance.base_url_backtest or settings.binance.base_url or "https://fapi.binance.com"
+        )
+
+        try:
+            async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+                response = await client.get("/fapi/v1/exchangeInfo")
+                response.raise_for_status()
+                payload = response.json()
+        except Exception as exc:  # noqa: BLE001
+            if isinstance(cached_symbols, list) and cached_symbols:
+                return [str(item) for item in cached_symbols if isinstance(item, str)]
+            raise HTTPException(status_code=502, detail=f"Failed to fetch Binance futures symbols: {exc}") from exc
+
+        symbols: list[str] = []
+        for raw in payload.get("symbols", []) if isinstance(payload, dict) else []:
+            if not isinstance(raw, dict):
+                continue
+            symbol = str(raw.get("symbol") or "").strip().upper()
+            status = str(raw.get("status") or "").strip().upper()
+            contract_type = str(raw.get("contractType") or "").strip().upper()
+            quote_asset = str(raw.get("quoteAsset") or "").strip().upper()
+            if not symbol or status != "TRADING":
+                continue
+            if contract_type != "PERPETUAL":
+                continue
+            if quote_asset != "USDT":
+                continue
+            symbols.append(symbol)
+
+        symbols = sorted(set(symbols))
+        futures_symbols_cache["symbols"] = symbols
+        futures_symbols_cache["expires_at"] = now + 900.0
+        return symbols
 
     @app.get("/api/strategies", response_model=list[StrategyInfo], dependencies=[Depends(require_auth)])
     async def strategies(

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { useI18n } from "@/lib/i18n";
 import { getJob, listJobs, listTrades } from "@/lib/api";
 import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
@@ -34,6 +35,7 @@ type LatestJobResultProps = {
 };
 
 export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner }: LatestJobResultProps) {
+  const { t } = useI18n();
   const [job, setJob] = useState<Job | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -120,12 +122,12 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
         {showPlaceholderGauge ? (
           <section className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
             <div className="flex items-center justify-between text-xs text-[#868993]">
-              <span>Progress</span>
-              <span>preparing…</span>
+              <span>{t.progress.progress}</span>
+              <span>{t.progress.preparing}</span>
             </div>
             <div className="mt-3">
               <div className="mb-1 flex items-center justify-between text-xs text-[#d1d4dc]">
-                <span>Progress</span>
+                <span>{t.progress.progress}</span>
                 <span className="text-[#868993]">0%</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-[#0f141f]">
@@ -139,7 +141,7 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
         ) : null}
 
         {loading && !job && !showPlaceholderGauge ? (
-          <div className="mt-4 text-sm text-[#868993]">Loading latest run…</div>
+          <div className="mt-4 text-sm text-[#868993]">{t.latestResult.loadingLatest}</div>
         ) : null}
 
         {!showPlaceholderGauge && error ? (
@@ -149,7 +151,7 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
         ) : null}
 
         {!showPlaceholderGauge && !job && !loading && !error ? (
-          <div className="mt-4 text-sm text-[#868993]">No runs yet. Start one to see results here.</div>
+          <div className="mt-4 text-sm text-[#868993]">{t.latestResult.noRuns}</div>
         ) : null}
 
         {!showPlaceholderGauge && job ? (
@@ -158,9 +160,9 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
 
         {!showPlaceholderGauge && job ? (
           <div className="mt-3 text-xs text-[#868993]">
-            <span>Created {formatDateTime(job.created_at)}</span>
+            <span>{t.jobDetail.created} {formatDateTime(job.created_at)}</span>
             <span className="mx-2">•</span>
-            <span>Ended {formatDateTime(job.ended_at)}</span>
+            <span>{t.jobDetail.ended} {formatDateTime(job.ended_at)}</span>
           </div>
         ) : null}
 
@@ -172,7 +174,7 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
 
         {!showPlaceholderGauge && job && !finished && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
-            Run in progress. Results will appear here once it finishes.
+            {t.latestResult.runInProgress}
           </div>
         ) : null}
 
@@ -199,13 +201,13 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
 
         {!showPlaceholderGauge && job && finished && job.result && !isRecord(job.result) ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
-            Result payload is not structured for summary. See raw payload below.
+            {t.tradeAnalysis.noResultStructured}
           </div>
         ) : null}
 
         {!showPlaceholderGauge && job && finished && !job.result && !hasLiveTrades ? (
           <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
-            No result payload found for this run.
+            {t.tradeAnalysis.noResultFound}
           </div>
         ) : null}
 

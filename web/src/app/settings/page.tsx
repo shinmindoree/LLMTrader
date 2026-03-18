@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 import {
   getUserProfile,
   getBinanceKeysStatus,
@@ -12,6 +13,7 @@ import type { UserProfile, BinanceKeysStatus } from "@/lib/types";
 type FormState = "idle" | "saving" | "deleting";
 
 export default function SettingsPage() {
+  const { t } = useI18n();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -31,14 +33,14 @@ export default function SettingsPage() {
         setKeysStatus(k);
         if (k.base_url) setBaseUrl(k.base_url);
       })
-      .catch(() => setMessage({ type: "error", text: "Failed to load settings" }))
+      .catch(() => setMessage({ type: "error", text: t.settingsPage.loadFailed }))
       .finally(() => setLoading(false));
   }, []);
 
   async function handleSaveKeys(e: React.FormEvent) {
     e.preventDefault();
     if (!apiKey.trim() || !apiSecret.trim()) {
-      setMessage({ type: "error", text: "API Key and Secret are required" });
+      setMessage({ type: "error", text: t.settingsPage.keyRequired });
       return;
     }
     setFormState("saving");
@@ -52,9 +54,9 @@ export default function SettingsPage() {
       setKeysStatus({ configured: true, api_key_masked: result.api_key_masked, base_url: result.base_url });
       setApiKey("");
       setApiSecret("");
-      setMessage({ type: "success", text: "Binance API keys saved and verified successfully" });
+      setMessage({ type: "success", text: t.settingsPage.keysSaved });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to save keys";
+      const msg = err instanceof Error ? err.message : t.settingsPage.saveFailed;
       setMessage({ type: "error", text: msg });
     } finally {
       setFormState("idle");
@@ -68,9 +70,9 @@ export default function SettingsPage() {
       await deleteBinanceKeys();
       setKeysStatus({ configured: false });
       setShowDeleteConfirm(false);
-      setMessage({ type: "success", text: "Binance API keys deleted" });
+      setMessage({ type: "success", text: t.settingsPage.keysDeleted });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to delete keys";
+      const msg = err instanceof Error ? err.message : t.settingsPage.deleteFailed;
       setMessage({ type: "error", text: msg });
     } finally {
       setFormState("idle");
@@ -80,27 +82,26 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <main className="w-full px-6 py-10">
-        <div className="text-[#868993]">Loading settings...</div>
+        <div className="text-[#868993]">{t.settingsPage.loading}</div>
       </main>
     );
   }
 
   return (
     <main className="w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold text-[#d1d4dc]">Settings</h1>
-      <p className="mt-2 text-sm text-[#868993]">Manage your account and API configuration</p>
+      <h1 className="text-2xl font-semibold text-[#d1d4dc]">{t.settingsPage.title}</h1>
+      <p className="mt-2 text-sm text-[#868993]">{t.settingsPage.subtitle}</p>
 
-      {/* Profile Info */}
       {profile && (
         <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
-          <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">Account</h2>
+          <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">{t.settingsPage.account}</h2>
           <div className="space-y-3 text-sm">
             <div className="flex justify-between">
-              <span className="text-[#868993]">Email</span>
+              <span className="text-[#868993]">{t.settingsPage.email}</span>
               <span className="text-[#d1d4dc]">{profile.email || "—"}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#868993]">Plan</span>
+              <span className="text-[#868993]">{t.settingsPage.plan}</span>
               <span className={
                 profile.plan === "enterprise" ? "text-[#ff9800] font-semibold uppercase" :
                 profile.plan === "pro" ? "text-[#2962ff] font-semibold uppercase" :
@@ -110,18 +111,17 @@ export default function SettingsPage() {
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#868993]">User ID</span>
+              <span className="text-[#868993]">{t.settingsPage.userId}</span>
               <span className="text-[#868993] font-mono text-xs">{profile.user_id.slice(0, 12)}...</span>
             </div>
           </div>
         </section>
       )}
 
-      {/* Binance API Keys */}
       <section className="mt-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
-        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-2">Binance API Keys</h2>
+        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-2">{t.settingsPage.binanceApiKeys}</h2>
         <p className="text-xs text-[#868993] mb-4">
-          Your keys are encrypted and stored securely. We test the connection before saving.
+          {t.settingsPage.keysSecureInfo}
         </p>
 
         {message && (
@@ -140,7 +140,7 @@ export default function SettingsPage() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="inline-block h-2 w-2 rounded-full bg-[#26a69a]" />
-                  <span className="text-sm text-[#d1d4dc]">Keys Configured</span>
+                  <span className="text-sm text-[#d1d4dc]">{t.settingsPage.keysConfigured}</span>
                 </div>
                 <div className="mt-1 text-xs text-[#868993] font-mono">
                   {keysStatus.api_key_masked || "****"}
@@ -156,13 +156,13 @@ export default function SettingsPage() {
                     disabled={formState === "deleting"}
                     onClick={handleDeleteKeys}
                   >
-                    {formState === "deleting" ? "Deleting..." : "Confirm Delete"}
+                    {formState === "deleting" ? t.settingsPage.deleting : t.settingsPage.confirmDelete}
                   </button>
                   <button
                     className="rounded px-3 py-1.5 text-xs text-[#868993] hover:text-[#d1d4dc] transition-colors"
                     onClick={() => setShowDeleteConfirm(false)}
                   >
-                    Cancel
+                    {t.common.cancel}
                   </button>
                 </div>
               ) : (
@@ -170,7 +170,7 @@ export default function SettingsPage() {
                   className="rounded px-3 py-1.5 text-xs text-[#ef5350] border border-[#ef5350]/30 hover:bg-[#ef5350]/10 transition-colors"
                   onClick={() => setShowDeleteConfirm(true)}
                 >
-                  Delete Keys
+                  {t.settingsPage.deleteKeys}
                 </button>
               )}
             </div>
@@ -180,35 +180,35 @@ export default function SettingsPage() {
         <form className="space-y-4" onSubmit={handleSaveKeys}>
           <div>
             <label className="block text-sm text-[#868993] mb-1" htmlFor="api-key">
-              API Key
+              {t.settingsPage.apiKey}
             </label>
             <input
               autoComplete="off"
               className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] placeholder-[#4a4e59] focus:border-[#2962ff] focus:outline-none transition-colors"
               id="api-key"
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="Enter your Binance API key"
+              placeholder={t.settingsPage.apiKeyPlaceholder}
               type="password"
               value={apiKey}
             />
           </div>
           <div>
             <label className="block text-sm text-[#868993] mb-1" htmlFor="api-secret">
-              API Secret
+              {t.settingsPage.apiSecret}
             </label>
             <input
               autoComplete="off"
               className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] placeholder-[#4a4e59] focus:border-[#2962ff] focus:outline-none transition-colors"
               id="api-secret"
               onChange={(e) => setApiSecret(e.target.value)}
-              placeholder="Enter your Binance API secret"
+              placeholder={t.settingsPage.apiSecretPlaceholder}
               type="password"
               value={apiSecret}
             />
           </div>
           <div>
             <label className="block text-sm text-[#868993] mb-1" htmlFor="base-url">
-              Base URL
+              {t.settingsPage.baseUrl}
             </label>
             <select
               className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
@@ -216,11 +216,11 @@ export default function SettingsPage() {
               onChange={(e) => setBaseUrl(e.target.value)}
               value={baseUrl}
             >
-              <option value="https://testnet.binancefuture.com">Testnet (testnet.binancefuture.com)</option>
-              <option value="https://fapi.binance.com">Mainnet (fapi.binance.com)</option>
+              <option value="https://testnet.binancefuture.com">{t.settingsPage.testnetOption}</option>
+              <option value="https://fapi.binance.com">{t.settingsPage.mainnetOption}</option>
             </select>
             <p className="mt-1 text-xs text-[#868993]">
-              Start with testnet. Switch to mainnet only after thorough testing.
+              {t.settingsPage.baseUrlHint}
             </p>
           </div>
           <button
@@ -228,17 +228,17 @@ export default function SettingsPage() {
             disabled={formState === "saving" || !apiKey.trim() || !apiSecret.trim()}
             type="submit"
           >
-            {formState === "saving" ? "Verifying & Saving..." : keysStatus?.configured ? "Update Keys" : "Save Keys"}
+            {formState === "saving" ? t.settingsPage.verifyingAndSaving : keysStatus?.configured ? t.settingsPage.updateKeys : t.settingsPage.saveKeys}
           </button>
         </form>
 
         <div className="mt-4 rounded-lg border border-[#2a2e39] bg-[#131722] p-4">
-          <h3 className="text-xs font-semibold text-[#868993] uppercase mb-2">Security Info</h3>
+          <h3 className="text-xs font-semibold text-[#868993] uppercase mb-2">{t.settingsPage.securityInfo}</h3>
           <ul className="text-xs text-[#868993] space-y-1">
-            <li>• Keys are encrypted with AES-256 before storage</li>
-            <li>• We verify the connection before saving</li>
-            <li>• Plain-text keys are never logged or stored</li>
-            <li>• Only you can access your keys through your account</li>
+            <li>• {t.settingsPage.securityItem1}</li>
+            <li>• {t.settingsPage.securityItem2}</li>
+            <li>• {t.settingsPage.securityItem3}</li>
+            <li>• {t.settingsPage.securityItem4}</li>
           </ul>
         </div>
       </section>

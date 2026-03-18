@@ -7,66 +7,50 @@ import {
   createBillingPortalSession,
 } from "@/lib/api";
 import type { BillingStatus } from "@/lib/types";
-
-const PLANS = [
-  {
-    id: "free",
-    name: "Free",
-    price: "$0",
-    period: "forever",
-    features: [
-      "Backtest only (10/month)",
-      "LLM strategy generation (5/month)",
-      "No live trading",
-      "Community support",
-    ],
-    color: "#868993",
-    borderColor: "#2a2e39",
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    price: "$29",
-    period: "/month",
-    features: [
-      "1 concurrent live trade",
-      "100 backtests/month",
-      "50 LLM generations/month",
-      "Priority queue",
-      "Email support",
-    ],
-    color: "#2962ff",
-    borderColor: "#2962ff",
-    popular: true,
-  },
-  {
-    id: "enterprise",
-    name: "Enterprise",
-    price: "$99",
-    period: "/month",
-    features: [
-      "10 concurrent live trades",
-      "Unlimited backtests",
-      "Unlimited LLM generations",
-      "Portfolio mode",
-      "Priority queue",
-      "Dedicated support",
-    ],
-    color: "#ff9800",
-    borderColor: "#ff9800",
-  },
-];
+import { useI18n } from "@/lib/i18n";
 
 export default function BillingPage() {
+  const { t } = useI18n();
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionPlan, setActionPlan] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const PLANS = [
+    {
+      id: "free",
+      name: t.billing.planFree,
+      price: "$0",
+      period: "forever",
+      features: [t.billing.free_f1, t.billing.free_f2, t.billing.free_f3, t.billing.free_f4],
+      color: "#868993",
+      borderColor: "#2a2e39",
+    },
+    {
+      id: "pro",
+      name: t.billing.planPro,
+      price: "$29",
+      period: "/month",
+      features: [t.billing.pro_f1, t.billing.pro_f2, t.billing.pro_f3, t.billing.pro_f4, t.billing.pro_f5],
+      color: "#2962ff",
+      borderColor: "#2962ff",
+      popular: true,
+    },
+    {
+      id: "enterprise",
+      name: t.billing.planEnterprise,
+      price: "$99",
+      period: "/month",
+      features: [t.billing.ent_f1, t.billing.ent_f2, t.billing.ent_f3, t.billing.ent_f4, t.billing.ent_f5, t.billing.ent_f6],
+      color: "#ff9800",
+      borderColor: "#ff9800",
+    },
+  ];
+
   useEffect(() => {
     getBillingStatus()
       .then(setBilling)
-      .catch(() => setError("Failed to load billing info"))
+      .catch(() => setError(t.billing.loadFailed))
       .finally(() => setLoading(false));
   }, []);
 
@@ -77,7 +61,7 @@ export default function BillingPage() {
       const { checkout_url } = await createCheckoutSession(plan);
       window.location.href = checkout_url;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to create checkout session";
+      const msg = err instanceof Error ? err.message : t.billing.checkoutFailed;
       setError(msg);
       setActionPlan(null);
     }
@@ -89,7 +73,7 @@ export default function BillingPage() {
       const { portal_url } = await createBillingPortalSession();
       window.location.href = portal_url;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to open billing portal";
+      const msg = err instanceof Error ? err.message : t.billing.portalFailed;
       setError(msg);
     }
   }
@@ -97,7 +81,7 @@ export default function BillingPage() {
   if (loading) {
     return (
       <main className="w-full px-6 py-10">
-        <div className="text-[#868993]">Loading billing info...</div>
+        <div className="text-[#868993]">{t.billing.loading}</div>
       </main>
     );
   }
@@ -106,8 +90,8 @@ export default function BillingPage() {
 
   return (
     <main className="w-full max-w-4xl px-6 py-10">
-      <h1 className="text-2xl font-semibold text-[#d1d4dc]">Billing & Plans</h1>
-      <p className="mt-2 text-sm text-[#868993]">Choose the plan that fits your trading needs</p>
+      <h1 className="text-2xl font-semibold text-[#d1d4dc]">{t.billing.title}</h1>
+      <p className="mt-2 text-sm text-[#868993]">{t.billing.subtitle}</p>
 
       {error && (
         <div className="mt-4 rounded-lg bg-[#ef5350]/10 border border-[#ef5350]/30 px-4 py-3 text-sm text-[#ef5350]">
@@ -115,12 +99,11 @@ export default function BillingPage() {
         </div>
       )}
 
-      {/* Current Plan Summary */}
       {billing && (
         <section className="mt-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-xs text-[#868993] uppercase">Current Plan</div>
+              <div className="text-xs text-[#868993] uppercase">{t.billing.currentPlan}</div>
               <div className={`text-xl font-bold uppercase mt-1 ${
                 currentPlan === "enterprise" ? "text-[#ff9800]" :
                 currentPlan === "pro" ? "text-[#2962ff]" :
@@ -130,7 +113,7 @@ export default function BillingPage() {
               </div>
               {billing.plan_expires_at && (
                 <div className="text-xs text-[#ef5350] mt-1">
-                  Expires: {new Date(billing.plan_expires_at).toLocaleDateString()}
+                  {t.billing.expires} {new Date(billing.plan_expires_at).toLocaleDateString()}
                 </div>
               )}
             </div>
@@ -139,37 +122,35 @@ export default function BillingPage() {
                 className="rounded-lg border border-[#2a2e39] px-4 py-2 text-sm text-[#868993] hover:text-[#d1d4dc] hover:border-[#d1d4dc] transition-colors"
                 onClick={handleManageBilling}
               >
-                Manage Subscription
+                {t.billing.manageSubscription}
               </button>
             )}
           </div>
         </section>
       )}
 
-      {/* Usage Stats */}
       {billing && (
         <section className="mt-4 grid gap-4 sm:grid-cols-3">
           <UsageCard
             current={billing.usage.backtest_this_month}
-            label="Backtests this month"
+            label={t.billing.backtestsThisMonth}
             limit={billing.limits.max_backtest_per_month}
           />
           <UsageCard
             current={billing.usage.llm_generate_this_month}
-            label="LLM Generations this month"
+            label={t.billing.llmGenerationsThisMonth}
             limit={billing.limits.max_llm_generate_per_month}
           />
           <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4">
-            <div className="text-xs text-[#868993]">Live Trading Slots</div>
+            <div className="text-xs text-[#868993]">{t.billing.liveSlots}</div>
             <div className="mt-1 text-xl font-semibold text-[#d1d4dc]">
               {billing.limits.max_live_jobs}
             </div>
-            <div className="text-xs text-[#868993] mt-1">concurrent</div>
+            <div className="text-xs text-[#868993] mt-1">{t.billing.concurrent}</div>
           </div>
         </section>
       )}
 
-      {/* Plan Cards */}
       <section className="mt-8 grid gap-4 sm:grid-cols-3">
         {PLANS.map((plan) => {
           const isCurrent = plan.id === currentPlan;
@@ -188,12 +169,12 @@ export default function BillingPage() {
             >
               {plan.popular && (
                 <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-[#2962ff] px-3 py-0.5 text-xs font-medium text-white">
-                  Popular
+                  {t.billing.popular}
                 </span>
               )}
               {isCurrent && (
                 <span className="absolute -top-3 right-4 rounded-full bg-[#26a69a] px-3 py-0.5 text-xs font-medium text-white">
-                  Current
+                  {t.billing.current}
                 </span>
               )}
               <div className="text-center">
@@ -216,7 +197,7 @@ export default function BillingPage() {
               <div className="mt-6">
                 {isCurrent ? (
                   <div className="w-full rounded-lg border border-[#2a2e39] px-4 py-2.5 text-center text-sm text-[#868993]">
-                    Current Plan
+                    {t.billing.currentPlanButton}
                   </div>
                 ) : plan.id === "free" ? (
                   isDowngrade ? (
@@ -224,7 +205,7 @@ export default function BillingPage() {
                       className="w-full rounded-lg border border-[#2a2e39] px-4 py-2.5 text-sm text-[#868993] hover:text-[#d1d4dc] hover:border-[#d1d4dc] transition-colors"
                       onClick={handleManageBilling}
                     >
-                      Downgrade
+                      {t.billing.downgrade}
                     </button>
                   ) : null
                 ) : (
@@ -235,10 +216,10 @@ export default function BillingPage() {
                     style={{ backgroundColor: plan.color }}
                   >
                     {actionPlan === plan.id
-                      ? "Redirecting..."
+                      ? t.billing.redirecting
                       : isUpgrade
-                        ? `Upgrade to ${plan.name}`
-                        : `Switch to ${plan.name}`}
+                        ? t.billing.upgradeTo.replace("{plan}", plan.name)
+                        : t.billing.switchTo.replace("{plan}", plan.name)}
                   </button>
                 )}
               </div>
@@ -247,28 +228,20 @@ export default function BillingPage() {
         })}
       </section>
 
-      {/* FAQ */}
       <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
-        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">FAQ</h2>
+        <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">{t.billing.faq}</h2>
         <div className="space-y-4 text-sm">
           <div>
-            <div className="text-[#d1d4dc] font-medium">What payment methods are accepted?</div>
-            <div className="text-[#868993] mt-1">
-              We accept Visa, Mastercard, AMEX, and other major international cards via Stripe.
-              Korean international cards are fully supported.
-            </div>
+            <div className="text-[#d1d4dc] font-medium">{t.billing.faq1q}</div>
+            <div className="text-[#868993] mt-1">{t.billing.faq1a}</div>
           </div>
           <div>
-            <div className="text-[#d1d4dc] font-medium">Can I cancel anytime?</div>
-            <div className="text-[#868993] mt-1">
-              Yes, you can cancel your subscription at any time. You'll retain access until the end of your billing period.
-            </div>
+            <div className="text-[#d1d4dc] font-medium">{t.billing.faq2q}</div>
+            <div className="text-[#868993] mt-1">{t.billing.faq2a}</div>
           </div>
           <div>
-            <div className="text-[#d1d4dc] font-medium">What happens when I hit usage limits?</div>
-            <div className="text-[#868993] mt-1">
-              You'll be prompted to upgrade your plan. Existing live trades will continue running.
-            </div>
+            <div className="text-[#d1d4dc] font-medium">{t.billing.faq3q}</div>
+            <div className="text-[#868993] mt-1">{t.billing.faq3a}</div>
           </div>
         </div>
       </section>

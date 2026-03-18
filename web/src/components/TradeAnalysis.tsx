@@ -281,13 +281,14 @@ function Chart({
   showEquity: boolean;
   backtestSymbol: string | null;
 }) {
+  const { t } = useI18n();
   const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
   if (!points.length) {
     return (
       <div className="rounded border border-[#2a2e39] bg-[#131722] px-4 py-6 text-center text-xs text-[#868993]">
-        No trade PnL data to chart yet.
+        {t.tradeAnalysis.noPnlData}
       </div>
     );
   }
@@ -331,10 +332,10 @@ function Chart({
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#868993]">
         <div>
           <span className="mr-3 inline-flex items-center gap-2">
-            <span className="h-2 w-2 rounded-sm bg-[#26a69a]" /> PnL
+            <span className="h-2 w-2 rounded-sm bg-[#26a69a]" /> {t.tradeAnalysis.pnl}
           </span>
           <span className="inline-flex items-center gap-2">
-            <span className="h-0.5 w-4 rounded-full bg-[#42a5f5]" /> Equity
+            <span className="h-0.5 w-4 rounded-full bg-[#42a5f5]" /> {t.tradeAnalysis.equity}
           </span>
         </div>
         <div>
@@ -438,7 +439,7 @@ function Chart({
       </svg>
       {!showEquity ? (
         <div className="mt-2 text-xs text-[#868993]">
-          Equity line is hidden until initial balance is available.
+          {t.tradeAnalysis.equityHidden}
         </div>
       ) : null}
     </div>
@@ -575,14 +576,14 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   if (!sortedTrades.length) {
     return (
       <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
-        <div className="text-sm font-medium text-[#d1d4dc]">Trade Analysis</div>
-        <div className="mt-3 text-xs text-[#868993]">No trades recorded yet.</div>
+        <div className="text-sm font-medium text-[#d1d4dc]">{t.tradeAnalysis.title}</div>
+        <div className="mt-3 text-xs text-[#868993]">{t.tradeAnalysis.noTrades}</div>
       </section>
     );
   }
 
-  const balanceLabel = job.type === "BACKTEST" ? "Initial Balance" : "Initial Equity";
-  const finalLabel = job.type === "BACKTEST" ? "Final Balance" : "Final Equity";
+  const balanceLabel = job.type === "BACKTEST" ? t.result.initialBalance : t.result.initialEquity;
+  const finalLabel = job.type === "BACKTEST" ? t.result.finalBalance : t.result.finalEquity;
 
   const tabButtonBase =
     "rounded border border-[#2a2e39] px-3 py-1.5 text-xs font-medium transition-colors";
@@ -592,7 +593,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   return (
     <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-[#d1d4dc]">Trade Analysis</span>
+        <span className="text-sm font-medium text-[#d1d4dc]">{t.tradeAnalysis.title}</span>
         <nav className="flex gap-1">
           <button
             type="button"
@@ -619,39 +620,39 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {totalReturnPct !== null && netProfit !== null && (
                   <MetricCard
-                    label="Return"
+                    label={t.result.return}
                     value={`${formatSigned(netProfit, "USDT")} (${formatNumber(totalReturnPct)}%)`}
                     tone={netProfit >= 0 ? "positive" : "negative"}
                   />
                 )}
                 {initialEquity !== null && finalEquity !== null && (
                   <MetricCard
-                    label="Balance"
+                    label={t.tradeAnalysis.balance}
                     value={`${formatNumber(initialEquity)} → ${formatNumber(finalEquity)} USDT`}
                   />
                 )}
                 <MetricCard
-                  label="Total Trades"
+                  label={t.tradeAnalysis.totalTrades}
                   value={`${numTrades} (${winCount} wins, ${formatNumber(winRatePct, 1)}%)`}
                 />
               </div>
 
               <details className="mb-4 group">
                 <summary className="flex cursor-pointer list-none items-center rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-2 text-xs font-medium text-[#d1d4dc] hover:bg-[#252a37] [&::-webkit-details-marker]:hidden [&::marker]:hidden">
-                  Trade detail
+                  {t.tradeAnalysis.tradeDetail}
                   <span className="ml-2 inline-block text-[#868993] transition-transform group-open:rotate-180">
                     ▾
                   </span>
                 </summary>
                 <div className="grid gap-3 rounded-b border border-[#2a2e39] border-t-0 bg-[#131722] p-4 sm:grid-cols-2 lg:grid-cols-3">
                   <MetricCard
-                    label="Total Commission"
+                    label={t.result.totalCommission}
                     value={`${formatNumber(totalCommission)} USDT`}
                     tone="negative"
                   />
                   {numTrades > 0 && netProfit !== null && (
                     <MetricCard
-                      label="Avg Profit / Trade"
+                      label={t.result.avgProfitPerTrade}
                       value={formatSigned(netProfit / numTrades, "USDT")}
                       tone={netProfit >= 0 ? "positive" : "negative"}
                     />
@@ -659,25 +660,25 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                   {tradeStats ? (
                     <>
                       <MetricCard
-                        label="Profit Factor"
+                        label={t.result.profitFactor}
                         value={tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
                       />
                       {tradeStats.maxProfit !== null && (
                         <MetricCard
-                          label="Max Profit"
+                          label={t.result.maxProfit}
                           value={formatSigned(tradeStats.maxProfit, "USDT")}
                           tone="positive"
                         />
                       )}
                       {tradeStats.maxLoss !== null && (
                         <MetricCard
-                          label="Max Loss"
+                          label={t.result.maxLoss}
                           value={formatSigned(tradeStats.maxLoss, "USDT")}
                           tone="negative"
                         />
                       )}
-                      <MetricCard label="Max Consecutive Wins" value={`${tradeStats.maxConsecutiveWins}`} />
-                      <MetricCard label="Max Consecutive Losses" value={`${tradeStats.maxConsecutiveLosses}`} />
+                      <MetricCard label={t.result.maxConsecutiveWins} value={`${tradeStats.maxConsecutiveWins}`} />
+                      <MetricCard label={t.result.maxConsecutiveLosses} value={`${tradeStats.maxConsecutiveLosses}`} />
                     </>
                   ) : null}
                 </div>

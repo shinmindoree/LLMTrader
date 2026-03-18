@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FocusEvent, MouseEvent } from "react";
 
-import { createJob, preflightJob } from "@/lib/api";
+import { InfoTooltip } from "@/components/InfoTooltip";
+import { createJob, listFuturesSymbols, preflightJob } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { Job, StrategyInfo } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
@@ -70,6 +72,7 @@ export function BacktestForm({
   onSubmittingChange?: (submitting: boolean) => void;
 }) {
   const defaults = loadExecutionDefaults();
+  const { t } = useI18n();
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
   const [symbol, setSymbol] = useState(defaults.symbol);
   const [interval, setInterval] = useState(defaults.interval);
@@ -83,6 +86,20 @@ export function BacktestForm({
   const [endDate, setEndDate] = useState(() => formatDateInputValue(now));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listFuturesSymbols()
+      .then((items) => {
+        if (cancelled) return;
+        setFuturesSymbols(items);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const openDatePicker = (event: FocusEvent<HTMLInputElement> | MouseEvent<HTMLInputElement>) => {
     const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
@@ -99,15 +116,15 @@ export function BacktestForm({
       const startParts = parseDateInputValue(startDate);
       const endParts = parseDateInputValue(endDate);
       if (!startParts || !endParts) {
-        throw new Error("Invalid date range: please use YYYY-MM-DD");
+        throw new Error(t.form.invalidDateRange);
       }
       const startTs = new Date(startParts.year, startParts.month - 1, startParts.day, 0, 0, 0, 0).getTime();
       const endTs = new Date(endParts.year, endParts.month - 1, endParts.day, 23, 59, 59, 999).getTime();
       if (Number.isNaN(startTs) || Number.isNaN(endTs)) {
-        throw new Error("Invalid date range");
+        throw new Error(t.form.invalidDate);
       }
       if (startTs > endTs) {
-        throw new Error("Start date must be on or before end date");
+        throw new Error(t.form.startBeforeEnd);
       }
       const config = {
         symbol,
@@ -126,13 +143,13 @@ export function BacktestForm({
         config,
       });
       if (!preflight.ok) {
-        const msg = formatPolicyMessages("Run blocked. Please update your settings.", preflight.blockers);
+        const msg = formatPolicyMessages(t.form.runBlocked, preflight.blockers);
         setError(msg);
         return;
       }
       if (preflight.warnings.length > 0) {
         const proceed = window.confirm(
-          formatPolicyMessages("Warnings detected. Do you want to continue?", preflight.warnings),
+          formatPolicyMessages(t.form.warningsDetected, preflight.warnings),
         );
         if (!proceed) {
           return;
@@ -164,17 +181,16 @@ export function BacktestForm({
         </p>
       ) : null}
       <p className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-xs text-[#868993]">
-        Even if you include trading settings in your strategy prompt (symbol/interval/leverage),
-        this form's values are used for execution.
+        {t.form.formNotice}
       </p>
       {defaults.applied ? (
         <p className="mb-4 text-xs text-[#868993]">
-          Defaults were pre-filled from your recent strategy request. Update them if needed.
+          {t.form.defaultsApplied}
         </p>
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Strategy</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.strategy}</div>
           <select
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             value={strategyPath}
@@ -188,15 +204,22 @@ export function BacktestForm({
           </select>
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Symbol</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.symbol}</div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
+            list="futures-symbol-options"
             value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
+            onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/\s+/g, ""))}
+            onBlur={(e) => setSymbol(e.target.value.trim().toUpperCase())}
           />
+          <datalist id="futures-symbol-options">
+            {futuresSymbols.map((item) => (
+              <option key={item} value={item} />
+            ))}
+          </datalist>
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Interval</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.interval}</div>
           <select
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             value={interval}
@@ -210,7 +233,7 @@ export function BacktestForm({
           </select>
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Start Date</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.startDate}</div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="date"
@@ -222,7 +245,7 @@ export function BacktestForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">End Date</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.endDate}</div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="date"
@@ -235,7 +258,7 @@ export function BacktestForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Leverage</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.leverage}<InfoTooltip text={t.form.tooltipLeverage} /></></div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
@@ -246,7 +269,7 @@ export function BacktestForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Initial Balance (USDT)</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.initialBalance}<InfoTooltip text={t.form.tooltipInitialBalance} /></></div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
@@ -256,7 +279,7 @@ export function BacktestForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Commission</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.commission}<InfoTooltip text={t.form.tooltipCommission} /></></div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
@@ -266,7 +289,7 @@ export function BacktestForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">StopLoss (%)</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
@@ -276,7 +299,7 @@ export function BacktestForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Max Pyramid Entries</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.maxPyramid}<InfoTooltip text={t.form.tooltipPyramid} /></></div>
           <input
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
@@ -285,9 +308,6 @@ export function BacktestForm({
             max={10}
             onChange={(e) => setMaxPyramidEntries(Number(e.target.value))}
           />
-          <div className="mt-1 text-xs text-[#868993]">
-            0 = off. Max additional entries in the same direction (strategy must call add_to_long/add_to_short).
-          </div>
         </label>
       </div>
 
@@ -296,7 +316,7 @@ export function BacktestForm({
         onClick={onSubmit}
         disabled={submitting}
       >
-        Run Backtest
+        {t.backtest.startBacktest}
       </button>
     </div>
   );

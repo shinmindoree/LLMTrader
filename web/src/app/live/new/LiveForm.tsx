@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { createJob, preflightJob } from "@/lib/api";
+import { InfoTooltip } from "@/components/InfoTooltip";
+import { createJob, listFuturesSymbols, preflightJob } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { Job, StrategyInfo } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
@@ -57,6 +59,7 @@ export function LiveForm({
   maxSlots: number;
 }) {
   const defaults = loadExecutionDefaults();
+  const { t } = useI18n();
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
   const [symbol, setSymbol] = useState(defaults.symbol);
   const [interval, setInterval] = useState(defaults.interval);
@@ -68,9 +71,23 @@ export function LiveForm({
   const [maxPyramidEntries, setMaxPyramidEntries] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
 
   const slotsAvailable = maxSlots - activeCount;
   const canCreate = slotsAvailable > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    listFuturesSymbols()
+      .then((items) => {
+        if (cancelled) return;
+        setFuturesSymbols(items);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const onSubmit = async () => {
     setError(null);
@@ -95,13 +112,13 @@ export function LiveForm({
 
       const preflight = await preflightJob({ type: "LIVE", config });
       if (!preflight.ok) {
-        const msg = formatPolicyMessages("Run blocked. Please update your settings.", preflight.blockers);
+        const msg = formatPolicyMessages(t.form.runBlocked, preflight.blockers);
         setError(msg);
         return;
       }
       if (preflight.warnings.length > 0) {
         const proceed = window.confirm(
-          formatPolicyMessages("High-risk warnings detected. Do you want to continue?", preflight.warnings),
+          formatPolicyMessages(t.form.highRiskWarnings, preflight.warnings),
         );
         if (!proceed) return;
       }
@@ -133,19 +150,19 @@ export function LiveForm({
 
       {!canCreate && (
         <p className="mb-4 rounded border border-[#efb74d]/30 bg-[#2d2718]/50 px-3 py-2 text-xs text-[#efb74d]">
-          All {maxSlots} slots are in use. Stop a running strategy to free a slot.
+          {t.live.slotsFullMessage.replace("{maxSlots}", String(maxSlots))}
         </p>
       )}
 
       {defaults.applied ? (
         <p className="mb-4 text-xs text-[#868993]">
-          Defaults were pre-filled from your recent strategy request.
+          {t.form.defaultsAppliedLive}
         </p>
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Strategy</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.strategy}</div>
           <select
             className={inputCls}
             value={strategyPath}
@@ -159,15 +176,22 @@ export function LiveForm({
           </select>
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Symbol</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.symbol}</div>
           <input
             className={inputCls}
+            list="futures-symbol-options"
             value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
+            onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/\s+/g, ""))}
+            onBlur={(e) => setSymbol(e.target.value.trim().toUpperCase())}
           />
+          <datalist id="futures-symbol-options">
+            {futuresSymbols.map((item) => (
+              <option key={item} value={item} />
+            ))}
+          </datalist>
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Interval</div>
+          <div className="mb-1 text-xs text-[#868993]">{t.form.interval}</div>
           <select
             className={inputCls}
             value={interval}
@@ -181,7 +205,7 @@ export function LiveForm({
           </select>
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Leverage</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.leverage}<InfoTooltip text={t.form.tooltipLeverage} /></></div>
           <input
             className={inputCls}
             type="number"
@@ -192,7 +216,7 @@ export function LiveForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Max Position (0-1)</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.maxPosition}<InfoTooltip text={t.form.tooltipMaxPosition} /></></div>
           <input
             className={inputCls}
             type="number"
@@ -204,7 +228,7 @@ export function LiveForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Daily Loss Limit (USDT)</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.dailyLossLimit}<InfoTooltip text={t.form.tooltipDailyLossLimit} /></></div>
           <input
             className={inputCls}
             type="number"
@@ -214,7 +238,7 @@ export function LiveForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">StopLoss (%)</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></div>
           <input
             className={inputCls}
             type="number"
@@ -224,7 +248,7 @@ export function LiveForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">StopLoss Cooldown (candles)</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLossCooldown}<InfoTooltip text={t.form.tooltipCooldown} /></></div>
           <input
             className={inputCls}
             type="number"
@@ -233,12 +257,9 @@ export function LiveForm({
             max={1000}
             onChange={(e) => setStoplossCooldownCandles(Number(e.target.value))}
           />
-          <div className="mt-1 text-xs text-[#868993]">
-            0 = off. After a stop-loss exit, new entries are blocked for N candles.
-          </div>
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]">Max Pyramid Entries</div>
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.maxPyramid}<InfoTooltip text={t.form.tooltipPyramidLive} /></></div>
           <input
             className={inputCls}
             type="number"
@@ -247,9 +268,6 @@ export function LiveForm({
             max={10}
             onChange={(e) => setMaxPyramidEntries(Number(e.target.value))}
           />
-          <div className="mt-1 text-xs text-[#868993]">
-            0 = off. Max additional entries in the same direction.
-          </div>
         </label>
       </div>
 
@@ -259,8 +277,8 @@ export function LiveForm({
         disabled={submitting || !canCreate}
       >
         {canCreate
-          ? `Run Live — ${symbol}@${interval}`
-          : `Slots Full (${activeCount}/${maxSlots})`}
+          ? `${t.live.startLive} — ${symbol}@${interval}`
+          : `${t.live.slotsFull} (${activeCount}/${maxSlots})`}
       </button>
     </div>
   );

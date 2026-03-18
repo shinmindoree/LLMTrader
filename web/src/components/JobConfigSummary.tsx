@@ -1,5 +1,6 @@
 "use client";
 
+import { useI18n } from "@/lib/i18n";
 import type { JobType } from "@/lib/types";
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -66,25 +67,26 @@ function ConfigEntry({ label, value }: ConfigEntryProps) {
 }
 
 function LiveStreamSection({ stream, index, total }: { stream: LiveStreamInfo; index: number; total: number }) {
+  const { t } = useI18n();
   return (
     <div>
       {total > 1 && (
         <div className="mb-1 text-[10px] font-medium text-[#868993] uppercase tracking-wider">
-          Stream {index + 1} — {stream.symbol}@{stream.interval}
+          {t.jobConfig.streams} {index + 1} — {stream.symbol}@{stream.interval}
         </div>
       )}
       <div className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
-        <ConfigEntry label="Symbol" value={stream.symbol} />
-        <ConfigEntry label="Interval" value={stream.interval} />
-        <ConfigEntry label="Leverage" value={stream.leverage} />
-        <ConfigEntry label="Max Position" value={stream.maxPosition} />
-        <ConfigEntry label="Daily Loss Limit" value={stream.dailyLossLimit} />
-        <ConfigEntry label="Stop Loss" value={stream.stopLossPct} />
+        <ConfigEntry label={t.jobConfig.symbol} value={stream.symbol} />
+        <ConfigEntry label={t.jobConfig.interval} value={stream.interval} />
+        <ConfigEntry label={t.jobConfig.leverage} value={stream.leverage} />
+        <ConfigEntry label={t.jobConfig.maxPosition} value={stream.maxPosition} />
+        <ConfigEntry label={t.jobConfig.dailyLossLimit} value={stream.dailyLossLimit} />
+        <ConfigEntry label={t.jobConfig.stopLoss} value={stream.stopLossPct} />
         {stream.cooldownCandles && stream.cooldownCandles !== "0" ? (
-          <ConfigEntry label="SL Cooldown" value={`${stream.cooldownCandles} candles`} />
+          <ConfigEntry label={t.jobConfig.slCooldown} value={`${stream.cooldownCandles} ${t.jobConfig.candles}`} />
         ) : null}
         {stream.maxPyramidEntries && stream.maxPyramidEntries !== "0" ? (
-          <ConfigEntry label="Pyramid" value={`max ${stream.maxPyramidEntries}`} />
+          <ConfigEntry label={t.jobConfig.pyramid} value={`${t.jobConfig.max} ${stream.maxPyramidEntries}`} />
         ) : null}
       </div>
     </div>
@@ -98,16 +100,17 @@ export function JobConfigSummary({
   type: JobType;
   config: Record<string, unknown>;
 }) {
+  const { t } = useI18n();
   if (type === "LIVE") {
     const streams = extractLiveStreams(config);
     if (streams.length === 0) return null;
     return (
       <div className="mt-3 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
         <div className="mb-2 flex items-center gap-2 text-xs font-medium text-[#868993]">
-          Trading Config
+          {t.jobConfig.tradingConfig}
           {streams.length > 1 && (
             <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#d1d4dc]">
-              {streams.length} streams
+              {streams.length} {t.jobConfig.streams}
             </span>
           )}
         </div>
@@ -123,18 +126,18 @@ export function JobConfigSummary({
   const c = extractBacktestConfig(config);
   return (
     <div className="mt-3 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
-      <div className="mb-2 text-xs font-medium text-[#868993]">Trading Config</div>
+      <div className="mb-2 text-xs font-medium text-[#868993]">{t.jobConfig.tradingConfig}</div>
       <div className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
-        <ConfigEntry label="Symbol" value={c.symbol} />
-        <ConfigEntry label="Interval" value={c.interval} />
-        <ConfigEntry label="Leverage" value={c.leverage} />
-        <ConfigEntry label="Initial Balance" value={c.initialBalance} />
-        <ConfigEntry label="Commission" value={c.commission} />
-        <ConfigEntry label="Stop Loss" value={c.stopLossPct} />
+        <ConfigEntry label={t.jobConfig.symbol} value={c.symbol} />
+        <ConfigEntry label={t.jobConfig.interval} value={c.interval} />
+        <ConfigEntry label={t.jobConfig.leverage} value={c.leverage} />
+        <ConfigEntry label={t.jobConfig.initialBalance} value={c.initialBalance} />
+        <ConfigEntry label={t.jobConfig.commission} value={c.commission} />
+        <ConfigEntry label={t.jobConfig.stopLoss} value={c.stopLossPct} />
         {c.maxPyramidEntries && c.maxPyramidEntries !== "0" ? (
-          <ConfigEntry label="Pyramid" value={`max ${c.maxPyramidEntries}`} />
+          <ConfigEntry label={t.jobConfig.pyramid} value={`${t.jobConfig.max} ${c.maxPyramidEntries}`} />
         ) : null}
-        <ConfigEntry label="Period" value={`${c.startDate} ~ ${c.endDate}`} />
+        <ConfigEntry label={t.jobConfig.period} value={`${c.startDate} ~ ${c.endDate}`} />
       </div>
     </div>
   );
@@ -147,6 +150,7 @@ export function JobConfigInline({
   type: JobType;
   config: Record<string, unknown>;
 }) {
+  const { t } = useI18n();
   if (type === "LIVE") {
     const streams = extractLiveStreams(config);
     if (streams.length === 0) return null;
@@ -161,7 +165,7 @@ export function JobConfigInline({
     const tags = streams.map((s) => `${s.symbol}@${s.interval}`).join(", ");
     return (
       <span className="text-[#868993]">
-        {streams.length} streams · {tags}
+        {streams.length} {t.jobConfig.streams} · {tags}
       </span>
     );
   }

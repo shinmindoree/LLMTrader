@@ -1,5 +1,6 @@
 "use client";
 
+import { useI18n } from "@/lib/i18n";
 import type { JobType, Trade } from "@/lib/types";
 
 type MetricTone = "neutral" | "positive" | "negative";
@@ -107,6 +108,7 @@ function computeBacktestTradeStats(trades: unknown): TradeStats | null {
 }
 
 function BacktestResultSummary({ result }: { result: Record<string, unknown> }) {
+  const { t } = useI18n();
   const initialBalance = asNumber(result.initial_balance);
   const finalBalance = asNumber(result.final_balance);
   const netProfit = asNumber(result.net_profit);
@@ -117,33 +119,33 @@ function BacktestResultSummary({ result }: { result: Record<string, unknown> }) 
   const metrics: Metric[] = [];
   if (totalReturnPct !== null) {
     metrics.push({
-      label: "Return",
+      label: t.result.return,
       value: `${formatNumber(totalReturnPct)}%`,
       tone: totalReturnPct >= 0 ? "positive" : "negative",
     });
   }
   if (initialBalance !== null) {
-    metrics.push({ label: "Initial Balance", value: `${formatNumber(initialBalance)} USDT` });
+    metrics.push({ label: t.result.initialBalance, value: `${formatNumber(initialBalance)} USDT` });
   }
   if (finalBalance !== null) {
-    metrics.push({ label: "Final Balance", value: `${formatNumber(finalBalance)} USDT` });
+    metrics.push({ label: t.result.finalBalance, value: `${formatNumber(finalBalance)} USDT` });
   }
   if (netProfit !== null) {
     metrics.push({
-      label: "Net Profit",
+      label: t.result.netProfit,
       value: formatSigned(netProfit, "USDT"),
       tone: netProfit >= 0 ? "positive" : "negative",
     });
   }
   if (totalTrades !== null) {
-    metrics.push({ label: "Total Trades", value: `${totalTrades}` });
+    metrics.push({ label: t.result.totalTrades, value: `${totalTrades}` });
   }
   if (totalCommission !== null) {
-    metrics.push({ label: "Total Commission", value: `${formatNumber(totalCommission)} USDT`, tone: "negative" });
+    metrics.push({ label: t.result.totalCommission, value: `${formatNumber(totalCommission)} USDT`, tone: "negative" });
   }
   if (netProfit !== null && totalTrades !== null && totalTrades > 0) {
     metrics.push({
-      label: "Avg Profit / Trade",
+      label: t.result.avgProfitPerTrade,
       value: formatSigned(netProfit / totalTrades, "USDT"),
       tone: netProfit >= 0 ? "positive" : "negative",
     });
@@ -152,19 +154,19 @@ function BacktestResultSummary({ result }: { result: Record<string, unknown> }) 
   const tradeStats = computeBacktestTradeStats(result.trades);
   const statsMetrics: Metric[] = tradeStats
     ? [
-        { label: "Win Rate", value: `${formatNumber(tradeStats.winRatePct, 1)}%` },
+        { label: t.result.winRate, value: `${formatNumber(tradeStats.winRatePct, 1)}%` },
         {
-          label: "Profit Factor",
+          label: t.result.profitFactor,
           value: tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor),
         },
         tradeStats.maxProfit !== null
-          ? { label: "Max Profit", value: formatSigned(tradeStats.maxProfit, "USDT"), tone: "positive" }
-          : { label: "Max Profit", value: "-", tone: "neutral" },
+          ? { label: t.result.maxProfit, value: formatSigned(tradeStats.maxProfit, "USDT"), tone: "positive" }
+          : { label: t.result.maxProfit, value: "-", tone: "neutral" },
         tradeStats.maxLoss !== null
-          ? { label: "Max Loss", value: formatSigned(tradeStats.maxLoss, "USDT"), tone: "negative" }
-          : { label: "Max Loss", value: "-", tone: "neutral" },
-        { label: "Max Consecutive Wins", value: `${tradeStats.maxConsecutiveWins}` },
-        { label: "Max Consecutive Losses", value: `${tradeStats.maxConsecutiveLosses}` },
+          ? { label: t.result.maxLoss, value: formatSigned(tradeStats.maxLoss, "USDT"), tone: "negative" }
+          : { label: t.result.maxLoss, value: "-", tone: "neutral" },
+        { label: t.result.maxConsecutiveWins, value: `${tradeStats.maxConsecutiveWins}` },
+        { label: t.result.maxConsecutiveLosses, value: `${tradeStats.maxConsecutiveLosses}` },
       ]
     : [];
 
@@ -179,7 +181,7 @@ function BacktestResultSummary({ result }: { result: Record<string, unknown> }) 
       ) : null}
       {statsMetrics.length ? (
         <div>
-          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Trade Stats</div>
+          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">{t.result.tradeStats}</div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {statsMetrics.map((metric) => (
               <MetricCard key={metric.label} {...metric} />
@@ -198,6 +200,7 @@ function LiveResultSummary({
   result: Record<string, unknown>;
   liveTrades: Trade[];
 }) {
+  const { t } = useI18n();
   const summary = isRecord(result.summary) ? (result.summary as Record<string, unknown>) : result;
   const summaryInitialEquity = asNumber(summary.initial_equity);
   const summaryFinalEquity = asNumber(summary.final_equity);
@@ -231,31 +234,31 @@ function LiveResultSummary({
   const metrics: Metric[] = [];
   if (totalReturnPct !== null) {
     metrics.push({
-      label: "Return",
+      label: t.result.return,
       value: `${formatNumber(totalReturnPct)}%`,
       tone: totalReturnPct >= 0 ? "positive" : "negative",
     });
   }
   if (initialEquity !== null) {
-    metrics.push({ label: "Initial Equity", value: `${formatNumber(initialEquity)} USDT` });
+    metrics.push({ label: t.result.initialEquity, value: `${formatNumber(initialEquity)} USDT` });
   }
   if (finalEquity !== null) {
-    metrics.push({ label: "Final Equity", value: `${formatNumber(finalEquity)} USDT` });
+    metrics.push({ label: t.result.finalEquity, value: `${formatNumber(finalEquity)} USDT` });
   }
   metrics.push({
-    label: "Net Profit",
+    label: t.result.netProfit,
     value: formatSigned(netProfit, "USDT"),
     tone: netProfit >= 0 ? "positive" : "negative",
   });
-  metrics.push({ label: "Total Trades", value: `${numTrades}` });
+  metrics.push({ label: t.result.totalTrades, value: `${numTrades}` });
   metrics.push({
-    label: "Total Commission",
+    label: t.result.totalCommission,
     value: `${formatNumber(totalCommission)} USDT`,
     tone: "negative",
   });
   if (numTrades > 0) {
     metrics.push({
-      label: "Avg Profit / Trade",
+      label: t.result.avgProfitPerTrade,
       value: formatSigned(netProfit / numTrades, "USDT"),
       tone: netProfit >= 0 ? "positive" : "negative",
     });
@@ -264,19 +267,19 @@ function LiveResultSummary({
   const tradeStats = computeTradeStatsFromPnls(pnls);
   const statsMetrics: Metric[] = tradeStats
     ? [
-        { label: "Win Rate", value: `${formatNumber(tradeStats.winRatePct, 1)}%` },
+        { label: t.result.winRate, value: `${formatNumber(tradeStats.winRatePct, 1)}%` },
         {
-          label: "Profit Factor",
+          label: t.result.profitFactor,
           value: tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor),
         },
         tradeStats.maxProfit !== null
-          ? { label: "Max Profit", value: formatSigned(tradeStats.maxProfit, "USDT"), tone: "positive" }
-          : { label: "Max Profit", value: "-", tone: "neutral" },
+          ? { label: t.result.maxProfit, value: formatSigned(tradeStats.maxProfit, "USDT"), tone: "positive" }
+          : { label: t.result.maxProfit, value: "-", tone: "neutral" },
         tradeStats.maxLoss !== null
-          ? { label: "Max Loss", value: formatSigned(tradeStats.maxLoss, "USDT"), tone: "negative" }
-          : { label: "Max Loss", value: "-", tone: "neutral" },
-        { label: "Max Consecutive Wins", value: `${tradeStats.maxConsecutiveWins}` },
-        { label: "Max Consecutive Losses", value: `${tradeStats.maxConsecutiveLosses}` },
+          ? { label: t.result.maxLoss, value: formatSigned(tradeStats.maxLoss, "USDT"), tone: "negative" }
+          : { label: t.result.maxLoss, value: "-", tone: "neutral" },
+        { label: t.result.maxConsecutiveWins, value: `${tradeStats.maxConsecutiveWins}` },
+        { label: t.result.maxConsecutiveLosses, value: `${tradeStats.maxConsecutiveLosses}` },
       ]
     : [];
 
@@ -291,7 +294,7 @@ function LiveResultSummary({
       ) : null}
       {statsMetrics.length ? (
         <div>
-          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Trade Stats</div>
+          <div className="mb-2 text-sm font-medium text-[#d1d4dc]">{t.result.tradeStats}</div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {statsMetrics.map((metric) => (
               <MetricCard key={metric.label} {...metric} />

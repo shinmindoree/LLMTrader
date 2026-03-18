@@ -1,3 +1,4 @@
+import { useI18n } from "@/lib/i18n";
 import type { JobStatus } from "@/lib/types";
 
 const STATUS_STYLES: Record<JobStatus, string> = {
@@ -9,19 +10,19 @@ const STATUS_STYLES: Record<JobStatus, string> = {
   FAILED: "bg-[#ef5350] text-white",
 };
 
-const STATUS_LABELS: Record<JobStatus, string> = {
-  PENDING: "Queued",
-  RUNNING: "Running",
-  STOP_REQUESTED: "Stopping",
-  SUCCEEDED: "Completed",
-  STOPPED: "Stopped",
-  FAILED: "Failed",
-};
-
 export function JobStatusBadge({ status }: { status: JobStatus }) {
+  const { t } = useI18n();
+  const labels: Record<JobStatus, string> = {
+    PENDING: t.status.queued,
+    RUNNING: t.status.running,
+    STOP_REQUESTED: t.status.stopping,
+    SUCCEEDED: t.status.completed,
+    STOPPED: t.status.stopped,
+    FAILED: t.status.failed,
+  };
   return (
     <span className={`rounded px-2 py-1 text-xs font-medium ${STATUS_STYLES[status]}`}>
-      {STATUS_LABELS[status]}
+      {labels[status]}
     </span>
   );
 }

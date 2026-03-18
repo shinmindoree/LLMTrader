@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { getBinanceAccountSummary } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { BinanceAccountSummary } from "@/lib/types";
 
 const REFRESH_MS = 15_000;
@@ -33,13 +34,8 @@ function formatSignedUsd(value: number | null): string {
   return value >= 0 ? `+${abs}` : `-${abs}`;
 }
 
-function modeBadge(mode: BinanceAccountSummary["mode"]): string {
-  if (mode === "testnet") return "Testnet";
-  if (mode === "mainnet") return "Mainnet";
-  return "Custom";
-}
-
 export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
+  const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<BinanceAccountSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -70,22 +66,23 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
   const connected = snapshot?.connected === true;
   const hasConfig = snapshot?.configured === true;
   const lastUpdated = snapshot?.update_time ? new Date(snapshot.update_time).toLocaleString() : "-";
+  const modeLabel = snapshot?.mode === "testnet" ? t.binanceAccount.testnet : snapshot?.mode === "mainnet" ? t.binanceAccount.mainnet : t.binanceAccount.custom;
 
   return (
     <section className={embedded ? "" : "mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         {!embedded && (
           <div>
-            <h2 className="text-lg font-semibold text-[#d1d4dc]">Binance Asset Overview</h2>
+            <h2 className="text-lg font-semibold text-[#d1d4dc]">{t.binanceAccount.title}</h2>
             <p className="mt-1 text-xs text-[#868993]">
-              Futures account snapshot with 15s auto-refresh
+              {t.binanceAccount.subtitle}
             </p>
           </div>
         )}
         <div className="flex items-center gap-2">
           {snapshot ? (
             <span className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#868993]">
-              {modeBadge(snapshot.mode)}
+              {modeLabel}
             </span>
           ) : null}
           <button
@@ -94,40 +91,40 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
             onClick={() => void refresh(false)}
             type="button"
           >
-            {refreshing ? "Refreshing..." : "Refresh"}
+            {refreshing ? t.binanceAccount.refreshing : t.binanceAccount.refresh}
           </button>
         </div>
       </div>
 
       <div className={`mt-2 text-xs text-[#868993] ${embedded ? "mt-0" : ""}`}>
-        Last updated: {lastUpdated}
+        {t.binanceAccount.lastUpdated} {lastUpdated}
       </div>
 
       {loading && !snapshot ? (
         <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-6 text-sm text-[#868993]">
-          Loading Binance account snapshot...
+          {t.binanceAccount.loadingSnapshot}
         </div>
       ) : null}
 
       {requestError ? (
         <div className="mt-4 rounded border border-[#ef5350]/40 bg-[#2d1f1f] px-4 py-3 text-sm text-[#ef5350]">
-          API request failed: {requestError}
+          {t.binanceAccount.apiFailed} {requestError}
         </div>
       ) : null}
 
       {snapshot && !hasConfig ? (
         <div className="mt-4 rounded border border-[#efb74d]/40 bg-[#2d2718] px-4 py-3 text-sm text-[#efb74d]">
-          Binance API keys are not configured.{" "}
+          {t.binanceAccount.keysNotConfigured}{" "}
           <a className="underline hover:text-[#d1d4dc] transition-colors" href="/settings">
-            Go to Settings
+            {t.binanceAccount.goToSettings}
           </a>{" "}
-          to set up your keys.
+          {t.binanceAccount.toSetupKeys}
         </div>
       ) : null}
 
       {snapshot && hasConfig && !connected ? (
         <div className="mt-4 rounded border border-[#ef5350]/40 bg-[#2d1f1f] px-4 py-3 text-sm text-[#ef5350]">
-          Failed to connect Binance account. {snapshot.error ?? ""}
+          {t.binanceAccount.connectionFailed} {snapshot.error ?? ""}
         </div>
       ) : null}
 
@@ -135,7 +132,7 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
         <>
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-              <div className="text-xs text-[#868993]">Total Wallet</div>
+              <div className="text-xs text-[#868993]">{t.binanceAccount.totalWallet}</div>
               <div className="mt-1 text-lg font-semibold text-[#d1d4dc]">
                 {formatUsd(snapshot.total_wallet_balance)}
               </div>
@@ -146,13 +143,13 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
               </div>
             </div>
             <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-              <div className="text-xs text-[#868993]">Available Balance</div>
+              <div className="text-xs text-[#868993]">{t.binanceAccount.availableBalance}</div>
               <div className="mt-1 text-lg font-semibold text-[#d1d4dc]">
                 {formatUsd(snapshot.available_balance)}
               </div>
             </div>
             <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-              <div className="text-xs text-[#868993]">Unrealized PnL</div>
+              <div className="text-xs text-[#868993]">{t.binanceAccount.unrealizedPnl}</div>
               <div
                 className={[
                   "mt-1 text-lg font-semibold",
@@ -163,7 +160,7 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
               </div>
             </div>
             <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-              <div className="text-xs text-[#868993]">Open Positions</div>
+              <div className="text-xs text-[#868993]">{t.binanceAccount.openPositions}</div>
               <div className="mt-1 text-lg font-semibold text-[#d1d4dc]">
                 {snapshot.positions.length}
               </div>
@@ -172,18 +169,18 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-              <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Assets</div>
+              <div className="mb-2 text-sm font-medium text-[#d1d4dc]">{t.binanceAccount.assets}</div>
               {snapshot.assets.length === 0 ? (
-                <div className="text-sm text-[#868993]">No asset balance available.</div>
+                <div className="text-sm text-[#868993]">{t.binanceAccount.noAssets}</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-left text-xs">
                     <thead className="text-[#868993]">
                       <tr>
-                        <th className="pb-2 pr-4 font-medium">Asset</th>
-                        <th className="pb-2 pr-4 font-medium">Wallet</th>
-                        <th className="pb-2 pr-4 font-medium">Available</th>
-                        <th className="pb-2 font-medium">Unrealized</th>
+                        <th className="pb-2 pr-4 font-medium">{t.binanceAccount.assetCol}</th>
+                        <th className="pb-2 pr-4 font-medium">{t.binanceAccount.walletCol}</th>
+                        <th className="pb-2 pr-4 font-medium">{t.binanceAccount.availableCol}</th>
+                        <th className="pb-2 font-medium">{t.binanceAccount.unrealizedCol}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -209,19 +206,19 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
             </div>
 
             <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-              <div className="mb-2 text-sm font-medium text-[#d1d4dc]">Positions</div>
+              <div className="mb-2 text-sm font-medium text-[#d1d4dc]">{t.binanceAccount.positions}</div>
               {snapshot.positions.length === 0 ? (
-                <div className="text-sm text-[#868993]">No open position.</div>
+                <div className="text-sm text-[#868993]">{t.binanceAccount.noPositions}</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-left text-xs">
                     <thead className="text-[#868993]">
                       <tr>
-                        <th className="pb-2 pr-4 font-medium">Symbol</th>
-                        <th className="pb-2 pr-4 font-medium">Side</th>
-                        <th className="pb-2 pr-4 font-medium">Qty</th>
-                        <th className="pb-2 pr-4 font-medium">Entry</th>
-                        <th className="pb-2 font-medium">PnL</th>
+                        <th className="pb-2 pr-4 font-medium">{t.binanceAccount.symbolCol}</th>
+                        <th className="pb-2 pr-4 font-medium">{t.binanceAccount.sideCol}</th>
+                        <th className="pb-2 pr-4 font-medium">{t.binanceAccount.qtyCol}</th>
+                        <th className="pb-2 pr-4 font-medium">{t.binanceAccount.entryCol}</th>
+                        <th className="pb-2 font-medium">{t.binanceAccount.pnlCol}</th>
                       </tr>
                     </thead>
                     <tbody>

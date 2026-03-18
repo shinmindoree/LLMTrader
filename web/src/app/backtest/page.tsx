@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
@@ -22,6 +23,7 @@ function strategyNameFromPath(path: string): string {
 }
 
 export default function BacktestJobsPage() {
+  const { t } = useI18n();
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [items, setItems] = useState<Job[]>([]);
@@ -60,19 +62,17 @@ export default function BacktestJobsPage() {
 
   const onCreated = (job: Job) => {
     setLatestJob(job);
-    setNotice("Backtest run started.");
+    setNotice(t.backtest.runStarted);
     refresh();
   };
 
   const onDeleteJob = async (job: Job) => {
     if (busy) return;
     if (!FINISHED_STATUSES.has(job.status)) {
-      setError("Only completed runs can be deleted.");
+      setError(t.backtest.onlyFinishedDelete);
       return;
     }
-    const ok = confirm(
-      "Delete this backtest run?\n\nThis also removes related events, orders, and trades.",
-    );
+    const ok = confirm(t.backtest.deleteConfirm);
     if (!ok) return;
 
     try {
@@ -81,7 +81,7 @@ export default function BacktestJobsPage() {
       setNotice(null);
       await deleteJob(job.job_id);
       setLatestJob((prev) => (prev?.job_id === job.job_id ? null : prev));
-      setNotice("Run deleted.");
+      setNotice(t.backtest.runDeleted);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -92,9 +92,7 @@ export default function BacktestJobsPage() {
 
   const onDeleteAll = async () => {
     if (busy) return;
-    const ok = confirm(
-      "Delete all backtest runs?\n\n- Only completed runs are deleted.\n- Queued/running/stopping runs are kept.",
-    );
+    const ok = confirm(t.backtest.deleteAllConfirm);
     if (!ok) return;
 
     try {
@@ -116,9 +114,7 @@ export default function BacktestJobsPage() {
 
   const onStopAll = async () => {
     if (busy) return;
-    const ok = confirm(
-      "Request stop for all backtest runs?\n\n- Queued runs stop immediately.\n- Running runs move to Stopping.",
-    );
+    const ok = confirm(t.backtest.stopAllConfirm);
     if (!ok) return;
 
     try {
@@ -141,7 +137,7 @@ export default function BacktestJobsPage() {
     <main className="w-full px-4 py-3">
       <div className="flex items-center justify-between">
         <p className="text-xs text-[#868993]">
-          Backtest runs use a separate queue from live runs.
+          {t.backtest.queueInfo}
         </p>
         <div className="flex gap-2 text-sm">
           <button
@@ -150,7 +146,7 @@ export default function BacktestJobsPage() {
             onClick={refresh}
             type="button"
           >
-            Refresh
+            {t.common.refresh}
           </button>
           <button
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#2d1f1f] hover:border-[#ef5350] disabled:opacity-60 transition-colors"
@@ -158,7 +154,7 @@ export default function BacktestJobsPage() {
             onClick={onDeleteAll}
             type="button"
           >
-            Delete All
+            {t.common.deleteAll}
           </button>
           <button
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-[#d1d4dc] hover:bg-[#2d1f1f] hover:border-[#ef5350] disabled:opacity-60 transition-colors"
@@ -166,7 +162,7 @@ export default function BacktestJobsPage() {
             onClick={onStopAll}
             type="button"
           >
-            Stop All
+            {t.common.stopAll}
           </button>
         </div>
       </div>
@@ -184,8 +180,8 @@ export default function BacktestJobsPage() {
       ) : null}
 
       <section className="mt-6">
-        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">New Backtest</div>
-        <p className="mb-3 text-xs text-[#868993]">Create a backtest run stored in Postgres.</p>
+        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.backtest.newBacktest}</div>
+        <p className="mb-3 text-xs text-[#868993]">{t.backtest.newBacktestDesc}</p>
         {strategies.length ? (
           <BacktestForm
             strategies={strategies}
@@ -193,19 +189,19 @@ export default function BacktestJobsPage() {
             onSubmittingChange={setRunPending}
           />
         ) : (
-          <div className="text-sm text-[#868993]">Loading…</div>
+          <div className="text-sm text-[#868993]">{t.common.loading}</div>
         )}
       </section>
 
       <LatestJobResult
         jobType="BACKTEST"
         focusJobId={latestJob?.job_id ?? null}
-        title="Latest Backtest Result"
+        title={t.backtest.latestResult}
         showPendingSpinner={runPending}
       />
 
       <section className="mt-10">
-        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">Run History</div>
+        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.backtest.runHistory}</div>
         {error ? (
           <p className="mb-4 text-sm text-[#ef5350] rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3">
             {error}
@@ -214,7 +210,7 @@ export default function BacktestJobsPage() {
 
         {items.length === 0 && !error ? (
           <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
-            No backtest jobs found. Create a new backtest to get started.
+            {t.backtest.emptyState}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -238,7 +234,7 @@ export default function BacktestJobsPage() {
                       onClick={() => onDeleteJob(j)}
                       type="button"
                     >
-                      Delete
+                      {t.common.delete}
                     </button>
                   </div>
                 </div>
