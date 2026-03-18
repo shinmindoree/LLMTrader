@@ -1,7 +1,15 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { useEffect, useRef, useMemo, useCallback } from "react";
+import {
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+  type SeriesMarker,
+  type Time,
+  ColorType,
+  CrosshairMode,
+} from "lightweight-charts";
 
 type CandlePoint = {
   open_time: number;
@@ -30,7 +38,7 @@ type BacktestChartPayload = {
   indicator_series?: IndicatorSeries[];
 };
 
-type MarkerTrade = {
+export type MarkerTrade = {
   timestamp: number | null;
   side: string | null;
   price: number | null;
@@ -38,8 +46,6 @@ type MarkerTrade = {
   reason: string | null;
   exitReason: string | null;
 };
-
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const PALETTE = [
   "#42a5f5",
@@ -56,20 +62,25 @@ function colorAt(index: number): string {
   return PALETTE[index % PALETTE.length];
 }
 
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+function msToSec(ms: number): Time {
+  return Math.floor(ms / 1000) as Time;
 }
 
 export function BacktestExecutionChart({
-  chart,
+  chart: chartPayload,
   trades,
 }: {
   chart: BacktestChartPayload;
   trades: MarkerTrade[];
 }) {
+  const mainRef = useRef<HTMLDivElement>(null);
+  const oscRef = useRef<HTMLDivElement>(null);
+  const mainChartRef = useRef<IChartApi | null>(null);
+  const oscChartRef = useRef<IChartApi | null>(null);
+
   const candles = useMemo(() => {
-    if (!Array.isArray(chart.candles)) return [];
-    return chart.candles.filter(
+    if (!Array.isArray(chartPayload.candles)) return [];
+    return chartPayload.candles.filter(
       (c) =>
         c &&
         typeof c.close_time === "number" &&
@@ -78,112 +89,230 @@ export function BacktestExecutionChart({
         Number.isFinite(c.low) &&
         Number.isFinite(c.close),
     );
-  }, [chart.candles]);
+  }, [chartPayload.candles]);
 
-  const hasOscillator = useMemo(
-    () => Array.isArray(chart.indicator_series) && chart.indicator_series.some((s) => s.pane === "oscillator"),
-    [chart.indicator_series],
-  );
+  const overlayIndicators = useMemo(() => {
+    if (!Array.isArray(chartPayload.indicator_series)) return [];
+    return chartPayload.indicator_series.filter((s) => s.pane === "overlay");
+  }, [chartPayload.indicator_series]);
 
-  const traces = useMemo(() => {
-    if (!candles.length) return [] as Array<Record<string, unknown>>;
+  const oscillatorIndicators = useMemo(() => {
+    if (!Array.isArray(chartPayload.indicator_series)) return [];
+    return chartPayload.indicator_series.filter((s) => s.pane === "oscillator");
+  }, [chartPayload.indicator_series]);
 
-    const x = candles.map((c) => new Date(c.close_time).toISOString());
-    const base: Array<Record<string, unknown>> = [
-      {
-        type: "candlestick",
-        name: "Price",
-        x,
-        open: candles.map((c) => c.open),
-        high: candles.map((c) => c.high),
-        low: candles.map((c) => c.low),
-        close: candles.map((c) => c.close),
-        increasing: { line: { color: "#26a69a" } },
-        decreasing: { line: { color: "#ef5350" } },
-        yaxis: "y",
-      },
-    ];
+  const hasOscillator = oscillatorIndicators.length > 0;
 
-    const indicatorSeries = Array.isArray(chart.indicator_series) ? chart.indicator_series : [];
-    indicatorSeries.forEach((series, idx) => {
-      const y = candles.map((_, i) => asNumber(series.values?.[i]));
-      if (!y.some((v) => v !== null)) return;
-      base.push({
-        type: "scatter",
-        mode: "lines",
-        name: series.label,
-        x,
-        y,
-        yaxis: series.pane === "oscillator" ? "y2" : "y",
-        line: { color: colorAt(idx), width: 1.8 },
-      });
-    });
-
-    const markerGroups: Record<string, Array<{ x: string; y: number; text: string }>> = {
-      LONG_ENTRY: [],
-      LONG_EXIT: [],
-      SHORT_ENTRY: [],
-      SHORT_EXIT: [],
-    };
-
+  const markers = useMemo<SeriesMarker<Time>[]>(() => {
+    const result: SeriesMarker<Time>[] = [];
     for (const trade of trades) {
       if (!trade.timestamp || !trade.price) continue;
+      const time = msToSec(trade.timestamp);
       const isExit = trade.pnl !== null;
       const side = trade.side ?? "";
-      let kind: keyof typeof markerGroups | null = null;
-      if (!isExit && side === "BUY") kind = "LONG_ENTRY";
-      if (!isExit && side === "SELL") kind = "SHORT_ENTRY";
-      if (isExit && side === "SELL") kind = "LONG_EXIT";
-      if (isExit && side === "BUY") kind = "SHORT_EXIT";
-      if (!kind) continue;
-      markerGroups[kind].push({
-        x: new Date(trade.timestamp).toISOString(),
-        y: trade.price,
-        text: `${kind} | ${trade.reason ?? trade.exitReason ?? "-"}`,
-      });
+
+      if (!isExit && side === "BUY") {
+        result.push({
+          time,
+          position: "belowBar",
+          color: "#00e676",
+          shape: "arrowUp",
+          text: `Long ${trade.reason ?? ""}`.trim(),
+        });
+      } else if (!isExit && side === "SELL") {
+        result.push({
+          time,
+          position: "aboveBar",
+          color: "#ff5252",
+          shape: "arrowDown",
+          text: `Short ${trade.reason ?? ""}`.trim(),
+        });
+      } else if (isExit && side === "SELL") {
+        const pnlStr = trade.pnl !== null ? ` (${trade.pnl >= 0 ? "+" : ""}${trade.pnl.toFixed(2)})` : "";
+        result.push({
+          time,
+          position: "aboveBar",
+          color: "#40c4ff",
+          shape: "arrowDown",
+          text: `Exit Long${pnlStr}`,
+        });
+      } else if (isExit && side === "BUY") {
+        const pnlStr = trade.pnl !== null ? ` (${trade.pnl >= 0 ? "+" : ""}${trade.pnl.toFixed(2)})` : "";
+        result.push({
+          time,
+          position: "belowBar",
+          color: "#ffb74d",
+          shape: "arrowUp",
+          text: `Exit Short${pnlStr}`,
+        });
+      }
     }
-
-    const markerStyles: Record<
-      keyof typeof markerGroups,
-      { name: string; symbol: string; color: string; size: number }
-    > = {
-      LONG_ENTRY: { name: "Long Entry", symbol: "triangle-up", color: "#00e676", size: 10 },
-      LONG_EXIT: { name: "Long Exit", symbol: "triangle-down", color: "#40c4ff", size: 10 },
-      SHORT_ENTRY: { name: "Short Entry", symbol: "triangle-down", color: "#ff5252", size: 10 },
-      SHORT_EXIT: { name: "Short Exit", symbol: "triangle-up", color: "#ffb74d", size: 10 },
-    };
-
-    for (const [kind, points] of Object.entries(markerGroups) as Array<
-      [keyof typeof markerGroups, Array<{ x: string; y: number; text: string }>]
-    >) {
-      if (!points.length) continue;
-      const style = markerStyles[kind];
-      base.push({
-        type: "scatter",
-        mode: "markers",
-        name: style.name,
-        x: points.map((p) => p.x),
-        y: points.map((p) => p.y),
-        yaxis: "y",
-        marker: {
-          symbol: style.symbol,
-          color: style.color,
-          size: style.size,
-          line: { width: 1, color: "#0f141f" },
-        },
-        text: points.map((p) => p.text),
-        hovertemplate: "%{text}<br>Price: %{y:.4f}<extra></extra>",
-      });
-    }
-
-    return base;
-  }, [candles, chart.indicator_series, trades]);
+    result.sort((a, b) => (a.time as number) - (b.time as number));
+    return result;
+  }, [trades]);
 
   const indicatorNames = useMemo(() => {
-    const config = chart.indicator_config;
+    const config = chartPayload.indicator_config;
     if (!config || typeof config !== "object") return [] as string[];
     return Object.keys(config);
-  }, [chart.indicator_config]);
+  }, [chartPayload.indicator_config]);
+
+  const buildChart = useCallback(
+    (container: HTMLDivElement, height: number) => {
+      return createChart(container, {
+        width: container.clientWidth,
+        height,
+        layout: {
+          background: { type: ColorType.Solid, color: "#131722" },
+          textColor: "#d1d4dc",
+        },
+        grid: {
+          vertLines: { color: "rgba(42,46,57,0.6)" },
+          horzLines: { color: "rgba(42,46,57,0.6)" },
+        },
+        crosshair: { mode: CrosshairMode.Normal },
+        rightPriceScale: { borderColor: "#2a2e39" },
+        timeScale: {
+          borderColor: "#2a2e39",
+          timeVisible: true,
+          secondsVisible: false,
+        },
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!mainRef.current || !candles.length) return;
+
+    const mainContainer = mainRef.current;
+    mainContainer.innerHTML = "";
+
+    const mainChart = buildChart(mainContainer, hasOscillator ? 400 : 560);
+    mainChartRef.current = mainChart;
+
+    const candleSeries = mainChart.addCandlestickSeries({
+      upColor: "#26a69a",
+      downColor: "#ef5350",
+      borderUpColor: "#26a69a",
+      borderDownColor: "#ef5350",
+      wickUpColor: "#26a69a",
+      wickDownColor: "#ef5350",
+    });
+
+    const candleData = candles.map((c) => ({
+      time: msToSec(c.close_time),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }));
+    candleSeries.setData(candleData);
+
+    if (markers.length > 0) {
+      candleSeries.setMarkers(markers);
+    }
+
+    const overlaySeries: ISeriesApi<"Line">[] = [];
+    overlayIndicators.forEach((series, idx) => {
+      const lineData: Array<{ time: Time; value: number }> = [];
+      candles.forEach((c, i) => {
+        const v = series.values?.[i];
+        if (typeof v === "number" && Number.isFinite(v)) {
+          lineData.push({ time: msToSec(c.close_time), value: v });
+        }
+      });
+      if (!lineData.length) return;
+
+      const lineSeries = mainChart.addLineSeries({
+        color: colorAt(idx),
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: series.label,
+      });
+      lineSeries.setData(lineData);
+      overlaySeries.push(lineSeries);
+    });
+
+    let oscChart: IChartApi | null = null;
+    const oscSeriesList: ISeriesApi<"Line" | "Histogram">[] = [];
+
+    if (hasOscillator && oscRef.current) {
+      const oscContainer = oscRef.current;
+      oscContainer.innerHTML = "";
+
+      oscChart = buildChart(oscContainer, 160);
+      oscChartRef.current = oscChart;
+
+      oscillatorIndicators.forEach((series, idx) => {
+        const useHistogram =
+          series.indicator.toUpperCase().includes("MACD") &&
+          (series.output?.toLowerCase() === "histogram" ||
+            series.output?.toLowerCase() === "hist");
+
+        const lineData: Array<{ time: Time; value: number; color?: string }> = [];
+        candles.forEach((c, i) => {
+          const v = series.values?.[i];
+          if (typeof v === "number" && Number.isFinite(v)) {
+            const point: { time: Time; value: number; color?: string } = {
+              time: msToSec(c.close_time),
+              value: v,
+            };
+            if (useHistogram) {
+              point.color = v >= 0 ? "#26a69a" : "#ef5350";
+            }
+            lineData.push(point);
+          }
+        });
+        if (!lineData.length) return;
+
+        if (useHistogram) {
+          const hSeries = oscChart!.addHistogramSeries({
+            priceLineVisible: false,
+            lastValueVisible: false,
+            title: series.label,
+          });
+          hSeries.setData(lineData);
+          oscSeriesList.push(hSeries);
+        } else {
+          const lSeries = oscChart!.addLineSeries({
+            color: colorAt(idx + overlayIndicators.length),
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            title: series.label,
+          });
+          lSeries.setData(lineData);
+          oscSeriesList.push(lSeries);
+        }
+      });
+
+      mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (range) oscChart?.timeScale().setVisibleLogicalRange(range);
+      });
+      oscChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (range) mainChart.timeScale().setVisibleLogicalRange(range);
+      });
+    }
+
+    mainChart.timeScale().fitContent();
+    oscChart?.timeScale().fitContent();
+
+    const handleResize = () => {
+      mainChart.applyOptions({ width: mainContainer.clientWidth });
+      oscChart?.applyOptions({ width: oscRef.current?.clientWidth ?? mainContainer.clientWidth });
+    };
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      mainChart.remove();
+      oscChart?.remove();
+      mainChartRef.current = null;
+      oscChartRef.current = null;
+    };
+  }, [candles, markers, overlayIndicators, oscillatorIndicators, hasOscillator, buildChart]);
 
   if (!candles.length) {
     return (
@@ -193,55 +322,14 @@ export function BacktestExecutionChart({
     );
   }
 
-  const layout: Record<string, unknown> = {
-    dragmode: "pan",
-    paper_bgcolor: "#131722",
-    plot_bgcolor: "#0f141f",
-    font: { color: "#d1d4dc" },
-    margin: { l: 56, r: 24, t: 18, b: 40 },
-    legend: { orientation: "h", x: 0, y: 1.02 },
-    xaxis: {
-      rangeslider: { visible: false },
-      showgrid: true,
-      gridcolor: "rgba(42, 46, 57, 0.6)",
-      showticklabels: !hasOscillator,
-      domain: [0, 1],
-    },
-    yaxis: {
-      title: "Price",
-      side: "right",
-      showgrid: true,
-      gridcolor: "rgba(42, 46, 57, 0.6)",
-      domain: hasOscillator ? [0.32, 1] : [0, 1],
-    },
-    hovermode: "x unified",
-  };
-
-  if (hasOscillator) {
-    layout.xaxis2 = {
-      matches: "x",
-      showgrid: true,
-      gridcolor: "rgba(42, 46, 57, 0.6)",
-      domain: [0, 1],
-      anchor: "y2",
-    };
-    layout.yaxis2 = {
-      title: "Oscillator",
-      side: "right",
-      showgrid: true,
-      gridcolor: "rgba(42, 46, 57, 0.6)",
-      domain: [0, 0.25],
-    };
-  }
-
   return (
     <section className="mb-4 rounded border border-[#2a2e39] bg-[#131722] p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded border border-[#2a2e39] bg-[#1e222d] px-2 py-1 text-[#d1d4dc]">
-          {chart.symbol ?? "-"}
+          {chartPayload.symbol ?? "-"}
         </span>
         <span className="rounded border border-[#2a2e39] bg-[#1e222d] px-2 py-1 text-[#d1d4dc]">
-          {chart.interval ?? "-"}
+          {chartPayload.interval ?? "-"}
         </span>
         {indicatorNames.map((name) => (
           <span key={name} className="rounded border border-[#2a2e39] bg-[#1e222d] px-2 py-1 text-[#868993]">
@@ -249,13 +337,8 @@ export function BacktestExecutionChart({
           </span>
         ))}
       </div>
-      <Plot
-        data={traces}
-        layout={layout}
-        style={{ width: "100%", height: "560px" }}
-        config={{ responsive: true, displaylogo: false }}
-        useResizeHandler
-      />
+      <div ref={mainRef} />
+      {hasOscillator && <div ref={oscRef} className="mt-1" />}
     </section>
   );
 }

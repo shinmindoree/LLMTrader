@@ -10,12 +10,11 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
+    "lightweight-charts": "^4.2.2",
     "next": "16.1.4",
     "nextjs-toploader": "^3.9.17",
-    "plotly.js-dist-min": "^3.4.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "react-plotly.js": "^2.6.0"
+    "react-dom": "19.2.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
