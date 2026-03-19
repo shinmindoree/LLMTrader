@@ -182,6 +182,18 @@ export function BacktestExecutionChart({
     return map;
   }, [trades]);
 
+  const tradesByTimeRef = useRef(tradesByTime);
+  tradesByTimeRef.current = tradesByTime;
+
+  const chartDataKey = useMemo(() => {
+    if (!candles.length) return "";
+    const first = candles[0]?.close_time ?? 0;
+    const last = candles[candles.length - 1]?.close_time ?? 0;
+    const overlayKey = overlayIndicators.map((s) => s.id).join(",");
+    const oscKey = oscillatorIndicators.map((s) => s.id).join(",");
+    return `${candles.length}-${first}-${last}-${hasOscillator}-${overlayKey}-${oscKey}`;
+  }, [candles, hasOscillator, overlayIndicators, oscillatorIndicators]);
+
   const indicatorNames = useMemo(() => {
     const config = chartPayload.indicator_config;
     if (!config || typeof config !== "object") return [] as string[];
@@ -344,7 +356,7 @@ export function BacktestExecutionChart({
         setTooltip(null);
         return;
       }
-      const found = findTradesAtTime(tradesByTime, timeSec);
+      const found = findTradesAtTime(tradesByTimeRef.current, timeSec);
       if (found.length) {
         setTooltip({ x: param.point.x, y: param.point.y, trades: found });
       } else {
@@ -359,7 +371,7 @@ export function BacktestExecutionChart({
       mainChart.remove();
       oscChart?.remove();
     };
-  }, [candles, markers, overlayIndicators, oscillatorIndicators, hasOscillator, buildChart, tradesByTime]);
+  }, [chartDataKey, buildChart]);
 
   if (!candles.length) {
     return (
