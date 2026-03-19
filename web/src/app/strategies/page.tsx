@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 
 import {
@@ -715,6 +715,8 @@ export default function StrategiesPage() {
   const workspaceResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const skipSessionSyncRef = useRef(false);
   const chatSessionsRef = useRef<ChatSessionRecord[]>([]);
+  const shouldAutoScrollRef = useRef(true);
+  const AUTO_SCROLL_THRESHOLD = 80;
 
   const routeWheelToScrollTarget = (event: React.WheelEvent, target: HTMLElement | null) => {
     if (!target) return;
@@ -770,10 +772,20 @@ export default function StrategiesPage() {
   }, []);
 
   useEffect(() => {
-    if (chatScrollRef.current) {
-      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    const el = chatScrollRef.current;
+    if (!el) return;
+    if (shouldAutoScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [chatMessages]);
+
+  const handleChatScroll = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom <= AUTO_SCROLL_THRESHOLD;
+  }, []);
 
   useEffect(() => {
     chatSessionsRef.current = chatSessions;
@@ -788,6 +800,7 @@ export default function StrategiesPage() {
       return;
     }
     skipSessionSyncRef.current = true;
+    shouldAutoScrollRef.current = true;
     setChatMessages(activeSession.messages);
     setChatError(null);
     setPrompt("");
@@ -1107,6 +1120,7 @@ export default function StrategiesPage() {
     };
 
     if (options?.forceChat && activeCode) {
+      shouldAutoScrollRef.current = true;
       setChatMessages((prev) => [...prev, { ...assistantMessage, textOnly: true }]);
       try {
         const chatMessagesForApi = toApiMessages(nextMessages);
@@ -1125,6 +1139,7 @@ export default function StrategiesPage() {
       return;
     }
 
+    shouldAutoScrollRef.current = true;
     setChatMessages((prev) => [...prev, assistantMessage]);
     try {
       const messagesToSend = buildMessagesForGeneration(
@@ -1524,6 +1539,7 @@ export default function StrategiesPage() {
                 <div
                   ref={chatScrollRef}
                   className="scrollbar-hover min-h-0 flex-1 overflow-y-auto px-6 py-6"
+                  onScroll={handleChatScroll}
                 >
                   <div className="mx-auto flex w-full max-w-4xl flex-col gap-8">
                     <div className="flex justify-end">
