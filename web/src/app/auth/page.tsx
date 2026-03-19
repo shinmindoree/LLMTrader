@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 
@@ -10,8 +11,17 @@ function isAuthEnabled(): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
+function isValidReturnUrl(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed.startsWith("/") && !trimmed.startsWith("//") && !trimmed.includes(":");
+}
+
 export default function AuthPage() {
   const { t } = useI18n();
+  const searchParams = useSearchParams();
+  const returnUrl = searchParams.get("returnUrl");
+  const reason = searchParams.get("reason");
+  const showSessionExpired = reason === "session_expired";
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,7 +53,8 @@ export default function AuthPage() {
         setMessage(t.auth.signupSuccess);
         return;
       }
-      window.location.href = "/dashboard";
+      const redirectTo = returnUrl && isValidReturnUrl(returnUrl) ? returnUrl : "/dashboard";
+      window.location.href = redirectTo;
     } catch {
       setError(t.auth.requestError);
     } finally {
@@ -73,6 +84,12 @@ export default function AuthPage() {
         <p className="mt-2 text-sm text-[#868993]">
           {t.auth.description}
         </p>
+
+        {showSessionExpired ? (
+          <p className="mt-3 rounded border border-[#2962ff]/40 bg-[#1a2744]/50 px-3 py-2 text-sm text-[#7eb8ff]">
+            {t.auth.sessionExpired}
+          </p>
+        ) : null}
 
         <div className="mt-4 space-y-3">
           <input

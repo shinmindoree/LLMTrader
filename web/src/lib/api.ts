@@ -27,6 +27,18 @@ import type {
 
 const CHAT_USER_ID_STORAGE_KEY = "llmtrader.chat_user_id";
 
+function redirectToAuthOn401(): never {
+  if (typeof window === "undefined") {
+    throw new Error("Session expired");
+  }
+  const returnPath = window.location.pathname === "/auth" ? "/dashboard" : window.location.pathname + window.location.search;
+  const params = new URLSearchParams();
+  params.set("returnUrl", returnPath);
+  params.set("reason", "session_expired");
+  window.location.href = `/auth?${params.toString()}`;
+  throw new Error("Session expired");
+}
+
 function parseSupabaseUserId(value: string): string | null {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -85,6 +97,9 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
   });
   if (!res.ok) {
+    if (res.status === 401) {
+      redirectToAuthOn401();
+    }
     const text = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
@@ -306,6 +321,9 @@ export async function generateStrategyStream(
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      redirectToAuthOn401();
+    }
     const text = await res.text().catch(() => "");
     doneWith({ error: `${res.status} ${res.statusText}: ${text}` });
     return;
