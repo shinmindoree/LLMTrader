@@ -1,26 +1,16 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
-import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
-import { JobConfigInline } from "@/components/JobConfigSummary";
-import { jobDetailPath } from "@/lib/routes";
+import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { BacktestForm } from "./new/BacktestForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
-
-function strategyNameFromPath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) return "Strategy";
-  const base = trimmed.split("/").pop() ?? trimmed;
-  return base.replace(/\.[^.]+$/, "");
-}
 
 export default function BacktestJobsPage() {
   const { t } = useI18n();
@@ -213,41 +203,13 @@ export default function BacktestJobsPage() {
             {t.backtest.emptyState}
           </div>
         ) : (
-          <ul className="space-y-2">
-            {items.map((j) => (
-              <li
-                key={j.job_id}
-                className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-3 hover:border-[#2962ff] hover:bg-[#252936] transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <Link
-                    className="font-medium text-[#d1d4dc] hover:text-[#2962ff] hover:underline transition-colors"
-                    href={jobDetailPath("BACKTEST", j.job_id)}
-                  >
-                    {strategyNameFromPath(j.strategy_path)}
-                  </Link>
-                  <div className="flex items-center gap-2">
-                    <JobStatusBadge status={j.status} />
-                    <button
-                      className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#d1d4dc] hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50 transition-colors"
-                      disabled={busy || !FINISHED_STATUSES.has(j.status)}
-                      onClick={() => onDeleteJob(j)}
-                      type="button"
-                    >
-                      {t.common.delete}
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-1 text-xs">
-                  <span className="text-[#868993]">{new Date(j.created_at).toLocaleString()}</span>
-                  {j.config ? (
-                    <span className="ml-2 text-xs"><JobConfigInline type="BACKTEST" config={j.config} /></span>
-                  ) : null}
-                  {j.error ? <span className="text-[#868993]"> · error: {j.error}</span> : ""}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <RunHistoryTable
+            items={items}
+            type="BACKTEST"
+            onDeleteJob={onDeleteJob}
+            busy={busy}
+            canDeleteJob={(j) => FINISHED_STATUSES.has(j.status)}
+          />
         )}
       </section>
     </main>

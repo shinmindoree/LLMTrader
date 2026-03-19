@@ -9,6 +9,7 @@ import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, StrategyInfo } f
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { JobConfigInline } from "@/components/JobConfigSummary";
+import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { jobDetailPath } from "@/lib/routes";
 import { LiveForm } from "./new/LiveForm";
 
@@ -312,46 +313,18 @@ export default function LiveJobsPage() {
           </p>
         ) : null}
 
-        {items.length === 0 && !error ? (
+        {items.filter((j) => !ACTIVE_STATUSES.has(j.status)).length === 0 && !error ? (
           <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
             {t.live.emptyState}
           </div>
         ) : (
-          <ul className="space-y-2">
-            {items.filter((j) => !ACTIVE_STATUSES.has(j.status)).map((j) => (
-              <li
-                key={j.job_id}
-                className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-3 hover:border-[#2962ff] hover:bg-[#252936] transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <Link
-                    className="font-medium text-[#d1d4dc] hover:text-[#2962ff] hover:underline transition-colors"
-                    href={jobDetailPath("LIVE", j.job_id)}
-                  >
-                    {strategyNameFromPath(j.strategy_path)}
-                  </Link>
-                  <div className="flex items-center gap-2">
-                    <JobStatusBadge status={j.status} />
-                    <button
-                      className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#d1d4dc] hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50 transition-colors"
-                      disabled={busy || !FINISHED_STATUSES.has(j.status)}
-                      onClick={() => onDeleteJob(j)}
-                      type="button"
-                    >
-                      {t.common.delete}
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-1 text-xs">
-                  <span className="text-[#868993]">{new Date(j.created_at).toLocaleString()}</span>
-                  {j.config ? (
-                    <span className="ml-2 text-xs"><JobConfigInline type="LIVE" config={j.config} /></span>
-                  ) : null}
-                  {j.error ? <span className="text-[#868993]"> · error: {j.error}</span> : ""}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <RunHistoryTable
+            items={items.filter((j) => !ACTIVE_STATUSES.has(j.status))}
+            type="LIVE"
+            onDeleteJob={onDeleteJob}
+            busy={busy}
+            canDeleteJob={(j) => FINISHED_STATUSES.has(j.status)}
+          />
         )}
       </section>
     </main>
