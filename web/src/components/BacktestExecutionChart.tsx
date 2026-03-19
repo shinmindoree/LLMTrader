@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useMemo, useCallback } from "react";
+import { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import {
   createChart,
   type IChartApi,
@@ -66,6 +66,27 @@ function msToSec(ms: number): Time {
   return Math.floor(ms / 1000) as Time;
 }
 
+type TooltipState = {
+  x: number;
+  y: number;
+  trades: MarkerTrade[];
+};
+
+function findTradesAtTime(tradesByTime: Map<number, MarkerTrade[]>, timeSec: number): MarkerTrade[] {
+  const exact = tradesByTime.get(timeSec);
+  if (exact?.length) return exact;
+  let nearest: MarkerTrade[] = [];
+  let minDist = 120;
+  for (const [tSec, list] of tradesByTime) {
+    const d = Math.abs(tSec - timeSec);
+    if (d < minDist) {
+      minDist = d;
+      nearest = list;
+    }
+  }
+  return nearest;
+}
+
 export function BacktestExecutionChart({
   chart: chartPayload,
   trades,
@@ -75,8 +96,8 @@ export function BacktestExecutionChart({
 }) {
   const mainRef = useRef<HTMLDivElement>(null);
   const oscRef = useRef<HTMLDivElement>(null);
-  const mainChartRef = useRef<IChartApi | null>(null);
-  const oscChartRef = useRef<IChartApi | null>(null);
+  const chartWrapperRef = useRef<HTMLDivElement>(null);
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   const candles = useMemo(() => {
     if (!Array.isArray(chartPayload.candles)) return [];
@@ -117,7 +138,7 @@ export function BacktestExecutionChart({
           position: "belowBar",
           color: "#00e676",
           shape: "arrowUp",
-          text: `Long ${trade.reason ?? ""}`.trim(),
+          text: "LE",
         });
       } else if (!isExit && side === "SELL") {
         result.push({
@@ -125,30 +146,40 @@ export function BacktestExecutionChart({
           position: "aboveBar",
           color: "#ff5252",
           shape: "arrowDown",
-          text: `Short ${trade.reason ?? ""}`.trim(),
+          text: "SE",
         });
       } else if (isExit && side === "SELL") {
-        const pnlStr = trade.pnl !== null ? ` (${trade.pnl >= 0 ? "+" : ""}${trade.pnl.toFixed(2)})` : "";
         result.push({
           time,
           position: "aboveBar",
           color: "#40c4ff",
           shape: "arrowDown",
-          text: `Exit Long${pnlStr}`,
+          text: "Exit",
         });
       } else if (isExit && side === "BUY") {
-        const pnlStr = trade.pnl !== null ? ` (${trade.pnl >= 0 ? "+" : ""}${trade.pnl.toFixed(2)})` : "";
         result.push({
           time,
           position: "belowBar",
           color: "#ffb74d",
           shape: "arrowUp",
-          text: `Exit Short${pnlStr}`,
+          text: "Exit",
         });
       }
     }
     result.sort((a, b) => (a.time as number) - (b.time as number));
     return result;
+  }, [trades]);
+
+  const tradesByTime = useMemo(() => {
+    const map = new Map<number, MarkerTrade[]>();
+    for (const trade of trades) {
+      if (!trade.timestamp) continue;
+      const t = Math.floor(trade.timestamp / 1000);
+      const list = map.get(t) ?? [];
+      list.push(trade);
+      map.set(t, list);
+    }
+    return map;
   }, [trades]);
 
   const indicatorNames = useMemo(() => {
@@ -189,7 +220,6 @@ export function BacktestExecutionChart({
     mainContainer.innerHTML = "";
 
     const mainChart = buildChart(mainContainer, hasOscillator ? 400 : 560);
-    mainChartRef.current = mainChart;
 
     const candleSeries = mainChart.addCandlestickSeries({
       upColor: "#26a69a",
@@ -243,7 +273,6 @@ export function BacktestExecutionChart({
       oscContainer.innerHTML = "";
 
       oscChart = buildChart(oscContainer, 160);
-      oscChartRef.current = oscChart;
 
       oscillatorIndicators.forEach((series, idx) => {
         const useHistogram =
@@ -305,14 +334,32 @@ export function BacktestExecutionChart({
     };
     window.addEventListener("resize", handleResize);
 
+    const crosshairHandler = (param: { point?: { x: number; y: number }; time?: unknown }) => {
+      if (!param.point) {
+        setTooltip(null);
+        return;
+      }
+      const timeSec = typeof param.time === "number" ? param.time : undefined;
+      if (timeSec === undefined) {
+        setTooltip(null);
+        return;
+      }
+      const found = findTradesAtTime(tradesByTime, timeSec);
+      if (found.length) {
+        setTooltip({ x: param.point.x, y: param.point.y, trades: found });
+      } else {
+        setTooltip(null);
+      }
+    };
+    mainChart.subscribeCrosshairMove(crosshairHandler);
+
     return () => {
+      mainChart.unsubscribeCrosshairMove(crosshairHandler);
       window.removeEventListener("resize", handleResize);
       mainChart.remove();
       oscChart?.remove();
-      mainChartRef.current = null;
-      oscChartRef.current = null;
     };
-  }, [candles, markers, overlayIndicators, oscillatorIndicators, hasOscillator, buildChart]);
+  }, [candles, markers, overlayIndicators, oscillatorIndicators, hasOscillator, buildChart, tradesByTime]);
 
   if (!candles.length) {
     return (
@@ -337,7 +384,37 @@ export function BacktestExecutionChart({
           </span>
         ))}
       </div>
-      <div ref={mainRef} />
+      <div ref={chartWrapperRef} className="relative">
+        <div ref={mainRef} />
+        {tooltip && (
+          <div
+            className="pointer-events-none absolute z-10 min-w-[200px] rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-xs shadow-lg"
+            style={{
+              left: tooltip.x,
+              top: tooltip.y - 8,
+              transform: "translate(-50%, -100%)",
+            }}
+          >
+            {tooltip.trades.map((t, i) => (
+              <div key={i} className={i > 0 ? "mt-2 border-t border-[#2a2e39] pt-2" : ""}>
+                <div className="space-y-1 text-[#d1d4dc]">
+                  <div className="font-medium">
+                    {t.pnl !== null ? "Exit" : t.side === "BUY" ? "Long Entry" : "Short Entry"}
+                  </div>
+                  <div>Price: {t.price != null ? t.price.toFixed(2) : "-"}</div>
+                  {t.pnl !== null && (
+                    <div className={t.pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}>
+                      PnL: {t.pnl >= 0 ? "+" : ""}{t.pnl.toFixed(2)}
+                    </div>
+                  )}
+                  {t.reason && <div className="text-[#868993]">Reason: {t.reason}</div>}
+                  {t.exitReason && <div className="text-[#868993]">Exit: {t.exitReason}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       {hasOscillator && <div ref={oscRef} className="mt-1" />}
     </section>
   );
