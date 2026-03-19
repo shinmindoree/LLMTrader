@@ -1640,7 +1640,9 @@ export default function StrategiesPage() {
                               ) : null
                             ) : (
                               <>
-                                {message.content && hasPythonCode ? (
+                                {message.status === "streaming" || message.status === "thinking" ? (
+                                  <CodePlaceholderBlock language="python" />
+                                ) : message.content && hasPythonCode ? (
                                   <div className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]">
                                     <div className="flex items-center justify-between gap-3 border-b border-[#2d313b] px-4 py-3">
                                       <span className="text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
