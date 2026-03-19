@@ -188,12 +188,9 @@ export function clearSessionCookies(cookies: WritableCookieStore): void {
 }
 
 export function writeSessionCookies(cookies: WritableCookieStore, session: SessionSnapshot): void {
-  const now = Math.floor(Date.now() / 1000);
-  const accessMaxAge = Math.max(60, session.expiresAt - now);
-
-  cookies.set(ACCESS_TOKEN_COOKIE, session.accessToken, cookieOptions(accessMaxAge));
+  cookies.set(ACCESS_TOKEN_COOKIE, session.accessToken, cookieOptions(REFRESH_TOKEN_MAX_AGE));
   cookies.set(REFRESH_TOKEN_COOKIE, session.refreshToken, cookieOptions(REFRESH_TOKEN_MAX_AGE));
-  cookies.set(EXPIRES_AT_COOKIE, String(session.expiresAt), cookieOptions(accessMaxAge));
+  cookies.set(EXPIRES_AT_COOKIE, String(session.expiresAt), cookieOptions(REFRESH_TOKEN_MAX_AGE));
   cookies.set(USER_ID_COOKIE, session.userId, cookieOptions(REFRESH_TOKEN_MAX_AGE));
   cookies.set(USER_EMAIL_COOKIE, session.email ?? "", cookieOptions(REFRESH_TOKEN_MAX_AGE));
 }
