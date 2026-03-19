@@ -267,7 +267,8 @@ type RichTextBlock =
   | { type: "paragraph"; content: string }
   | { type: "unordered-list"; items: { content: string; indent: number }[] }
   | { type: "ordered-list"; items: { content: string; indent: number }[] }
-  | { type: "code"; language: string; content: string };
+  | { type: "code"; language: string; content: string }
+  | { type: "code-placeholder"; language: string };
 
 function PendingReply() {
   return (
@@ -336,6 +337,25 @@ function renderInlineRichText(text: string): React.ReactNode[] {
 }
 
 function parseRichTextBlocks(content: string): RichTextBlock[] {
+  const backtickMatches = content.match(/```/g);
+  const hasUnclosedBlock =
+    backtickMatches &&
+    backtickMatches.length % 2 === 1 &&
+    content.includes("```");
+  if (hasUnclosedBlock) {
+    const lastOpen = content.lastIndexOf("```");
+    const beforeIncomplete = content.slice(0, lastOpen).trim();
+    const afterOpen = content.slice(lastOpen);
+    const langMatch = afterOpen.match(/^```(\w*)\s*\n?/);
+    const language = (langMatch && langMatch[1]) || "python";
+    const blocks = beforeIncomplete ? parseRichTextBlocksComplete(beforeIncomplete) : [];
+    blocks.push({ type: "code-placeholder", language });
+    return blocks;
+  }
+  return parseRichTextBlocksComplete(content);
+}
+
+function parseRichTextBlocksComplete(content: string): RichTextBlock[] {
   const segments = content
     .split(/(```[\s\S]*?```)/g)
     .map((segment) => segment.trim())
@@ -403,12 +423,45 @@ function parseRichTextBlocks(content: string): RichTextBlock[] {
   return blocks;
 }
 
+function CodePlaceholderBlock({ language }: { language: string }) {
+  const { t } = useI18n();
+  return (
+    <div
+      className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]"
+      role="status"
+      aria-label={t.strategy.codeGenerating}
+    >
+      <div className="border-b border-[#2d313b] px-4 py-3 text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
+        {language || "Code"}
+      </div>
+      <div className="flex items-center gap-2 px-4 py-8">
+        <div className="flex gap-1">
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className="h-2 w-2 rounded-full bg-[#5f6472] animate-pulse"
+              style={{ animationDelay: `${i * 160}ms` }}
+            />
+          ))}
+        </div>
+        <span className="text-sm text-[#8f96a3]">{t.strategy.codeGenerating}</span>
+      </div>
+    </div>
+  );
+}
+
 function RichTextContent({ content }: { content: string }) {
   const blocks = parseRichTextBlocks(content);
 
   return (
     <div className="space-y-4 text-[15px] leading-7 text-[#ececf1]">
       {blocks.map((block, idx) => {
+        if (block.type === "code-placeholder") {
+          return (
+            <CodePlaceholderBlock key={`rich-code-placeholder-${idx}`} language={block.language} />
+          );
+        }
+
         if (block.type === "code") {
           return (
             <div
