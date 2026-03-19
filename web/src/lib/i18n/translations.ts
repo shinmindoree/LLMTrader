@@ -446,8 +446,6 @@ const en = {
   strategy: {
     codeGenHint:
       "You can continue editing the strategy code in this area once it has been generated.",
-    expandSummary:
-      "Expand the strategy summary in more detail. Order: strategy overview → entry flow → exit flow → risk management → practical notes. Do not modify the code.",
     streamingStopped: "Stream response was interrupted. Please try again later.",
     serverDelay: "Generation server is slow to respond. Please try again later.",
     typing: "Typing...",
@@ -904,8 +902,6 @@ const ko: TranslationKeys = {
   strategy: {
     codeGenHint:
       "전략 코드가 생성되면 이 영역에서 계속 편집할 수 있습니다.",
-    expandSummary:
-      "방금 전략 요약을 이어서 더 자세히 설명해줘. 전략 개요 → 진입 흐름 → 청산 흐름 → 리스크 관리 → 실전 주의사항 순서로 써줘. 코드는 변경하지 마.",
     streamingStopped: "스트림 응답이 중단되었습니다. 잠시 후 다시 시도해주세요.",
     serverDelay: "생성 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.",
     typing: "답변 작성 중...",

@@ -1218,11 +1218,6 @@ export default function StrategiesPage() {
     await submitPrompt(trimmed);
   };
 
-  const handleSummaryExpand = async () => {
-    if (isSending) return;
-    await submitPrompt(t.strategy.expandSummary, { forceChat: true });
-  };
-
   const handleWorkspaceChange = (nextCode: string) => {
     setWorkspaceCode(nextCode);
     setWorkspaceDirty(true);
@@ -1681,16 +1676,6 @@ export default function StrategiesPage() {
                                 {message.summary && hasPythonCode ? (
                                   <div className="space-y-3">
                                     <RichTextContent content={message.summary} />
-                                    {isLatestAssistantCode ? (
-                                      <button
-                                        type="button"
-                                        className="rounded-full border border-[#3f7a68] px-3 py-1.5 text-xs text-[#8bd1ba] transition hover:bg-[#1e312c] disabled:opacity-50"
-                                        onClick={() => void handleSummaryExpand()}
-                                        disabled={chatBusy}
-                                      >
-                                        Expand summary
-                                      </button>
-                                    ) : null}
                                   </div>
                                 ) : null}
 
