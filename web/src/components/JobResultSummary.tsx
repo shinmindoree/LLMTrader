@@ -218,7 +218,12 @@ function LiveResultSummary({
       ? liveTrades.reduce((s, t) => s + (t.commission ?? 0), 0)
       : (summaryTotalCommission ?? 0);
   const numTrades = liveTrades.length > 0 ? liveTrades.length : (summaryNumTrades ?? 0);
-  const pnls = liveTrades
+  const sortedByTime = [...liveTrades].sort((a, b) => {
+    const ta = typeof a.ts === "number" ? a.ts : Date.parse(String(a.ts ?? 0)) || 0;
+    const tb = typeof b.ts === "number" ? b.ts : Date.parse(String(b.ts ?? 0)) || 0;
+    return ta - tb;
+  });
+  const pnls = sortedByTime
     .map((t) => t.realized_pnl)
     .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p));
   const initialEquity = summaryInitialEquity;
