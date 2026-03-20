@@ -47,13 +47,16 @@ const USER_ID_COOKIE = "sb-user-id";
 const USER_EMAIL_COOKIE = "sb-user-email";
 const REFRESH_LEEWAY_SECONDS = 30;
 const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30;
+export const OAUTH_PKCE_COOKIE = "sb-oauth-pkce";
+export const OAUTH_RETURN_COOKIE = "sb-oauth-return";
+const OAUTH_PKCE_MAX_AGE = 60 * 10;
 
 function parseBoolean(value: string | undefined): boolean {
   const normalized = (value ?? "").trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function cookieOptions(maxAge: number): {
+export function sessionCookieOptions(maxAge: number): {
   httpOnly: boolean;
   sameSite: "lax";
   secure: boolean;
@@ -67,6 +70,10 @@ function cookieOptions(maxAge: number): {
     path: "/",
     maxAge,
   };
+}
+
+function cookieOptions(maxAge: number): ReturnType<typeof sessionCookieOptions> {
+  return sessionCookieOptions(maxAge);
 }
 
 function ensureSupabaseConfig(): { url: string; anonKey: string } {
@@ -221,6 +228,80 @@ export async function signUpWithPassword(email: string, password: string): Promi
     : null;
 
   return { userId, email: userEmail, session };
+}
+
+function generateOAuthPkceVerifier(): string {
+  const verifierLength = 56;
+  const array = new Uint32Array(verifierLength);
+  crypto.getRandomValues(array);
+  return Array.from(array, (dec) => ("0" + dec.toString(16)).slice(-2)).join("");
+}
+
+async function sha256Base64Url(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(hash);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  const b64 = btoa(binary);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export async function createGoogleOAuthAuthorizeUrl(
+  supabaseCallbackUrl: string,
+): Promise<{ authorizeUrl: string; codeVerifier: string }> {
+  const { url } = ensureSupabaseConfig();
+  const codeVerifier = generateOAuthPkceVerifier();
+  const codeChallenge = await sha256Base64Url(codeVerifier);
+  const params = new URLSearchParams({
+    provider: "google",
+    redirect_to: supabaseCallbackUrl,
+    code_challenge: codeChallenge,
+    code_challenge_method: "s256",
+  });
+  const authorizeUrl = `${url}/auth/v1/authorize?${params.toString()}`;
+  return { authorizeUrl, codeVerifier };
+}
+
+export async function exchangeOAuthPkceCode(
+  authCode: string,
+  codeVerifier: string,
+): Promise<SessionSnapshot> {
+  const code = (authCode || "").trim();
+  const verifier = (codeVerifier || "").trim();
+  if (!code || !verifier) {
+    throw new Error("Missing OAuth code or verifier");
+  }
+  const response = await supabaseRequest("/auth/v1/token?grant_type=pkce", {
+    method: "POST",
+    body: JSON.stringify({ auth_code: code, code_verifier: verifier }),
+  });
+  if (!response.ok) {
+    const message = await parseErrorMessage(response);
+    throw new Error(message);
+  }
+  const payload = (await response.json()) as SupabaseTokenPayload;
+  const session = normalizeSessionFromPayload(payload);
+  if (!session) {
+    throw new Error("Supabase OAuth response is missing session data");
+  }
+  return session;
+}
+
+export function writeOAuthStartCookies(
+  cookies: WritableCookieStore,
+  codeVerifier: string,
+  returnPath: string,
+): void {
+  cookies.set(OAUTH_PKCE_COOKIE, codeVerifier, sessionCookieOptions(OAUTH_PKCE_MAX_AGE));
+  cookies.set(OAUTH_RETURN_COOKIE, returnPath, sessionCookieOptions(OAUTH_PKCE_MAX_AGE));
+}
+
+export function clearOAuthStartCookies(cookies: WritableCookieStore): void {
+  cookies.delete(OAUTH_PKCE_COOKIE);
+  cookies.delete(OAUTH_RETURN_COOKIE);
 }
 
 export async function signInWithPassword(email: string, password: string): Promise<SessionSnapshot> {
