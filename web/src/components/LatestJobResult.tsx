@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { getJob, listJobs, listTrades } from "@/lib/api";
+import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
@@ -36,59 +37,88 @@ type LatestJobResultProps = {
 
 export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner }: LatestJobResultProps) {
   const { t } = useI18n();
+  const isVisible = usePageVisibility();
   const [job, setJob] = useState<Job | null>(null);
+  const jobRef = useRef<Job | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let active = true;
+    jobRef.current = job;
+  }, [job]);
 
-    const load = async () => {
-      if (focusJobId) setLoading(true);
+  useEffect(() => {
+    let active = true;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    if (focusJobId) setLoading(true);
+
+    const load = async (): Promise<Job | null> => {
       try {
         setError(null);
         const data = focusJobId
           ? await getJob(focusJobId)
           : (await listJobs({ type: jobType }))[0] ?? null;
-        if (!active) return;
+        if (!active) return null;
         setJob(data);
+        return data;
       } catch (e) {
-        if (!active) return;
+        if (!active) return null;
         setError(String(e));
+        return null;
       } finally {
-        if (!active) return;
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
 
-    load();
-    const timer = setInterval(load, 3000);
+    const loop = async () => {
+      const data = await load();
+      if (!active) return;
+      const terminal = data != null && FINISHED_STATUSES.has(data.status);
+      if (terminal) return;
+      const noJob = data == null;
+      const ms = !isVisible ? 15_000 : noJob ? 12_000 : 3_000;
+      timeoutId = setTimeout(() => void loop(), ms);
+    };
+
+    void loop();
 
     return () => {
       active = false;
-      clearInterval(timer);
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
-  }, [focusJobId, jobType]);
+  }, [focusJobId, jobType, isVisible]);
 
+  /* Poll trades only for active LIVE jobs; use job_id/status in deps so we do not restart on every job object update from the main poll. */
   useEffect(() => {
     if (!job || jobType !== "LIVE") return;
+    if (FINISHED_STATUSES.has(job.status)) return;
     let active = true;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    const fetchTrades = () => {
-      listTrades(job.job_id).then((data) => {
+    const tick = async () => {
+      try {
+        const data = await listTrades(job.job_id);
         if (active) setTrades(data);
-      }).catch(() => {});
+      } catch {
+        // ignore
+      }
+      if (!active) return;
+      const j = jobRef.current;
+      if (j && FINISHED_STATUSES.has(j.status)) return;
+      const ms = !isVisible ? 12_000 : 3_000;
+      timeoutId = setTimeout(() => void tick(), ms);
     };
 
-    fetchTrades();
-    const timer = setInterval(fetchTrades, 3000);
+    void tick();
 
     return () => {
       active = false;
-      clearInterval(timer);
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
-  }, [job?.job_id, jobType]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jobRef carries latest job inside the timer; avoid restarting when unrelated job fields change
+  }, [job?.job_id, jobType, job?.status, isVisible]);
 
   const finished = useMemo(() => (job ? FINISHED_STATUSES.has(job.status) : false), [job]);
   const hasLiveTrades = jobType === "LIVE" && trades.length > 0;

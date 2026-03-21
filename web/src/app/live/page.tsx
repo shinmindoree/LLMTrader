@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJobs, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
@@ -26,6 +27,7 @@ function strategyNameFromPath(path: string): string {
 
 export default function LiveJobsPage() {
   const { t } = useI18n();
+  const isVisible = usePageVisibility();
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [items, setItems] = useState<Job[]>([]);
@@ -59,9 +61,10 @@ export default function LiveJobsPage() {
 
   useEffect(() => {
     if (activeCount === 0) return;
-    const interval = setInterval(refresh, 2000);
+    const ms = isVisible ? 2_500 : 12_000;
+    const interval = setInterval(refresh, ms);
     return () => clearInterval(interval);
-  }, [activeCount, refresh]);
+  }, [activeCount, refresh, isVisible]);
 
   useEffect(() => {
     listStrategies()

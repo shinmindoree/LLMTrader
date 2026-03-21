@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
@@ -14,6 +15,7 @@ const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTE
 
 export default function BacktestJobsPage() {
   const { t } = useI18n();
+  const isVisible = usePageVisibility();
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [items, setItems] = useState<Job[]>([]);
@@ -40,9 +42,10 @@ export default function BacktestJobsPage() {
   const hasActiveJobs = items.some((j) => ACTIVE_STATUSES.has(j.status));
   useEffect(() => {
     if (!hasActiveJobs) return;
-    const interval = setInterval(refresh, 2000);
+    const ms = isVisible ? 2_500 : 12_000;
+    const interval = setInterval(refresh, ms);
     return () => clearInterval(interval);
-  }, [hasActiveJobs, refresh]);
+  }, [hasActiveJobs, refresh, isVisible]);
 
   useEffect(() => {
     listStrategies()

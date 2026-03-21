@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { getJob, listTrades, stopJob } from "@/lib/api";
+import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { jobDetailPath } from "@/lib/routes";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
@@ -44,6 +45,7 @@ function strategyNameFromPath(path: string): string {
 
 export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
   const { t } = useI18n();
+  const isVisible = usePageVisibility();
   const params = useParams<{ jobId?: string | string[] }>();
   const raw = params?.jobId;
   const jobId = Array.isArray(raw) ? raw[0] : raw;
@@ -54,21 +56,34 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
   useEffect(() => {
     if (!validJobId || !jobId) return;
-    getJob(jobId)
-      .then(setJob)
-      .catch((e) => setError(String(e)));
-  }, [jobId, validJobId]);
+    let active = true;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-  useEffect(() => {
-    if (!validJobId || !jobId) return;
-    const tick = () => {
-      listTrades(jobId).then(setTrades).catch(() => {});
-      getJob(jobId).then(setJob).catch(() => {});
+    const tick = async () => {
+      if (!active) return;
+      try {
+        const [jobData, tradesData] = await Promise.all([getJob(jobId), listTrades(jobId)]);
+        if (!active) return;
+        setError(null);
+        setJob(jobData);
+        setTrades(tradesData);
+        if (FINISHED_STATUSES.has(jobData.status)) return;
+        const ms = !isVisible ? 12_000 : 2_500;
+        timeoutId = setTimeout(() => void tick(), ms);
+      } catch (e) {
+        if (active) setError(String(e));
+        const ms = !isVisible ? 20_000 : 5_000;
+        timeoutId = setTimeout(() => void tick(), ms);
+      }
     };
-    tick();
-    const intervalId = setInterval(tick, 2000);
-    return () => clearInterval(intervalId);
-  }, [jobId, validJobId]);
+
+    void tick();
+
+    return () => {
+      active = false;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
+  }, [jobId, validJobId, isVisible]);
 
   const onStop = async () => {
     try {
