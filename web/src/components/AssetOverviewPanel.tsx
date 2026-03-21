@@ -19,7 +19,7 @@ export function AssetOverviewPanel({ keysStatus }: { keysStatus: BinanceKeysStat
 
   return (
     <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5">
-      <h2 className="text-lg font-semibold text-[#d1d4dc]">Asset Overview</h2>
+      <h2 className="text-lg font-semibold text-[#d1d4dc]">{t.assetOverview.title}</h2>
       <p className="mt-1 text-xs text-[#868993]">
         {t.assetOverview.subtitle}
       </p>
