@@ -176,6 +176,11 @@ class JobPolicyCheckResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class JobCountsResponse(BaseModel):
+    backtest_total: int
+    live_total: int
+
+
 class JobResponse(BaseModel):
     job_id: uuid.UUID
     type: JobType

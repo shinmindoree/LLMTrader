@@ -113,6 +113,11 @@ export type Job = {
   ended_at: string | null;
 };
 
+export type JobCounts = {
+  backtest_total: number;
+  live_total: number;
+};
+
 export type JobPolicyCheckResponse = {
   ok: boolean;
   blockers: string[];

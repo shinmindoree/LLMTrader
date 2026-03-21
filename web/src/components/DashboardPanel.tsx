@@ -1,14 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
-import { listStrategies, listJobs, getBinanceKeysStatus } from "@/lib/api";
+import { getBinanceKeysStatus, getJobCounts, listJobs, listStrategies } from "@/lib/api";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { jobDetailPath } from "@/lib/routes";
-import type { BinanceKeysStatus, Job, JobType } from "@/lib/types";
+import type { Job, JobType } from "@/lib/types";
+
+const DASHBOARD_RECENT_LIMIT = 12;
+const DASHBOARD_RUNNING_LIMIT = 64;
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -61,31 +65,51 @@ function mergeRecent(
 
 export function DashboardPanel() {
   const { t, locale } = useI18n();
-  const [strategyCount, setStrategyCount] = useState(0);
-  const [backtestJobs, setBacktestJobs] = useState<Job[]>([]);
-  const [liveJobs, setLiveJobs] = useState<Job[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
 
-  useEffect(() => {
-    Promise.all([
-      listStrategies().then((s) => setStrategyCount(s.length)),
-      listJobs({ type: "BACKTEST", limit: 80 }).then(setBacktestJobs),
-      listJobs({ type: "LIVE", limit: 80 }).then(setLiveJobs),
-      getBinanceKeysStatus().then(setKeysStatus),
-    ])
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
-
-  const runningLive = useMemo(
-    () => liveJobs.filter((j) => j.status === "RUNNING"),
-    [liveJobs],
+  const { data: strategies, isLoading: strategiesLoading } = useSWR(
+    ["dashboard", "strategies"],
+    () => listStrategies(),
   );
+
+  const { data: jobCounts, isLoading: jobCountsLoading } = useSWR(
+    ["dashboard", "job-counts"],
+    () => getJobCounts(),
+  );
+
+  const { data: backtestJobs, isLoading: btLoading } = useSWR(
+    ["dashboard", "jobs", "BACKTEST", DASHBOARD_RECENT_LIMIT],
+    () => listJobs({ type: "BACKTEST", limit: DASHBOARD_RECENT_LIMIT }),
+  );
+
+  const { data: liveRecentJobs, isLoading: liveRecentLoading } = useSWR(
+    ["dashboard", "jobs", "LIVE", DASHBOARD_RECENT_LIMIT],
+    () => listJobs({ type: "LIVE", limit: DASHBOARD_RECENT_LIMIT }),
+  );
+
+  const { data: liveRunningJobs, isLoading: liveRunningLoading } = useSWR(
+    ["dashboard", "jobs", "LIVE", "RUNNING", DASHBOARD_RUNNING_LIMIT],
+    () =>
+      listJobs({
+        type: "LIVE",
+        status: "RUNNING",
+        limit: DASHBOARD_RUNNING_LIMIT,
+      }),
+  );
+
+  const { data: keysStatus, isLoading: keysLoading } = useSWR(
+    ["dashboard", "binance-keys"],
+    () => getBinanceKeysStatus(),
+  );
+
+  const runningLive = liveRunningJobs ?? [];
   const recent = useMemo(
-    () => mergeRecent(backtestJobs, liveJobs, 6),
-    [backtestJobs, liveJobs],
+    () => mergeRecent(backtestJobs ?? [], liveRecentJobs ?? [], 6),
+    [backtestJobs, liveRecentJobs],
   );
+
+  const runningSectionLoading = liveRunningLoading && liveRunningJobs === undefined;
+  const recentSectionLoading =
+    (btLoading && backtestJobs === undefined) || (liveRecentLoading && liveRecentJobs === undefined);
 
   const binanceOk = !!keysStatus?.configured;
   const localeTag = locale === "ko" ? "ko-KR" : "en-US";
@@ -93,21 +117,26 @@ export function DashboardPanel() {
   const stats = [
     {
       label: t.dashboard.strategyCount,
-      value: strategyCount,
+      value:
+        strategies === undefined && strategiesLoading ? null : (strategies?.length ?? 0),
       href: "/strategies",
       color: "text-[#d1d4dc]",
       hoverBorder: "hover:border-[#2962ff]",
     },
     {
       label: t.dashboard.backtestCount,
-      value: backtestJobs.length,
+      value:
+        jobCounts === undefined && jobCountsLoading ? null : (jobCounts?.backtest_total ?? 0),
       href: "/backtest",
       color: "text-[#d1d4dc]",
       hoverBorder: "hover:border-[#2962ff]",
     },
     {
       label: t.dashboard.runningLive,
-      value: runningLive.length,
+      value:
+        liveRunningJobs === undefined && liveRunningLoading
+          ? null
+          : (liveRunningJobs?.length ?? 0),
       href: "/live",
       color: "text-[#26a69a]",
       hoverBorder: "hover:border-[#26a69a]",
@@ -127,13 +156,23 @@ export function DashboardPanel() {
           <span className="font-medium text-[#d1d4dc]">{t.dashboard.binance}</span>
           <span
             className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium ${
-              binanceOk ? "bg-[#26a69a]/15 text-[#26a69a]" : "bg-[#ef5350]/15 text-[#ef5350]"
+              keysLoading
+                ? "bg-[#2a2e39] text-[#868993]"
+                : binanceOk
+                  ? "bg-[#26a69a]/15 text-[#26a69a]"
+                  : "bg-[#ef5350]/15 text-[#ef5350]"
             }`}
           >
             <span
-              className={`inline-block h-1.5 w-1.5 rounded-full ${binanceOk ? "bg-[#26a69a]" : "bg-[#ef5350]"}`}
+              className={`inline-block h-1.5 w-1.5 rounded-full ${
+                keysLoading ? "bg-[#868993]" : binanceOk ? "bg-[#26a69a]" : "bg-[#ef5350]"
+              }`}
             />
-            {binanceOk ? t.dashboard.statusConnected : t.dashboard.statusNotConnected}
+            {keysLoading
+              ? t.dashboard.exchangeChecking
+              : binanceOk
+                ? t.dashboard.statusConnected
+                : t.dashboard.statusNotConnected}
           </span>
         </div>
         <Link
@@ -144,10 +183,10 @@ export function DashboardPanel() {
         </Link>
       </div>
 
-      {!loading && !binanceOk && (
+      {!keysLoading && !binanceOk && (
         <p className="mt-3 text-xs text-[#868993]">{t.dashboard.hintKeys}</p>
       )}
-      {!loading && strategyCount === 0 && (
+      {!strategiesLoading && strategies !== undefined && strategies.length === 0 && (
         <p className="mt-2 text-xs text-[#868993]">{t.dashboard.hintNoStrategies}</p>
       )}
 
@@ -160,7 +199,7 @@ export function DashboardPanel() {
           >
             <div className="text-xs text-[#868993]">{s.label}</div>
             <div className={`mt-1 flex min-h-[2rem] items-center text-2xl font-semibold ${s.color}`}>
-              {loading ? <LoadingSpinner size="md" /> : s.value}
+              {s.value === null ? <LoadingSpinner size="md" /> : s.value}
             </div>
           </Link>
         ))}
@@ -174,7 +213,7 @@ export function DashboardPanel() {
               {t.dashboard.viewLive}
             </Link>
           </div>
-          {loading ? (
+          {runningSectionLoading ? (
             <div className="mt-4 flex justify-center py-6">
               <LoadingSpinner size="md" />
             </div>
@@ -222,7 +261,7 @@ export function DashboardPanel() {
               </Link>
             </div>
           </div>
-          {loading ? (
+          {recentSectionLoading ? (
             <div className="mt-4 flex justify-center py-6">
               <LoadingSpinner size="md" />
             </div>
@@ -272,7 +311,7 @@ export function DashboardPanel() {
       </div>
 
       <div className="mt-8">
-        <AssetOverviewPanel keysStatus={keysStatus} />
+        <AssetOverviewPanel keysStatus={keysStatus ?? null} />
       </div>
     </div>
   );

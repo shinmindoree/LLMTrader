@@ -265,12 +265,27 @@ async def list_jobs(
     user_id: str,
     limit: int = 50,
     job_type: JobType | None = None,
+    status: JobStatus | None = None,
 ) -> list[Job]:
     stmt: Select[tuple[Job]] = select(Job).where(Job.user_id == user_id)
     if job_type is not None:
         stmt = stmt.where(Job.type == job_type)
+    if status is not None:
+        stmt = stmt.where(Job.status == status)
     result = await session.execute(stmt.order_by(Job.created_at.desc()).limit(limit))
     return list(result.scalars().all())
+
+
+async def count_jobs(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    job_type: JobType | None = None,
+) -> int:
+    stmt = select(func.count()).select_from(Job).where(Job.user_id == user_id)
+    if job_type is not None:
+        stmt = stmt.where(Job.type == job_type)
+    return int((await session.execute(stmt)).scalar_one() or 0)
 
 
 async def count_active_jobs(

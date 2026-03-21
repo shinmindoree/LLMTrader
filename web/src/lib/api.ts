@@ -6,8 +6,10 @@ import type {
   DeleteAllResponse,
   DeleteResponse,
   Job,
+  JobCounts,
   JobEvent,
   JobPolicyCheckResponse,
+  JobStatus,
   JobType,
   Order,
   PortalResponse,
@@ -390,13 +392,24 @@ export async function generateStrategyStream(
   }
 }
 
-export async function listJobs(options?: { type?: JobType; limit?: number }): Promise<Job[]> {
+export async function listJobs(options?: {
+  type?: JobType;
+  limit?: number;
+  status?: JobStatus;
+}): Promise<Job[]> {
   const params = new URLSearchParams();
   params.set("limit", String(options?.limit ?? 50));
   if (options?.type) {
     params.set("type", options.type);
   }
+  if (options?.status) {
+    params.set("status", options.status);
+  }
   return json<Job[]>(`/api/backend/api/jobs?${params.toString()}`);
+}
+
+export async function getJobCounts(): Promise<JobCounts> {
+  return json<JobCounts>("/api/backend/api/jobs/counts");
 }
 
 export async function getBinanceAccountSummary(): Promise<BinanceAccountSummary> {

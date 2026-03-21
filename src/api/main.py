@@ -37,6 +37,7 @@ from control.repo import (
     get_job,
     get_strategy_meta_by_name,
     list_events,
+    count_jobs,
     list_jobs,
     list_orders,
     list_strategy_meta,
@@ -78,6 +79,7 @@ from api.schemas import (
     JobPolicyCheckRequest,
     JobPolicyCheckResponse,
     JobCreateRequest,
+    JobCountsResponse,
     JobEventResponse,
     JobResponse,
     OrderResponse,
@@ -1408,11 +1410,27 @@ def create_app() -> FastAPI:
     async def jobs(
         limit: int = Query(default=50, ge=1, le=200),
         job_type: JobType | None = Query(default=None, alias="type"),
+        status: JobStatus | None = Query(default=None),
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> list[JobResponse]:
-        rows = await list_jobs(session, user_id=user.user_id, limit=limit, job_type=job_type)
+        rows = await list_jobs(
+            session,
+            user_id=user.user_id,
+            limit=limit,
+            job_type=job_type,
+            status=status,
+        )
         return [_job_to_response(j) for j in rows]
+
+    @app.get("/api/jobs/counts", response_model=JobCountsResponse)
+    async def job_counts(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> JobCountsResponse:
+        backtest_total = await count_jobs(session, user_id=user.user_id, job_type=JobType.BACKTEST)
+        live_total = await count_jobs(session, user_id=user.user_id, job_type=JobType.LIVE)
+        return JobCountsResponse(backtest_total=backtest_total, live_total=live_total)
 
     @app.post("/api/jobs/stop-all", response_model=StopAllResponse)
     async def stop_all(
