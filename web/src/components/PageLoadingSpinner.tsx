@@ -1,19 +1,26 @@
+"use client";
+
+import { useI18n } from "@/lib/i18n";
+import { LoadingSpinner } from "@/components/LoadingSpinner";
+
 export function PageLoadingSpinner() {
+  const { t } = useI18n();
+
   return (
-    <div className="flex min-h-[40vh] w-full items-center justify-center px-6 py-10">
-      <div className="flex flex-col items-center gap-5">
-        <div className="page-load-spinner" aria-hidden />
-        <div className="flex gap-1.5">
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="page-load-dot"
-              style={{ animationDelay: `${i * 0.15}s` }}
-              aria-hidden
-            />
-          ))}
-        </div>
+    <div
+      className="flex min-h-[40vh] w-full flex-col items-center justify-center gap-5 px-6 py-12"
+      role="status"
+      aria-live="polite"
+      aria-label={t.common.loading}
+    >
+      <div className="relative">
+        <div
+          className="absolute inset-[-10px] rounded-full bg-[#2962ff]/10 blur-md"
+          aria-hidden
+        />
+        <LoadingSpinner size="lg" className="relative" />
       </div>
+      <p className="text-sm font-medium tracking-wide text-[#868993]">{t.common.loading}</p>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
+import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { BacktestForm } from "./new/BacktestForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
@@ -182,7 +183,7 @@ export default function BacktestJobsPage() {
             onSubmittingChange={setRunPending}
           />
         ) : (
-          <div className="text-sm text-[#868993]">{t.common.loading}</div>
+          <InlineLoadingIndicator message={t.common.loading} />
         )}
       </section>
 

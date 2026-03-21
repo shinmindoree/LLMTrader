@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { listStrategies, listJobs, getBinanceKeysStatus } from "@/lib/api";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
+import { LoadingSpinner } from "@/components/LoadingSpinner";
 import type { BinanceKeysStatus } from "@/lib/types";
 
 const EXCHANGES = [
@@ -97,8 +98,8 @@ export function DashboardPanel() {
             className={`block rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4 transition-colors ${s.hoverBorder}`}
           >
             <div className="text-xs text-[#868993]">{s.label}</div>
-            <div className={`mt-1 text-2xl font-semibold ${s.color}`}>
-              {loading ? "..." : s.value}
+            <div className={`mt-1 flex min-h-[2rem] items-center text-2xl font-semibold ${s.color}`}>
+              {loading ? <LoadingSpinner size="md" /> : s.value}
             </div>
           </Link>
         ))}

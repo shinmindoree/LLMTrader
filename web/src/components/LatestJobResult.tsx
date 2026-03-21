@@ -11,6 +11,7 @@ import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobProgressGauge } from "@/components/JobProgressGauge";
 import { TradeAnalysis } from "@/components/TradeAnalysis";
 import { JobConfigSummary } from "@/components/JobConfigSummary";
+import { LoadingSpinner } from "@/components/LoadingSpinner";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -171,7 +172,10 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
         ) : null}
 
         {loading && !job && !showPlaceholderGauge ? (
-          <div className="mt-4 text-sm text-[#868993]">{t.latestResult.loadingLatest}</div>
+          <div className="mt-4 flex items-center gap-2.5 text-sm text-[#868993]">
+            <LoadingSpinner size="sm" />
+            <span>{t.latestResult.loadingLatest}</span>
+          </div>
         ) : null}
 
         {!showPlaceholderGauge && error ? (

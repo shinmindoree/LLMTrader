@@ -12,6 +12,7 @@ import { LatestJobResult } from "@/components/LatestJobResult";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { jobDetailPath } from "@/lib/routes";
+import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { LiveForm } from "./new/LiveForm";
 
 const MAX_SLOTS_FALLBACK = 5;
@@ -297,7 +298,7 @@ export default function LiveJobsPage() {
             maxSlots={maxSlots}
           />
         ) : (
-          <div className="text-sm text-[#868993]">{t.common.loading}</div>
+          <InlineLoadingIndicator message={t.common.loading} />
         )}
       </section>
 
