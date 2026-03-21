@@ -15,6 +15,10 @@
 - 주문/리스크/StopLoss/수량 산정은 컨텍스트(ctx)가 담당 → 전략은 신호만 생성
 - 크로스 판단/prev 업데이트는 `bar["is_new_bar"] == True` 에서만 수행 (백테스트 stoploss 시뮬레이션 호환)
 - 라이브에서 중복 주문 방지: 미체결 주문이 있으면 신호 무시(`ctx.get_open_orders()` 가드)
+
+웹 UI 파라미터 패널(선택):
+- 모듈 상단에 `STRATEGY_PARAMS` / 선택적 `STRATEGY_PARAM_SCHEMA` 를 두고 `__init__(self, **kwargs)` 에서 `{**STRATEGY_PARAMS, **kwargs}` 로 병합하면
+  사용자가 코드 없이 숫자만 조정할 수 있다. 예시: `scripts/strategies/rsi_long_short_strategy.py`
 """
 
 from __future__ import annotations

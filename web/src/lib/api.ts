@@ -22,6 +22,8 @@ import type {
   StrategyQualitySummaryResponse,
   StrategySaveResponse,
   StrategyChatSessionRecord,
+  StrategyParamsApplyResponse,
+  StrategyParamsExtractResponse,
   StrategySyntaxCheckResponse,
   Trade,
   UserProfile,
@@ -191,6 +193,23 @@ export async function validateStrategySyntax(
     body: JSON.stringify({
       code,
     }),
+  });
+}
+
+export async function extractStrategyParams(code: string): Promise<StrategyParamsExtractResponse> {
+  return json<StrategyParamsExtractResponse>("/api/backend/api/strategies/params/extract", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function applyStrategyParams(
+  code: string,
+  param_values: Record<string, unknown>,
+): Promise<StrategyParamsApplyResponse> {
+  return json<StrategyParamsApplyResponse>("/api/backend/api/strategies/params/apply", {
+    method: "POST",
+    body: JSON.stringify({ code, param_values }),
   });
 }
 

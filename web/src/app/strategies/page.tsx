@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 
 import {
+  applyStrategyParams,
   deleteStrategyChatSession,
   deleteStrategy,
+  extractStrategyParams,
   getStrategyContent,
   generateStrategyStream,
   listStrategyChatSessions,
@@ -19,6 +21,8 @@ import {
 import type {
   StrategyChatSessionRecord,
   StrategyInfo,
+  StrategyParamsExtractResponse,
+  StrategyParamFieldSpec,
   StrategySyntaxCheckResponse,
 } from "@/lib/types";
 
@@ -726,6 +730,31 @@ const buildGeneratedStrategySummaryPrompt = (userRequest: string) =>
     "Do not include code fences or repeat the full code.",
   ].join("\n");
 
+type WorkspaceSideTab = "params" | "code";
+
+function normalizeStrategyParamPayload(
+  draft: Record<string, unknown>,
+  schemaFields: Record<string, StrategyParamFieldSpec>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(schemaFields)) {
+    const raw = draft[key];
+    const t = String(schemaFields[key]?.type ?? "").toLowerCase();
+    if (t === "boolean") {
+      out[key] = Boolean(raw);
+    } else if (t === "integer") {
+      const n = Number(raw);
+      out[key] = Number.isFinite(n) ? Math.round(n) : 0;
+    } else if (t === "number") {
+      const n = Number(raw);
+      out[key] = Number.isFinite(n) ? n : 0;
+    } else {
+      out[key] = raw == null ? "" : String(raw);
+    }
+  }
+  return out;
+}
+
 export default function StrategiesPage() {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<TabId>("chat");
@@ -767,6 +796,14 @@ export default function StrategiesPage() {
   const workspaceGutterRef = useRef<HTMLDivElement | null>(null);
   const workspaceTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const workspaceResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [workspaceSideTab, setWorkspaceSideTab] = useState<WorkspaceSideTab>("params");
+  const [strategyParamsSnapshot, setStrategyParamsSnapshot] = useState<StrategyParamsExtractResponse | null>(
+    null,
+  );
+  const [strategyParamsLoading, setStrategyParamsLoading] = useState(false);
+  const [paramDraft, setParamDraft] = useState<Record<string, unknown>>({});
+  const [paramApplyError, setParamApplyError] = useState<string | null>(null);
+  const [strategyParamsApplying, setStrategyParamsApplying] = useState(false);
   const skipSessionSyncRef = useRef(false);
   const chatSessionsRef = useRef<ChatSessionRecord[]>([]);
   const shouldAutoScrollRef = useRef(true);
@@ -968,6 +1005,46 @@ export default function StrategiesPage() {
           setWorkspaceChecking(false);
         });
     }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [workspaceCode]);
+
+  useEffect(() => {
+    const code = workspaceCode.trim();
+    if (!code) {
+      setStrategyParamsSnapshot(null);
+      setParamDraft({});
+      setParamApplyError(null);
+      setStrategyParamsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setStrategyParamsLoading(true);
+      extractStrategyParams(code)
+        .then((res) => {
+          if (cancelled) return;
+          setStrategyParamsSnapshot(res);
+          setParamApplyError(null);
+          if (res.supported) {
+            setParamDraft({ ...res.values });
+          } else {
+            setParamDraft({});
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setStrategyParamsSnapshot({ supported: false, values: {}, schema_fields: {} });
+          setParamDraft({});
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setStrategyParamsLoading(false);
+          }
+        });
+    }, 320);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -1255,6 +1332,23 @@ export default function StrategiesPage() {
     setWorkspaceCode(nextCode);
     setWorkspaceDirty(true);
     setWorkspaceSummary(null);
+  };
+
+  const handleApplyStrategyParams = async () => {
+    if (!strategyParamsSnapshot?.supported) return;
+    setStrategyParamsApplying(true);
+    setParamApplyError(null);
+    try {
+      const payload = normalizeStrategyParamPayload(paramDraft, strategyParamsSnapshot.schema_fields);
+      const res = await applyStrategyParams(workspaceCode, payload);
+      setWorkspaceCode(res.code);
+      setWorkspaceDirty(true);
+      setWorkspaceSummary(null);
+    } catch (e) {
+      setParamApplyError(`${t.strategy.workspaceParamsApplyError} (${String(e)})`);
+    } finally {
+      setStrategyParamsApplying(false);
+    }
   };
 
   const handleWorkspaceScroll = () => {
@@ -1829,7 +1923,7 @@ export default function StrategiesPage() {
             }`}
             style={{ width: workspaceOpen ? workspaceWidth : 0 }}
             onWheel={(event) => {
-              if (!workspaceCode.trim()) return;
+              if (workspaceSideTab !== "code" || !workspaceCode.trim()) return;
               routeWheelToScrollTarget(event, workspaceTextAreaRef.current);
               if (workspaceGutterRef.current && workspaceTextAreaRef.current) {
                 workspaceGutterRef.current.scrollTop = workspaceTextAreaRef.current.scrollTop;
@@ -1838,25 +1932,207 @@ export default function StrategiesPage() {
           >
             {workspaceOpen ? (
               <>
-                <div className="flex items-center justify-between border-b border-[#2a2e39] px-3 py-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-[#d1d4dc]">Workspace Code</h3>
-                    <p className="mt-1 text-[11px] text-[#868993]">
-                      Follow-up generation uses this code automatically.
-                    </p>
+                <div className="border-b border-[#2a2e39] px-3 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 text-xs font-medium transition ${
+                            workspaceSideTab === "params"
+                              ? "bg-[#2962ff]/25 text-[#b4c8ff]"
+                              : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
+                          }`}
+                          onClick={() => setWorkspaceSideTab("params")}
+                        >
+                          {t.strategy.workspaceTabParams}
+                        </button>
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 text-xs font-medium transition ${
+                            workspaceSideTab === "code"
+                              ? "bg-[#2962ff]/25 text-[#b4c8ff]"
+                              : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
+                          }`}
+                          onClick={() => setWorkspaceSideTab("code")}
+                        >
+                          {t.strategy.workspaceTabCode}
+                        </button>
+                      </div>
+                      <p className="mt-1 text-[11px] text-[#868993]">
+                        {workspaceSideTab === "params"
+                          ? t.strategy.workspaceParamsHint
+                          : t.strategy.workspaceTabCodeHint}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded border border-[#2962ff]/70 px-2 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff]/15 disabled:opacity-50"
+                      onClick={handleSaveWorkspace}
+                      disabled={!workspaceCode.trim() || savingId !== null}
+                    >
+                      Save
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="rounded border border-[#2962ff]/70 px-2 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff]/15 disabled:opacity-50"
-                    onClick={handleSaveWorkspace}
-                    disabled={!workspaceCode.trim() || savingId !== null}
-                  >
-                    Save
-                  </button>
                 </div>
 
-                <div className="min-h-0 flex-1">
-                  {workspaceCode.trim() ? (
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  {workspaceSideTab === "params" ? (
+                    <div className="scrollbar-hover flex h-full flex-col overflow-y-auto">
+                      {workspaceSummary?.trim() ? (
+                        <div className="shrink-0 border-b border-[#2a2e39] px-3 py-3">
+                          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[#6b7383]">
+                            {t.strategy.workspaceParamsSummary}
+                          </p>
+                          <div className="text-sm text-[#c5c8ce]">
+                            <RichTextContent content={workspaceSummary} />
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="min-h-0 flex-1 px-3 py-3">
+                        {!workspaceCode.trim() ? (
+                          <p className="text-center text-sm text-[#868993]">{t.strategy.codeGenHint}</p>
+                        ) : strategyParamsLoading ? (
+                          <p className="text-sm text-[#8fa8ff]">{t.strategy.workspaceParamsLoading}</p>
+                        ) : strategyParamsSnapshot?.supported ? (
+                          <form
+                            className="flex flex-col gap-3"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void handleApplyStrategyParams();
+                            }}
+                          >
+                            {Object.keys(strategyParamsSnapshot.schema_fields).map((key) => {
+                              const spec = strategyParamsSnapshot.schema_fields[key] ?? {};
+                              const label =
+                                typeof spec.label === "string" && spec.label.trim()
+                                  ? spec.label
+                                  : key;
+                              const tRaw = String(spec.type ?? "").toLowerCase();
+                              const minV = typeof spec.min === "number" ? spec.min : undefined;
+                              const maxV = typeof spec.max === "number" ? spec.max : undefined;
+                              const draftVal = paramDraft[key];
+
+                              if (tRaw === "boolean") {
+                                return (
+                                  <label
+                                    key={key}
+                                    className="flex cursor-pointer items-center gap-2 text-sm text-[#d1d4dc]"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      className="h-4 w-4 rounded border border-[#2a2e39] bg-[#131722]"
+                                      checked={Boolean(draftVal)}
+                                      onChange={(e) =>
+                                        setParamDraft((prev) => ({ ...prev, [key]: e.target.checked }))
+                                      }
+                                    />
+                                    <span>{label}</span>
+                                  </label>
+                                );
+                              }
+
+                              if (tRaw === "integer" || tRaw === "number") {
+                                const num =
+                                  typeof draftVal === "number"
+                                    ? draftVal
+                                    : Number.parseFloat(String(draftVal ?? ""));
+                                const display = Number.isFinite(num) ? num : "";
+                                return (
+                                  <div key={key} className="flex flex-col gap-1">
+                                    <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${key}`}>
+                                      {label}
+                                    </label>
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                      <input
+                                        id={`param-${key}`}
+                                        type="number"
+                                        className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 font-mono text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none sm:max-w-[140px]"
+                                        min={minV}
+                                        max={maxV}
+                                        step={tRaw === "integer" ? 1 : "any"}
+                                        value={display === "" ? "" : display}
+                                        onChange={(e) => {
+                                          const v = e.target.value;
+                                          if (v === "") {
+                                            setParamDraft((prev) => ({ ...prev, [key]: "" }));
+                                            return;
+                                          }
+                                          const parsed =
+                                            tRaw === "integer" ? Number.parseInt(v, 10) : Number.parseFloat(v);
+                                          setParamDraft((prev) => ({
+                                            ...prev,
+                                            [key]: Number.isFinite(parsed) ? parsed : v,
+                                          }));
+                                        }}
+                                      />
+                                      {minV !== undefined && maxV !== undefined ? (
+                                        <input
+                                          type="range"
+                                          className="h-2 w-full accent-[#2962ff]"
+                                          min={minV}
+                                          max={maxV}
+                                          step={tRaw === "integer" ? 1 : (maxV - minV) / 200}
+                                          value={
+                                            Number.isFinite(num)
+                                              ? Math.min(maxV, Math.max(minV, num))
+                                              : minV
+                                          }
+                                          onChange={(e) => {
+                                            const parsed = Number.parseFloat(e.target.value);
+                                            setParamDraft((prev) => ({
+                                              ...prev,
+                                              [key]: tRaw === "integer" ? Math.round(parsed) : parsed,
+                                            }));
+                                          }}
+                                        />
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div key={key} className="flex flex-col gap-1">
+                                  <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${key}`}>
+                                    {label}
+                                  </label>
+                                  <input
+                                    id={`param-${key}`}
+                                    type="text"
+                                    className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                                    value={draftVal == null ? "" : String(draftVal)}
+                                    onChange={(e) =>
+                                      setParamDraft((prev) => ({ ...prev, [key]: e.target.value }))
+                                    }
+                                  />
+                                </div>
+                              );
+                            })}
+                            {paramApplyError ? (
+                              <p className="text-sm text-[#ef9a9a]">{paramApplyError}</p>
+                            ) : null}
+                            <button
+                              type="submit"
+                              className="mt-1 w-full rounded bg-[#2962ff] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#1e4bd8] disabled:opacity-50"
+                              disabled={strategyParamsApplying}
+                            >
+                              {strategyParamsApplying
+                                ? t.strategy.workspaceParamsApplying
+                                : t.strategy.workspaceParamsApply}
+                            </button>
+                          </form>
+                        ) : (
+                          <div className="space-y-2 text-sm text-[#868993]">
+                            <p>{t.strategy.workspaceParamsNone}</p>
+                            <p className="text-[12px] leading-relaxed text-[#6b7383]">
+                              {t.strategy.workspaceParamsNoneDetail}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : workspaceCode.trim() ? (
                     <div className="flex h-full overflow-hidden">
                       <div
                         ref={workspaceGutterRef}

@@ -469,6 +469,19 @@ const en = {
     typing: "Typing...",
     codeGenerating: "Generating code...",
     summaryGenerating: "Writing strategy summary...",
+    workspaceTabParams: "Parameters",
+    workspaceTabCode: "Code",
+    workspaceTabCodeHint: "Advanced — edit Python only if you need to.",
+    workspaceParamsHint:
+      "Change numbers here and apply. Python stays in the background; use Save when ready.",
+    workspaceParamsLoading: "Loading parameters…",
+    workspaceParamsNone: "No tunable parameters in this file yet.",
+    workspaceParamsNoneDetail:
+      "New strategies from the assistant should define STRATEGY_PARAMS. You can still edit code under the Code tab or ask the chat to adjust logic.",
+    workspaceParamsSummary: "Summary",
+    workspaceParamsApply: "Apply to strategy",
+    workspaceParamsApplying: "Applying…",
+    workspaceParamsApplyError: "Could not apply parameters.",
     previousCodeContext:
       "Below is the strategy code you were using previously. If the user's latest request is a modification or improvement, regenerate based on this code.\n\n",
   },
@@ -944,6 +957,19 @@ const ko: TranslationKeys = {
     typing: "답변 작성 중...",
     codeGenerating: "코드 생성 중...",
     summaryGenerating: "전략 요약 작성 중...",
+    workspaceTabParams: "파라미터",
+    workspaceTabCode: "코드",
+    workspaceTabCodeHint: "고급 — 필요할 때만 파이썬을 직접 수정합니다.",
+    workspaceParamsHint:
+      "숫자만 바꾼 뒤 반영하면 됩니다. 코드는 뒤에서만 갱신되며, 저장은 준비가 되면 Save 하세요.",
+    workspaceParamsLoading: "파라미터 불러오는 중…",
+    workspaceParamsNone: "이 파일에는 아직 조절 가능한 파라미터 블록이 없습니다.",
+    workspaceParamsNoneDetail:
+      "어시스턴트가 만든 새 전략은 STRATEGY_PARAMS를 포함하도록 안내됩니다. 로직 수정은 코드 탭 또는 채팅으로 하세요.",
+    workspaceParamsSummary: "요약",
+    workspaceParamsApply: "전략에 반영",
+    workspaceParamsApplying: "반영 중…",
+    workspaceParamsApplyError: "파라미터를 반영하지 못했습니다.",
     previousCodeContext:
       "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n",
   },

@@ -102,6 +102,10 @@ from api.schemas import (
     StrategySyntaxError,
     StrategySaveRequest,
     StrategySaveResponse,
+    StrategyParamsApplyRequest,
+    StrategyParamsApplyResponse,
+    StrategyParamsExtractRequest,
+    StrategyParamsExtractResponse,
     LlmTestRequest,
     LlmTestResponse,
     TradeResponse,
@@ -110,6 +114,11 @@ from api.schemas import (
     BinanceAccountSummaryResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
+from api.strategy_params import (
+    StrategyParamsError,
+    apply_strategy_params,
+    extract_strategy_params,
+)
 
 INTERNAL_JOB_CONFIG_KEYS = {"_strategy_code"}
 
@@ -1370,6 +1379,44 @@ def create_app() -> FastAPI:
                     ),
                 ),
             )
+
+    @app.post(
+        "/api/strategies/params/extract",
+        response_model=StrategyParamsExtractResponse,
+        dependencies=[Depends(require_auth)],
+    )
+    async def extract_strategy_params_endpoint(
+        body: StrategyParamsExtractRequest,
+    ) -> StrategyParamsExtractResponse:
+        code = _strip_code_fences(body.code or "")
+        if not code.strip():
+            return StrategyParamsExtractResponse(supported=False, values={}, schema_fields={})
+        try:
+            values, schema_fields, supported = extract_strategy_params(code)
+            return StrategyParamsExtractResponse(
+                supported=supported,
+                values=values,
+                schema_fields=schema_fields,
+            )
+        except StrategyParamsError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/strategies/params/apply",
+        response_model=StrategyParamsApplyResponse,
+        dependencies=[Depends(require_auth)],
+    )
+    async def apply_strategy_params_endpoint(
+        body: StrategyParamsApplyRequest,
+    ) -> StrategyParamsApplyResponse:
+        code = _strip_code_fences(body.code or "")
+        if not code.strip():
+            raise HTTPException(status_code=422, detail="code must be non-empty")
+        try:
+            new_code = apply_strategy_params(code, dict(body.param_values or {}))
+            return StrategyParamsApplyResponse(code=new_code)
+        except StrategyParamsError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post(
         "/api/jobs/preflight",

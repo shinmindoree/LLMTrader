@@ -4,6 +4,23 @@ from typing import Any
 from strategy.base import Strategy
 from strategy.context import StrategyContext
 
+# 웹 UI 파라미터 패널이 이 dict를 읽고 AST로 안전하게 갱신합니다.
+STRATEGY_PARAMS: dict[str, Any] = {
+    "rsi_period": 14,
+    "long_entry_rsi": 30.0,
+    "long_exit_rsi": 70.0,
+    "short_entry_rsi": 70.0,
+    "short_exit_rsi": 30.0,
+}
+
+STRATEGY_PARAM_SCHEMA: dict[str, Any] = {
+    "rsi_period": {"type": "integer", "min": 2, "max": 100, "label": "RSI 기간"},
+    "long_entry_rsi": {"type": "number", "min": 1, "max": 99, "label": "롱 진입 RSI (상향 돌파)"},
+    "long_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "롱 청산 RSI (상향 돌파)"},
+    "short_entry_rsi": {"type": "number", "min": 1, "max": 99, "label": "숏 진입 RSI (하향 돌파)"},
+    "short_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "숏 청산 RSI (하향 돌파)"},
+}
+
 
 def crossed_above(prev: float, current: float, level: float) -> bool:
     """prev < level <= current"""
@@ -33,15 +50,15 @@ class RsiLongShortStrategy(Strategy):
     - 롱과 숏 포지션은 동시에 존재할 수 없음 (position_size로 관리)
     """
 
-    def __init__(
-        self,
-        rsi_period: int = 14,
-        long_entry_rsi: float = 30.0,
-        long_exit_rsi: float = 70.0,
-        short_entry_rsi: float = 70.0,
-        short_exit_rsi: float = 30.0,
-    ) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__()
+        p = {**STRATEGY_PARAMS, **kwargs}
+        rsi_period = int(p["rsi_period"])
+        long_entry_rsi = float(p["long_entry_rsi"])
+        long_exit_rsi = float(p["long_exit_rsi"])
+        short_entry_rsi = float(p["short_entry_rsi"])
+        short_exit_rsi = float(p["short_exit_rsi"])
+
         if not (0 < long_entry_rsi < long_exit_rsi < 100):
             raise ValueError("invalid long RSI thresholds")
         if not (0 < short_exit_rsi < short_entry_rsi < 100):

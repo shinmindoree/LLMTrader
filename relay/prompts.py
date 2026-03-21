@@ -37,6 +37,16 @@ SUMMARY_SYSTEM_PROMPT = ""
 
 TEST_SYSTEM_PROMPT = ""
 
+_STRATEGY_PARAMS_UI_PROMPT = """## Tunable parameters (product UI)
+At **module level** (before the Strategy subclass), define:
+- `STRATEGY_PARAMS`: `dict[str, int | float | bool | str]` — every user-tunable default the UI may edit.
+- Optional `STRATEGY_PARAM_SCHEMA`: same keys → metadata for the UI: `type` (`integer`|`number`|`boolean`|`string`), `label`, and optionally `min` / `max` / `enum`.
+
+The strategy class **must** use `def __init__(self, **kwargs: Any) -> None:` and merge defaults with `merged = {**STRATEGY_PARAMS, **kwargs}`, then read all tunables from `merged` only (no duplicate magic numbers). Job runners may call `StrategyClass()` or `StrategyClass(**overrides)`.
+
+Reference: `scripts/strategies/rsi_long_short_strategy.py`.
+"""
+
 
 def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
     return f"Strategy code:\n{code}\n\nSummary:\n{summary or 'N/A'}"
@@ -137,6 +147,7 @@ def build_system_prompt(user_prompt: str = "") -> str:
         sections.append(f"## Rules\n\n{skill}")
     if examples:
         sections.append(f"## Examples\n\n{examples}")
+    sections.append(_STRATEGY_PARAMS_UI_PROMPT)
     return "\n\n".join(sections) if sections else ""
 
 
@@ -160,4 +171,5 @@ def build_repair_system_prompt() -> str:
         sections.append(str(template))
     if examples:
         sections.append(str(examples))
+    sections.append(_STRATEGY_PARAMS_UI_PROMPT)
     return "\n\n".join(sections) if sections else ""

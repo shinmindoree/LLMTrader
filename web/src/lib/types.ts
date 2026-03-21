@@ -100,6 +100,24 @@ export type StrategySyntaxCheckResponse = {
   error: StrategySyntaxError | null;
 };
 
+export type StrategyParamFieldSpec = {
+  type?: string;
+  label?: string;
+  min?: number;
+  max?: number;
+  enum?: unknown[];
+};
+
+export type StrategyParamsExtractResponse = {
+  supported: boolean;
+  values: Record<string, unknown>;
+  schema_fields: Record<string, StrategyParamFieldSpec>;
+};
+
+export type StrategyParamsApplyResponse = {
+  code: string;
+};
+
 export type Job = {
   job_id: string;
   type: JobType;

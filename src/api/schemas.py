@@ -20,6 +20,25 @@ class StrategyContentResponse(BaseModel):
     code: str
 
 
+class StrategyParamsExtractRequest(BaseModel):
+    code: str
+
+
+class StrategyParamsExtractResponse(BaseModel):
+    supported: bool
+    values: dict[str, Any] = Field(default_factory=dict)
+    schema_fields: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class StrategyParamsApplyRequest(BaseModel):
+    code: str
+    param_values: dict[str, Any]
+
+
+class StrategyParamsApplyResponse(BaseModel):
+    code: str
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
