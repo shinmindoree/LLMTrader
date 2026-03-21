@@ -12,6 +12,7 @@ import {
   listStrategies,
   saveStrategy,
   strategyChat,
+  strategyChatStream,
   upsertStrategyChatSession,
   validateStrategySyntax,
 } from "@/lib/api";
@@ -1122,24 +1123,56 @@ export default function StrategiesPage() {
                 setWorkspaceDirty(false);
                 setInitialGeneratedCode((prev) => prev ?? resolvedCode ?? null);
                 if (!resolvedSummary) {
-                  void strategyChat(
+                  setChatMessages((prev) =>
+                    prev.map((message) =>
+                      message.id === assistantId
+                        ? {
+                            ...message,
+                            summary: "",
+                            status: "streaming",
+                            statusText: t.strategy.summaryGenerating,
+                          }
+                        : message,
+                    ),
+                  );
+                  setWorkspaceSummary("");
+                  void strategyChatStream(
                     resolvedCode,
                     null,
                     [{ role: "user", content: buildGeneratedStrategySummaryPrompt(trimmed) }],
-                  )
-                    .then((summaryRes) => {
-                      setChatMessages((prev) =>
-                        prev.map((message) =>
-                          message.id === assistantId
-                            ? { ...message, summary: summaryRes.content }
-                            : message,
-                        ),
-                      );
-                      setWorkspaceSummary(summaryRes.content);
-                    })
-                    .catch(() => {
-                      // keep code-only rendering if summary generation fails
-                    });
+                    {
+                      onToken(token) {
+                        setChatMessages((prev) =>
+                          prev.map((message) =>
+                            message.id === assistantId
+                              ? {
+                                  ...message,
+                                  summary: (message.summary ?? "") + token,
+                                }
+                              : message,
+                          ),
+                        );
+                        setWorkspaceSummary((prev) => (prev ?? "") + token);
+                      },
+                      onDone({ error }) {
+                        setChatMessages((prev) =>
+                          prev.map((message) =>
+                            message.id === assistantId
+                              ? {
+                                  ...message,
+                                  status: null,
+                                  statusText: null,
+                                  summary: error ? null : message.summary,
+                                }
+                              : message,
+                          ),
+                        );
+                        if (error) {
+                          setWorkspaceSummary(null);
+                        }
+                      },
+                    },
+                  );
                 }
               } else if (resolvedCode && !resolvedIsPythonCode) {
                 setWorkspaceSummary(null);
@@ -1378,27 +1411,46 @@ export default function StrategiesPage() {
       setPrompt("");
 
       const strategyLabel = strategyNameFromPath(loaded.path || path);
-      let summaryText = "Summary is unavailable right now.";
-      try {
-        const summaryRes = await strategyChat(code, null, [
-          { role: "user", content: LOADED_STRATEGY_SUMMARY_PROMPT },
-        ]);
-        summaryText = summaryRes.content;
-        setWorkspaceSummary(summaryRes.content);
-      } catch {
-        // continue without summary
-      }
-
+      const header = `Loaded strategy: ${strategyLabel}\n\n`;
+      const loadedMsgId = createId();
       setChatMessages([
         {
-          id: createId(),
+          id: loadedMsgId,
           role: "assistant",
-          content: `Loaded strategy: ${strategyLabel}\n\n${summaryText}`,
+          content: header,
           textOnly: true,
-          status: null,
-          statusText: null,
+          status: "streaming",
+          statusText: t.strategy.summaryGenerating,
         },
       ]);
+
+      await strategyChatStream(code, null, [{ role: "user", content: LOADED_STRATEGY_SUMMARY_PROMPT }], {
+        onToken(token) {
+          setChatMessages((prev) =>
+            prev.map((m) =>
+              m.id === loadedMsgId ? { ...m, content: (m.content ?? "") + token } : m,
+            ),
+          );
+          setWorkspaceSummary((prev) => (prev ?? "") + token);
+        },
+        onDone({ error }) {
+          setChatMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== loadedMsgId) return m;
+              const onlyHeader = (m.content ?? "") === header;
+              return {
+                ...m,
+                status: null,
+                statusText: null,
+                content: error && onlyHeader ? `${header}Summary is unavailable right now.` : m.content,
+              };
+            }),
+          );
+          if (error) {
+            setWorkspaceSummary((prev) => (prev && prev.trim() ? prev : null));
+          }
+        },
+      });
     } catch (e) {
       setChatError(String(e));
     } finally {

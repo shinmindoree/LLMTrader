@@ -1182,6 +1182,36 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=502, detail="Strategy chat failed")
         return StrategyChatResponse(content=content)
 
+    async def _strategy_chat_stream_events(body: StrategyChatRequest):
+        code = (body.code or "").strip()
+        if not code:
+            yield f"data: {json.dumps({'error': 'code must be non-empty'})}\n\n"
+            return
+        if not body.messages:
+            yield f"data: {json.dumps({'error': 'messages must be non-empty'})}\n\n"
+            return
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            return
+        openai_messages = [{"role": m.role, "content": m.content} for m in body.messages]
+        try:
+            async for event in client.strategy_chat_stream(code, body.summary, openai_messages):
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("done") or event.get("error"):
+                    return
+        except Exception as exc:  # noqa: BLE001
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    @app.post("/api/strategies/chat/stream")
+    async def strategy_chat_stream_endpoint(body: StrategyChatRequest):
+        return StreamingResponse(
+            _strategy_chat_stream_events(body),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get(
         "/api/strategies/chat/sessions",
         response_model=list[StrategyChatSessionResponse],

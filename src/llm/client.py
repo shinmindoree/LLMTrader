@@ -245,6 +245,46 @@ class LLMClient:
         except Exception:
             return None
 
+    async def strategy_chat_stream(
+        self,
+        code: str,
+        summary: str | None,
+        messages: list[dict[str, str]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """전략 채팅/요약 스트리밍. token / done / error 이벤트를 yield."""
+        if not code or not code.strip() or not messages:
+            yield {"error": "code and messages are required"}
+            return
+        payload: dict[str, Any] = {
+            "code": code.strip(),
+            "summary": summary,
+            "messages": messages,
+        }
+        headers: dict[str, str] = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/strategy/chat/stream",
+                    json=payload,
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            try:
+                                data = json.loads(line[6:])
+                                yield data
+                                if data.get("done") or data.get("error"):
+                                    return
+                            except json.JSONDecodeError:
+                                pass
+        except Exception as e:
+            yield {"error": str(e)}
+
     async def intake_strategy(
         self,
         user_prompt: str,

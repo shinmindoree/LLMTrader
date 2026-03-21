@@ -552,6 +552,48 @@ async def strategy_chat(
     return StrategyChatResponse(content=content.strip())
 
 
+async def _strategy_chat_stream_body(body: StrategyChatRequest):
+    code = (body.code or "").strip()
+    if not code:
+        yield f"data: {json.dumps({'error': 'code must be non-empty'})}\n\n"
+        return
+    messages = body.messages or []
+    if not messages:
+        yield f"data: {json.dumps({'error': 'messages must be non-empty'})}\n\n"
+        return
+
+    config = get_config()
+    if not config.is_azure_configured():
+        yield f"data: {json.dumps({'error': 'Azure OpenAI not configured'})}\n\n"
+        return
+
+    try:
+        system_content = build_strategy_chat_system_prompt(code, body.summary)
+        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+        async for token in chat_completion_stream(
+            config,
+            system_content=system_content,
+            messages=openai_messages,
+        ):
+            yield f"data: {json.dumps({'token': token})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+    except Exception as e:
+        logger.exception("LLM stream failed at /strategy/chat/stream: %s", e)
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+
+@app.post("/strategy/chat/stream")
+async def strategy_chat_stream(
+    body: StrategyChatRequest,
+    _: None = Depends(require_api_key),
+):
+    return StreamingResponse(
+        _strategy_chat_stream_body(body),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/intake", response_model=IntakeResponse)
 async def intake(
     body: StrategyRequest,

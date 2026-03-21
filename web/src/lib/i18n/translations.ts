@@ -468,6 +468,7 @@ const en = {
     serverDelay: "Generation server is slow to respond. Please try again later.",
     typing: "Typing...",
     codeGenerating: "Generating code...",
+    summaryGenerating: "Writing strategy summary...",
     previousCodeContext:
       "Below is the strategy code you were using previously. If the user's latest request is a modification or improvement, regenerate based on this code.\n\n",
   },
@@ -942,6 +943,7 @@ const ko: TranslationKeys = {
     serverDelay: "생성 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.",
     typing: "답변 작성 중...",
     codeGenerating: "코드 생성 중...",
+    summaryGenerating: "전략 요약 작성 중...",
     previousCodeContext:
       "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n",
   },

@@ -209,6 +209,137 @@ export async function strategyChat(
   });
 }
 
+export type StrategyChatStreamCallbacks = {
+  onToken: (token: string) => void;
+  onDone: (payload: { error?: string }) => void;
+};
+
+export async function strategyChatStream(
+  code: string,
+  summary: string | null,
+  messages: { role: string; content: string }[],
+  callbacks: StrategyChatStreamCallbacks,
+): Promise<void> {
+  const FIRST_EVENT_TIMEOUT_MS = 90_000;
+  const EVENT_GAP_TIMEOUT_MS = 120_000;
+
+  const chatUserId = getChatUserId();
+  const headers = new Headers();
+  headers.set("content-type", "application/json");
+  if (chatUserId) {
+    headers.set("x-chat-user-id", chatUserId);
+  }
+  const controller = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let settled = false;
+  let sawEvent = false;
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearStallTimer = () => {
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  };
+
+  const doneWith = (payload: { error?: string }) => {
+    if (settled) return;
+    settled = true;
+    clearStallTimer();
+    callbacks.onDone(payload);
+  };
+
+  const timeoutMessage = () =>
+    sawEvent
+      ? "Stream response was interrupted. Please try again later."
+      : "Generation server is slow to respond. Please try again later.";
+
+  const armStallTimer = (ms: number) => {
+    clearStallTimer();
+    stallTimer = setTimeout(() => {
+      controller.abort();
+      doneWith({ error: timeoutMessage() });
+    }, ms);
+  };
+
+  armStallTimer(FIRST_EVENT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch("/api/backend/api/strategies/chat/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        code,
+        summary: summary ?? undefined,
+        messages,
+      }),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (e) {
+    doneWith({ error: controller.signal.aborted ? timeoutMessage() : String(e) });
+    return;
+  }
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      redirectToAuthOn401();
+    }
+    const text = await res.text().catch(() => "");
+    doneWith({ error: `${res.status} ${res.statusText}: ${text}` });
+    return;
+  }
+  reader = res.body?.getReader() ?? null;
+  if (!reader) {
+    doneWith({ error: "No response body" });
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      armStallTimer(EVENT_GAP_TIMEOUT_MS);
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? "";
+      for (const event of events) {
+        const dataLines = event
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart());
+        if (dataLines.length === 0) continue;
+        sawEvent = true;
+        armStallTimer(EVENT_GAP_TIMEOUT_MS);
+        try {
+          const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+          if (typeof data.token === "string") {
+            callbacks.onToken(data.token);
+          }
+          if (data.done === true) {
+            doneWith({});
+            return;
+          }
+          if (typeof data.error === "string") {
+            doneWith({ error: data.error });
+            return;
+          }
+        } catch {
+          // skip malformed event payload
+        }
+      }
+    }
+    doneWith({ error: "Stream ended without done" });
+  } catch (e) {
+    doneWith({ error: controller.signal.aborted ? timeoutMessage() : String(e) });
+  } finally {
+    clearStallTimer();
+    reader.releaseLock();
+  }
+}
+
 export async function listStrategyChatSessions(): Promise<StrategyChatSessionRecord[]> {
   return json<StrategyChatSessionRecord[]>("/api/backend/api/strategies/chat/sessions?limit=200");
 }
