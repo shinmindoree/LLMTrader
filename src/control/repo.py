@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, delete, func, select, update
+from sqlalchemy import Select, and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -375,7 +375,14 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
         res_live_requeued = await session.execute(
             update(Job)
             .where(Job.job_id.in_(running_live_ids))
-            .values(status=JobStatus.PENDING, started_at=None, ended_at=None, updated_at=now, error=None)
+            .values(
+                status=JobStatus.PENDING,
+                started_at=None,
+                ended_at=None,
+                updated_at=now,
+                error=None,
+                live_heartbeat_at=None,
+            )
         )
 
     res_stop_requested = None
@@ -403,6 +410,73 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
     }
 
 
+async def requeue_stale_live_jobs(
+    session: AsyncSession,
+    *,
+    stale_seconds: int,
+    initial_grace_seconds: int,
+    reason: str = "stale_live_heartbeat",
+) -> int:
+    """LIVE + RUNNING 잡 중 하트비트가 오래된 것을 PENDING으로 되돌린다 (프로세스 고아 복구)."""
+    now = datetime.now()
+    stale_cutoff = now - timedelta(seconds=max(30, stale_seconds))
+    grace_cutoff = now - timedelta(seconds=max(60, initial_grace_seconds))
+
+    stale_cond = or_(
+        and_(Job.live_heartbeat_at.is_(None), Job.started_at < grace_cutoff),
+        Job.live_heartbeat_at < stale_cutoff,
+    )
+    stale_rows = list(
+        (
+            await session.execute(
+                select(Job.job_id).where(
+                    Job.type == JobType.LIVE,
+                    Job.status == JobStatus.RUNNING,
+                    Job.ended_at.is_(None),
+                    Job.started_at.is_not(None),
+                    stale_cond,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not stale_rows:
+        return 0
+
+    await session.execute(
+        update(Job)
+        .where(Job.job_id.in_(stale_rows))
+        .values(
+            status=JobStatus.PENDING,
+            started_at=None,
+            ended_at=None,
+            updated_at=now,
+            error=None,
+            live_heartbeat_at=None,
+        )
+    )
+    for jid in stale_rows:
+        await append_event(
+            session,
+            job_id=jid,
+            kind=EventKind.STATUS,
+            message="JOB_REQUEUED",
+            payload_json={"reason": reason, "resume": True},
+        )
+    return len(stale_rows)
+
+
+async def update_live_job_heartbeat(session: AsyncSession, job_id: uuid.UUID) -> None:
+    now = datetime.now()
+    await session.execute(
+        update(Job)
+        .where(Job.job_id == job_id)
+        .where(Job.status == JobStatus.RUNNING)
+        .values(live_heartbeat_at=now, updated_at=now)
+    )
+
+
 async def claim_next_pending_job(
     session: AsyncSession,
     *,
@@ -424,6 +498,7 @@ async def claim_next_pending_job(
     job.status = JobStatus.RUNNING
     job.started_at = datetime.now()
     job.updated_at = datetime.now()
+    job.live_heartbeat_at = None
     await session.flush()
     return job
 
@@ -439,7 +514,14 @@ async def set_job_finished(
     await session.execute(
         update(Job)
         .where(Job.job_id == job_id)
-        .values(status=status, result_json=result_json, error=error, ended_at=datetime.now(), updated_at=datetime.now())
+        .values(
+            status=status,
+            result_json=result_json,
+            error=error,
+            ended_at=datetime.now(),
+            updated_at=datetime.now(),
+            live_heartbeat_at=None,
+        )
     )
 
 

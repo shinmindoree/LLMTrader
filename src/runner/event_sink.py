@@ -201,13 +201,20 @@ class DbEventSink:
     async def _run(self) -> None:
         while True:
             item = await self._queue.get()
-            async with self._session_maker() as session:
-                await append_event(
-                    session,
-                    job_id=item.job_id,
-                    kind=item.kind,
-                    message=item.message,
-                    level=item.level,
-                    payload_json=item.payload,
+            try:
+                async with self._session_maker() as session:
+                    await append_event(
+                        session,
+                        job_id=item.job_id,
+                        kind=item.kind,
+                        message=item.message,
+                        level=item.level,
+                        payload_json=item.payload,
+                    )
+                    await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[runner] db-event-sink error job_id={item.job_id} "
+                    f"msg={item.message!r}: {type(exc).__name__}: {exc}"
                 )
-                await session.commit()
+                await asyncio.sleep(1.0)

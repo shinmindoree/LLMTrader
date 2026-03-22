@@ -14,11 +14,13 @@ from control.repo import (
     claim_next_pending_job,
     finalize_orphaned_jobs,
     get_job,
+    requeue_stale_live_jobs,
     set_job_finished,
 )
 from runner.event_sink import DbEventSink
 from runner.executors.backtest_executor import run_backtest
 from runner.executors.live_executor import run_live
+from settings import get_settings
 
 
 class RunnerWorker:
@@ -46,10 +48,32 @@ class RunnerWorker:
 
         loops: list[asyncio.Task[None]] = [
             asyncio.create_task(self._run_loop(JobType.BACKTEST), name="runner-backtest-0"),
+            asyncio.create_task(self._periodic_stale_live_reconcile(), name="runner-stale-live-reconcile"),
         ]
         for i in range(self._live_concurrency):
             loops.append(asyncio.create_task(self._run_loop(JobType.LIVE), name=f"runner-live-{i}"))
         await asyncio.gather(*loops)
+
+    async def _periodic_stale_live_reconcile(self) -> None:
+        settings = get_settings()
+        interval = max(15, int(settings.runner_periodic_reconcile_interval_sec))
+        stale_sec = max(60, int(settings.runner_stale_live_seconds))
+        grace_sec = max(90, int(settings.runner_live_initial_heartbeat_grace_sec))
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                async with self._session_maker() as session:
+                    n = await requeue_stale_live_jobs(
+                        session,
+                        stale_seconds=stale_sec,
+                        initial_grace_seconds=grace_sec,
+                        reason="stale_live_heartbeat",
+                    )
+                    if n:
+                        print(f"[runner] requeued stale LIVE jobs (heartbeat): {n}")
+                    await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[runner] periodic stale-live reconcile error: {type(exc).__name__}: {exc}")
 
     async def _run_loop(self, job_type: JobType) -> None:
         while True:
@@ -122,6 +146,7 @@ class RunnerWorker:
                     should_stop=should_stop,
                     user_id=user_id,
                     session_maker=self._session_maker,
+                    job_id=job_id,
                 )
 
             status = JobStatus.STOPPED if should_stop.is_set() else JobStatus.SUCCEEDED

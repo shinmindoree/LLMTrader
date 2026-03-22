@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     strategy_dirs: str = Field(default="scripts/strategies", alias="STRATEGY_DIRS")
     runner_poll_interval_ms: int = Field(default=500, alias="RUNNER_POLL_INTERVAL_MS")
     runner_live_concurrency: int = Field(default=5, alias="RUNNER_LIVE_CONCURRENCY")
+    runner_live_heartbeat_interval_sec: int = Field(default=30, alias="RUNNER_LIVE_HEARTBEAT_INTERVAL_SEC")
+    runner_stale_live_seconds: int = Field(default=120, alias="RUNNER_STALE_LIVE_SECONDS")
+    runner_live_initial_heartbeat_grace_sec: int = Field(
+        default=180, alias="RUNNER_LIVE_INITIAL_HEARTBEAT_GRACE_SEC"
+    )
+    runner_periodic_reconcile_interval_sec: int = Field(
+        default=45, alias="RUNNER_PERIODIC_RECONCILE_INTERVAL_SEC"
+    )
     frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")
     crypto_backend: str = Field(default="fernet", alias="CRYPTO_BACKEND")
 

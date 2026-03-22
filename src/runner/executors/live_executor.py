@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from pathlib import Path
 from typing import Any
 
 from binance.client import BinanceHTTPClient
 from common.risk import RiskConfig
 from control.enums import EventKind
+from control.repo import update_live_job_heartbeat
 from live.context import LiveContext
 from live.indicator_context import CandleStreamIndicatorContext
 from live.portfolio_context import PortfolioContext
@@ -66,6 +68,7 @@ async def run_live(
     config: dict[str, Any],
     sink: DbEventSink,
     should_stop: asyncio.Event,
+    job_id: uuid.UUID,
     user_id: str = "legacy",
     session_maker: Any = None,
 ) -> dict[str, Any]:
@@ -196,6 +199,26 @@ async def run_live(
 
     sink.emit(kind=EventKind.LOG, message="LIVE_START", payload={"streams": normalized_streams})
 
+    async with session_maker() as session:
+        await update_live_job_heartbeat(session, job_id)
+        await session.commit()
+
+    hb_interval = max(10, int(settings.runner_live_heartbeat_interval_sec))
+
+    async def _heartbeat_loop() -> None:
+        while not should_stop.is_set():
+            await asyncio.sleep(hb_interval)
+            if should_stop.is_set():
+                break
+            try:
+                async with session_maker() as session:
+                    await update_live_job_heartbeat(session, job_id)
+                    await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[runner] live heartbeat failed job_id={job_id}: {type(exc).__name__}: {exc}")
+
+    hb_task = asyncio.create_task(_heartbeat_loop(), name=f"live-heartbeat:{job_id}")
+
     async def stop_watcher() -> None:
         while True:
             if should_stop.is_set():
@@ -210,6 +233,11 @@ async def run_live(
         return {"summary": engine.get_summary()}
     finally:
         watcher_task.cancel()
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
         if cleanup_strategy_file:
             strategy_file.unlink(missing_ok=True)
         await client.aclose()
