@@ -22,6 +22,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from control.alembic_upgrade import run_alembic_upgrade_head
 from control.db import create_async_engine, create_session_maker, init_db
 from control.enums import EventKind, JobStatus, JobType
 from control.models import Job
@@ -536,6 +537,9 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup() -> None:
+        if settings.auto_alembic_upgrade:
+            print("[api] applying database migrations (alembic upgrade head)...")
+            await asyncio.to_thread(run_alembic_upgrade_head)
         await init_db(engine)
 
     async def _db_session() -> AsyncIterator[AsyncSession]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from control.alembic_upgrade import run_alembic_upgrade_head
 from control.db import create_async_engine, create_session_maker, init_db
 from runner.worker import RunnerWorker
 from settings import get_settings
@@ -14,6 +15,9 @@ def _repo_root() -> Path:
 
 async def _amain() -> None:
     settings = get_settings()
+    if settings.auto_alembic_upgrade:
+        print("[runner] applying database migrations (alembic upgrade head)...")
+        await asyncio.to_thread(run_alembic_upgrade_head)
     engine = create_async_engine(settings.effective_database_url)
     await init_db(engine)
     session_maker = create_session_maker(engine)
