@@ -1,4 +1,4 @@
-"""LLMTrader Streamlit UI (라이브 트레이딩 전용)."""
+"""AlphaWeaver Streamlit UI (라이브 트레이딩 전용)."""
 
 import sys
 from pathlib import Path
@@ -12,14 +12,14 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 st.set_page_config(
-    page_title="LLMTrader",
-    page_icon="📈",
+    page_title="AlphaWeaver",
+    page_icon="🧵",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # 메인 페이지
-st.title("📈 LLMTrader")
+st.title("🧵 AlphaWeaver")
 st.markdown("### 바이낸스 선물 자동 트레이딩 (라이브 전용)")
 
 st.divider()
@@ -75,6 +75,6 @@ st.info(f"**Binance URL**: {settings.binance.base_url}")
 
 # 푸터
 st.divider()
-st.caption("LLMTrader v0.1.0 | 바이낸스 선물 테스트넷 전용")
+st.caption("AlphaWeaver v0.1.0 | 바이낸스 선물 테스트넷 전용")
 
 

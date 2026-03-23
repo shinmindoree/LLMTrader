@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "YHLAB | Describe. Backtest. Trade.",
-  description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, deploy to mainnet.",
+  title: "AlphaWeaver | Describe. Backtest. Trade.",
+  description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, and trade live.",
 };
 
 export default function RootLayout({

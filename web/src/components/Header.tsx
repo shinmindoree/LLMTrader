@@ -14,8 +14,8 @@ export function Header() {
           className="flex items-center gap-2 rounded px-2 py-1 hover:bg-[#2a2e39] transition-colors"
           href="/"
         >
-          <Image alt="YHLAB" height={24} priority src="/yhlab-logo.svg" width={24} />
-          <span className="text-sm font-semibold text-[#d1d4dc]">YHLAB</span>
+          <Image alt="AlphaWeaver" height={24} priority src="/alphaweaver-logo.svg" width={24} />
+          <span className="text-sm font-semibold text-[#d1d4dc]">AlphaWeaver</span>
         </Link>
         <div className="flex items-center gap-3">
           <LanguageSwitcher />

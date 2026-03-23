@@ -72,7 +72,7 @@ const en = {
       login: "Login",
     },
     footer: {
-      copyright: "© YHLAB · Binance Futures Trading Platform",
+      copyright: "© AlphaWeaver · Binance Futures Trading Platform",
       dashboard: "Dashboard",
       strategies: "Strategies",
       login: "Login",
@@ -120,7 +120,7 @@ const en = {
     description: "Supabase auth is disabled. Set NEXT_PUBLIC_SUPABASE_AUTH_ENABLED=true.",
   },
   dashboard: {
-    title: "YHLAB Dashboard",
+    title: "AlphaWeaver Dashboard",
     subtitle: "Your account, active trading, and recent activity in one place.",
     strategyCount: "My strategies",
     backtestCount: "Simulations",
@@ -560,7 +560,7 @@ const ko: TranslationKeys = {
       login: "로그인",
     },
     footer: {
-      copyright: "© YHLAB · Binance Futures Trading Platform",
+      copyright: "© AlphaWeaver · Binance Futures Trading Platform",
       dashboard: "대시보드",
       strategies: "트레이딩 전략",
       login: "로그인",
@@ -608,7 +608,7 @@ const ko: TranslationKeys = {
     description: "Supabase 인증이 비활성화되어 있습니다. NEXT_PUBLIC_SUPABASE_AUTH_ENABLED=true로 설정하세요.",
   },
   dashboard: {
-    title: "YHLAB 대시보드",
+    title: "AlphaWeaver 대시보드",
     subtitle: "계정 상태, 실행 중인 자동거래, 최근 활동을 한 화면에서 확인하세요.",
     strategyCount: "나의 전략",
     backtestCount: "시뮬레이션",
