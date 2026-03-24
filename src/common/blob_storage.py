@@ -4,8 +4,7 @@ import logging
 import os
 from typing import Any
 
-from azure.core.exceptions import ResourceExistsError
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
 from azure.storage.blob import ContainerClient
 
 logger = logging.getLogger(__name__)
@@ -16,12 +15,6 @@ class StrategyBlobService:
 
     def __init__(self, container: ContainerClient) -> None:
         self._container = container
-        try:
-            self._container.create_container()
-        except ResourceExistsError:
-            pass
-        except Exception:  # noqa: BLE001
-            logger.warning("create_container() failed (container may already exist), continuing", exc_info=True)
 
     @classmethod
     def from_connection_string(cls, connection_string: str, container_name: str = "strategies") -> StrategyBlobService:
@@ -29,11 +22,19 @@ class StrategyBlobService:
 
     @classmethod
     def from_account_url(cls, account_url: str, container_name: str = "strategies") -> StrategyBlobService:
-        kwargs: dict[str, Any] = {}
         client_id = os.getenv("AZURE_CLIENT_ID", "").strip()
-        if client_id:
-            kwargs["managed_identity_client_id"] = client_id
-        credential = DefaultAzureCredential(**kwargs)
+        # Container Apps / Azure 환경에서는 ManagedIdentityCredential 우선 사용
+        if os.getenv("IDENTITY_ENDPOINT"):
+            kwargs: dict[str, Any] = {}
+            if client_id:
+                kwargs["client_id"] = client_id
+            credential = ManagedIdentityCredential(**kwargs)
+            logger.info("Using ManagedIdentityCredential for Azure Blob Storage")
+        else:
+            kwargs = {}
+            if client_id:
+                kwargs["managed_identity_client_id"] = client_id
+            credential = DefaultAzureCredential(**kwargs)
         return cls(ContainerClient(account_url=account_url, container_name=container_name, credential=credential))
 
     def _blob_path(self, user_id: str, strategy_name: str) -> str:
@@ -103,9 +104,21 @@ def get_blob_service() -> StrategyBlobService | None:
     conn_str = settings.azure_blob.connection_string.strip()
     try:
         if account_url:
-            _blob_service_cache = StrategyBlobService.from_account_url(account_url, settings.azure_blob.container_name)
+            svc = StrategyBlobService.from_account_url(account_url, settings.azure_blob.container_name)
         elif conn_str:
-            _blob_service_cache = StrategyBlobService.from_connection_string(conn_str, settings.azure_blob.container_name)
+            svc = StrategyBlobService.from_connection_string(conn_str, settings.azure_blob.container_name)
+        else:
+            svc = None
+
+        # 접근 가능한지 가볍게 검증 (list_blobs 1개만 조회)
+        if svc is not None:
+            next(svc._container.list_blobs(results_per_page=1).by_page(), None)
+            logger.info("Azure Blob Storage connected successfully")
+            _blob_service_cache = svc
+    except StopIteration:
+        # 빈 컨테이너 — 정상
+        logger.info("Azure Blob Storage connected (empty container)")
+        _blob_service_cache = svc  # type: ignore[possibly-undefined]
     except Exception:  # noqa: BLE001
         logger.error("Failed to initialize Azure Blob service", exc_info=True)
         _blob_service_cache = None
