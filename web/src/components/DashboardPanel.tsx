@@ -205,6 +205,10 @@ export function DashboardPanel() {
         ))}
       </div>
 
+      <div className="mt-6">
+        <AssetOverviewPanel keysStatus={keysStatus ?? null} />
+      </div>
+
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <section className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4">
           <div className="flex items-center justify-between gap-2">
@@ -308,10 +312,6 @@ export function DashboardPanel() {
             </ul>
           )}
         </section>
-      </div>
-
-      <div className="mt-8">
-        <AssetOverviewPanel keysStatus={keysStatus ?? null} />
       </div>
     </div>
   );
