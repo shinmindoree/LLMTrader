@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import logging
+from typing import Protocol, runtime_checkable
 from urllib.parse import quote
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class StrategyStorage(Protocol):
+    """전략 스토리지 공통 인터페이스."""
+
+    def upload(self, user_id: str, strategy_name: str, code: str) -> str: ...
+    def download_by_path(self, object_path: str) -> str: ...
+    def delete_by_path(self, object_path: str) -> bool: ...
 
 
 class StrategyObjectStorage:
@@ -90,18 +100,31 @@ class StrategyObjectStorage:
         return True
 
 
-def get_strategy_storage() -> StrategyObjectStorage | None:
-    """설정 기반으로 전략 스토리지를 반환. 미설정 시 None."""
+def get_strategy_storage() -> StrategyStorage | None:
+    """설정 기반으로 전략 스토리지를 반환.
+
+    우선순위: Azure Blob → Supabase Storage → None (로컬 파일시스템 폴백).
+    """
+    from common.blob_storage import get_blob_service
     from settings import get_settings
 
+    # 1) Azure Blob Storage (우선)
+    blob = get_blob_service()
+    if blob is not None:
+        logger.info("Strategy storage: Azure Blob Storage")
+        return blob
+
+    # 2) Supabase Storage (폴백)
     settings = get_settings()
     base_url = (settings.supabase_storage.url or settings.supabase_auth.url).strip()
     service_role_key = settings.supabase_storage.service_role_key.strip()
     bucket_name = settings.supabase_storage.bucket_name.strip() or "strategies"
-    if not base_url or not service_role_key:
-        return None
-    return StrategyObjectStorage(
-        base_url=base_url,
-        service_role_key=service_role_key,
-        bucket_name=bucket_name,
-    )
+    if base_url and service_role_key:
+        logger.info("Strategy storage: Supabase Storage")
+        return StrategyObjectStorage(
+            base_url=base_url,
+            service_role_key=service_role_key,
+            bucket_name=bucket_name,
+        )
+
+    return None
