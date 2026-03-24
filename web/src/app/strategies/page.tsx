@@ -1979,16 +1979,6 @@ export default function StrategiesPage() {
                 <div className="min-h-0 flex-1 overflow-hidden">
                   {workspaceSideTab === "params" ? (
                     <div className="scrollbar-hover flex h-full flex-col overflow-y-auto">
-                      {workspaceSummary?.trim() ? (
-                        <div className="shrink-0 border-b border-[#2a2e39] px-3 py-3">
-                          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[#6b7383]">
-                            {t.strategy.workspaceParamsSummary}
-                          </p>
-                          <div className="text-sm text-[#c5c8ce]">
-                            <RichTextContent content={workspaceSummary} />
-                          </div>
-                        </div>
-                      ) : null}
                       <div className="min-h-0 flex-1 px-3 py-3">
                         {!workspaceCode.trim() ? (
                           <p className="text-center text-sm text-[#868993]">{t.strategy.codeGenHint}</p>
