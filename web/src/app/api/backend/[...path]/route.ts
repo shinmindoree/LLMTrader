@@ -86,6 +86,8 @@ function isAdminOnlyPath(path: string): boolean {
   );
 }
 
+const PROXY_TIMEOUT_MS = 120_000;
+
 async function proxy(req: NextRequest, params: { path: string[] }): Promise<Response> {
   const url = new URL(req.url);
   const relPath = params.path.join("/");
@@ -127,12 +129,25 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     body = await req.arrayBuffer();
   }
 
-  const res = await fetch(target.toString(), {
-    method: req.method,
-    headers,
-    body,
-    redirect: "manual",
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+
+  let res: globalThis.Response;
+  try {
+    res = await fetch(target.toString(), {
+      method: req.method,
+      headers,
+      body,
+      redirect: "manual",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    const message = err instanceof Error ? err.message : "Backend request failed";
+    const status = controller.signal.aborted ? 504 : 502;
+    return NextResponse.json({ error: message }, { status });
+  }
+  clearTimeout(timeout);
 
   const resHeaders = new Headers(res.headers);
   resHeaders.delete("content-encoding");

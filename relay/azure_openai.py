@@ -12,6 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import httpx
 from azure.core.credentials import TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
@@ -56,6 +57,10 @@ def _build_async_credential(config: RelayConfig) -> AsyncTokenCredential:
     return AsyncDefaultAzureCredential(**kwargs)
 
 
+# Timeout applied to every OpenAI API call (connection + read + write).
+_OPENAI_TIMEOUT = httpx.Timeout(120.0, connect=30.0)
+
+
 def _create_client(config: RelayConfig) -> OpenAI:
     credential = _build_credential(config)
     token_provider = get_bearer_token_provider(
@@ -65,6 +70,7 @@ def _create_client(config: RelayConfig) -> OpenAI:
     return OpenAI(
         base_url=config.resolved_openai_base_url.rstrip("/") + "/",
         api_key=token_provider,
+        timeout=_OPENAI_TIMEOUT,
     )
 
 
@@ -78,6 +84,7 @@ async def _create_async_client(config: RelayConfig):
     client = AsyncOpenAI(
         base_url=config.resolved_openai_base_url.rstrip("/") + "/",
         api_key=token_provider,
+        timeout=_OPENAI_TIMEOUT,
     )
     try:
         yield client
