@@ -109,10 +109,12 @@ def get_strategy_storage() -> StrategyStorage | None:
     from settings import get_settings
 
     # 1) Azure Blob Storage (우선)
-    blob = get_blob_service()
-    if blob is not None:
-        logger.info("Strategy storage: Azure Blob Storage")
-        return blob
+    try:
+        blob = get_blob_service()
+        if blob is not None:
+            return blob
+    except Exception:  # noqa: BLE001
+        logger.error("Azure Blob service unavailable, trying fallback", exc_info=True)
 
     # 2) Supabase Storage (폴백)
     settings = get_settings()
@@ -120,11 +122,13 @@ def get_strategy_storage() -> StrategyStorage | None:
     service_role_key = settings.supabase_storage.service_role_key.strip()
     bucket_name = settings.supabase_storage.bucket_name.strip() or "strategies"
     if base_url and service_role_key:
-        logger.info("Strategy storage: Supabase Storage")
-        return StrategyObjectStorage(
-            base_url=base_url,
-            service_role_key=service_role_key,
-            bucket_name=bucket_name,
-        )
+        try:
+            return StrategyObjectStorage(
+                base_url=base_url,
+                service_role_key=service_role_key,
+                bucket_name=bucket_name,
+            )
+        except Exception:  # noqa: BLE001
+            logger.error("Supabase Storage unavailable", exc_info=True)
 
     return None

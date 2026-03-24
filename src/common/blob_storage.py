@@ -20,6 +20,8 @@ class StrategyBlobService:
             self._container.create_container()
         except ResourceExistsError:
             pass
+        except Exception:  # noqa: BLE001
+            logger.warning("create_container() failed (container may already exist), continuing", exc_info=True)
 
     @classmethod
     def from_connection_string(cls, connection_string: str, container_name: str = "strategies") -> StrategyBlobService:
@@ -84,15 +86,28 @@ class StrategyBlobService:
             return False
 
 
+_blob_service_cache: StrategyBlobService | None = None
+_blob_service_initialized = False
+
+
 def get_blob_service() -> StrategyBlobService | None:
-    """설정 기반으로 BlobService를 반환. 미설정 시 None."""
+    """설정 기반으로 BlobService를 반환. 미설정 시 None. 인스턴스를 캐싱한다."""
+    global _blob_service_cache, _blob_service_initialized  # noqa: PLW0603
+    if _blob_service_initialized:
+        return _blob_service_cache
+
     from settings import get_settings
 
     settings = get_settings()
     account_url = settings.azure_blob.account_url.strip()
     conn_str = settings.azure_blob.connection_string.strip()
-    if account_url:
-        return StrategyBlobService.from_account_url(account_url, settings.azure_blob.container_name)
-    if not conn_str:
-        return None
-    return StrategyBlobService.from_connection_string(conn_str, settings.azure_blob.container_name)
+    try:
+        if account_url:
+            _blob_service_cache = StrategyBlobService.from_account_url(account_url, settings.azure_blob.container_name)
+        elif conn_str:
+            _blob_service_cache = StrategyBlobService.from_connection_string(conn_str, settings.azure_blob.container_name)
+    except Exception:  # noqa: BLE001
+        logger.error("Failed to initialize Azure Blob service", exc_info=True)
+        _blob_service_cache = None
+    _blob_service_initialized = True
+    return _blob_service_cache
