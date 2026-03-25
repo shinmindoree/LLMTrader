@@ -192,6 +192,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">{t.form.strategy}</div>
           <select
+            id="strategy"
+            name="strategy"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             value={strategyPath}
             onChange={(e) => setStrategyPath(e.target.value)}
@@ -206,6 +208,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">{t.form.symbol}</div>
           <input
+            id="symbol"
+            name="symbol"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             list="futures-symbol-options"
             value={symbol}
@@ -221,6 +225,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">{t.form.interval}</div>
           <select
+            id="interval"
+            name="interval"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             value={interval}
             onChange={(e) => setInterval(e.target.value)}
@@ -235,6 +241,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">{t.form.startDate}</div>
           <input
+            id="start-date"
+            name="start-date"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="date"
             value={startDate}
@@ -247,6 +255,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">{t.form.endDate}</div>
           <input
+            id="end-date"
+            name="end-date"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="date"
             value={endDate}
@@ -260,6 +270,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.leverage}<InfoTooltip text={t.form.tooltipLeverage} /></></div>
           <input
+            id="leverage"
+            name="leverage"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
             value={leverage}
@@ -271,6 +283,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.initialBalance}<InfoTooltip text={t.form.tooltipInitialBalance} /></></div>
           <input
+            id="initial-balance"
+            name="initial-balance"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
             value={initialBalance}
@@ -281,6 +295,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.commission}<InfoTooltip text={t.form.tooltipCommission} /></></div>
           <input
+            id="commission"
+            name="commission"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
             step="0.0001"
@@ -291,6 +307,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></div>
           <input
+            id="stop-loss"
+            name="stop-loss"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
             step="0.1"
@@ -301,6 +319,8 @@ export function BacktestForm({
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.maxPyramid}<InfoTooltip text={t.form.tooltipPyramid} /></></div>
           <input
+            id="max-pyramid"
+            name="max-pyramid"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
             value={maxPyramidEntries}

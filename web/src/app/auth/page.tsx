@@ -89,6 +89,8 @@ export default function AuthPage() {
             </p>
           ) : null}
           <input
+            id="email"
+            name="email"
             type="email"
             required
             placeholder="Email"
@@ -97,6 +99,8 @@ export default function AuthPage() {
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder-[#868993] outline-none focus:border-[#2962ff]"
           />
           <input
+            id="password"
+            name="password"
             type="password"
             required
             placeholder="Password"

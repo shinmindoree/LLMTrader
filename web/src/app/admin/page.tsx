@@ -389,6 +389,8 @@ export default function AdminPage() {
         <p className="mt-1 text-xs text-[#868993]">{t.settings.llmTestDesc}</p>
         <div className="mt-3 space-y-3">
           <input
+            id="llm-test-input"
+            name="llm-test-input"
             className="w-full rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-2.5 text-sm text-[#d1d4dc] placeholder-[#4a4e59] focus:border-[#2962ff] focus:outline-none transition-colors"
             onChange={(e) => setLlmInput(e.target.value)}
             placeholder={t.settings.llmTestPlaceholder}

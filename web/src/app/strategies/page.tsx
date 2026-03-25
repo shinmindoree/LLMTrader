@@ -1073,6 +1073,8 @@ export default function StrategiesPage() {
               <>
                 <div className="flex items-center gap-2 border-b border-[#2f3440] px-4 py-2 md:hidden">
                   <select
+                    id="mobile-session-select"
+                    name="mobile-session-select"
                     className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
                     value={activeSessionId ?? ""}
                     onChange={(e) => handleSelectSession(e.target.value)}
@@ -1508,6 +1510,8 @@ export default function StrategiesPage() {
                         })}
                       </div>
                       <textarea
+                        id="workspace-code"
+                        name="workspace-code"
                         ref={workspaceTextAreaRef}
                         className="scrollbar-hover h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
                         spellCheck={false}
@@ -1599,6 +1603,8 @@ export default function StrategiesPage() {
                 Enter a name for this strategy file (optional).
               </p>
               <input
+                id="strategy-name"
+                name="strategy-name"
                 className="mt-4 w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder:text-[#5f6472] focus:border-[#2962ff] focus:outline-none"
                 onChange={(e) =>
                   setSaveModal((prev) => (prev ? { ...prev, name: e.target.value } : null))
