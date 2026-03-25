@@ -106,6 +106,20 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
 
     sm = _get_session_maker()
     async with sm() as session:
+        # First, try to find an existing profile by email (handles auth migration).
+        # This preserves data associations when user_id changes across auth providers.
+        norm_email = _normalize_email(user.email)
+        if norm_email:
+            existing = await session.execute(
+                select(UserProfile).where(UserProfile.email == norm_email)
+            )
+            existing_profile = existing.scalar_one_or_none()
+            if existing_profile:
+                user.user_id = existing_profile.user_id
+                user.plan = existing_profile.plan or "free"
+                return user
+
+        # No existing profile found by email — create a new one.
         stmt = (
             insert(UserProfile)
             .values(user_id=user.user_id, email=user.email or "", display_name="")
