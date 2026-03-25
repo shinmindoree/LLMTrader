@@ -3,19 +3,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAdminEmail } from "@/lib/admin";
 import {
   clearSessionCookies,
-  fetchSupabaseUser,
-  isSupabaseAuthEnabled,
+  isAuthEnabled,
   readSessionCookies,
-  refreshSession,
+  refreshAccessToken,
   shouldRefreshSession,
   writeSessionCookies,
-} from "@/lib/supabaseAuth";
+} from "@/lib/entraAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest): Promise<Response> {
-  if (!isSupabaseAuthEnabled()) {
+  if (!isAuthEnabled()) {
     return NextResponse.json(
       { authenticated: false, isAdmin: false, reason: "disabled" },
       { status: 200 },
@@ -33,7 +32,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   let refreshed = false;
 
   if (shouldRefreshSession(current)) {
-    const nextSession = await refreshSession(current.refreshToken, current.userId, current.email);
+    const nextSession = await refreshAccessToken(current.refreshToken);
     if (!nextSession) {
       const response = NextResponse.json({ authenticated: false, isAdmin: false }, { status: 401 });
       clearSessionCookies(response.cookies);
@@ -43,27 +42,16 @@ export async function GET(req: NextRequest): Promise<Response> {
     refreshed = true;
   }
 
-  const user = await fetchSupabaseUser(resolved.accessToken);
-  if (!user) {
-    const response = NextResponse.json({ authenticated: false, isAdmin: false }, { status: 401 });
-    clearSessionCookies(response.cookies);
-    return response;
-  }
-
   const response = NextResponse.json(
     {
       authenticated: true,
-      isAdmin: isAdminEmail(user.email),
-      user: { id: user.id, email: user.email },
+      isAdmin: isAdminEmail(resolved.email),
+      user: { id: resolved.userId, email: resolved.email },
     },
     { status: 200 },
   );
-  if (refreshed || user.id !== resolved.userId || user.email !== resolved.email) {
-    writeSessionCookies(response.cookies, {
-      ...resolved,
-      userId: user.id,
-      email: user.email,
-    });
+  if (refreshed) {
+    writeSessionCookies(response.cookies, resolved);
   }
   return response;
 }
