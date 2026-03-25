@@ -3,8 +3,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
-import httpx
+import asyncio
+
+import jwt
 from fastapi import Depends, Header, HTTPException
+from jwt import PyJWKClient
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from settings import get_settings
 
 _session_maker_ref: async_sessionmaker[AsyncSession] | None = None
+_jwk_client: PyJWKClient | None = None
 
 
 def set_session_maker(sm: async_sessionmaker[AsyncSession]) -> None:
@@ -53,43 +57,48 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return value[7:].strip()
 
 
-async def _verify_supabase_user(access_token: str) -> AuthenticatedUser:
+def _get_jwk_client() -> PyJWKClient:
+    global _jwk_client  # noqa: PLW0603
+    if _jwk_client is None:
+        settings = get_settings()
+        entra = settings.entra_auth
+        jwks_url = entra.jwks_uri
+        if not jwks_url:
+            raise RuntimeError("Entra JWKS URI not configured")
+        _jwk_client = PyJWKClient(jwks_url, cache_keys=True, lifespan=3600)
+    return _jwk_client
+
+
+async def _verify_entra_user(id_token: str) -> AuthenticatedUser:
     settings = get_settings()
-    supabase = settings.supabase_auth
-    url = (supabase.url or "").strip().rstrip("/")
-    anon_key = (supabase.anon_key or "").strip()
-    if not url or not anon_key:
-        raise HTTPException(status_code=500, detail="SUPABASE_URL/SUPABASE_ANON_KEY is not configured")
+    entra = settings.entra_auth
 
-    headers = {
-        "authorization": f"Bearer {access_token}",
-        "apikey": anon_key,
-    }
-    endpoint = f"{url}/auth/v1/user"
-    timeout = max(1.0, float(supabase.auth_timeout_seconds))
+    if not entra.client_id:
+        raise HTTPException(status_code=500, detail="ENTRA_CLIENT_ID is not configured")
+
+    jwk_client = _get_jwk_client()
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(endpoint, headers=headers)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"Supabase auth request failed: {exc}") from exc
+        signing_key = await asyncio.to_thread(jwk_client.get_signing_key_from_jwt, id_token)
+        payload = jwt.decode(
+            id_token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=entra.client_id,
+            issuer=entra.issuer,
+            options={"verify_exp": True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
 
-    if response.status_code in (401, 403):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Supabase auth failed with {response.status_code}")
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail="Invalid Supabase auth response") from exc
-
-    user_id = str(payload.get("id") or "").strip()
+    user_id = str(payload.get("oid") or payload.get("sub") or "").strip()
     if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Token missing user identifier")
 
-    email = str(payload.get("email") or "").strip() or None
-    return AuthenticatedUser(user_id=user_id, email=email, provider="supabase")
+    email = str(payload.get("email") or payload.get("preferred_username") or "").strip() or None
+    return AuthenticatedUser(user_id=user_id, email=email, provider="entra")
 
 
 async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
@@ -118,22 +127,22 @@ async def require_auth(
     authorization: str | None = Header(default=None),
 ) -> AuthenticatedUser:
     settings = get_settings()
-    supabase = settings.supabase_auth
-    supabase_enabled = supabase.enabled or bool((supabase.url or "").strip())
+    entra = settings.entra_auth
+    entra_enabled = entra.enabled or bool((entra.client_id or "").strip())
 
-    if supabase_enabled:
+    if entra_enabled:
         token = _extract_bearer_token(authorization)
         if token:
-            user = await _verify_supabase_user(token)
+            user = await _verify_entra_user(token)
             return await _ensure_user_profile(user)
-        if not supabase.allow_admin_fallback:
+        if not entra.allow_admin_fallback:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     expected = settings.admin_token.strip()
     if not expected:
         detail = "ADMIN_TOKEN is not configured"
-        if supabase_enabled:
-            detail = "SUPABASE token is missing and ADMIN fallback is not configured"
+        if entra_enabled:
+            detail = "Entra token is missing and ADMIN fallback is not configured"
         raise HTTPException(status_code=500, detail=detail)
     if (x_admin_token or "").strip() != expected:
         raise HTTPException(status_code=401, detail="Unauthorized")

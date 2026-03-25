@@ -1,7 +1,11 @@
 /**
- * Microsoft Entra ID OIDC authentication helper.
- * Replaces supabaseAuth.ts — uses standard OIDC authorization code + PKCE flow.
+ * Microsoft Entra ID / External ID OIDC authentication helper.
+ * Uses standard OIDC authorization code + PKCE flow.
  * Backend verifies JWT locally via JWKS (no egress to third-party auth service).
+ *
+ * Supports both:
+ *  - Workforce tenant:  authority = https://login.microsoftonline.com/{tenantId}
+ *  - External ID (CIAM): authority = https://{subdomain}.ciamlogin.com/{tenantId}
  */
 
 type CookieValue = { value: string };
@@ -125,8 +129,21 @@ async function sha256Base64Url(input: string): Promise<string> {
 
 // ── Authorize URL ───────────────────────────────────────────
 
+/**
+ * Returns true when the authority URL points to an External ID (CIAM) tenant.
+ */
+export function isCiamAuthority(): boolean {
+  try {
+    const config = getEntraConfig();
+    return config.authority.includes(".ciamlogin.com");
+  } catch {
+    return false;
+  }
+}
+
 export async function createAuthorizeUrl(
   redirectUri: string,
+  provider?: string,
 ): Promise<{ authorizeUrl: string; codeVerifier: string }> {
   const config = getEntraConfig();
   const codeVerifier = generatePkceVerifier();
@@ -141,6 +158,11 @@ export async function createAuthorizeUrl(
     code_challenge_method: "S256",
     response_mode: "query",
   });
+
+  // For External ID (CIAM): hint the identity provider (e.g. "google.com")
+  if (provider && config.authority.includes(".ciamlogin.com")) {
+    params.set("domain_hint", provider);
+  }
 
   const authorizeUrl = `${config.authority}/oauth2/v2.0/authorize?${params.toString()}`;
   return { authorizeUrl, codeVerifier };

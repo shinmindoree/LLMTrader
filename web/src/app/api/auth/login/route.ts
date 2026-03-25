@@ -5,6 +5,7 @@ import {
   clearPkceCookies,
   createAuthorizeUrl,
   isAuthEnabled,
+  isCiamAuthority,
   writePkceCookies,
 } from "@/lib/entraAuth";
 
@@ -22,9 +23,10 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   const origin = getRequestOrigin(req);
   const redirectUri = `${origin}/api/auth/callback`;
+  const provider = req.nextUrl.searchParams.get("provider") ?? undefined;
 
   try {
-    const { authorizeUrl, codeVerifier } = await createAuthorizeUrl(redirectUri);
+    const { authorizeUrl, codeVerifier } = await createAuthorizeUrl(redirectUri, provider);
     const response = NextResponse.redirect(authorizeUrl);
     clearPkceCookies(response.cookies);
     writePkceCookies(response.cookies, codeVerifier, returnPath);

@@ -32,6 +32,7 @@ dependencies = [
     "azure-storage-blob>=12.20.0",
     "azure-identity>=1.15.0",
     "azure-keyvault-keys>=4.9.0",
+    "PyJWT>=2.8.0",
 ]
 
 [project.optional-dependencies]

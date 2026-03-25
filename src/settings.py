@@ -41,7 +41,7 @@ class RelayServerSettings(BaseSettings):
 
 
 class SupabaseAuthSettings(BaseSettings):
-    """Supabase 인증 설정."""
+    """Supabase 인증 설정 (레거시 — EntraAuthSettings로 마이그레이션됨)."""
 
     enabled: bool = Field(default=False, alias="SUPABASE_AUTH_ENABLED")
     url: str = Field(default="", alias="SUPABASE_URL")
@@ -50,6 +50,34 @@ class SupabaseAuthSettings(BaseSettings):
     allow_admin_fallback: bool = Field(default=True, alias="AUTH_ALLOW_ADMIN_TOKEN_FALLBACK")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+class EntraAuthSettings(BaseSettings):
+    """Microsoft Entra ID 인증 설정."""
+
+    enabled: bool = Field(default=False, alias="ENTRA_AUTH_ENABLED")
+    tenant_id: str = Field(default="", alias="ENTRA_TENANT_ID")
+    client_id: str = Field(default="", alias="ENTRA_CLIENT_ID")
+    authority: str = Field(default="", alias="ENTRA_AUTHORITY")
+    allow_admin_fallback: bool = Field(default=True, alias="AUTH_ALLOW_ADMIN_TOKEN_FALLBACK")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def issuer(self) -> str:
+        if self.authority:
+            return f"{self.authority.rstrip('/')}/v2.0"
+        if self.tenant_id:
+            return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
+        return ""
+
+    @property
+    def jwks_uri(self) -> str:
+        if self.authority:
+            return f"{self.authority.rstrip('/')}/discovery/v2.0/keys"
+        if self.tenant_id:
+            return f"https://login.microsoftonline.com/{self.tenant_id}/discovery/v2.0/keys"
+        return ""
 
 
 class SupabaseStorageSettings(BaseSettings):
@@ -137,6 +165,7 @@ class Settings(BaseSettings):
     supabase_storage: SupabaseStorageSettings = Field(default_factory=SupabaseStorageSettings)
     encryption: EncryptionSettings = Field(default_factory=EncryptionSettings)
     stripe: StripeSettings = Field(default_factory=StripeSettings)
+    entra_auth: EntraAuthSettings = Field(default_factory=EntraAuthSettings)
     azure_blob: AzureBlobSettings = Field(default_factory=AzureBlobSettings)
     azure_keyvault: AzureKeyVaultSettings = Field(default_factory=AzureKeyVaultSettings)
 
