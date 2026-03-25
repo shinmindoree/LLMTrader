@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import NextTopLoader from "nextjs-toploader";
+import { Toaster } from "sonner";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import { Header } from "@/components/Header";
@@ -16,9 +17,32 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://alphaweaver.com";
+
 export const metadata: Metadata = {
-  title: "AlphaWeaver | Describe. Backtest. Trade.",
+  title: {
+    default: "AlphaWeaver | Describe. Backtest. Trade.",
+    template: "%s | AlphaWeaver",
+  },
   description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, and trade live.",
+  metadataBase: new URL(siteUrl),
+  openGraph: {
+    title: "AlphaWeaver | Describe. Backtest. Trade.",
+    description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, and trade live.",
+    url: siteUrl,
+    siteName: "AlphaWeaver",
+    type: "website",
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "AlphaWeaver | Describe. Backtest. Trade.",
+    description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, and trade live.",
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export default function RootLayout({
@@ -33,6 +57,17 @@ export default function RootLayout({
         <Providers>
         <Header />
         <AppShell>{children}</AppShell>
+        <Toaster
+          theme="dark"
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              background: "#1e222d",
+              border: "1px solid #2a2e39",
+              color: "#d1d4dc",
+            },
+          }}
+        />
         </Providers>
       </body>
     </html>

@@ -1,39 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { isAdminEmail } from "@/lib/admin";
+import { isRateLimited, getRateLimitHeaders } from "@/lib/rateLimit";
 import {
   clearSessionCookies,
-  isSupabaseAuthEnabled,
+  isAuthEnabled,
   readSessionCookies,
-  refreshSession,
+  refreshAccessToken,
   shouldRefreshSession,
   writeSessionCookies,
-} from "@/lib/supabaseAuth";
+  type SessionSnapshot,
+} from "@/lib/entraAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const API_ORIGIN = process.env.API_ORIGIN ?? "http://localhost:8000";
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "dev-admin-token";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
 type ProxyAuthState = {
   accessToken: string;
   userId: string;
   email: string | null;
-  refreshedSession:
-    | {
-        accessToken: string;
-        refreshToken: string;
-        expiresAt: number;
-        userId: string;
-        email: string | null;
-      }
-    | null;
+  refreshedSession: SessionSnapshot | null;
   clearCookies: boolean;
 };
 
 async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null> {
-  if (!isSupabaseAuthEnabled()) {
+  if (!isAuthEnabled()) {
     return null;
   }
 
@@ -50,7 +44,7 @@ async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null
 
   if (!shouldRefreshSession(session)) {
     return {
-      accessToken: session.accessToken,
+      accessToken: session.idToken,
       userId: session.userId,
       email: session.email,
       refreshedSession: null,
@@ -58,7 +52,7 @@ async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null
     };
   }
 
-  const refreshed = await refreshSession(session.refreshToken, session.userId, session.email);
+  const refreshed = await refreshAccessToken(session.refreshToken);
   if (!refreshed) {
     return {
       accessToken: "",
@@ -70,7 +64,7 @@ async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null
   }
 
   return {
-    accessToken: refreshed.accessToken,
+    accessToken: refreshed.idToken,
     userId: refreshed.userId,
     email: refreshed.email,
     refreshedSession: refreshed,
@@ -89,6 +83,14 @@ function isAdminOnlyPath(path: string): boolean {
 const PROXY_TIMEOUT_MS = 120_000;
 
 async function proxy(req: NextRequest, params: { path: string[] }): Promise<Response> {
+  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  if (isRateLimited(clientIp)) {
+    return NextResponse.json(
+      { error: "Too many requests" },
+      { status: 429, headers: getRateLimitHeaders(clientIp) },
+    );
+  }
+
   const url = new URL(req.url);
   const relPath = params.path.join("/");
   const target = new URL(relPath, API_ORIGIN.endsWith("/") ? API_ORIGIN : `${API_ORIGIN}/`);
@@ -103,7 +105,7 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
       { status: 500 },
     );
   }
-  if (isSupabaseAuthEnabled() && (!auth || !auth.accessToken)) {
+  if (isAuthEnabled() && (!auth || !auth.accessToken)) {
     const unauthorized = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (auth?.clearCookies) {
       clearSessionCookies(unauthorized.cookies);
@@ -115,11 +117,14 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   }
 
   const headers = new Headers(req.headers);
-  if (isSupabaseAuthEnabled() && auth) {
+  if (isAuthEnabled() && auth) {
     headers.set("authorization", `Bearer ${auth.accessToken}`);
     headers.set("x-chat-user-id", auth.userId);
     headers.delete("x-admin-token");
   } else {
+    if (!ADMIN_TOKEN) {
+      console.warn("[proxy] ADMIN_TOKEN env var is not set — admin routes will fail");
+    }
     headers.set("x-admin-token", ADMIN_TOKEN);
   }
   headers.delete("host");

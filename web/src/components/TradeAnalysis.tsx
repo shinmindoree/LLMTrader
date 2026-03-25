@@ -1,11 +1,15 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useMemo, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
-import { BacktestExecutionChart } from "@/components/BacktestExecutionChart";
+const BacktestExecutionChart = dynamic(
+  () => import("@/components/BacktestExecutionChart").then((mod) => mod.BacktestExecutionChart),
+  { ssr: false },
+);
 
 type NormalizedTrade = {
   id: string | number;

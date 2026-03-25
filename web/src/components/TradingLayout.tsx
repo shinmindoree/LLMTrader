@@ -1,8 +1,12 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { TradingViewChart } from "@/components/TradingViewChart";
+const TradingViewChart = dynamic(
+  () => import("@/components/TradingViewChart").then((mod) => mod.TradingViewChart),
+  { ssr: false },
+);
 import { TradingTabs } from "@/components/TradingTabs";
 
 const DEFAULT_CHART_RATIO = 0.45;
