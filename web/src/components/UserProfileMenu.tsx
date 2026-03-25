@@ -24,19 +24,12 @@ export function UserProfileMenu() {
   }, [open]);
 
   if (status === "loading") {
-    return <span className="text-xs text-[#868993]">Auth...</span>;
+    return null;
   }
 
   const user = session?.user;
   if (!user) {
-    return (
-      <Link
-        className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#d1d4dc] transition-colors hover:border-[#2962ff]"
-        href="/auth"
-      >
-        {t.auth.login}
-      </Link>
-    );
+    return null;
   }
 
   const initial = (user.email ?? user.id ?? "?").charAt(0).toUpperCase();

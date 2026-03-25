@@ -270,19 +270,8 @@ export default function LandingPage() {
       )}
 
       <footer className="border-t border-[#2a2e39] px-6 py-8">
-        <div className="mx-auto max-w-6xl flex flex-col items-center justify-between gap-4 sm:flex-row">
+        <div className="mx-auto max-w-6xl flex items-center justify-center">
           <span className="text-sm text-[#868993]">{t.landing.footer.copyright}</span>
-          <div className="flex gap-6 text-sm">
-            <Link className="text-[#868993] hover:text-[#d1d4dc]" href="/dashboard">
-              {t.landing.footer.dashboard}
-            </Link>
-            <Link className="text-[#868993] hover:text-[#d1d4dc]" href="/strategies">
-              {t.landing.footer.strategies}
-            </Link>
-            <Link className="text-[#868993] hover:text-[#d1d4dc]" href="/auth">
-              {t.landing.footer.login}
-            </Link>
-          </div>
         </div>
       </footer>
     </div>
