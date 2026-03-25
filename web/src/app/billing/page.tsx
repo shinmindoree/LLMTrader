@@ -59,7 +59,7 @@ export default function BillingPage() {
     setError(null);
     try {
       const { checkout_url } = await createCheckoutSession(plan);
-      window.location.href = checkout_url;
+      window.location.assign(checkout_url);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : t.billing.checkoutFailed;
       setError(msg);

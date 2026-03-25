@@ -183,7 +183,9 @@ export function BacktestExecutionChart({
   }, [trades]);
 
   const tradesByTimeRef = useRef(tradesByTime);
-  tradesByTimeRef.current = tradesByTime;
+  useEffect(() => {
+    tradesByTimeRef.current = tradesByTime;
+  }, [tradesByTime]);
 
   const chartDataKey = useMemo(() => {
     if (!candles.length) return "";
