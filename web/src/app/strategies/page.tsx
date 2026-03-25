@@ -108,11 +108,10 @@ export default function StrategiesPage() {
   const shouldAutoScrollRef = useRef(true);
   const AUTO_SCROLL_THRESHOLD = 80;
 
-  const routeWheelToScrollTarget = (event: React.WheelEvent, target: HTMLElement | null) => {
+  const routeWheelToScrollTarget = (_event: React.WheelEvent, target: HTMLElement | null) => {
     if (!target) return;
     if (target.scrollHeight <= target.clientHeight) return;
-    event.preventDefault();
-    target.scrollTop += event.deltaY;
+    target.scrollTop += _event.deltaY;
   };
 
   useEffect(() => {
@@ -1000,7 +999,7 @@ export default function StrategiesPage() {
                 {sessionSyncError}
               </p>
             ) : null}
-            <div ref={sessionListScrollRef} className="scrollbar-hover min-h-0 flex-1 overflow-y-auto px-2 py-2">
+            <div ref={sessionListScrollRef} className="scrollbar-hover min-h-0 flex-1 overflow-y-auto px-2 py-2" style={{ overscrollBehaviorY: "contain" }}>
               {!sessionsReady ? (
                 <div className="space-y-2 px-1">
                   {Array.from({ length: 4 }).map((_, i) => (
@@ -1099,6 +1098,7 @@ export default function StrategiesPage() {
                 <div
                   ref={chatScrollRef}
                   className="scrollbar-hover min-h-0 flex-1 overflow-y-auto px-6 py-6"
+                  style={{ overscrollBehaviorY: "contain" }}
                   onScroll={handleChatScroll}
                 >
                   <div className="mx-auto flex w-full max-w-4xl flex-col gap-8">
@@ -1235,6 +1235,7 @@ export default function StrategiesPage() {
               <div
                 ref={emptyChatScrollRef}
                 className="scrollbar-hover flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-12"
+                style={{ overscrollBehaviorY: "contain" }}
               >
                 {chatError ? (
                   <p className="mb-6 w-full max-w-3xl rounded-2xl border border-[#ef5350]/30 bg-[#351f24] px-4 py-3 text-sm text-[#ef9a9a]">
