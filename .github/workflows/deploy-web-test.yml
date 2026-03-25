@@ -49,9 +49,6 @@ jobs:
           IMAGE_TAG="${AZURE_ACR_LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}"
           az acr login --name "${AZURE_ACR_NAME}"
           docker build -f infra/Dockerfile.web \
-            --build-arg NEXT_PUBLIC_ENTRA_AUTH_ENABLED=true \
-            --build-arg NEXT_PUBLIC_ENTRA_TENANT_ID=${{ vars.ENTRA_TENANT_ID }} \
-            --build-arg NEXT_PUBLIC_ENTRA_CLIENT_ID=${{ vars.ENTRA_CLIENT_ID }} \
             --build-arg NEXT_PUBLIC_SITE_URL=${{ vars.SITE_URL }} \
             -t "${IMAGE_TAG}" .
           docker push "${IMAGE_TAG}"

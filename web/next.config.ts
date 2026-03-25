@@ -23,7 +23,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' https://fonts.gstatic.com",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://s3.tradingview.com https://*.ingest.sentry.io https://login.microsoftonline.com https://*.ciamlogin.com",
+      "connect-src 'self' https://s3.tradingview.com https://*.ingest.sentry.io https://accounts.google.com https://oauth2.googleapis.com",
       "frame-src 'self' https://s3.tradingview.com",
       "object-src 'none'",
       "base-uri 'self'",
