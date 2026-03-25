@@ -88,6 +88,7 @@ export default function StrategiesPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionsReady, setSessionsReady] = useState(false);
   const [sessionSyncError, setSessionSyncError] = useState<string | null>(null);
+  const remoteStubIdsRef = useRef<Set<string>>(new Set());
   const sessionListScrollRef = useRef<HTMLDivElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const emptyChatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -162,6 +163,9 @@ export default function StrategiesPage() {
           workspaceSummary: null,
         } as ChatSessionRecord));
 
+        // Track which sessions are server stubs needing lazy-load
+        remoteStubIdsRef.current = new Set(stubSessions.map((s) => s.id));
+
         const allSessions = [activeSession, ...stubSessions];
         setChatSessions(allSessions);
         setActiveSessionId(activeSession.id);
@@ -216,8 +220,8 @@ export default function StrategiesPage() {
       return;
     }
 
-    // If session is a stub (loaded from summary, no messages), fetch full data lazily
-    if (activeSession.messages.length === 0 && activeSession.workspaceCode === "") {
+    // If session is a remote stub (loaded from summary, no messages), fetch full data lazily
+    if (remoteStubIdsRef.current.has(activeSession.id) && activeSession.messages.length === 0 && activeSession.workspaceCode === "") {
       let cancelled = false;
       setIsLoadingStrategy(true);
       getStrategyChatSession(activeSession.id)
@@ -225,6 +229,7 @@ export default function StrategiesPage() {
           if (cancelled) return;
           const loaded = fromRemoteSessionRecord(full);
           if (!loaded) return;
+          remoteStubIdsRef.current.delete(loaded.id);
           // Update session in list with full data
           setChatSessions((prev) =>
             prev.map((s) => (s.id === loaded.id ? loaded : s)),
