@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
@@ -16,6 +17,10 @@ from settings import get_settings
 
 _session_maker_ref: async_sessionmaker[AsyncSession] | None = None
 _jwk_client: PyJWKClient | None = None
+
+# In-memory cache for user profiles: email -> (user_id, plan, timestamp)
+_PROFILE_CACHE: dict[str, tuple[str, str, float]] = {}
+_PROFILE_CACHE_TTL = 300  # 5 minutes
 
 
 def set_session_maker(sm: async_sessionmaker[AsyncSession]) -> None:
@@ -104,11 +109,20 @@ async def _verify_entra_user(id_token: str) -> AuthenticatedUser:
 async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
     from control.models import UserProfile
 
+    norm_email = _normalize_email(user.email)
+
+    # Check in-memory cache first
+    if norm_email and norm_email in _PROFILE_CACHE:
+        cached_uid, cached_plan, cached_ts = _PROFILE_CACHE[norm_email]
+        if time.monotonic() - cached_ts < _PROFILE_CACHE_TTL:
+            user.user_id = cached_uid
+            user.plan = cached_plan
+            return user
+
     sm = _get_session_maker()
     async with sm() as session:
         # First, try to find an existing profile by email (handles auth migration).
         # This preserves data associations when user_id changes across auth providers.
-        norm_email = _normalize_email(user.email)
         if norm_email:
             existing = await session.execute(
                 select(UserProfile)
@@ -120,6 +134,7 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
             if existing_profile:
                 user.user_id = existing_profile.user_id
                 user.plan = existing_profile.plan or "free"
+                _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
                 return user
 
         # No existing profile found by email — create a new one.
@@ -136,6 +151,8 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
         )
         plan = result.scalar_one_or_none() or "free"
         user.plan = plan
+        if norm_email:
+            _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
     return user
 
 

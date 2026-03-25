@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { deleteAllJobs, deleteJob, listJobs, listStrategies, stopAllJobs } from "@/lib/api";
+import { deleteAllJobs, deleteJob, listJobSummaries, listStrategies, stopAllJobs } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { Job, JobStatus, StrategyInfo } from "@/lib/types";
+import type { Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
@@ -19,17 +19,17 @@ export default function BacktestJobsPage() {
   const isVisible = usePageVisibility();
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [strategyError, setStrategyError] = useState<string | null>(null);
-  const [items, setItems] = useState<Job[]>([]);
+  const [items, setItems] = useState<JobSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [latestJob, setLatestJob] = useState<Job | null>(null);
+  const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
   const [runPending, setRunPending] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      const data = await listJobs({ type: "BACKTEST", limit: 200 });
+      const data = await listJobSummaries({ type: "BACKTEST", limit: 50 });
       setItems(data);
     } catch (e) {
       setError(String(e));
@@ -43,7 +43,7 @@ export default function BacktestJobsPage() {
   const hasActiveJobs = items.some((j) => ACTIVE_STATUSES.has(j.status));
   useEffect(() => {
     if (!hasActiveJobs) return;
-    const ms = isVisible ? 2_500 : 12_000;
+    const ms = isVisible ? 5_000 : 15_000;
     const interval = setInterval(refresh, ms);
     return () => clearInterval(interval);
   }, [hasActiveJobs, refresh, isVisible]);
@@ -55,12 +55,23 @@ export default function BacktestJobsPage() {
   }, []);
 
   const onCreated = (job: Job) => {
-    setLatestJob(job);
+    setLatestJob({
+      job_id: job.job_id,
+      type: job.type,
+      status: job.status,
+      strategy_path: job.strategy_path,
+      config: job.config,
+      result_summary: job.result,
+      error: job.error,
+      created_at: job.created_at,
+      started_at: job.started_at,
+      ended_at: job.ended_at,
+    });
     setNotice(t.backtest.runStarted);
     refresh();
   };
 
-  const onDeleteJob = async (job: Job) => {
+  const onDeleteJob = async (job: Job | JobSummary) => {
     if (busy) return;
     if (!FINISHED_STATUSES.has(job.status)) {
       setError(t.backtest.onlyFinishedDelete);

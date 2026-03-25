@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJobs, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
+import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJobSummaries, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, StrategyInfo } from "@/lib/types";
+import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { JobConfigInline } from "@/components/JobConfigSummary";
@@ -31,11 +31,11 @@ export default function LiveJobsPage() {
   const isVisible = usePageVisibility();
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [strategyError, setStrategyError] = useState<string | null>(null);
-  const [items, setItems] = useState<Job[]>([]);
+  const [items, setItems] = useState<JobSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [latestJob, setLatestJob] = useState<Job | null>(null);
+  const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
   const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [runPending, setRunPending] = useState(false);
@@ -43,7 +43,7 @@ export default function LiveJobsPage() {
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      const data = await listJobs({ type: "LIVE", limit: 200 });
+      const data = await listJobSummaries({ type: "LIVE", limit: 50 });
       setItems(data);
     } catch (e) {
       setError(String(e));
@@ -62,7 +62,7 @@ export default function LiveJobsPage() {
 
   useEffect(() => {
     if (activeCount === 0) return;
-    const ms = isVisible ? 2_500 : 12_000;
+    const ms = isVisible ? 5_000 : 15_000;
     const interval = setInterval(refresh, ms);
     return () => clearInterval(interval);
   }, [activeCount, refresh, isVisible]);
@@ -74,12 +74,23 @@ export default function LiveJobsPage() {
   }, []);
 
   const onCreated = (job: Job) => {
-    setLatestJob(job);
+    setLatestJob({
+      job_id: job.job_id,
+      type: job.type,
+      status: job.status,
+      strategy_path: job.strategy_path,
+      config: job.config,
+      result_summary: job.result,
+      error: job.error,
+      created_at: job.created_at,
+      started_at: job.started_at,
+      ended_at: job.ended_at,
+    });
     setNotice(t.live.runStarted);
     refresh();
   };
 
-  const onStopJob = async (job: Job) => {
+  const onStopJob = async (job: Job | JobSummary) => {
     if (busy) return;
     try {
       setBusy(true);
@@ -94,7 +105,7 @@ export default function LiveJobsPage() {
     }
   };
 
-  const onDeleteJob = async (job: Job) => {
+  const onDeleteJob = async (job: Job | JobSummary) => {
     if (busy) return;
     if (!FINISHED_STATUSES.has(job.status)) {
       setError(t.live.onlyFinishedDelete);

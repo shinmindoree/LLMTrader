@@ -131,6 +131,20 @@ export type Job = {
   ended_at: string | null;
 };
 
+/** Lightweight job representation — no trades in result. */
+export type JobSummary = {
+  job_id: string;
+  type: JobType;
+  status: JobStatus;
+  strategy_path: string;
+  config: Record<string, unknown>;
+  result_summary: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+};
+
 export type JobCounts = {
   backtest_total: number;
   live_total: number;

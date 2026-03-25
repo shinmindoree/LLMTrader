@@ -10,6 +10,7 @@ import type {
   JobEvent,
   JobPolicyCheckResponse,
   JobStatus,
+  JobSummary,
   JobType,
   Order,
   PortalResponse,
@@ -556,6 +557,23 @@ export async function listJobs(options?: {
     params.set("status", options.status);
   }
   return json<Job[]>(`/api/backend/api/jobs?${params.toString()}`);
+}
+
+/** Lightweight job list — excludes heavy trades data from result. */
+export async function listJobSummaries(options?: {
+  type?: JobType;
+  limit?: number;
+  status?: JobStatus;
+}): Promise<JobSummary[]> {
+  const params = new URLSearchParams();
+  params.set("limit", String(options?.limit ?? 50));
+  if (options?.type) {
+    params.set("type", options.type);
+  }
+  if (options?.status) {
+    params.set("status", options.status);
+  }
+  return json<JobSummary[]>(`/api/backend/api/jobs/list?${params.toString()}`);
 }
 
 export async function getJobCounts(): Promise<JobCounts> {

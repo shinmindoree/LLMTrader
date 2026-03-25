@@ -83,6 +83,7 @@ from api.schemas import (
     JobCountsResponse,
     JobEventResponse,
     JobResponse,
+    JobSummary,
     OrderResponse,
     StopResponse,
     StopAllResponse,
@@ -149,6 +150,27 @@ def _job_to_response(job: Any) -> JobResponse:
         strategy_path=job.strategy_path,
         config=_public_job_config(job.config_json),
         result=job.result_json,
+        error=job.error,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        ended_at=job.ended_at,
+    )
+
+
+def _job_to_summary(job: Any) -> JobSummary:
+    """Lightweight conversion — strips trades from result to reduce payload."""
+    raw = job.result_json
+    if raw and isinstance(raw, dict):
+        summary = {k: v for k, v in raw.items() if k != "trades"}
+    else:
+        summary = raw
+    return JobSummary(
+        job_id=job.job_id,
+        type=JobType(str(job.type)),
+        status=job.status,
+        strategy_path=job.strategy_path,
+        config=_public_job_config(job.config_json),
+        result_summary=summary,
         error=job.error,
         created_at=job.created_at,
         started_at=job.started_at,
@@ -1503,6 +1525,24 @@ def create_app() -> FastAPI:
             status=status,
         )
         return [_job_to_response(j) for j in rows]
+
+    @app.get("/api/jobs/list", response_model=list[JobSummary])
+    async def jobs_summary(
+        limit: int = Query(default=50, ge=1, le=200),
+        job_type: JobType | None = Query(default=None, alias="type"),
+        status: JobStatus | None = Query(default=None),
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[JobSummary]:
+        """Lightweight job list — excludes heavy trades data from result."""
+        rows = await list_jobs(
+            session,
+            user_id=user.user_id,
+            limit=limit,
+            job_type=job_type,
+            status=status,
+        )
+        return [_job_to_summary(j) for j in rows]
 
     @app.get("/api/jobs/counts", response_model=JobCountsResponse)
     async def job_counts(

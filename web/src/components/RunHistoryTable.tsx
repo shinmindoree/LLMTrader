@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import type { Job, JobStatus, JobType } from "@/lib/types";
+import type { Job, JobSummary, JobStatus, JobType } from "@/lib/types";
+
+type AnyJob = Job | JobSummary;
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
@@ -39,7 +41,7 @@ function computeWinRate(pnls: number[]): number | null {
 }
 
 export type RunHistoryRow = {
-  job: Job;
+  job: AnyJob;
   date: string;
   dateMs: number;
   strategy: string;
@@ -80,9 +82,15 @@ function extractInterval(type: JobType, config: Record<string, unknown>): string
   return "-";
 }
 
-function buildRow(job: Job, type: JobType): RunHistoryRow {
+function getResult(job: AnyJob): Record<string, unknown> | null {
+  if ("result" in job) return job.result;
+  if ("result_summary" in job) return job.result_summary;
+  return null;
+}
+
+function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
   const config = (job.config ?? {}) as Record<string, unknown>;
-  const result = job.result;
+  const result = getResult(job);
   const isResultRecord = result && isRecord(result);
 
   let totalTrades: number | null = null;
@@ -144,11 +152,11 @@ export function RunHistoryTable({
   busy,
   canDeleteJob,
 }: {
-  items: Job[];
+  items: AnyJob[];
   type: JobType;
-  onDeleteJob: (job: Job) => void;
+  onDeleteJob: (job: AnyJob) => void;
   busy: boolean;
-  canDeleteJob?: (job: Job) => boolean;
+  canDeleteJob?: (job: AnyJob) => boolean;
 }) {
   const { t } = useI18n();
   const [sortKey, setSortKey] = useState<SortKey>("date");

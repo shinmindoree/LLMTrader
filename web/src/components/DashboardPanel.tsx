@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useMemo } from "react";
 import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
-import { getBinanceKeysStatus, getJobCounts, listJobs, listStrategies } from "@/lib/api";
+import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies } from "@/lib/api";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { jobDetailPath } from "@/lib/routes";
-import type { Job, JobType } from "@/lib/types";
+import type { JobSummary, JobType } from "@/lib/types";
 
 const DASHBOARD_RECENT_LIMIT = 12;
 const DASHBOARD_RUNNING_LIMIT = 64;
@@ -49,10 +49,10 @@ function jobInterval(type: JobType, config: Record<string, unknown>): string {
 }
 
 function mergeRecent(
-  backtest: Job[],
-  live: Job[],
+  backtest: JobSummary[],
+  live: JobSummary[],
   limit: number,
-): { job: Job; type: JobType }[] {
+): { job: JobSummary; type: JobType }[] {
   const merged = [
     ...backtest.map((job) => ({ job, type: "BACKTEST" as const })),
     ...live.map((job) => ({ job, type: "LIVE" as const })),
@@ -78,18 +78,18 @@ export function DashboardPanel() {
 
   const { data: backtestJobs, isLoading: btLoading } = useSWR(
     ["dashboard", "jobs", "BACKTEST", DASHBOARD_RECENT_LIMIT],
-    () => listJobs({ type: "BACKTEST", limit: DASHBOARD_RECENT_LIMIT }),
+    () => listJobSummaries({ type: "BACKTEST", limit: DASHBOARD_RECENT_LIMIT }),
   );
 
   const { data: liveRecentJobs, isLoading: liveRecentLoading } = useSWR(
     ["dashboard", "jobs", "LIVE", DASHBOARD_RECENT_LIMIT],
-    () => listJobs({ type: "LIVE", limit: DASHBOARD_RECENT_LIMIT }),
+    () => listJobSummaries({ type: "LIVE", limit: DASHBOARD_RECENT_LIMIT }),
   );
 
   const { data: liveRunningJobs, isLoading: liveRunningLoading } = useSWR(
     ["dashboard", "jobs", "LIVE", "RUNNING", DASHBOARD_RUNNING_LIMIT],
     () =>
-      listJobs({
+      listJobSummaries({
         type: "LIVE",
         status: "RUNNING",
         limit: DASHBOARD_RUNNING_LIMIT,

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { getJob, listJobs, listTrades } from "@/lib/api";
+import { getJob, listJobSummaries, listTrades } from "@/lib/api";
 import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
@@ -58,9 +58,15 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
     const load = async (): Promise<Job | null> => {
       try {
         setError(null);
-        const data = focusJobId
-          ? await getJob(focusJobId)
-          : (await listJobs({ type: jobType }))[0] ?? null;
+        let data: Job | null = null;
+        if (focusJobId) {
+          data = await getJob(focusJobId);
+        } else {
+          const summaries = await listJobSummaries({ type: jobType, limit: 1 });
+          if (summaries.length > 0) {
+            data = await getJob(summaries[0].job_id);
+          }
+        }
         if (!active) return null;
         setJob(data);
         return data;
@@ -79,7 +85,7 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
       const terminal = data != null && FINISHED_STATUSES.has(data.status);
       if (terminal) return;
       const noJob = data == null;
-      const ms = !isVisible ? 15_000 : noJob ? 12_000 : 3_000;
+      const ms = !isVisible ? 15_000 : noJob ? 12_000 : 5_000;
       timeoutId = setTimeout(() => void loop(), ms);
     };
 

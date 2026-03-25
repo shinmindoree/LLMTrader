@@ -200,6 +200,20 @@ class JobCountsResponse(BaseModel):
     live_total: int
 
 
+class JobSummary(BaseModel):
+    """Lightweight job representation without heavy result payload."""
+    job_id: uuid.UUID
+    type: JobType
+    status: JobStatus
+    strategy_path: str
+    config: dict[str, Any]
+    result_summary: dict[str, Any] | None
+    error: str | None
+    created_at: datetime
+    started_at: datetime | None
+    ended_at: datetime | None
+
+
 class JobResponse(BaseModel):
     job_id: uuid.UUID
     type: JobType
