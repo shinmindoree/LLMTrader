@@ -153,6 +153,7 @@ export default function StrategiesPage() {
         const stubSessions: ChatSessionRecord[] = summaries.slice(1).map((s) => ({
           id: s.session_id,
           title: s.title || "New chat",
+          createdAt: s.created_at,
           updatedAt: s.updated_at,
           messages: [],
           workspaceCode: "",
