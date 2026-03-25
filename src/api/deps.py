@@ -111,7 +111,10 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
         norm_email = _normalize_email(user.email)
         if norm_email:
             existing = await session.execute(
-                select(UserProfile).where(UserProfile.email == norm_email)
+                select(UserProfile)
+                .where(UserProfile.email == norm_email)
+                .order_by(UserProfile.created_at)
+                .limit(1)
             )
             existing_profile = existing.scalar_one_or_none()
             if existing_profile:
