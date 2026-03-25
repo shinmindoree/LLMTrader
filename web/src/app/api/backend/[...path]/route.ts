@@ -104,6 +104,15 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   const resHeaders = new Headers(res.headers);
   resHeaders.delete("content-encoding");
 
+  // If backend returned a non-JSON error (e.g. HTML 502), normalise to JSON
+  if (!res.ok && !res.headers.get("content-type")?.includes("application/json")) {
+    const text = await res.text().catch(() => "");
+    return NextResponse.json(
+      { error: text.slice(0, 200) || `Backend returned ${res.status}` },
+      { status: res.status },
+    );
+  }
+
   // Allow short-lived browser cache for read-only listing endpoints
   const isCacheableListing =
     req.method === "GET" &&
