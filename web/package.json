@@ -12,10 +12,12 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@auth/core": "^0.41.0",
     "@sentry/nextjs": "^10.45.0",
     "dotenv": "^16.4.5",
     "lightweight-charts": "^4.2.2",
     "next": "16.1.4",
+    "next-auth": "^5.0.0-beta.30",
     "nextjs-toploader": "^3.9.17",
     "react": "19.2.3",
     "react-dom": "19.2.3",

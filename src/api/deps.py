@@ -122,14 +122,45 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
     return user
 
 
+async def _verify_nextauth_user(
+    token: str,
+    email_header: str | None,
+    user_id_header: str | None,
+) -> AuthenticatedUser:
+    """Verify request from NextAuth web proxy via shared secret."""
+    settings = get_settings()
+    expected_secret = (settings.nextauth.secret or "").strip()
+    if not expected_secret:
+        raise HTTPException(status_code=500, detail="AUTH_SECRET is not configured")
+
+    import hmac
+    if not hmac.compare_digest(token, expected_secret):
+        raise HTTPException(status_code=401, detail="Invalid auth secret")
+
+    email = (email_header or "").strip() or None
+    user_id = (user_id_header or "").strip() or (email or "anonymous")
+    return AuthenticatedUser(user_id=user_id, email=email, provider="nextauth")
+
+
 async def require_auth(
     x_admin_token: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
+    x_chat_user_id: str | None = Header(default=None),
 ) -> AuthenticatedUser:
     settings = get_settings()
+
+    # 1. Try NextAuth shared-secret auth (preferred)
+    nextauth_enabled = settings.nextauth.enabled or bool((settings.nextauth.secret or "").strip())
+    if nextauth_enabled:
+        token = _extract_bearer_token(authorization)
+        if token:
+            user = await _verify_nextauth_user(token, x_user_email, x_chat_user_id)
+            return await _ensure_user_profile(user)
+
+    # 2. Try Entra ID JWT auth (legacy)
     entra = settings.entra_auth
     entra_enabled = entra.enabled or bool((entra.client_id or "").strip())
-
     if entra_enabled:
         token = _extract_bearer_token(authorization)
         if token:
@@ -138,11 +169,12 @@ async def require_auth(
         if not entra.allow_admin_fallback:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
+    # 3. Fall back to admin token
     expected = settings.admin_token.strip()
     if not expected:
         detail = "ADMIN_TOKEN is not configured"
-        if entra_enabled:
-            detail = "Entra token is missing and ADMIN fallback is not configured"
+        if entra_enabled or nextauth_enabled:
+            detail = "Auth token is missing and ADMIN fallback is not configured"
         raise HTTPException(status_code=500, detail=detail)
     if (x_admin_token or "").strip() != expected:
         raise HTTPException(status_code=401, detail="Unauthorized")

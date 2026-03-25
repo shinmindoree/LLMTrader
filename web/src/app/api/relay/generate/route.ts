@@ -1,13 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import {
-  clearSessionCookies,
-  isSupabaseAuthEnabled,
-  readSessionCookies,
-  refreshSession,
-  shouldRefreshSession,
-  writeSessionCookies,
-} from "@/lib/supabaseAuth";
+import { auth } from "@/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,22 +16,9 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  let refreshedSession: ReturnType<typeof readSessionCookies> = null;
-  if (isSupabaseAuthEnabled()) {
-    const session = readSessionCookies(req.cookies);
-    if (!session) {
-      const unauthorized = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      clearSessionCookies(unauthorized.cookies);
-      return unauthorized;
-    }
-    if (shouldRefreshSession(session)) {
-      refreshedSession = await refreshSession(session.refreshToken, session.userId, session.email);
-      if (!refreshedSession) {
-        const unauthorized = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-        clearSessionCookies(unauthorized.cookies);
-        return unauthorized;
-      }
-    }
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const target = new URL("/generate", RELAY_ORIGIN);
@@ -62,9 +42,5 @@ export async function POST(req: NextRequest): Promise<Response> {
   resHeaders.delete("content-encoding");
   resHeaders.set("cache-control", "no-store");
 
-  const response = new NextResponse(res.body, { status: res.status, headers: resHeaders });
-  if (refreshedSession) {
-    writeSessionCookies(response.cookies, refreshedSession);
-  }
-  return response;
+  return new NextResponse(res.body, { status: res.status, headers: resHeaders });
 }

@@ -52,6 +52,15 @@ class SupabaseAuthSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+class NextAuthSettings(BaseSettings):
+    """NextAuth.js 인증 설정 (shared secret 기반)."""
+
+    secret: str = Field(default="", alias="AUTH_SECRET", repr=False)
+    enabled: bool = Field(default=False, alias="NEXTAUTH_ENABLED")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
 class EntraAuthSettings(BaseSettings):
     """Microsoft Entra ID 인증 설정."""
 
@@ -166,6 +175,7 @@ class Settings(BaseSettings):
     encryption: EncryptionSettings = Field(default_factory=EncryptionSettings)
     stripe: StripeSettings = Field(default_factory=StripeSettings)
     entra_auth: EntraAuthSettings = Field(default_factory=EntraAuthSettings)
+    nextauth: NextAuthSettings = Field(default_factory=NextAuthSettings)
     azure_blob: AzureBlobSettings = Field(default_factory=AzureBlobSettings)
     azure_keyvault: AzureKeyVaultSettings = Field(default_factory=AzureKeyVaultSettings)
 

@@ -112,7 +112,7 @@ const ko: TranslationKeys = {
   },
   authDisabled: {
     title: "인증 비활성화",
-    description: "인증이 비활성화되어 있습니다. NEXT_PUBLIC_ENTRA_AUTH_ENABLED=true로 설정하세요.",
+    description: "인증이 비활성화되어 있습니다.",
   },
   dashboard: {
     title: "AlphaWeaver 대시보드",

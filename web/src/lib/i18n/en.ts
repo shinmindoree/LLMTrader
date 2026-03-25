@@ -98,7 +98,7 @@ const en = {
     authFailed: "Authentication failed",
     requestError: "An error occurred while processing your request.",
     sessionExpired: "Your session has expired. Please sign in again.",
-    description: "Sign in with your Microsoft or organizational account.",
+    description: "Sign in with Google or your email and password.",
     continueWithGoogle: "Continue with Google",
     orUseEmail: "or use email",
     oauthFailed: "Sign-in failed. Please try again.",
@@ -108,7 +108,7 @@ const en = {
   },
   authDisabled: {
     title: "Auth Disabled",
-    description: "Authentication is disabled. Set NEXT_PUBLIC_ENTRA_AUTH_ENABLED=true.",
+    description: "Authentication is disabled.",
   },
   dashboard: {
     title: "AlphaWeaver Dashboard",

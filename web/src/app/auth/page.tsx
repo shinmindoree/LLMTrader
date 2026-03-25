@@ -1,45 +1,47 @@
 "use client";
 
+import { useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
+import { signIn } from "next-auth/react";
 import { isValidAuthReturnPath } from "@/lib/authRedirect";
 import { useI18n } from "@/lib/i18n";
-
-function isAuthEnabled(): boolean {
-  const raw = (process.env.NEXT_PUBLIC_ENTRA_AUTH_ENABLED ?? "").trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
-function isCiamEnabled(): boolean {
-  const authority = (process.env.NEXT_PUBLIC_ENTRA_AUTHORITY ?? "").trim();
-  return authority.includes(".ciamlogin.com");
-}
 
 export default function AuthPage() {
   const { t } = useI18n();
   const searchParams = useSearchParams();
-  const returnUrl = searchParams.get("returnUrl");
+  const returnUrl = searchParams.get("returnUrl") ?? searchParams.get("callbackUrl");
   const reason = searchParams.get("reason");
+  const errorParam = searchParams.get("error");
   const showSessionExpired = reason === "session_expired";
-  const showAuthFailed = reason === "auth_failed" || reason === "oauth_failed";
+  const showAuthFailed = reason === "auth_failed" || reason === "oauth_failed" || !!errorParam;
 
-  if (!isAuthEnabled()) {
-    return (
-      <main className="mx-auto w-full max-w-md px-6 py-16">
-        <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
-          <h1 className="text-lg font-semibold text-[#d1d4dc]">{t.authDisabled.title}</h1>
-          <p className="mt-2 text-sm text-[#868993]">
-            {t.authDisabled.description}
-          </p>
-        </div>
-      </main>
-    );
+  const callbackUrl = returnUrl && isValidAuthReturnPath(returnUrl) ? returnUrl : "/";
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [credError, setCredError] = useState("");
+
+  async function handleCredentialsSubmit(e: FormEvent) {
+    e.preventDefault();
+    setCredError("");
+    setSubmitting(true);
+    try {
+      const result = await signIn("credentials", {
+        email,
+        password,
+        callbackUrl,
+        redirect: false,
+      });
+      if (result?.error) {
+        setCredError(t.auth.authFailed);
+      } else if (result?.url) {
+        window.location.href = result.url;
+      }
+    } finally {
+      setSubmitting(false);
+    }
   }
-
-  const loginHref = `/api/auth/login${
-    returnUrl && isValidAuthReturnPath(returnUrl)
-      ? `?returnUrl=${encodeURIComponent(returnUrl)}`
-      : ""
-  }`;
 
   return (
     <main className="mx-auto w-full max-w-md px-6 py-16">
@@ -62,43 +64,56 @@ export default function AuthPage() {
           </p>
         ) : null}
 
-        <a
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded bg-[#2962ff] px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#2962ff]/90"
-          href={loginHref}
+        {/* Google Sign-In */}
+        <button
+          type="button"
+          className="mt-6 flex w-full items-center justify-center gap-2 rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2.5 text-sm font-medium text-[#d1d4dc] transition-colors hover:bg-[#262a35]"
+          onClick={() => signIn("google", { callbackUrl })}
         >
-          <MicrosoftGlyph />
-          {t.auth.login}
-        </a>
+          <GoogleGlyph />
+          {t.auth.continueWithGoogle}
+        </button>
 
-        {isCiamEnabled() ? (
-          <>
-            <div className="my-4 flex items-center gap-3">
-              <div className="h-px flex-1 bg-[#2a2e39]" />
-              <span className="text-xs text-[#868993]">or</span>
-              <div className="h-px flex-1 bg-[#2a2e39]" />
-            </div>
-            <a
-              className="flex w-full items-center justify-center gap-2 rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2.5 text-sm font-medium text-[#d1d4dc] transition-colors hover:bg-[#262a35]"
-              href={`${loginHref}${loginHref.includes("?") ? "&" : "?"}provider=google.com`}
-            >
-              <GoogleGlyph />
-              {t.auth.continueWithGoogle}
-            </a>
-          </>
-        ) : null}
+        {/* Divider */}
+        <div className="my-4 flex items-center gap-3">
+          <div className="h-px flex-1 bg-[#2a2e39]" />
+          <span className="text-xs text-[#868993]">{t.auth.orUseEmail}</span>
+          <div className="h-px flex-1 bg-[#2a2e39]" />
+        </div>
+
+        {/* Credentials Form */}
+        <form onSubmit={handleCredentialsSubmit} className="space-y-3">
+          {credError ? (
+            <p className="rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-3 py-2 text-sm text-[#ef5350]">
+              {credError}
+            </p>
+          ) : null}
+          <input
+            type="email"
+            required
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder-[#868993] outline-none focus:border-[#2962ff]"
+          />
+          <input
+            type="password"
+            required
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder-[#868993] outline-none focus:border-[#2962ff]"
+          />
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full rounded bg-[#2962ff] px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#2962ff]/90 disabled:opacity-60"
+          >
+            {submitting ? t.auth.submitting : t.auth.login}
+          </button>
+        </form>
       </div>
     </main>
-  );
-}
-
-function MicrosoftGlyph() {
-  return (
-    <svg aria-hidden className="h-5 w-5 shrink-0" viewBox="0 0 21 21">
-      <rect x="1" y="1" width="9" height="9" fill="#f25022" />
-      <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
-      <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
-      <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
-    </svg>
   );
 }
 

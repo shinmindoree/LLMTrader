@@ -2,73 +2,28 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isAdminEmail } from "@/lib/admin";
 import { isRateLimited, getRateLimitHeaders } from "@/lib/rateLimit";
-import {
-  clearSessionCookies,
-  isAuthEnabled,
-  readSessionCookies,
-  refreshAccessToken,
-  shouldRefreshSession,
-  writeSessionCookies,
-  type SessionSnapshot,
-} from "@/lib/entraAuth";
+import { auth } from "@/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const API_ORIGIN = process.env.API_ORIGIN ?? "http://localhost:8000";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
+const AUTH_SECRET = process.env.AUTH_SECRET ?? "";
 
 type ProxyAuthState = {
-  accessToken: string;
+  token: string;
   userId: string;
   email: string | null;
-  refreshedSession: SessionSnapshot | null;
-  clearCookies: boolean;
 };
 
-async function resolveProxyAuth(req: NextRequest): Promise<ProxyAuthState | null> {
-  if (!isAuthEnabled()) {
-    return null;
-  }
-
-  const session = readSessionCookies(req.cookies);
-  if (!session) {
-    return {
-      accessToken: "",
-      userId: "",
-      email: null,
-      refreshedSession: null,
-      clearCookies: true,
-    };
-  }
-
-  if (!shouldRefreshSession(session)) {
-    return {
-      accessToken: session.idToken,
-      userId: session.userId,
-      email: session.email,
-      refreshedSession: null,
-      clearCookies: false,
-    };
-  }
-
-  const refreshed = await refreshAccessToken(session.refreshToken);
-  if (!refreshed) {
-    return {
-      accessToken: "",
-      userId: "",
-      email: null,
-      refreshedSession: null,
-      clearCookies: true,
-    };
-  }
-
+async function resolveProxyAuth(): Promise<ProxyAuthState | null> {
+  const session = await auth();
+  if (!session?.user) return null;
   return {
-    accessToken: refreshed.idToken,
-    userId: refreshed.userId,
-    email: refreshed.email,
-    refreshedSession: refreshed,
-    clearCookies: false,
+    token: AUTH_SECRET, // Backend will verify via shared secret
+    userId: session.user.id ?? "",
+    email: session.user.email ?? null,
   };
 }
 
@@ -96,37 +51,29 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   const target = new URL(relPath, API_ORIGIN.endsWith("/") ? API_ORIGIN : `${API_ORIGIN}/`);
   target.search = url.search;
 
-  let auth: ProxyAuthState | null = null;
+  let proxyAuth: ProxyAuthState | null = null;
   try {
-    auth = await resolveProxyAuth(req);
+    proxyAuth = await resolveProxyAuth();
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Auth initialization failed" },
       { status: 500 },
     );
   }
-  if (isAuthEnabled() && (!auth || !auth.accessToken)) {
-    const unauthorized = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (auth?.clearCookies) {
-      clearSessionCookies(unauthorized.cookies);
-    }
-    return unauthorized;
+  if (!proxyAuth) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (isAdminOnlyPath(relPath) && !isAdminEmail(auth?.email)) {
+  if (isAdminOnlyPath(relPath) && !isAdminEmail(proxyAuth.email)) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
   const headers = new Headers(req.headers);
-  if (isAuthEnabled() && auth) {
-    headers.set("authorization", `Bearer ${auth.accessToken}`);
-    headers.set("x-chat-user-id", auth.userId);
-    headers.delete("x-admin-token");
-  } else {
-    if (!ADMIN_TOKEN) {
-      console.warn("[proxy] ADMIN_TOKEN env var is not set — admin routes will fail");
-    }
-    headers.set("x-admin-token", ADMIN_TOKEN);
+  headers.set("authorization", `Bearer ${proxyAuth.token}`);
+  headers.set("x-chat-user-id", proxyAuth.userId);
+  if (proxyAuth.email) {
+    headers.set("x-user-email", proxyAuth.email);
   }
+  headers.delete("x-admin-token");
   headers.delete("host");
 
   let body: ArrayBuffer | undefined;
@@ -158,14 +105,7 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   resHeaders.delete("content-encoding");
   resHeaders.set("cache-control", "no-store");
 
-  const response = new NextResponse(res.body, { status: res.status, headers: resHeaders });
-  if (auth?.refreshedSession) {
-    writeSessionCookies(response.cookies, auth.refreshedSession);
-  }
-  if (auth?.clearCookies) {
-    clearSessionCookies(response.cookies);
-  }
-  return response;
+  return new NextResponse(res.body, { status: res.status, headers: resHeaders });
 }
 
 type RouteCtx = { params: Promise<{ path: string[] }> };

@@ -2,43 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { signOut, useSession } from "next-auth/react";
 import { useI18n } from "@/lib/i18n";
-
-type SessionData = {
-  user?: { id: string; email: string | null };
-  isAdmin?: boolean;
-};
-
-function isAuthEnabled(): boolean {
-  const raw = (
-    process.env.NEXT_PUBLIC_SUPABASE_AUTH_ENABLED ?? ""
-  )
-    .trim()
-    .toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
+import { isAdminEmail } from "@/lib/admin";
 
 export function UserProfileMenu() {
   const { t } = useI18n();
-  const authEnabled = isAuthEnabled();
-  const [session, setSession] = useState<SessionData | null>(null);
-  const [loading, setLoading] = useState(authEnabled);
+  const { data: session, status } = useSession();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!authEnabled) return;
-    fetch("/api/auth/session", { cache: "no-store" })
-      .then(async (res) => {
-        if (!res.ok) {
-          setSession(null);
-          return;
-        }
-        setSession((await res.json()) as SessionData);
-      })
-      .catch(() => setSession(null))
-      .finally(() => setLoading(false));
-  }, [authEnabled]);
 
   useEffect(() => {
     if (!open) return;
@@ -51,9 +23,7 @@ export function UserProfileMenu() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  if (!authEnabled) return null;
-
-  if (loading) {
+  if (status === "loading") {
     return <span className="text-xs text-[#868993]">Auth...</span>;
   }
 
@@ -69,17 +39,17 @@ export function UserProfileMenu() {
     );
   }
 
-  const initial = (user.email ?? user.id).charAt(0).toUpperCase();
+  const initial = (user.email ?? user.id ?? "?").charAt(0).toUpperCase();
+  const admin = isAdminEmail(user.email ?? null);
 
   async function onLogout(): Promise<void> {
-    await fetch("/api/auth/logout", { method: "POST" });
-    window.location.href = "/auth";
+    await signOut({ callbackUrl: "/auth" });
   }
 
   const menuItems = [
     { href: "/settings", label: t.nav.settings },
     { href: "/billing", label: "Billing" },
-    ...(session?.isAdmin ? [{ href: "/admin", label: "Admin" }] : []),
+    ...(admin ? [{ href: "/admin", label: "Admin" }] : []),
   ];
 
   return (

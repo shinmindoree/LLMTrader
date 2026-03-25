@@ -1,5 +1,3 @@
-// NextAuth handles /api/auth/session via the [...nextauth] catch-all route.
-// We keep this file to avoid 404 for any direct callers, re-exporting NextAuth handlers.
 import { handlers } from "@/auth";
 import type { NextRequest } from "next/server";
 

@@ -1,16 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
-
-import {
-  clearSessionCookies,
-  isAuthEnabled,
-  readSessionCookies,
-} from "@/lib/entraAuth";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest): Promise<Response> {
-  const response = NextResponse.json({ ok: true }, { status: 200 });
-  clearSessionCookies(response.cookies);
-  return response;
+export async function POST(): Promise<Response> {
+  // NextAuth handles sign-out via /api/auth/signout
+  // This endpoint is kept for backward compat with UserProfileMenu
+  return NextResponse.json({ ok: true }, { status: 200 });
 }
