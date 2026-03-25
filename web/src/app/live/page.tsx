@@ -7,9 +7,7 @@ import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJ
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
-import { JobStatusBadge } from "@/components/JobStatusBadge";
-import { LatestJobResult } from "@/components/LatestJobResult";
-import { JobConfigInline } from "@/components/JobConfigSummary";
+import { ActiveJobCard } from "@/components/ActiveJobCard";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { jobDetailPath } from "@/lib/routes";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
@@ -18,13 +16,6 @@ import { LiveForm } from "./new/LiveForm";
 const MAX_SLOTS_FALLBACK = 5;
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
-
-function strategyNameFromPath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) return "Strategy";
-  const base = trimmed.split("/").pop() ?? trimmed;
-  return base.replace(/\.[^.]+$/, "");
-}
 
 export default function LiveJobsPage() {
   const { t } = useI18n();
@@ -38,7 +29,6 @@ export default function LiveJobsPage() {
   const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
   const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
-  const [runPending, setRunPending] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -226,40 +216,7 @@ export default function LiveJobsPage() {
           </div>
           <ul className="space-y-2">
             {activeJobs.map((j) => (
-              <li
-                key={j.job_id}
-                className="rounded border border-[#2962ff]/30 bg-[#1a2340]/50 px-4 py-3"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Link
-                      className="font-medium text-[#d1d4dc] hover:text-[#2962ff] hover:underline transition-colors"
-                      href={jobDetailPath("LIVE", j.job_id)}
-                    >
-                      {strategyNameFromPath(j.strategy_path)}
-                    </Link>
-                    {j.config ? (
-                      <span className="text-xs"><JobConfigInline type="LIVE" config={j.config} /></span>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <JobStatusBadge status={j.status} />
-                    {(j.status === "PENDING" || j.status === "RUNNING") && (
-                      <button
-                        className="rounded border border-[#2a2e39] px-2 py-1 text-xs text-[#d1d4dc] hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50 transition-colors"
-                        disabled={busy}
-                        onClick={() => onStopJob(j)}
-                        type="button"
-                      >
-                        {t.common.stop}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-1 text-xs text-[#868993]">
-                  {t.live.started} {new Date(j.created_at).toLocaleString()}
-                </div>
-              </li>
+              <ActiveJobCard key={j.job_id} job={j} busy={busy} onStop={onStopJob} />
             ))}
           </ul>
         </section>
@@ -304,7 +261,6 @@ export default function LiveJobsPage() {
           <LiveForm
             strategies={strategies}
             onCreated={onCreated}
-            onSubmittingChange={setRunPending}
             activeCount={activeCount}
             maxSlots={maxSlots}
           />
@@ -312,13 +268,6 @@ export default function LiveJobsPage() {
           <InlineLoadingIndicator message={t.common.loading} />
         )}
       </section>
-
-      <LatestJobResult
-        jobType="LIVE"
-        focusJobId={latestJob?.job_id ?? null}
-        title={t.live.latestResult}
-        showPendingSpinner={runPending}
-      />
 
       <section className="mt-10">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.live.runHistory}</div>
