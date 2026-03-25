@@ -43,6 +43,8 @@ from control.repo import (
     list_orders,
     list_strategy_meta,
     list_strategy_chat_sessions as repo_list_strategy_chat_sessions,
+    list_strategy_chat_session_summaries as repo_list_strategy_chat_session_summaries,
+    get_strategy_chat_session as repo_get_strategy_chat_session,
     list_strategy_quality_logs,
     list_trades,
     request_stop,
@@ -96,6 +98,7 @@ from api.schemas import (
     StrategyGenerateRequest,
     StrategyGenerateResponse,
     StrategyChatSessionResponse,
+    StrategyChatSessionSummary,
     StrategyChatSessionUpsertRequest,
     StrategyChatRequest,
     StrategyChatResponse,
@@ -210,6 +213,20 @@ def _chat_session_to_response(row: Any) -> StrategyChatSessionResponse:
         session_id=str(row.session_id),
         title=str(row.title or "New chat"),
         data=data,
+        message_count=message_count,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _chat_session_to_summary(row: Any) -> StrategyChatSessionSummary:
+    """Lightweight conversion — metadata only, no data payload."""
+    data = row.data_json if isinstance(row.data_json, dict) else {}
+    messages = data.get("messages") if isinstance(data, dict) else None
+    message_count = len(messages) if isinstance(messages, list) else 0
+    return StrategyChatSessionSummary(
+        session_id=str(row.session_id),
+        title=str(row.title or "New chat"),
         message_count=message_count,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -1259,6 +1276,35 @@ def create_app() -> FastAPI:
     ) -> list[StrategyChatSessionResponse]:
         rows = await repo_list_strategy_chat_sessions(session, user_id=user_id, limit=limit)
         return [_chat_session_to_response(row) for row in rows]
+
+    @app.get(
+        "/api/strategies/chat/sessions/list",
+        response_model=list[StrategyChatSessionSummary],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_chat_session_summaries(
+        limit: int = Query(default=200, ge=1, le=500),
+        user_id: str = Depends(_chat_user_id_from_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[StrategyChatSessionSummary]:
+        """Lightweight session list — metadata only, no data payload."""
+        rows = await repo_list_strategy_chat_session_summaries(session, user_id=user_id, limit=limit)
+        return [_chat_session_to_summary(row) for row in rows]
+
+    @app.get(
+        "/api/strategies/chat/sessions/{session_id}",
+        response_model=StrategyChatSessionResponse,
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_chat_session(
+        session_id: str,
+        user_id: str = Depends(_chat_user_id_from_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StrategyChatSessionResponse:
+        row = await repo_get_strategy_chat_session(session, user_id=user_id, session_id=session_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return _chat_session_to_response(row)
 
     @app.put(
         "/api/strategies/chat/sessions/{session_id}",

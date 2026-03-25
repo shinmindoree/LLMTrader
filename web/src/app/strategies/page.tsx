@@ -9,8 +9,9 @@ import {
   deleteStrategy,
   extractStrategyParams,
   getStrategyContent,
+  getStrategyChatSession,
   generateStrategyStream,
-  listStrategyChatSessions,
+  listStrategyChatSessionSummaries,
   listStrategies,
   saveStrategy,
   strategyChat,
@@ -124,27 +125,53 @@ export default function StrategiesPage() {
 
     const loadSessions = async () => {
       try {
-        const remote = await listStrategyChatSessions();
-        if (cancelled) return;
-        const remoteSessions = remote
-          .map((item) => fromRemoteSessionRecord(item))
-          .filter(isPresent);
-        if (remoteSessions.length > 0) {
-          const sorted = sortSessionsByUpdated(remoteSessions);
-          setChatSessions(sorted);
-          setActiveSessionId(sorted[0].id);
-          setSessionSyncError(null);
+        // Load lightweight summaries first (no data payload)
+        const summaries = await listStrategyChatSessionSummaries();
+        if (cancelled || summaries.length === 0) {
+          if (!cancelled) {
+            const empty = createEmptySession();
+            setChatSessions([empty]);
+            setActiveSessionId(empty.id);
+          }
           return;
         }
+
+        // Load the most recent session's full data
+        const mostRecent = summaries[0];
+        const full = await getStrategyChatSession(mostRecent.session_id);
+        if (cancelled) return;
+
+        const activeSession = fromRemoteSessionRecord(full);
+        if (!activeSession) {
+          const empty = createEmptySession();
+          setChatSessions([empty]);
+          setActiveSessionId(empty.id);
+          return;
+        }
+
+        // Build session list: full active session + placeholder stubs for the rest
+        const stubSessions: ChatSessionRecord[] = summaries.slice(1).map((s) => ({
+          id: s.session_id,
+          title: s.title || "New chat",
+          updatedAt: s.updated_at,
+          messages: [],
+          workspaceCode: "",
+          workspaceSourceMessageId: null,
+          initialGeneratedCode: null,
+          workspaceSummary: null,
+        } as ChatSessionRecord));
+
+        const allSessions = [activeSession, ...stubSessions];
+        setChatSessions(allSessions);
+        setActiveSessionId(activeSession.id);
+        setSessionSyncError(null);
       } catch (e) {
         if (!cancelled) {
           setSessionSyncError(`Remote session load failed: ${String(e)}`);
+          const empty = createEmptySession();
+          setChatSessions([empty]);
+          setActiveSessionId(empty.id);
         }
-      }
-      if (!cancelled) {
-        const empty = createEmptySession();
-        setChatSessions([empty]);
-        setActiveSessionId(empty.id);
       }
     };
 
@@ -187,6 +214,42 @@ export default function StrategiesPage() {
     if (!activeSession) {
       return;
     }
+
+    // If session is a stub (loaded from summary, no messages), fetch full data lazily
+    if (activeSession.messages.length === 0 && activeSession.workspaceCode === "") {
+      let cancelled = false;
+      setIsLoadingStrategy(true);
+      getStrategyChatSession(activeSession.id)
+        .then((full) => {
+          if (cancelled) return;
+          const loaded = fromRemoteSessionRecord(full);
+          if (!loaded) return;
+          // Update session in list with full data
+          setChatSessions((prev) =>
+            prev.map((s) => (s.id === loaded.id ? loaded : s)),
+          );
+          skipSessionSyncRef.current = true;
+          shouldAutoScrollRef.current = true;
+          setChatMessages(loaded.messages);
+          setChatError(null);
+          setPrompt("");
+          setWorkspaceCode(loaded.workspaceCode);
+          setWorkspaceSourceMessageId(loaded.workspaceSourceMessageId);
+          setInitialGeneratedCode(loaded.initialGeneratedCode);
+          setWorkspaceSummary(loaded.workspaceSummary);
+          setWorkspaceDirty(false);
+          setWorkspaceSyntax(null);
+          setWorkspaceSyntaxError(null);
+        })
+        .catch(() => {
+          if (!cancelled) setChatError("Failed to load session");
+        })
+        .finally(() => {
+          if (!cancelled) setIsLoadingStrategy(false);
+        });
+      return () => { cancelled = true; };
+    }
+
     skipSessionSyncRef.current = true;
     shouldAutoScrollRef.current = true;
     setChatMessages(activeSession.messages);

@@ -804,6 +804,36 @@ async def list_strategy_chat_sessions(
     return list(result.scalars().all())
 
 
+async def list_strategy_chat_session_summaries(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    limit: int = 200,
+) -> list[StrategyChatSession]:
+    """Load sessions with deferred data_json to reduce payload."""
+    result = await session.execute(
+        select(StrategyChatSession)
+        .where(StrategyChatSession.user_id == user_id)
+        .order_by(StrategyChatSession.updated_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_strategy_chat_session(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    session_id: str,
+) -> StrategyChatSession | None:
+    result = await session.execute(
+        select(StrategyChatSession)
+        .where(StrategyChatSession.user_id == user_id)
+        .where(StrategyChatSession.session_id == session_id)
+    )
+    return result.scalar_one_or_none()
+
+
 async def upsert_strategy_chat_session(
     session: AsyncSession,
     *,

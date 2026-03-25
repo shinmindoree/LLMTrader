@@ -152,6 +152,15 @@ class StrategyChatSessionUpsertRequest(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class StrategyChatSessionSummary(BaseModel):
+    """Lightweight session metadata — no full data payload."""
+    session_id: str
+    title: str
+    message_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
 class StrategyChatSessionResponse(BaseModel):
     session_id: str
     title: str

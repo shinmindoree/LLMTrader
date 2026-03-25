@@ -103,7 +103,13 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
 
   const resHeaders = new Headers(res.headers);
   resHeaders.delete("content-encoding");
-  resHeaders.set("cache-control", "no-store");
+
+  // Allow short-lived browser cache for read-only listing endpoints
+  const isCacheableListing =
+    req.method === "GET" &&
+    res.ok &&
+    /^api\/(strategies\/chat\/sessions\/list|strategies\/list|jobs\/list)/.test(relPath);
+  resHeaders.set("cache-control", isCacheableListing ? "private, max-age=5" : "no-store");
 
   return new NextResponse(res.body, { status: res.status, headers: resHeaders });
 }

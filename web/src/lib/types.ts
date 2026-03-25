@@ -87,6 +87,15 @@ export type StrategyChatSessionRecord = {
   updated_at: string;
 };
 
+/** Lightweight session metadata — no data payload. */
+export type StrategyChatSessionSummary = {
+  session_id: string;
+  title: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type StrategySyntaxError = {
   message: string;
   line: number | null;

@@ -23,6 +23,7 @@ import type {
   StrategyQualitySummaryResponse,
   StrategySaveResponse,
   StrategyChatSessionRecord,
+  StrategyChatSessionSummary,
   StrategyParamsApplyResponse,
   StrategyParamsExtractResponse,
   StrategySyntaxCheckResponse,
@@ -362,6 +363,17 @@ export async function strategyChatStream(
 
 export async function listStrategyChatSessions(): Promise<StrategyChatSessionRecord[]> {
   return json<StrategyChatSessionRecord[]>("/api/backend/api/strategies/chat/sessions?limit=200");
+}
+
+/** Lightweight session list — metadata only, no data payload. */
+export async function listStrategyChatSessionSummaries(): Promise<StrategyChatSessionSummary[]> {
+  return json<StrategyChatSessionSummary[]>("/api/backend/api/strategies/chat/sessions/list?limit=200");
+}
+
+export async function getStrategyChatSession(sessionId: string): Promise<StrategyChatSessionRecord> {
+  return json<StrategyChatSessionRecord>(
+    `/api/backend/api/strategies/chat/sessions/${encodeURIComponent(sessionId)}`,
+  );
 }
 
 export async function upsertStrategyChatSession(
