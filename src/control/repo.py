@@ -348,7 +348,7 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
         ).all()
     )
     running_live_ids = [job_id for job_id, job_type in running_rows if str(job_type) == str(JobType.LIVE)]
-    running_non_live_ids = [job_id for job_id, job_type in running_rows if str(job_type) != str(JobType.LIVE)]
+    running_backtest_ids = [job_id for job_id, job_type in running_rows if str(job_type) != str(JobType.LIVE)]
 
     stop_requested_ids = list(
         (
@@ -362,12 +362,20 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
         .all()
     )
 
-    res_running = None
-    if running_non_live_ids:
-        res_running = await session.execute(
+    # Requeue orphaned backtest jobs (PENDING) so they auto-retry on the next runner.
+    res_backtest_requeued = None
+    if running_backtest_ids:
+        res_backtest_requeued = await session.execute(
             update(Job)
-            .where(Job.job_id.in_(running_non_live_ids))
-            .values(status=JobStatus.FAILED, ended_at=now, updated_at=now, error=f"Orphaned job ({reason})")
+            .where(Job.job_id.in_(running_backtest_ids))
+            .values(
+                status=JobStatus.PENDING,
+                started_at=None,
+                ended_at=None,
+                updated_at=now,
+                error=None,
+                result_json=None,
+            )
         )
 
     res_live_requeued = None
@@ -393,9 +401,9 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
             .values(status=JobStatus.STOPPED, ended_at=now, updated_at=now)
         )
 
-    for jid in running_non_live_ids:
-        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_FAILED",
-                           payload_json={"error": f"Orphaned job ({reason})"})
+    for jid in running_backtest_ids:
+        await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_REQUEUED",
+                           payload_json={"reason": reason, "resume": False})
     for jid in running_live_ids:
         await append_event(session, job_id=jid, kind=EventKind.STATUS, message="JOB_REQUEUED",
                            payload_json={"reason": reason, "resume": True})
@@ -404,7 +412,7 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
                            payload_json={"reason": reason})
 
     return {
-        "finalized_failed": int(res_running.rowcount or 0) if res_running is not None else 0,
+        "requeued_backtest": int(res_backtest_requeued.rowcount or 0) if res_backtest_requeued is not None else 0,
         "requeued_live": int(res_live_requeued.rowcount or 0) if res_live_requeued is not None else 0,
         "finalized_stopped": int(res_stop_requested.rowcount or 0) if res_stop_requested is not None else 0,
     }

@@ -82,6 +82,7 @@ services:
       context: .
       dockerfile: infra/Dockerfile.runner
     restart: unless-stopped
+    stop_grace_period: 120s
     logging:
       driver: json-file
       options:
@@ -100,6 +101,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      replicas: ${RUNNER_REPLICAS:-2}
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
 
   web:
     build:

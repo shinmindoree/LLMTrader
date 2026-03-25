@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import signal
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -36,13 +37,23 @@ class RunnerWorker:
         self._session_maker = session_maker
         self._poll_interval = max(50, poll_interval_ms) / 1000.0
         self._live_concurrency = max(1, int(live_concurrency))
+        self._shutting_down = asyncio.Event()
 
     async def run_forever(self) -> None:
+        # Register SIGTERM/SIGINT for graceful shutdown.
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, self._request_shutdown, sig)
+            except NotImplementedError:
+                # Windows: signal handlers not supported in asyncio, use thread-based fallback
+                signal.signal(sig, lambda s, f: loop.call_soon_threadsafe(self._request_shutdown, s))
+
         # On runner startup, reconcile jobs left RUNNING/STOP_REQUESTED from a previous crash/restart.
         # LIVE jobs are re-queued so the runner can resume them automatically.
         async with self._session_maker() as session:
             counts = await finalize_orphaned_jobs(session, reason="runner_startup")
-            if counts.get("finalized_failed") or counts.get("requeued_live") or counts.get("finalized_stopped"):
+            if counts.get("requeued_backtest") or counts.get("requeued_live") or counts.get("finalized_stopped"):
                 print(f"[runner] reconciled orphaned jobs: {counts}")
             await session.commit()
 
@@ -53,6 +64,11 @@ class RunnerWorker:
         for i in range(self._live_concurrency):
             loops.append(asyncio.create_task(self._run_loop(JobType.LIVE), name=f"runner-live-{i}"))
         await asyncio.gather(*loops)
+
+    def _request_shutdown(self, sig: int | signal.Signals) -> None:
+        sig_name = signal.Signals(sig).name if isinstance(sig, int) else sig.name
+        print(f"[runner] received {sig_name}, draining active jobs before shutdown...")
+        self._shutting_down.set()
 
     async def _periodic_stale_live_reconcile(self) -> None:
         settings = get_settings()
@@ -77,6 +93,11 @@ class RunnerWorker:
 
     async def _run_loop(self, job_type: JobType) -> None:
         while True:
+            # Graceful shutdown: stop accepting new jobs
+            if self._shutting_down.is_set():
+                print(f"[runner] {job_type} loop exiting (graceful shutdown)")
+                return
+
             async with self._session_maker() as session:
                 job = await claim_next_pending_job(session, job_type=job_type)
                 if not job:
