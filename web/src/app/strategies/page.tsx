@@ -1257,34 +1257,9 @@ export default function StrategiesPage() {
                                 {message.status === "streaming" || message.status === "thinking" ? (
                                   <CodePlaceholderBlock language="AlphaWeaver" statusText={message.statusText} />
                                 ) : message.content && hasPythonCode ? (
-                                  <div className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]">
-                                    <div className="flex items-center justify-between gap-3 border-b border-[#2d313b] px-4 py-3">
-                                      <span className="text-xs font-medium tracking-[0.18em] text-[#8f96a3]">
-                                        AlphaWeaver
-                                      </span>
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <button
-                                          type="button"
-                                          className="rounded-full border border-[#343946] px-3 py-1.5 text-xs text-[#c6cad3] transition hover:border-[#505765] hover:text-white"
-                                          onClick={() => void handleCopy(message.content, message.id)}
-                                        >
-                                          {copiedId === message.id ? "Copied" : "Copy"}
-                                        </button>
-                                        {!message.path && isLatestAssistantCode && message.status == null ? (
-                                          <button
-                                            type="button"
-                                            className="rounded-full border border-[#2962ff]/70 px-3 py-1.5 text-xs text-[#8fa8ff] transition hover:bg-[#1f3367] hover:text-white disabled:opacity-50"
-                                            onClick={() => void handleSaveClick(message.id, message.content)}
-                                            disabled={savingId !== null}
-                                          >
-                                            Save strategy
-                                          </button>
-                                        ) : null}
-                                      </div>
-                                    </div>
-                                    <pre className="scrollbar-hover max-h-[560px] overflow-auto px-4 py-4 font-mono text-xs leading-6 text-[#ececf1]">
-                                      {message.content}
-                                    </pre>
+                                  <div className="flex items-center gap-2 rounded-full bg-[#1b2330] border border-[#2962ff]/30 px-4 py-2 text-xs text-[#8fa8ff]">
+                                    <svg className="h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                                    <span>Code generated — see workspace</span>
                                   </div>
                                 ) : message.content ? (
                                   <RichTextContent content={message.content} />
@@ -1445,7 +1420,7 @@ export default function StrategiesPage() {
                       onClick={handleSaveWorkspace}
                       disabled={!workspaceCode.trim() || savingId !== null}
                     >
-                      Save
+                      Save Strategy
                     </button>
                   </div>
                 </div>
