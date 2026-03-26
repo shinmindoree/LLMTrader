@@ -1,5 +1,5 @@
-import { PageLoadingSpinner } from "@/components/PageLoadingSpinner";
+import { LiveSkeleton } from "@/components/skeletons/LiveSkeleton";
 
 export default function Loading() {
-  return <PageLoadingSpinner />;
+  return <LiveSkeleton />;
 }
