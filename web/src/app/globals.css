@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  /* TradingView dark theme colors */
+  /* TradingView dark theme colors (default) */
   --background: #131722;
   --foreground: #d1d4dc;
   --card-bg: #1e222d;
@@ -10,6 +10,23 @@
   --accent: #2962ff;
   --profit: #26a69a;
   --loss: #ef5350;
+  --hover-bg: #252936;
+  --avatar-bg: #2a2e39;
+  --avatar-hover: #363a45;
+}
+
+html.light {
+  --background: #f5f7fa;
+  --foreground: #1e293b;
+  --card-bg: #ffffff;
+  --border: #e2e8f0;
+  --text-secondary: #64748b;
+  --accent: #2962ff;
+  --profit: #16a34a;
+  --loss: #dc2626;
+  --hover-bg: #f1f5f9;
+  --avatar-bg: #e2e8f0;
+  --avatar-hover: #cbd5e1;
 }
 
 @theme inline {
@@ -28,6 +45,55 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ── Light-mode overrides for hardcoded TradingView hex classes ── */
+html.light .bg-\[\#131722\]   { background-color: var(--background) !important; }
+html.light .bg-\[\#1e222d\]   { background-color: var(--card-bg) !important; }
+html.light .bg-\[\#1e222d\]\/90 { background-color: color-mix(in srgb, var(--card-bg) 90%, transparent) !important; }
+html.light .bg-\[\#1e222d\]\/50 { background-color: color-mix(in srgb, var(--card-bg) 50%, transparent) !important; }
+html.light .bg-\[\#2a2e39\]   { background-color: var(--border) !important; }
+
+html.light .border-\[\#2a2e39\] { border-color: var(--border) !important; }
+html.light .border-b-\[\#2a2e39\] { border-bottom-color: var(--border) !important; }
+html.light .border-t-\[\#2a2e39\] { border-top-color: var(--border) !important; }
+
+html.light .text-\[\#d1d4dc\] { color: var(--foreground) !important; }
+html.light .text-\[\#868993\] { color: var(--text-secondary) !important; }
+
+html.light .hover\:bg-\[\#2a2e39\]:hover { background-color: var(--hover-bg) !important; }
+html.light .hover\:bg-\[\#2a2e39\]\/50:hover { background-color: color-mix(in srgb, var(--hover-bg) 50%, transparent) !important; }
+html.light .hover\:bg-\[\#252936\]:hover { background-color: var(--hover-bg) !important; }
+html.light .hover\:bg-\[\#363a45\]:hover { background-color: var(--avatar-hover) !important; }
+html.light .hover\:text-\[\#d1d4dc\]:hover { color: var(--foreground) !important; }
+
+html.light .text-\[\#26a69a\] { color: var(--profit) !important; }
+html.light .text-\[\#ef5350\] { color: var(--loss) !important; }
+html.light .hover\:text-\[\#ef5350\]:hover { color: var(--loss) !important; }
+html.light .hover\:border-\[\#ef5350\]:hover { border-color: var(--loss) !important; }
+html.light .bg-\[\#26a69a\] { background-color: var(--profit) !important; }
+html.light .bg-\[\#ef5350\] { background-color: var(--loss) !important; }
+
+html.light .bg-\[\#26a69a\]\/10 { background-color: color-mix(in srgb, var(--profit) 10%, transparent) !important; }
+html.light .bg-\[\#ef5350\]\/10 { background-color: color-mix(in srgb, var(--loss) 10%, transparent) !important; }
+
+/* Dropdown / select / input overrides */
+html.light select,
+html.light input[type="text"],
+html.light input[type="number"],
+html.light input[type="password"],
+html.light textarea {
+  background-color: var(--background) !important;
+  border-color: var(--border) !important;
+  color: var(--foreground) !important;
+}
+
+html.light select option {
+  background-color: var(--card-bg);
+  color: var(--foreground);
+}
+
+/* Border-dashed overrides */
+html.light .border-dashed.border-\[\#2a2e39\] { border-color: var(--border) !important; }
 
 /* Scrollbar styles */
 ::-webkit-scrollbar {

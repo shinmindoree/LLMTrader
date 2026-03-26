@@ -51,20 +51,20 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#131722]`}>
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <NextTopLoader color="#2962ff" height={3} showSpinner={false} />
         <Providers>
         <Header />
         <AppShell>{children}</AppShell>
         <Toaster
-          theme="dark"
+          theme="system"
           position="bottom-right"
           toastOptions={{
             style: {
-              background: "#1e222d",
-              border: "1px solid #2a2e39",
-              color: "#d1d4dc",
+              background: "var(--card-bg)",
+              border: "1px solid var(--border)",
+              color: "var(--foreground)",
             },
           }}
         />

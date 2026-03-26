@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { UserProfileMenu } from "@/components/UserProfileMenu";
 import { useI18n } from "@/lib/i18n";
 
@@ -63,6 +64,7 @@ export function Header() {
             </Link>
           )}
           <LanguageSwitcher />
+          <ThemeToggle />
           <UserProfileMenu />
         </div>
       </div>
