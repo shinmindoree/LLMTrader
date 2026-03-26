@@ -220,6 +220,7 @@ const en = {
     slotsFull: "Slots Full",
     startLive: "Start Live",
     slotsFullMessage: "All {maxSlots} slots are in use. Stop a running strategy to free a slot.",
+    slotsRemaining: "slots available",
   },
   form: {
     strategy: "Strategy",

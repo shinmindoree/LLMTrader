@@ -49,12 +49,14 @@ export function LiveForm({
   strategies,
   onCreated,
   onSubmittingChange,
+  onClose,
   activeCount,
   maxSlots,
 }: {
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
   onSubmittingChange?: (submitting: boolean) => void;
+  onClose?: () => void;
   activeCount: number;
   maxSlots: number;
 }) {
@@ -141,7 +143,7 @@ export function LiveForm({
   };
 
   return (
-    <div className="rounded border border-[#2a2e39] bg-[#1e222d] p-5">
+    <div>
       {error ? (
         <p className="mb-4 whitespace-pre-wrap rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
           {error}
@@ -153,6 +155,13 @@ export function LiveForm({
           {t.live.slotsFullMessage.replace("{maxSlots}", String(maxSlots))}
         </p>
       )}
+
+      <div className="mb-4 flex flex-wrap gap-2">
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">SL {(stopLossPct * 100).toFixed(1)}%</span>
+      </div>
 
       {defaults.applied ? (
         <p className="mb-4 text-xs text-[#868993]">
@@ -271,15 +280,27 @@ export function LiveForm({
         </label>
       </div>
 
-      <button
-        className="mt-5 rounded bg-[#ef5350] px-4 py-2 text-sm text-white hover:bg-[#d32f2f] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-        onClick={onSubmit}
-        disabled={submitting || !canCreate}
-      >
-        {canCreate
-          ? `${t.live.startLive} — ${symbol}@${interval}`
-          : `${t.live.slotsFull} (${activeCount}/${maxSlots})`}
-      </button>
+      <div className="mt-5 flex justify-end gap-3">
+        {onClose && (
+          <button
+            type="button"
+            className="rounded border border-[#2a2e39] bg-[#131722] px-4 py-2 text-sm text-[#868993] hover:text-[#d1d4dc] hover:border-[#d1d4dc] transition-colors"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            {t.common.cancel}
+          </button>
+        )}
+        <button
+          className="rounded bg-[#ef5350] px-4 py-2 text-sm text-white hover:bg-[#d32f2f] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          onClick={onSubmit}
+          disabled={submitting || !canCreate}
+        >
+          {canCreate
+            ? `${t.live.startLive} — ${symbol}@${interval}`
+            : `${t.live.slotsFull} (${activeCount}/${maxSlots})`}
+        </button>
+      </div>
     </div>
   );
 }

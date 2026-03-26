@@ -12,6 +12,7 @@ import { ActiveJobCard } from "@/components/ActiveJobCard";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { jobDetailPath } from "@/lib/routes";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
+import { FormModal } from "@/components/FormModal";
 import { LiveForm } from "./new/LiveForm";
 
 const MAX_SLOTS_FALLBACK = 5;
@@ -26,6 +27,7 @@ export default function LiveJobsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
 
   const { data: strategies = [], error: strategyError } = useSWR<StrategyInfo[]>(
     "strategies",
@@ -247,29 +249,42 @@ export default function LiveJobsPage() {
         </p>
       ) : null}
 
-      <section className="mt-6">
-        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[#d1d4dc]">
-          {t.live.addStrategy}
-          {activeCount > 0 && (
-            <span className="text-xs font-normal text-[#868993]">
-              {t.live.slotsUsed.replace("{activeCount}", String(activeCount)).replace("{maxSlots}", String(maxSlots))}
-            </span>
-          )}
-        </div>
-        <p className="mb-3 text-xs text-[#efb6b2]">
-          {t.live.strategyIndependentInfo.replace("{maxSlots}", String(maxSlots))}
-        </p>
+      <section className="mt-4">
+        <button
+          type="button"
+          onClick={() => setFormOpen(true)}
+          disabled={activeCount >= maxSlots}
+          className="w-full rounded-lg border-2 border-dashed border-[#2a2e39] bg-[#1e222d]/50 py-5 text-sm transition-colors hover:border-[#2962ff] hover:text-[#2962ff] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-[#2a2e39] disabled:hover:text-[#868993]"
+        >
+          <span className="flex items-center justify-center gap-2 text-[#868993]">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
+            {activeCount < maxSlots
+              ? `${t.live.addStrategy} (${maxSlots - activeCount} ${t.live.slotsRemaining})`
+              : t.live.slotsFullMessage.replace("{maxSlots}", String(maxSlots))}
+          </span>
+        </button>
+      </section>
+
+      <FormModal
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        title={`${t.live.addStrategy} (${activeCount}/${maxSlots})`}
+      >
         {strategies.length ? (
           <LiveForm
             strategies={strategies}
-            onCreated={onCreated}
+            onCreated={(job) => {
+              onCreated(job);
+              setFormOpen(false);
+            }}
+            onClose={() => setFormOpen(false)}
             activeCount={activeCount}
             maxSlots={maxSlots}
           />
         ) : (
           <InlineLoadingIndicator message={t.common.loading} />
         )}
-      </section>
+      </FormModal>
 
       <section className="mt-10">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.live.runHistory}</div>

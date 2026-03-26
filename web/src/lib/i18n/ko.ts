@@ -224,6 +224,7 @@ const ko: TranslationKeys = {
     slotsFull: "슬롯 초과",
     startLive: "라이브 트레이딩 시작",
     slotsFullMessage: "{maxSlots}개 슬롯이 모두 사용 중입니다. 실행 중인 전략을 중지하면 슬롯이 확보됩니다.",
+    slotsRemaining: "슬롯 남음",
   },
   form: {
     strategy: "트레이딩 전략",

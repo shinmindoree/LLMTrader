@@ -10,6 +10,7 @@ import type { Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
 import { LatestJobResult } from "@/components/LatestJobResult";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
+import { FormModal } from "@/components/FormModal";
 import { BacktestForm } from "./new/BacktestForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
@@ -24,6 +25,7 @@ export default function BacktestJobsPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
   const [runPending, setRunPending] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
 
   const { data: strategies = [], error: strategyError } = useSWR<StrategyInfo[]>(
     "strategies",
@@ -179,19 +181,39 @@ export default function BacktestJobsPage() {
         </p>
       ) : null}
 
-      <section className="mt-6">
-        <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.backtest.newBacktest}</div>
+      <section className="mt-4">
+        <button
+          type="button"
+          onClick={() => setFormOpen(true)}
+          className="w-full rounded-lg border-2 border-dashed border-[#2a2e39] bg-[#1e222d]/50 py-5 text-sm transition-colors hover:border-[#2962ff] hover:text-[#2962ff]"
+        >
+          <span className="flex items-center justify-center gap-2 text-[#868993]">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
+            {t.backtest.newBacktest}
+          </span>
+        </button>
+      </section>
+
+      <FormModal
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        title={t.backtest.newBacktest}
+      >
         <p className="mb-3 text-xs text-[#868993]">{t.backtest.newBacktestDesc}</p>
         {strategies.length ? (
           <BacktestForm
             strategies={strategies}
-            onCreated={onCreated}
+            onCreated={(job) => {
+              onCreated(job);
+              setFormOpen(false);
+            }}
             onSubmittingChange={setRunPending}
+            onClose={() => setFormOpen(false)}
           />
         ) : (
           <InlineLoadingIndicator message={t.common.loading} />
         )}
-      </section>
+      </FormModal>
 
       <LatestJobResult
         jobType="BACKTEST"

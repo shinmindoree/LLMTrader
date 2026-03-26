@@ -78,3 +78,15 @@ body {
 .scrollbar-hover:hover::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
+
+/* Modal animation */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

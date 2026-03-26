@@ -66,10 +66,12 @@ export function BacktestForm({
   strategies,
   onCreated,
   onSubmittingChange,
+  onClose,
 }: {
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
   onSubmittingChange?: (submitting: boolean) => void;
+  onClose?: () => void;
 }) {
   const defaults = loadExecutionDefaults();
   const { t } = useI18n();
@@ -174,12 +176,18 @@ export function BacktestForm({
   };
 
   return (
-    <div className="rounded border border-[#2a2e39] bg-[#1e222d] p-5">
+    <div>
       {error ? (
         <p className="mb-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
           {error}
         </p>
       ) : null}
+      <div className="mb-4 flex flex-wrap gap-2">
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{startDate} → {endDate}</span>
+      </div>
       <p className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-xs text-[#868993]">
         {t.form.formNotice}
       </p>
@@ -331,13 +339,25 @@ export function BacktestForm({
         </label>
       </div>
 
-      <button
-        className="mt-5 rounded bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-        onClick={onSubmit}
-        disabled={submitting}
-      >
-        {t.backtest.startBacktest}
-      </button>
+      <div className="mt-5 flex justify-end gap-3">
+        {onClose && (
+          <button
+            type="button"
+            className="rounded border border-[#2a2e39] bg-[#131722] px-4 py-2 text-sm text-[#868993] hover:text-[#d1d4dc] hover:border-[#d1d4dc] transition-colors"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            {t.common.cancel}
+          </button>
+        )}
+        <button
+          className="rounded bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          onClick={onSubmit}
+          disabled={submitting}
+        >
+          {t.backtest.startBacktest}
+        </button>
+      </div>
     </div>
   );
 }
