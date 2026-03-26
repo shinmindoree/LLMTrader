@@ -33,9 +33,12 @@ export function useLiveJobStream(enabled: boolean): {
 
   useEffect(() => {
     if (!enabled) {
-      setJobs([]);
-      setConnected(false);
-      return;
+      // Use setTimeout to avoid synchronous setState in effect body
+      const id = setTimeout(() => {
+        setJobs([]);
+        setConnected(false);
+      }, 0);
+      return () => clearTimeout(id);
     }
 
     let retryDelay = 1000;

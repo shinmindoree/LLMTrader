@@ -68,7 +68,6 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
     },
   );
 
-  const isLiveActive = job != null && job.type === "LIVE" && !FINISHED_STATUSES.has(job.status);
   const { data: trades = [] } = useSWR<Trade[]>(
     validJobId && jobId ? ["trades", jobId] : null,
     () => listTrades(jobId!),

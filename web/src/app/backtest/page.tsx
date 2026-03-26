@@ -21,7 +21,7 @@ export default function BacktestJobsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [runPending, setRunPending] = useState(false);
+  const [, setRunPending] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
 
   const { data: strategies = [], error: strategyError } = useSWR<StrategyInfo[]>(
@@ -45,7 +45,7 @@ export default function BacktestJobsPage() {
 
   const refresh = useCallback(() => refreshItems(), [refreshItems]);
 
-  const onCreated = (job: Job) => {
+  const onCreated = () => {
     setNotice(t.backtest.runStarted);
     refreshItems();
   };
@@ -181,8 +181,8 @@ export default function BacktestJobsPage() {
         {strategies.length ? (
           <BacktestForm
             strategies={strategies}
-            onCreated={(job) => {
-              onCreated(job);
+            onCreated={() => {
+              onCreated();
               setFormOpen(false);
             }}
             onSubmittingChange={setRunPending}
