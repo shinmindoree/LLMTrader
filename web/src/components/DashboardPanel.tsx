@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
-import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies } from "@/lib/api";
+import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies, listTrades } from "@/lib/api";
+import { usePageVisibility } from "@/lib/usePageVisibility";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
+import type { JobSummary, Trade } from "@/lib/types";
 
 const DASHBOARD_RUNNING_LIMIT = 64;
 
@@ -16,6 +19,15 @@ function strategyNameFromPath(path: string): string {
   return base.replace(/\.[^.]+$/, "");
 }
 
+const formatNumber = (value: number, digits = 2): string =>
+  value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+const formatSigned = (value: number, suffix = ""): string => {
+  const formatted = formatNumber(value, 2);
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatted}${suffix ? ` ${suffix}` : ""}`;
+};
+
 /* ── Shared tiny components ── */
 
 function StatBadge({ label, value, color = "text-[#868993]" }: { label: string; value: string; color?: string }) {
@@ -25,6 +37,61 @@ function StatBadge({ label, value, color = "text-[#868993]" }: { label: string; 
       {value}
     </span>
   );
+}
+
+/* ── Aggregated live stats from trades ── */
+
+type LiveStats = { netPnl: number; totalTrades: number; winRate: number | null };
+
+function useLiveTradeStats(runningJobs: JobSummary[]): LiveStats | null {
+  const isVisible = usePageVisibility();
+  const [allTrades, setAllTrades] = useState<Map<string, Trade[]>>(new Map());
+  const activeRef = useRef(true);
+  const jobIds = runningJobs.map((j) => j.job_id).sort().join(",");
+
+  useEffect(() => {
+    if (!jobIds) {
+      setAllTrades(new Map());
+      return;
+    }
+    activeRef.current = true;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      const ids = jobIds.split(",");
+      const results = await Promise.allSettled(ids.map((id) => listTrades(id)));
+      if (!activeRef.current) return;
+      const next = new Map<string, Trade[]>();
+      ids.forEach((id, i) => {
+        const r = results[i];
+        if (r.status === "fulfilled") next.set(id, r.value);
+      });
+      setAllTrades(next);
+      if (!activeRef.current) return;
+      const ms = isVisible ? 10_000 : 30_000;
+      timeoutId = setTimeout(() => void tick(), ms);
+    };
+
+    void tick();
+    return () => {
+      activeRef.current = false;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
+  }, [jobIds, isVisible]);
+
+  if (runningJobs.length === 0) return null;
+  const all = Array.from(allTrades.values()).flat();
+  if (all.length === 0) return null;
+
+  const netPnl = all.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0);
+  const closedPnls = all
+    .map((tr) => tr.realized_pnl)
+    .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p) && p !== 0);
+  const winCount = closedPnls.filter((p) => p > 0).length;
+  const totalClosed = closedPnls.length;
+  const winRate = totalClosed > 0 ? (winCount / totalClosed) * 100 : null;
+
+  return { netPnl, totalTrades: all.length, winRate };
 }
 
 export function DashboardPanel() {
@@ -55,11 +122,6 @@ export function DashboardPanel() {
     () => listJobSummaries({ type: "BACKTEST", status: "SUCCEEDED", limit: 1 }),
   );
 
-  const { data: latestLiveCompleted } = useSWR(
-    ["dashboard", "jobs", "LIVE", "SUCCEEDED", 1],
-    () => listJobSummaries({ type: "LIVE", status: "SUCCEEDED", limit: 1 }),
-  );
-
   const { data: keysStatus, isLoading: keysLoading } = useSWR(
     ["dashboard", "binance-keys"],
     () => getBinanceKeysStatus(),
@@ -78,9 +140,8 @@ export function DashboardPanel() {
   const lastBt = latestBacktest?.[0];
   const lastBtSummary = lastBt?.result_summary as Record<string, unknown> | null | undefined;
 
-  // Running live jobs summary
-  const lastLive = latestLiveCompleted?.[0];
-  const lastLiveSummary = lastLive?.result_summary as Record<string, unknown> | null | undefined;
+  // Real-time aggregated stats from running live trades
+  const liveStats = useLiveTradeStats(runningLive);
 
   return (
     <div className="w-full px-4 py-4">
@@ -238,43 +299,37 @@ export function DashboardPanel() {
                   const symbol = typeof cfg?.symbol === "string" ? cfg.symbol : null;
                   const interval = typeof cfg?.interval === "string" ? cfg.interval : null;
                   return (
-                    <div key={j.job_id} className="flex flex-col gap-1">
+                    <div key={j.job_id} className="flex items-center gap-1.5">
                       <span className="truncate text-xs font-medium text-[#b2b5be]">{name}</span>
-                      {(symbol || interval) && (
-                        <div className="flex gap-1.5">
-                          {symbol && <StatBadge label="" value={symbol} color="text-[#d1d4dc]" />}
-                          {interval && <StatBadge label="" value={interval} color="text-[#868993]" />}
-                        </div>
-                      )}
+                      {symbol && <StatBadge label="" value={symbol} color="text-[#d1d4dc]" />}
+                      {interval && <StatBadge label="" value={interval} color="text-[#868993]" />}
                     </div>
                   );
                 })}
                 {runningLive.length > 3 && (
                   <span className="text-[11px] text-[#555]">+{runningLive.length - 3} more</span>
                 )}
-                {/* Last completed live result */}
-                {lastLiveSummary && (() => {
-                  const wr = typeof lastLiveSummary.win_rate === "number" ? lastLiveSummary.win_rate : null;
-                  const trades = typeof lastLiveSummary.total_trades === "number"
-                    ? lastLiveSummary.total_trades
-                    : typeof lastLiveSummary.num_filled_orders === "number"
-                      ? lastLiveSummary.num_filled_orders
-                      : null;
-                  if (wr === null && (trades === null || trades === 0)) return null;
-                  return (
-                    <div className="mt-1 border-t border-[#2a2e39] pt-2">
-                      <span className="text-[10px] font-medium uppercase tracking-wider text-[#555]">{t.dashboard.labelLastResult}</span>
-                      <div className="mt-1 flex flex-wrap gap-1.5">
-                        {wr !== null && (
-                          <StatBadge label={t.dashboard.labelWinRate} value={`${wr.toFixed(1)}%`} color={wr >= 50 ? "text-[#26a69a]" : "text-[#ef5350]"} />
-                        )}
-                        {trades !== null && trades > 0 && (
-                          <StatBadge label="" value={`${trades.toLocaleString()} ${t.dashboard.labelTrades}`} />
-                        )}
+                {/* Real-time aggregated stats from trades */}
+                {liveStats && (
+                  <div className="mt-1 grid grid-cols-3 gap-1.5 border-t border-[#2a2e39] pt-2">
+                    <div className="rounded bg-[#131722] px-2 py-1.5">
+                      <div className="text-[10px] text-[#555]">{t.dashboard.labelNetProfit}</div>
+                      <div className={`text-xs font-semibold ${liveStats.netPnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
+                        {formatSigned(liveStats.netPnl, "USDT")}
                       </div>
                     </div>
-                  );
-                })()}
+                    <div className="rounded bg-[#131722] px-2 py-1.5">
+                      <div className="text-[10px] text-[#555]">{t.dashboard.labelTotalTrades}</div>
+                      <div className="text-xs font-semibold text-[#d1d4dc]">{liveStats.totalTrades}</div>
+                    </div>
+                    <div className="rounded bg-[#131722] px-2 py-1.5">
+                      <div className="text-[10px] text-[#555]">{t.dashboard.labelWinRate}</div>
+                      <div className="text-xs font-semibold text-[#d1d4dc]">
+                        {liveStats.winRate !== null ? `${formatNumber(liveStats.winRate, 1)}%` : "—"}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <span className="text-xs text-[#555]">{t.dashboard.statNoRunning}</span>

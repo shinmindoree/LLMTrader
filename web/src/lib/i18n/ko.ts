@@ -140,6 +140,8 @@ const ko: TranslationKeys = {
     labelWinRate: "승률",
     labelReturn: "수익률",
     labelTrades: "건",
+    labelNetProfit: "순손익",
+    labelTotalTrades: "총 거래",
     labelLastResult: "직전",
     statNoRunning: "실행 중인 거래 없음",
   },
