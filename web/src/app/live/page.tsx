@@ -10,6 +10,7 @@ import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
 import { ActiveJobCard } from "@/components/ActiveJobCard";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
+import { RunHistoryTableSkeleton } from "@/components/skeletons/RunHistoryTableSkeleton";
 import { jobDetailPath } from "@/lib/routes";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { FormModal } from "@/components/FormModal";
@@ -46,7 +47,7 @@ export default function LiveJobsPage() {
 
   const hasActiveItems = (data: JobSummary[]) => data.some((j) => ACTIVE_STATUSES.has(j.status));
 
-  const { data: items = [], error, mutate: refreshItems } = useSWR<JobSummary[]>(
+  const { data: items = [], error, isLoading: itemsLoading, mutate: refreshItems } = useSWR<JobSummary[]>(
     ["jobSummaries", "LIVE"],
     () => listJobSummaries({ type: "LIVE", limit: 50 }),
     {
@@ -294,7 +295,9 @@ export default function LiveJobsPage() {
           </p>
         ) : null}
 
-        {items.filter((j) => !ACTIVE_STATUSES.has(j.status)).length === 0 && !error && !actionError ? (
+        {itemsLoading ? (
+          <RunHistoryTableSkeleton />
+        ) : items.filter((j) => !ACTIVE_STATUSES.has(j.status)).length === 0 && !error && !actionError ? (
           <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
             {t.live.emptyState}
           </div>

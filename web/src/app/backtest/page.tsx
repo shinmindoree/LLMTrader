@@ -8,6 +8,7 @@ import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
+import { RunHistoryTableSkeleton } from "@/components/skeletons/RunHistoryTableSkeleton";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { FormModal } from "@/components/FormModal";
 import { BacktestForm } from "./new/BacktestForm";
@@ -31,7 +32,7 @@ export default function BacktestJobsPage() {
 
   const hasActiveJobs = (items: JobSummary[]) => items.some((j) => ACTIVE_STATUSES.has(j.status));
 
-  const { data: items = [], error, mutate: refreshItems } = useSWR<JobSummary[]>(
+  const { data: items = [], error, isLoading: itemsLoading, mutate: refreshItems } = useSWR<JobSummary[]>(
     ["jobSummaries", "BACKTEST"],
     () => listJobSummaries({ type: "BACKTEST", limit: 50 }),
     {
@@ -201,7 +202,9 @@ export default function BacktestJobsPage() {
           </p>
         ) : null}
 
-        {items.length === 0 && !error && !actionError ? (
+        {itemsLoading ? (
+          <RunHistoryTableSkeleton />
+        ) : items.length === 0 && !error && !actionError ? (
           <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
             {t.backtest.emptyState}
           </div>

@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies } from "@/lib/api";
 import { useLiveJobStream } from "@/lib/useLiveJobStream";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
+import { DashboardSkeleton } from "@/components/skeletons/DashboardSkeleton";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 
 const DASHBOARD_RUNNING_LIMIT = 64;
@@ -110,6 +111,11 @@ export function DashboardPanel() {
 
   // Real-time aggregated stats from SSE stream
   const liveStats = useLiveTradeStats(runningLive.length > 0);
+
+  // Show skeleton until primary data has loaded (SWR isLoading = first fetch only)
+  if (strategiesLoading || jobCountsLoading || liveRunningLoading || keysLoading) {
+    return <DashboardSkeleton />;
+  }
 
   return (
     <div className="w-full px-4 py-4">
