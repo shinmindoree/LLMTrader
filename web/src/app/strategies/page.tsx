@@ -554,9 +554,11 @@ export default function StrategiesPage() {
             const phaseUpdate = (prev: ChatMessage[]) => {
               const last = prev[prev.length - 1];
               if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+              const updates: Partial<ChatMessage> = { status: "streaming" as const, statusText: phaseText };
+              if (phase === "generating") updates.textOnly = false;
               return [
                 ...prev.slice(0, -1),
-                { ...last, status: "streaming" as const, statusText: phaseText },
+                { ...last, ...updates },
               ];
             };
             setChatMessages(phaseUpdate);
@@ -712,7 +714,7 @@ export default function StrategiesPage() {
       backtest_ok: false,
       repaired: false,
       repair_attempts: 0,
-      textOnly: false,
+      textOnly: true,
       status: "thinking",
       statusText: t.strategy.codeGenerating,
     };
@@ -1253,12 +1255,12 @@ export default function StrategiesPage() {
                             ) : (
                               <>
                                 {message.status === "streaming" || message.status === "thinking" ? (
-                                  <CodePlaceholderBlock language="python" statusText={message.statusText} />
+                                  <CodePlaceholderBlock language="AlphaWeaver" statusText={message.statusText} />
                                 ) : message.content && hasPythonCode ? (
                                   <div className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]">
                                     <div className="flex items-center justify-between gap-3 border-b border-[#2d313b] px-4 py-3">
-                                      <span className="text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
-                                        Python
+                                      <span className="text-xs font-medium tracking-[0.18em] text-[#8f96a3]">
+                                        AlphaWeaver
                                       </span>
                                       <div className="flex flex-wrap items-center gap-2">
                                         <button

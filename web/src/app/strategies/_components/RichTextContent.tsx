@@ -123,7 +123,7 @@ export function CodePlaceholderBlock({ language, statusText }: { language: strin
       role="status"
       aria-label={displayText}
     >
-      <div className="border-b border-[#2d313b] px-4 py-3 text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
+      <div className="border-b border-[#2d313b] px-4 py-3 text-xs font-medium tracking-[0.18em] text-[#8f96a3]">
         {language || "Code"}
       </div>
       <div className="flex items-center gap-2 px-4 py-8">
