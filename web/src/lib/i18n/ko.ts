@@ -136,6 +136,9 @@ const ko: TranslationKeys = {
     viewBacktest: "시뮬레이션 화면",
     hintKeys: "설정에서 Binance API 키를 연결하면 잔고가 갱신되고 실거래 자동매매를 쓸 수 있어요.",
     hintNoStrategies: "먼저 전략을 만든 뒤 시뮬레이션이나 자동거래를 시작해 보세요.",
+    statLatest: "최근",
+    statLiveTotal: "실거래 누적",
+    statNoRunning: "실행 중인 거래 없음",
   },
   sidebar: {
     close: "사이드바 닫기",

@@ -132,6 +132,9 @@ const en = {
     viewBacktest: "View simulations",
     hintKeys: "Connect your Binance API keys in Settings to refresh balances and enable live trading.",
     hintNoStrategies: "Create a strategy first, then run a simulation or go live.",
+    statLatest: "Latest",
+    statLiveTotal: "Live total",
+    statNoRunning: "No active trading",
   },
   sidebar: {
     close: "Close sidebar",
