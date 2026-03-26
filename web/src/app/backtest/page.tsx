@@ -2,12 +2,11 @@
 
 import { useCallback, useState } from "react";
 
-import useSWR, { useSWRConfig } from "swr";
+import useSWR from "swr";
 import { deleteAllJobs, deleteJob, listJobSummaries, listStrategies, stopAllJobs } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
 import type { Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
-import { LatestJobResult } from "@/components/LatestJobResult";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { FormModal } from "@/components/FormModal";
@@ -19,11 +18,9 @@ const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTE
 export default function BacktestJobsPage() {
   const { t } = useI18n();
   const isVisible = usePageVisibility();
-  const { mutate } = useSWRConfig();
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
   const [runPending, setRunPending] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
 
@@ -49,21 +46,8 @@ export default function BacktestJobsPage() {
   const refresh = useCallback(() => refreshItems(), [refreshItems]);
 
   const onCreated = (job: Job) => {
-    setLatestJob({
-      job_id: job.job_id,
-      type: job.type,
-      status: job.status,
-      strategy_path: job.strategy_path,
-      config: job.config,
-      result_summary: job.result,
-      error: job.error,
-      created_at: job.created_at,
-      started_at: job.started_at,
-      ended_at: job.ended_at,
-    });
     setNotice(t.backtest.runStarted);
     refreshItems();
-    void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
   };
 
   const onDeleteJob = async (job: Job | JobSummary) => {
@@ -80,10 +64,8 @@ export default function BacktestJobsPage() {
       setActionError(null);
       setNotice(null);
       await deleteJob(job.job_id);
-      setLatestJob((prev) => (prev?.job_id === job.job_id ? null : prev));
       setNotice(t.backtest.runDeleted);
       await refreshItems();
-      void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
     } catch (e) {
       setActionError(String(e));
     } finally {
@@ -101,12 +83,8 @@ export default function BacktestJobsPage() {
       setActionError(null);
       setNotice(null);
       const res = await deleteAllJobs("BACKTEST");
-      setLatestJob((prev) =>
-        prev && FINISHED_STATUSES.has(prev.status) ? null : prev,
-      );
       setNotice(`Done: deleted=${res.deleted}, skipped_active=${res.skipped_active}`);
       await refreshItems();
-      void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
     } catch (e) {
       setActionError(String(e));
     } finally {
@@ -215,14 +193,7 @@ export default function BacktestJobsPage() {
         )}
       </FormModal>
 
-      <LatestJobResult
-        jobType="BACKTEST"
-        focusJobId={latestJob?.job_id ?? null}
-        title={t.backtest.latestResult}
-        showPendingSpinner={runPending}
-      />
-
-      <section className="mt-10">
+      <section className="mt-6">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.backtest.runHistory}</div>
         {(actionError || error) ? (
           <p className="mb-4 text-sm text-[#ef5350] rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3">
