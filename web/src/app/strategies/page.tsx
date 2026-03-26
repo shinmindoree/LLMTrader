@@ -101,7 +101,7 @@ export default function StrategiesPage() {
   const [paramDraft, setParamDraft] = useState<Record<string, unknown>>({});
   const [paramApplyError, setParamApplyError] = useState<string | null>(null);
   const [strategyParamsApplying, setStrategyParamsApplying] = useState(false);
-  const skipSessionSyncRef = useRef(false);
+  const skipSessionSyncRef = useRef(0);
   const chatSessionsRef = useRef<ChatSessionRecord[]>([]);
   const shouldAutoScrollRef = useRef(true);
   const streamingSessionIdRef = useRef<string | null>(null);
@@ -232,7 +232,7 @@ export default function StrategiesPage() {
           setChatSessions((prev) =>
             prev.map((s) => (s.id === loaded.id ? loaded : s)),
           );
-          skipSessionSyncRef.current = true;
+          skipSessionSyncRef.current = 2;
           shouldAutoScrollRef.current = true;
           setChatMessages(loaded.messages);
           setChatError(null);
@@ -254,7 +254,7 @@ export default function StrategiesPage() {
       return () => { cancelled = true; };
     }
 
-    skipSessionSyncRef.current = true;
+    skipSessionSyncRef.current = 2;
     shouldAutoScrollRef.current = true;
     setChatMessages(activeSession.messages);
     setChatError(null);
@@ -272,8 +272,8 @@ export default function StrategiesPage() {
     if (!sessionsReady || !activeSessionId) {
       return;
     }
-    if (skipSessionSyncRef.current) {
-      skipSessionSyncRef.current = false;
+    if (skipSessionSyncRef.current > 0) {
+      skipSessionSyncRef.current -= 1;
       return;
     }
     setChatSessions((prev) => {
