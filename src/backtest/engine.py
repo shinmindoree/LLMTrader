@@ -191,6 +191,11 @@ class BacktestEngine:
         total_pnl = sum(t.get("pnl", 0) for t in self.ctx.trades if t.get("side") == "SELL")
         total_commission = sum(t.get("commission", 0) for t in self.ctx.trades)
         
+        sell_trades = [t for t in self.ctx.trades if t.get("side") == "SELL"]
+        num_trades = len(sell_trades)
+        wins = sum(1 for t in sell_trades if t.get("pnl", 0) > 0)
+        win_rate = (wins / num_trades * 100) if num_trades > 0 else 0.0
+        
         self.results = {
             "initial_balance": initial_balance,
             "final_balance": final_equity,
@@ -198,7 +203,8 @@ class BacktestEngine:
             "total_pnl": total_pnl,
             "total_commission": total_commission,
             "net_profit": final_equity - initial_balance,
-            "total_trades": len([t for t in self.ctx.trades if t.get("side") == "SELL"]),
+            "total_trades": num_trades,
+            "win_rate": win_rate,
             "trades": self.ctx.trades,
         }
         

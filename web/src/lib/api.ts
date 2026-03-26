@@ -109,7 +109,16 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
     const text = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
-  return (await res.json()) as T;
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    throw new Error(
+      `JSON parse error at ${path}: ${
+        e instanceof SyntaxError ? e.message : String(e)
+      } (${text.length} bytes)`,
+    );
+  }
 }
 
 export async function listStrategies(): Promise<StrategyInfo[]> {

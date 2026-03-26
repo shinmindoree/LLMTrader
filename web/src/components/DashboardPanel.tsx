@@ -39,6 +39,11 @@ export function DashboardPanel() {
       }),
   );
 
+  const { data: latestBacktest } = useSWR(
+    ["dashboard", "jobs", "BACKTEST", "COMPLETED", 1],
+    () => listJobSummaries({ type: "BACKTEST", status: "COMPLETED", limit: 1 }),
+  );
+
   const { data: keysStatus, isLoading: keysLoading } = useSWR(
     ["dashboard", "binance-keys"],
     () => getBinanceKeysStatus(),

@@ -395,6 +395,8 @@ class LiveTradingEngine:
             "max_drawdown_pct": max_dd * 100,
             "num_snapshots": len(self.snapshots),
             "num_filled_orders": num_trades,
+            "total_trades": num_trades,
+            "win_rate": round(win_rate * 100, 1),
             "risk_status": risk_status,
             "audit_log_size": len(self.ctx.audit_log),
         }

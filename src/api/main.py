@@ -160,11 +160,15 @@ def _job_to_response(job: Any) -> JobResponse:
     )
 
 
+# Keys in result_json that are too large for summary lists (chart candles, trade arrays, etc.)
+_HEAVY_RESULT_KEYS = {"trades", "chart"}
+
+
 def _job_to_summary(job: Any) -> JobSummary:
-    """Lightweight conversion — strips trades from result to reduce payload."""
+    """Lightweight conversion — strips heavy data (trades, chart) from result to reduce payload."""
     raw = job.result_json
     if raw and isinstance(raw, dict):
-        summary = {k: v for k, v in raw.items() if k != "trades"}
+        summary = {k: v for k, v in raw.items() if k not in _HEAVY_RESULT_KEYS}
     else:
         summary = raw
     return JobSummary(
