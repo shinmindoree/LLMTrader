@@ -61,7 +61,6 @@ export default function StrategiesPage() {
   const [prompt, setPrompt] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [saveModal, setSaveModal] = useState<{
@@ -826,10 +825,6 @@ export default function StrategiesPage() {
     });
   };
 
-  const handleSaveClick = (messageId: string, code: string) => {
-    setSaveModal({ messageId, code, name: "" });
-  };
-
   const handleSaveConfirm = async () => {
     if (!saveModal || savingId) return;
     setSavingId(saveModal.messageId);
@@ -908,21 +903,6 @@ export default function StrategiesPage() {
     void deleteStrategyChatSession(sessionId)
       .then(() => setSessionSyncError(null))
       .catch((e) => setSessionSyncError(`Remote delete failed: ${String(e)}`));
-  };
-
-  const handleCopy = async (content: string, id: string) => {
-    if (!navigator?.clipboard) {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopiedId(id);
-      setTimeout(() => {
-        setCopiedId((prev) => (prev === id ? null : prev));
-      }, 1500);
-    } catch {
-      setCopiedId(null);
-    }
   };
 
   const handleDeleteClick = (path: string) => {
@@ -1013,10 +993,6 @@ export default function StrategiesPage() {
     }
   };
 
-  const latestAssistantCodeId =
-    [...chatMessages]
-      .reverse()
-      .find((m) => m.role === "assistant" && !m.textOnly && Boolean(m.content) && looksLikePythonCode(m.content))?.id ?? null;
   const workspaceLineCount = Math.max(1, workspaceCode.split("\n").length);
   const syntaxErrorLine = workspaceSyntax?.error?.line ?? null;
   const syntaxErrorColumn =
@@ -1225,7 +1201,6 @@ export default function StrategiesPage() {
                       </p>
                     ) : null}
                     {chatMessages.map((message) => {
-                      const isLatestAssistantCode = message.id === latestAssistantCodeId;
                       const shouldShowPending =
                         message.role === "assistant" && !message.content && !message.summary;
                       const hasPythonCode = looksLikePythonCode(message.content);
