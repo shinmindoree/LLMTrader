@@ -51,8 +51,9 @@ function useLiveTradeStats(runningJobs: JobSummary[]): LiveStats | null {
 
   useEffect(() => {
     if (!jobIds) {
-      setAllTrades(new Map());
-      return;
+      // Schedule reset in a microtask to avoid synchronous setState in effect body
+      const id = setTimeout(() => setAllTrades(new Map()), 0);
+      return () => clearTimeout(id);
     }
     activeRef.current = true;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
