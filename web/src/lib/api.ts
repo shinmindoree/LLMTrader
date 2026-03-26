@@ -414,6 +414,7 @@ export type GenerateStreamCallbacks = {
     backtest_ok?: boolean;
     repaired?: boolean;
     repair_attempts?: number;
+    rejected?: boolean;
     error?: string;
   }) => void;
 };

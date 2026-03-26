@@ -1174,6 +1174,18 @@ def create_app() -> FastAPI:
                     # Relay already did verify+repair; extract results
                     stream_repaired = event.get("repaired", False)
                     stream_repair_attempts = event.get("repair_attempts", 0)
+                    if event.get("rejected"):
+                        # Non-trading request rejected by planner
+                        rejection_msg = event.get("code", "")
+                        await _log_once(
+                            generation_attempted=True,
+                            generation_success=False,
+                            verification_passed=False,
+                            error_stage="planner_rejected",
+                            error_message="Non-trading request",
+                        )
+                        yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': rejection_msg, 'repaired': False, 'repair_attempts': 0})}\n\n"
+                        return
                     if event.get("code"):
                         code_acc = [event["code"]]
                     break

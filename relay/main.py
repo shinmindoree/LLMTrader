@@ -865,6 +865,13 @@ async def _generate_stream_body(body: StrategyRequest):
     except Exception:
         logger.warning("Planner agent failed, proceeding with direct generation", exc_info=True)
 
+    # Gatekeeping: if planner says request is NOT trading-related, reject early
+    if plan_spec and plan_spec.get("is_trading_related") is False:
+        rejection_msg = plan_spec.get("rejection_message") or "이 시스템은 트레이딩 전략 생성 전용입니다. 트레이딩 전략을 설명해 주세요."
+        logger.info("Non-trading request rejected by planner: %s", rejection_msg[:80])
+        yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': rejection_msg, 'repaired': False, 'repair_attempts': 0})}\n\n"
+        return
+
     # Phase 2: Generating — Coder agent writes the code (streaming)
     yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
 
