@@ -44,6 +44,11 @@ export function DashboardPanel() {
     () => listJobSummaries({ type: "BACKTEST", status: "SUCCEEDED", limit: 1 }),
   );
 
+  const { data: latestLiveCompleted } = useSWR(
+    ["dashboard", "jobs", "LIVE", "SUCCEEDED", 1],
+    () => listJobSummaries({ type: "LIVE", status: "SUCCEEDED", limit: 1 }),
+  );
+
   const { data: keysStatus, isLoading: keysLoading } = useSWR(
     ["dashboard", "binance-keys"],
     () => getBinanceKeysStatus(),
@@ -64,32 +69,42 @@ export function DashboardPanel() {
   const btSub = lastBt
     ? (() => {
         const name = strategyNameFromPath(lastBt.strategy_path);
-        const totalTrades = typeof lastBtSummary?.total_trades === "number" ? lastBtSummary.total_trades : 0;
+        const parts = [name];
         if (typeof lastBtSummary?.win_rate === "number") {
-          return `${name} · ${lastBtSummary.win_rate.toFixed(1)}% · ${totalTrades}${t.dashboard.statTradesShort}`;
+          parts.push(`${t.dashboard.labelWinRate} ${lastBtSummary.win_rate.toFixed(1)}%`);
+        } else if (typeof lastBtSummary?.total_return_pct === "number") {
+          const r = lastBtSummary.total_return_pct;
+          parts.push(`${t.dashboard.labelReturn} ${r >= 0 ? "+" : ""}${r.toFixed(1)}%`);
         }
-        // Fallback: no win_rate (old jobs) — show return instead
-        const ret = typeof lastBtSummary?.total_return_pct === "number"
-          ? `${lastBtSummary.total_return_pct >= 0 ? "+" : ""}${lastBtSummary.total_return_pct.toFixed(1)}%`
-          : null;
-        return `${name}${ret ? ` · ${ret}` : ""} · ${totalTrades}${t.dashboard.statTradesShort}`;
+        if (typeof lastBtSummary?.total_trades === "number") {
+          parts.push(`${lastBtSummary.total_trades.toLocaleString()} ${t.dashboard.labelTrades}`);
+        }
+        return parts.join(" · ");
       })()
     : null;
 
-  // Running live jobs summary
+  // Running live jobs summary — show names + last completed stats
+  const lastLive = latestLiveCompleted?.[0];
+  const lastLiveSummary = lastLive?.result_summary as Record<string, unknown> | null | undefined;
   const liveSub = (() => {
     if (runningLive.length === 0) return t.dashboard.statNoRunning;
-    return runningLive.slice(0, 2).map((j) => {
-      const name = strategyNameFromPath(j.strategy_path);
-      const rs = j.result_summary as Record<string, unknown> | null | undefined;
-      if (!rs) return name;
-      const trades = typeof rs.total_trades === "number" ? rs.total_trades
-        : typeof rs.num_filled_orders === "number" ? rs.num_filled_orders : 0;
-      if (typeof rs.win_rate === "number") {
-        return `${name} · ${rs.win_rate.toFixed(1)}% · ${trades}${t.dashboard.statTradesShort}`;
+    const names = runningLive.slice(0, 2).map((j) => strategyNameFromPath(j.strategy_path)).join(", ");
+    // Append last completed live result if available
+    if (lastLiveSummary) {
+      const parts: string[] = [];
+      if (typeof lastLiveSummary.win_rate === "number") {
+        parts.push(`${t.dashboard.labelWinRate} ${lastLiveSummary.win_rate.toFixed(1)}%`);
       }
-      return trades > 0 ? `${name} · ${trades}${t.dashboard.statTradesShort}` : name;
-    }).join("  |  ");
+      const trades = typeof lastLiveSummary.total_trades === "number" ? lastLiveSummary.total_trades
+        : typeof lastLiveSummary.num_filled_orders === "number" ? lastLiveSummary.num_filled_orders : 0;
+      if (trades > 0) {
+        parts.push(`${trades.toLocaleString()} ${t.dashboard.labelTrades}`);
+      }
+      if (parts.length > 0) {
+        return `${names} (${t.dashboard.labelLastResult}: ${parts.join(", ")})`;
+      }
+    }
+    return names;
   })();
 
   const stats = [

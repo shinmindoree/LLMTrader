@@ -133,9 +133,10 @@ const en = {
     hintKeys: "Connect your Binance API keys in Settings to refresh balances and enable live trading.",
     hintNoStrategies: "Create a strategy first, then run a simulation or go live.",
     statLatest: "Latest",
-    statWinRate: "WR",
-    statTrades: "trades",
-    statTradesShort: "t",
+    labelWinRate: "Win rate",
+    labelReturn: "Return",
+    labelTrades: "trades",
+    labelLastResult: "Last",
     statNoRunning: "No active trading",
   },
   sidebar: {
