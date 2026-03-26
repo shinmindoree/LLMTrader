@@ -64,21 +64,31 @@ export function DashboardPanel() {
   const btSub = lastBt
     ? (() => {
         const name = strategyNameFromPath(lastBt.strategy_path);
-        const wr = typeof lastBtSummary?.win_rate === "number" ? `${lastBtSummary.win_rate.toFixed(1)}%` : "—";
-        const trades = lastBtSummary?.total_trades ?? "—";
-        return `${name} · ${t.dashboard.statWinRate} ${wr} · ${trades} ${t.dashboard.statTrades}`;
+        const totalTrades = typeof lastBtSummary?.total_trades === "number" ? lastBtSummary.total_trades : 0;
+        if (typeof lastBtSummary?.win_rate === "number") {
+          return `${name} · ${lastBtSummary.win_rate.toFixed(1)}% · ${totalTrades}${t.dashboard.statTradesShort}`;
+        }
+        // Fallback: no win_rate (old jobs) — show return instead
+        const ret = typeof lastBtSummary?.total_return_pct === "number"
+          ? `${lastBtSummary.total_return_pct >= 0 ? "+" : ""}${lastBtSummary.total_return_pct.toFixed(1)}%`
+          : null;
+        return `${name}${ret ? ` · ${ret}` : ""} · ${totalTrades}${t.dashboard.statTradesShort}`;
       })()
     : null;
 
-  // Running live jobs summary (first job's info)
+  // Running live jobs summary
   const liveSub = (() => {
     if (runningLive.length === 0) return t.dashboard.statNoRunning;
     return runningLive.slice(0, 2).map((j) => {
       const name = strategyNameFromPath(j.strategy_path);
       const rs = j.result_summary as Record<string, unknown> | null | undefined;
-      const wr = typeof rs?.win_rate === "number" ? `${rs.win_rate.toFixed(1)}%` : "—";
-      const trades = rs?.total_trades ?? rs?.num_filled_orders ?? "—";
-      return `${name} · ${wr} · ${trades}${t.dashboard.statTradesShort}`;
+      if (!rs) return name;
+      const trades = typeof rs.total_trades === "number" ? rs.total_trades
+        : typeof rs.num_filled_orders === "number" ? rs.num_filled_orders : 0;
+      if (typeof rs.win_rate === "number") {
+        return `${name} · ${rs.win_rate.toFixed(1)}% · ${trades}${t.dashboard.statTradesShort}`;
+      }
+      return trades > 0 ? `${name} · ${trades}${t.dashboard.statTradesShort}` : name;
     }).join("  |  ");
   })();
 
