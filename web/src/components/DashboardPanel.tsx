@@ -40,8 +40,8 @@ export function DashboardPanel() {
   );
 
   const { data: latestBacktest } = useSWR(
-    ["dashboard", "jobs", "BACKTEST", "COMPLETED", 1],
-    () => listJobSummaries({ type: "BACKTEST", status: "COMPLETED", limit: 1 }),
+    ["dashboard", "jobs", "BACKTEST", "SUCCEEDED", 1],
+    () => listJobSummaries({ type: "BACKTEST", status: "SUCCEEDED", limit: 1 }),
   );
 
   const { data: keysStatus, isLoading: keysLoading } = useSWR(
