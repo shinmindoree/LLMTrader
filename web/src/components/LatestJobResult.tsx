@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 
+import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
 import { getJob, listJobSummaries, listTrades } from "@/lib/api";
 import { usePageVisibility } from "@/lib/usePageVisibility";
@@ -36,97 +37,49 @@ type LatestJobResultProps = {
   showPendingSpinner?: boolean;
 };
 
+async function fetchLatestJob(jobType: JobType, focusJobId?: string | null): Promise<Job | null> {
+  if (focusJobId) {
+    return getJob(focusJobId);
+  }
+  const summaries = await listJobSummaries({ type: jobType, limit: 1 });
+  if (summaries.length > 0) {
+    return getJob(summaries[0].job_id);
+  }
+  return null;
+}
+
 export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner }: LatestJobResultProps) {
   const { t } = useI18n();
   const isVisible = usePageVisibility();
-  const [job, setJob] = useState<Job | null>(null);
-  const jobRef = useRef<Job | null>(null);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    jobRef.current = job;
-  }, [job]);
+  const jobFinished = (j: Job | null | undefined) => j != null && FINISHED_STATUSES.has(j.status);
 
-  useEffect(() => {
-    let active = true;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const { data: job = null, error, isLoading: loading } = useSWR(
+    ["latestJob", jobType, focusJobId ?? "latest"],
+    () => fetchLatestJob(jobType, focusJobId),
+    {
+      refreshInterval: (latestData: Job | null | undefined) => {
+        if (!isVisible) return 15_000;
+        if (jobFinished(latestData)) return 0;
+        if (latestData == null) return 12_000;
+        return 5_000;
+      },
+      dedupingInterval: 3_000,
+      revalidateOnFocus: true,
+    },
+  );
 
-    if (focusJobId) setLoading(true);
+  const isLiveActive = job != null && jobType === "LIVE" && !FINISHED_STATUSES.has(job.status);
+  const { data: trades = [] } = useSWR<Trade[]>(
+    isLiveActive ? ["trades", job.job_id] : null,
+    () => listTrades(job!.job_id),
+    {
+      refreshInterval: isVisible ? 3_000 : 12_000,
+      dedupingInterval: 2_000,
+    },
+  );
 
-    const load = async (): Promise<Job | null> => {
-      try {
-        setError(null);
-        let data: Job | null = null;
-        if (focusJobId) {
-          data = await getJob(focusJobId);
-        } else {
-          const summaries = await listJobSummaries({ type: jobType, limit: 1 });
-          if (summaries.length > 0) {
-            data = await getJob(summaries[0].job_id);
-          }
-        }
-        if (!active) return null;
-        setJob(data);
-        return data;
-      } catch (e) {
-        if (!active) return null;
-        setError(String(e));
-        return null;
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
-
-    const loop = async () => {
-      const data = await load();
-      if (!active) return;
-      const terminal = data != null && FINISHED_STATUSES.has(data.status);
-      if (terminal) return;
-      const noJob = data == null;
-      const ms = !isVisible ? 15_000 : noJob ? 12_000 : 5_000;
-      timeoutId = setTimeout(() => void loop(), ms);
-    };
-
-    void loop();
-
-    return () => {
-      active = false;
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    };
-  }, [focusJobId, jobType, isVisible]);
-
-  /* Poll trades only for active LIVE jobs; use job_id/status in deps so we do not restart on every job object update from the main poll. */
-  useEffect(() => {
-    if (!job || jobType !== "LIVE") return;
-    if (FINISHED_STATUSES.has(job.status)) return;
-    let active = true;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-    const tick = async () => {
-      try {
-        const data = await listTrades(job.job_id);
-        if (active) setTrades(data);
-      } catch {
-        // ignore
-      }
-      if (!active) return;
-      const j = jobRef.current;
-      if (j && FINISHED_STATUSES.has(j.status)) return;
-      const ms = !isVisible ? 12_000 : 3_000;
-      timeoutId = setTimeout(() => void tick(), ms);
-    };
-
-    void tick();
-
-    return () => {
-      active = false;
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- jobRef carries latest job inside the timer; avoid restarting when unrelated job fields change
-  }, [job?.job_id, jobType, job?.status, isVisible]);
-
+  const errorStr = error ? String(error) : null;
   const finished = useMemo(() => (job ? FINISHED_STATUSES.has(job.status) : false), [job]);
   const hasLiveTrades = jobType === "LIVE" && trades.length > 0;
   const hasTrades = useMemo(
@@ -184,9 +137,9 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
           </div>
         ) : null}
 
-        {!showPlaceholderGauge && error ? (
+        {!showPlaceholderGauge && errorStr ? (
           <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-            {error}
+            {errorStr}
           </p>
         ) : null}
 

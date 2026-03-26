@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import useSWR, { useSWRConfig } from "swr";
 import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJobSummaries, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
@@ -20,48 +21,46 @@ const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTE
 export default function LiveJobsPage() {
   const { t } = useI18n();
   const isVisible = usePageVisibility();
-  const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
-  const [strategyError, setStrategyError] = useState<string | null>(null);
-  const [items, setItems] = useState<JobSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const { mutate } = useSWRConfig();
+  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
-  const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
-  const [billing, setBilling] = useState<BillingStatus | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      setError(null);
-      const data = await listJobSummaries({ type: "LIVE", limit: 50 });
-      setItems(data);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, []);
+  const { data: strategies = [], error: strategyError } = useSWR<StrategyInfo[]>(
+    "strategies",
+    () => listStrategies(),
+  );
 
-  useEffect(() => {
-    refresh();
-    getBinanceKeysStatus().then(setKeysStatus).catch(() => {});
-    getBillingStatus().then(setBilling).catch(() => {});
-  }, [refresh]);
+  const { data: keysStatus } = useSWR<BinanceKeysStatus>(
+    "binanceKeysStatus",
+    () => getBinanceKeysStatus(),
+  );
+
+  const { data: billing } = useSWR<BillingStatus>(
+    "billingStatus",
+    () => getBillingStatus(),
+  );
+
+  const hasActiveItems = (data: JobSummary[]) => data.some((j) => ACTIVE_STATUSES.has(j.status));
+
+  const { data: items = [], error, mutate: refreshItems } = useSWR<JobSummary[]>(
+    ["jobSummaries", "LIVE"],
+    () => listJobSummaries({ type: "LIVE", limit: 50 }),
+    {
+      refreshInterval: (latestData: JobSummary[] | undefined) => {
+        if (!latestData || !hasActiveItems(latestData)) return 0;
+        return isVisible ? 5_000 : 15_000;
+      },
+      dedupingInterval: 2_000,
+    },
+  );
+
+  const refresh = useCallback(() => refreshItems(), [refreshItems]);
 
   const activeJobs = useMemo(() => items.filter((j) => ACTIVE_STATUSES.has(j.status)), [items]);
   const activeCount = activeJobs.length;
   const maxSlots = billing?.limits?.max_live_jobs ?? MAX_SLOTS_FALLBACK;
-
-  useEffect(() => {
-    if (activeCount === 0) return;
-    const ms = isVisible ? 5_000 : 15_000;
-    const interval = setInterval(refresh, ms);
-    return () => clearInterval(interval);
-  }, [activeCount, refresh, isVisible]);
-
-  useEffect(() => {
-    listStrategies()
-      .then(setStrategies)
-      .catch((e) => setStrategyError(String(e)));
-  }, []);
 
   const onCreated = (job: Job) => {
     setLatestJob({
@@ -77,19 +76,20 @@ export default function LiveJobsPage() {
       ended_at: job.ended_at,
     });
     setNotice(t.live.runStarted);
-    refresh();
+    refreshItems();
+    void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
   };
 
   const onStopJob = async (job: Job | JobSummary) => {
     if (busy) return;
     try {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       await stopJob(job.job_id);
       setNotice(t.live.stopRequested);
-      await refresh();
+      await refreshItems();
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusy(false);
     }
@@ -98,7 +98,7 @@ export default function LiveJobsPage() {
   const onDeleteJob = async (job: Job | JobSummary) => {
     if (busy) return;
     if (!FINISHED_STATUSES.has(job.status)) {
-      setError(t.live.onlyFinishedDelete);
+      setActionError(t.live.onlyFinishedDelete);
       return;
     }
     const ok = confirm(t.live.deleteConfirm);
@@ -106,14 +106,15 @@ export default function LiveJobsPage() {
 
     try {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       setNotice(null);
       await deleteJob(job.job_id);
       setLatestJob((prev) => (prev?.job_id === job.job_id ? null : prev));
       setNotice(t.live.runDeleted);
-      await refresh();
+      await refreshItems();
+      void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusy(false);
     }
@@ -126,16 +127,17 @@ export default function LiveJobsPage() {
 
     try {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       setNotice(null);
       const res = await deleteAllJobs("LIVE");
       setLatestJob((prev) =>
         prev && FINISHED_STATUSES.has(prev.status) ? null : prev,
       );
       setNotice(`Done: deleted=${res.deleted}, skipped_active=${res.skipped_active}`);
-      await refresh();
+      await refreshItems();
+      void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusy(false);
     }
@@ -148,21 +150,21 @@ export default function LiveJobsPage() {
 
     try {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       setNotice(null);
       const res = await stopAllJobs("LIVE");
       setNotice(
         `Stop requested: stopped_queued=${res.stopped_queued}, stop_requested_running=${res.stop_requested_running}`,
       );
-      await refresh();
+      await refreshItems();
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusy(false);
     }
   };
 
-  const keysNotConfigured = keysStatus !== null && !keysStatus.configured;
+  const keysNotConfigured = keysStatus != null && !keysStatus.configured;
 
   return (
     <main className="w-full px-4 py-3">
@@ -241,7 +243,7 @@ export default function LiveJobsPage() {
 
       {strategyError ? (
         <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-          {strategyError}
+          {String(strategyError)}
         </p>
       ) : null}
 
@@ -271,13 +273,13 @@ export default function LiveJobsPage() {
 
       <section className="mt-10">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.live.runHistory}</div>
-        {error ? (
+        {(actionError || error) ? (
           <p className="mb-4 text-sm text-[#ef5350] rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3">
-            {error}
+            {actionError || String(error)}
           </p>
         ) : null}
 
-        {items.filter((j) => !ACTIVE_STATUSES.has(j.status)).length === 0 && !error ? (
+        {items.filter((j) => !ACTIVE_STATUSES.has(j.status)).length === 0 && !error && !actionError ? (
           <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
             {t.live.emptyState}
           </div>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
 import {
   getUserProfile,
@@ -14,9 +15,6 @@ type FormState = "idle" | "saving" | "deleting";
 
 export default function SettingsPage() {
   const { t } = useI18n();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [keysStatus, setKeysStatus] = useState<BinanceKeysStatus | null>(null);
-  const [loading, setLoading] = useState(true);
   const [formState, setFormState] = useState<FormState>("idle");
 
   const [apiKey, setApiKey] = useState("");
@@ -26,17 +24,22 @@ export default function SettingsPage() {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  useEffect(() => {
-    Promise.all([getUserProfile(), getBinanceKeysStatus()])
-      .then(([p, k]) => {
-        setProfile(p);
-        setKeysStatus(k);
-        if (k.base_url) setBaseUrl(k.base_url);
-      })
-      .catch(() => setMessage({ type: "error", text: t.settingsPage.loadFailed }))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { data: profile, isLoading: profileLoading } = useSWR<UserProfile>(
+    "userProfile",
+    () => getUserProfile(),
+  );
+
+  const { data: keysStatus, mutate: mutateKeys, isLoading: keysLoading } = useSWR<BinanceKeysStatus>(
+    "binanceKeysStatus",
+    () => getBinanceKeysStatus(),
+    {
+      onSuccess: (data) => {
+        if (data.base_url) setBaseUrl(data.base_url);
+      },
+    },
+  );
+
+  const loading = profileLoading || keysLoading;
 
   async function handleSaveKeys(e: React.FormEvent) {
     e.preventDefault();
@@ -52,7 +55,7 @@ export default function SettingsPage() {
         api_secret: apiSecret.trim(),
         base_url: baseUrl.trim(),
       });
-      setKeysStatus({ configured: true, api_key_masked: result.api_key_masked, base_url: result.base_url });
+      void mutateKeys({ configured: true, api_key_masked: result.api_key_masked, base_url: result.base_url }, false);
       setApiKey("");
       setApiSecret("");
       setMessage({ type: "success", text: t.settingsPage.keysSaved });
@@ -69,7 +72,7 @@ export default function SettingsPage() {
     setMessage(null);
     try {
       await deleteBinanceKeys();
-      setKeysStatus({ configured: false });
+      void mutateKeys({ configured: false }, false);
       setShowDeleteConfirm(false);
       setMessage({ type: "success", text: t.settingsPage.keysDeleted });
     } catch (err: unknown) {

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import useSWR from "swr";
 import {
   getBillingStatus,
   createCheckoutSession,
@@ -11,10 +12,13 @@ import { useI18n } from "@/lib/i18n";
 
 export default function BillingPage() {
   const { t } = useI18n();
-  const [billing, setBilling] = useState<BillingStatus | null>(null);
-  const [loading, setLoading] = useState(true);
   const [actionPlan, setActionPlan] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const { data: billing, isLoading: loading } = useSWR<BillingStatus>(
+    "billingStatus",
+    () => getBillingStatus(),
+  );
 
   const PLANS = [
     {
@@ -46,14 +50,6 @@ export default function BillingPage() {
       borderColor: "#ff9800",
     },
   ];
-
-  useEffect(() => {
-    getBillingStatus()
-      .then(setBilling)
-      .catch(() => setError(t.billing.loadFailed))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function handleSubscribe(plan: string) {
     setActionPlan(plan);

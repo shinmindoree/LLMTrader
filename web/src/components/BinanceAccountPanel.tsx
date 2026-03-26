@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
+import useSWR from "swr";
 import { getBinanceAccountSummary } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { BinanceAccountSummary } from "@/lib/types";
@@ -36,32 +37,27 @@ function formatSignedUsd(value: number | null): string {
 
 export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
   const { t } = useI18n();
-  const [snapshot, setSnapshot] = useState<BinanceAccountSummary | null>(null);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [requestError, setRequestError] = useState<string | null>(null);
 
-  const refresh = useCallback(async (silent = false) => {
-    if (!silent) setRefreshing(true);
+  const { data: snapshot, error: requestErrorObj, isLoading: loading, mutate } = useSWR<BinanceAccountSummary>(
+    "binanceAccountSummary",
+    () => getBinanceAccountSummary(),
+    {
+      refreshInterval: REFRESH_MS,
+      dedupingInterval: 5_000,
+    },
+  );
+
+  const requestError = requestErrorObj ? String(requestErrorObj) : null;
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
     try {
-      const data = await getBinanceAccountSummary();
-      setSnapshot(data);
-      setRequestError(null);
-    } catch (e) {
-      setRequestError(String(e));
+      await mutate();
     } finally {
-      if (!silent) setRefreshing(false);
-      setLoading(false);
+      setRefreshing(false);
     }
-  }, []);
-
-  useEffect(() => {
-    void refresh(false);
-    const id = setInterval(() => {
-      void refresh(true);
-    }, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [refresh]);
+  };
 
   const connected = snapshot?.connected === true;
   const hasConfig = snapshot?.configured === true;
@@ -88,7 +84,7 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
           <button
             className="rounded border border-[#2a2e39] bg-[#131722] px-3 py-1.5 text-xs text-[#d1d4dc] hover:border-[#2962ff] hover:bg-[#252936] transition-colors disabled:opacity-60"
             disabled={refreshing}
-            onClick={() => void refresh(false)}
+            onClick={() => void handleRefresh()}
             type="button"
           >
             {refreshing ? t.binanceAccount.refreshing : t.binanceAccount.refresh}

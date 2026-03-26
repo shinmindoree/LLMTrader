@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
+import useSWR, { useSWRConfig } from "swr";
 import { deleteAllJobs, deleteJob, listJobSummaries, listStrategies, stopAllJobs } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
@@ -17,42 +18,33 @@ const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTE
 export default function BacktestJobsPage() {
   const { t } = useI18n();
   const isVisible = usePageVisibility();
-  const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
-  const [strategyError, setStrategyError] = useState<string | null>(null);
-  const [items, setItems] = useState<JobSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const { mutate } = useSWRConfig();
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [latestJob, setLatestJob] = useState<JobSummary | null>(null);
   const [runPending, setRunPending] = useState(false);
 
-  const refresh = useCallback(async () => {
-    try {
-      setError(null);
-      const data = await listJobSummaries({ type: "BACKTEST", limit: 50 });
-      setItems(data);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, []);
+  const { data: strategies = [], error: strategyError } = useSWR<StrategyInfo[]>(
+    "strategies",
+    () => listStrategies(),
+  );
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  const hasActiveJobs = (items: JobSummary[]) => items.some((j) => ACTIVE_STATUSES.has(j.status));
 
-  const hasActiveJobs = items.some((j) => ACTIVE_STATUSES.has(j.status));
-  useEffect(() => {
-    if (!hasActiveJobs) return;
-    const ms = isVisible ? 5_000 : 15_000;
-    const interval = setInterval(refresh, ms);
-    return () => clearInterval(interval);
-  }, [hasActiveJobs, refresh, isVisible]);
+  const { data: items = [], error, mutate: refreshItems } = useSWR<JobSummary[]>(
+    ["jobSummaries", "BACKTEST"],
+    () => listJobSummaries({ type: "BACKTEST", limit: 50 }),
+    {
+      refreshInterval: (latestData: JobSummary[] | undefined) => {
+        if (!latestData || !hasActiveJobs(latestData)) return 0;
+        return isVisible ? 5_000 : 15_000;
+      },
+      dedupingInterval: 2_000,
+    },
+  );
 
-  useEffect(() => {
-    listStrategies()
-      .then(setStrategies)
-      .catch((e) => setStrategyError(String(e)));
-  }, []);
+  const refresh = useCallback(() => refreshItems(), [refreshItems]);
 
   const onCreated = (job: Job) => {
     setLatestJob({
@@ -68,13 +60,14 @@ export default function BacktestJobsPage() {
       ended_at: job.ended_at,
     });
     setNotice(t.backtest.runStarted);
-    refresh();
+    refreshItems();
+    void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
   };
 
   const onDeleteJob = async (job: Job | JobSummary) => {
     if (busy) return;
     if (!FINISHED_STATUSES.has(job.status)) {
-      setError(t.backtest.onlyFinishedDelete);
+      setActionError(t.backtest.onlyFinishedDelete);
       return;
     }
     const ok = confirm(t.backtest.deleteConfirm);
@@ -82,14 +75,15 @@ export default function BacktestJobsPage() {
 
     try {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       setNotice(null);
       await deleteJob(job.job_id);
       setLatestJob((prev) => (prev?.job_id === job.job_id ? null : prev));
       setNotice(t.backtest.runDeleted);
-      await refresh();
+      await refreshItems();
+      void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusy(false);
     }
@@ -102,16 +96,17 @@ export default function BacktestJobsPage() {
 
     try {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       setNotice(null);
       const res = await deleteAllJobs("BACKTEST");
       setLatestJob((prev) =>
         prev && FINISHED_STATUSES.has(prev.status) ? null : prev,
       );
       setNotice(`Done: deleted=${res.deleted}, skipped_active=${res.skipped_active}`);
-      await refresh();
+      await refreshItems();
+      void mutate((key: unknown) => Array.isArray(key) && key[0] === "latestJob");
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusy(false);
     }
@@ -124,15 +119,15 @@ export default function BacktestJobsPage() {
 
     try {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       setNotice(null);
       const res = await stopAllJobs("BACKTEST");
       setNotice(
         `Stop requested: stopped_queued=${res.stopped_queued}, stop_requested_running=${res.stop_requested_running}`,
       );
-      await refresh();
+      await refreshItems();
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusy(false);
     }
@@ -180,7 +175,7 @@ export default function BacktestJobsPage() {
 
       {strategyError ? (
         <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-          {strategyError}
+          {String(strategyError)}
         </p>
       ) : null}
 
@@ -207,13 +202,13 @@ export default function BacktestJobsPage() {
 
       <section className="mt-10">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.backtest.runHistory}</div>
-        {error ? (
+        {(actionError || error) ? (
           <p className="mb-4 text-sm text-[#ef5350] rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3">
-            {error}
+            {actionError || String(error)}
           </p>
         ) : null}
 
-        {items.length === 0 && !error ? (
+        {items.length === 0 && !error && !actionError ? (
           <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
             {t.backtest.emptyState}
           </div>

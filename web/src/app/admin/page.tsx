@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import useSWR from "swr";
 import { getStrategyCapabilities, getStrategyQualitySummary, testLlmEndpoint } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type {
@@ -189,24 +190,10 @@ export default function AdminPage() {
   const router = useRouter();
   const { t } = useI18n();
   const [accessState, setAccessState] = useState<"checking" | "allowed" | "denied">("checking");
-  const [summary, setSummary] = useState<StrategyQualitySummaryResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [capabilities, setCapabilities] = useState<StrategyCapabilitiesResponse | null>(null);
-  const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [llmInput, setLlmInput] = useState("Hello");
   const [llmOutput, setLlmOutput] = useState<string | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    getStrategyQualitySummary(7)
-      .then(setSummary)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -234,13 +221,20 @@ export default function AdminPage() {
     };
   }, [router]);
 
-  useEffect(() => {
-    if (accessState !== "allowed") return;
-    refresh();
-    getStrategyCapabilities()
-      .then(setCapabilities)
-      .catch((e) => setCapabilityError(String(e)));
-  }, [accessState, refresh]);
+  const isAllowed = accessState === "allowed";
+
+  const { data: summary, error: summaryError, isLoading: loading, mutate: refreshSummary } = useSWR<StrategyQualitySummaryResponse>(
+    isAllowed ? "adminQualitySummary" : null,
+    () => getStrategyQualitySummary(7),
+  );
+
+  const { data: capabilities, error: capabilityErrorObj } = useSWR<StrategyCapabilitiesResponse>(
+    isAllowed ? "adminCapabilities" : null,
+    () => getStrategyCapabilities(),
+  );
+
+  const error = summaryError ? String(summaryError) : null;
+  const capabilityError = capabilityErrorObj ? String(capabilityErrorObj) : null;
 
   async function handleTestLlm() {
     setLlmLoading(true);
@@ -289,7 +283,7 @@ export default function AdminPage() {
         <button
           className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-sm text-[#d1d4dc] transition-colors hover:border-[#2962ff] hover:bg-[#252936] disabled:opacity-60"
           disabled={loading}
-          onClick={refresh}
+          onClick={() => void refreshSummary()}
           type="button"
         >
           Refresh

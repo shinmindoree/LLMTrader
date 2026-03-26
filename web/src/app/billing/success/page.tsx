@@ -1,17 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import useSWR from "swr";
 import { getBillingStatus } from "@/lib/api";
 
 export default function BillingSuccessPage() {
-  const [plan, setPlan] = useState<string | null>(null);
-
-  useEffect(() => {
-    getBillingStatus()
-      .then((b) => setPlan(b.plan))
-      .catch(() => {});
-  }, []);
+  const { data: billing } = useSWR("billingStatus", () => getBillingStatus());
+  const plan = billing?.plan ?? null;
 
   return (
     <main className="w-full max-w-lg px-6 py-20 mx-auto text-center">
