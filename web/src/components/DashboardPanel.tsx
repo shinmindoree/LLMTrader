@@ -58,7 +58,29 @@ export function DashboardPanel() {
       ? strategyNameFromPath(strategies[strategies.length - 1].path)
       : null;
 
-  const runningNames = runningLive.slice(0, 2).map((j) => strategyNameFromPath(j.strategy_path));
+  // Latest completed backtest summary
+  const lastBt = latestBacktest?.[0];
+  const lastBtSummary = lastBt?.result_summary as Record<string, unknown> | null | undefined;
+  const btSub = lastBt
+    ? (() => {
+        const name = strategyNameFromPath(lastBt.strategy_path);
+        const wr = typeof lastBtSummary?.win_rate === "number" ? `${lastBtSummary.win_rate.toFixed(1)}%` : "—";
+        const trades = lastBtSummary?.total_trades ?? "—";
+        return `${name} · ${t.dashboard.statWinRate} ${wr} · ${trades} ${t.dashboard.statTrades}`;
+      })()
+    : null;
+
+  // Running live jobs summary (first job's info)
+  const liveSub = (() => {
+    if (runningLive.length === 0) return t.dashboard.statNoRunning;
+    return runningLive.slice(0, 2).map((j) => {
+      const name = strategyNameFromPath(j.strategy_path);
+      const rs = j.result_summary as Record<string, unknown> | null | undefined;
+      const wr = typeof rs?.win_rate === "number" ? `${rs.win_rate.toFixed(1)}%` : "—";
+      const trades = rs?.total_trades ?? rs?.num_filled_orders ?? "—";
+      return `${name} · ${wr} · ${trades}${t.dashboard.statTradesShort}`;
+    }).join("  |  ");
+  })();
 
   const stats = [
     {
@@ -74,10 +96,7 @@ export function DashboardPanel() {
       label: t.dashboard.backtestCount,
       value:
         jobCounts === undefined && jobCountsLoading ? null : (jobCounts?.backtest_total ?? 0),
-      sub:
-        jobCounts
-          ? `${t.dashboard.statLiveTotal}: ${jobCounts.live_total}`
-          : null,
+      sub: btSub,
       href: "/backtest",
       color: "text-[#d1d4dc]",
       hoverBorder: "hover:border-[#2962ff]",
@@ -88,10 +107,7 @@ export function DashboardPanel() {
         liveRunningJobs === undefined && liveRunningLoading
           ? null
           : (liveRunningJobs?.length ?? 0),
-      sub:
-        runningNames.length > 0
-          ? runningNames.join(", ")
-          : t.dashboard.statNoRunning,
+      sub: liveSub,
       href: "/live",
       color: "text-[#26a69a]",
       hoverBorder: "hover:border-[#26a69a]",
