@@ -441,6 +441,17 @@ def _extract_python_code(content: str) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
+def _sanitize_code_quotes(code: str) -> str:
+    """Replace smart/curly quotes with ASCII equivalents to prevent SyntaxError."""
+    return (
+        code
+        .replace("\u201c", '"')   # "
+        .replace("\u201d", '"')   # "
+        .replace("\u2018", "'")   # '
+        .replace("\u2019", "'")   # '
+    )
+
+
 def _verify_strategy_code(code: str) -> str | None:
     try:
         tree = ast.parse(code)
@@ -774,7 +785,7 @@ async def generate(
         logger.warning("LLM returned blank content at /generate")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
-    code = _extract_python_code(content)
+    code = _sanitize_code_quotes(_extract_python_code(content))
 
     reviewer_model = config.resolved_reviewer_model
     for attempt in range(_MAX_REPAIR_ATTEMPTS):
@@ -803,7 +814,12 @@ async def generate(
                 model=reviewer_model,
             )
             if repaired and repaired.strip():
-                code = _extract_python_code(repaired)
+                candidate = _sanitize_code_quotes(_extract_python_code(repaired))
+                if candidate and ("class " in candidate or "def " in candidate):
+                    code = candidate
+                else:
+                    logger.warning("Repair attempt %d returned non-code output", attempt + 1)
+                    break
         except Exception:
             logger.exception("Repair attempt %d failed", attempt + 1)
             break
@@ -833,6 +849,8 @@ async def _generate_stream_body(body: StrategyRequest):
         if messages:
             planner_parts = [f"[{m.role}]: {m.content}" for m in messages if m.content]
             planner_input = "\n".join(planner_parts)
+        # Responses API requires the word "json" in user input for json_object format
+        planner_input = f"Analyze the following trading strategy request and respond in JSON format.\n\n{planner_input}"
 
         plan_content, _ = chat_completion(
             config,
@@ -886,7 +904,7 @@ async def _generate_stream_body(body: StrategyRequest):
                     yield f"data: {json.dumps({'phase': 'generating', 'progress': min(90, token_count // 8)})}\n\n"
 
         raw_code = "".join(code_acc)
-        code = _extract_python_code(raw_code)
+        code = _sanitize_code_quotes(_extract_python_code(raw_code))
         if not code:
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
             return
@@ -927,8 +945,14 @@ async def _generate_stream_body(body: StrategyRequest):
                     model=reviewer_model,
                 )
                 if repaired_content and repaired_content.strip():
-                    code = _extract_python_code(repaired_content)
-                    repaired = True
+                    candidate = _sanitize_code_quotes(_extract_python_code(repaired_content))
+                    # Only accept repair if it looks like Python code (has class/def)
+                    if candidate and ("class " in candidate or "def " in candidate):
+                        code = candidate
+                        repaired = True
+                    else:
+                        logger.warning("Repair attempt %d returned non-code output, keeping original", repair_attempts)
+                        break
             except Exception:
                 logger.exception("Stream repair attempt %d failed", repair_attempts)
                 break
