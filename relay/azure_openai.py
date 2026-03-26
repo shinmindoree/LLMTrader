@@ -143,14 +143,18 @@ def _build_response_kwargs(
     messages: list[dict[str, str]] | None = None,
     *,
     stream: bool = False,
+    model: str | None = None,
+    text_format: dict[str, object] | None = None,
 ) -> dict[str, object]:
     kwargs: dict[str, object] = {
-        "model": config.resolved_openai_model,
+        "model": model or config.resolved_openai_model,
         "instructions": system_content,
         "input": _build_response_input(user_content=user_content, messages=messages),
     }
     if stream:
         kwargs["stream"] = True
+    if text_format:
+        kwargs["text"] = {"format": text_format}
     return kwargs
 
 
@@ -237,6 +241,8 @@ async def chat_completion_stream(
     system_content: str,
     user_content: str | None = None,
     messages: list[dict[str, str]] | None = None,
+    *,
+    model: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream OpenAI Responses API text deltas with pre-first-token retry."""
     request_kwargs = _build_response_kwargs(
@@ -245,6 +251,7 @@ async def chat_completion_stream(
         user_content=user_content,
         messages=messages,
         stream=True,
+        model=model,
     )
 
     last_error: Exception | None = None
@@ -293,12 +300,17 @@ def chat_completion(
     config: RelayConfig,
     system_content: str,
     user_content: str,
+    *,
+    model: str | None = None,
+    text_format: dict[str, object] | None = None,
 ) -> tuple[str, str]:
     """Call Responses API for a single user turn. Returns (content, model_used)."""
     request_kwargs = _build_response_kwargs(
         config,
         system_content=system_content,
         user_content=user_content,
+        model=model,
+        text_format=text_format,
     )
 
     client = _create_client(config)
@@ -315,12 +327,15 @@ def chat_completion_messages(
     config: RelayConfig,
     system_content: str,
     messages: list[dict[str, str]],
+    *,
+    model: str | None = None,
 ) -> tuple[str, str]:
     """Call Responses API with multi-turn messages. Returns (content, model_used)."""
     request_kwargs = _build_response_kwargs(
         config,
         system_content=system_content,
         messages=messages,
+        model=model,
     )
 
     client = _create_client(config)

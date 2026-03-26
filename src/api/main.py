@@ -47,6 +47,7 @@ from control.repo import (
     get_strategy_chat_session as repo_get_strategy_chat_session,
     list_strategy_quality_logs,
     list_trades,
+    list_trades_batch,
     request_stop,
     stop_all_jobs,
     upsert_strategy_meta,

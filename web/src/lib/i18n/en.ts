@@ -469,6 +469,7 @@ const en = {
     typing: "Typing...",
     codeGenerating: "Generating code...",
     phaseAnalyzing: "Analyzing requirements...",
+    phasePlanning: "Planning strategy architecture...",
     phaseGenerating: "Generating code...",
     phaseVerifying: "Verifying code...",
     phaseRepairing: "Auto-fixing code ({attempt}/{max})...",

@@ -37,6 +37,29 @@ SUMMARY_SYSTEM_PROMPT = ""
 
 TEST_SYSTEM_PROMPT = ""
 
+PLANNER_SYSTEM_PROMPT = """You are a trading strategy architect.
+Analyze the user's request and produce a detailed implementation specification as JSON.
+
+Output a JSON object with these fields:
+- strategy_name: PascalCase class name ending in "Strategy" (e.g. "RSIOversoldBounceStrategy")
+- description: One-sentence summary of the strategy
+- symbol: Trading pair (default "BTCUSDT" if unspecified)
+- timeframe: Candle interval (default "15m" if unspecified)
+- direction: "long_only", "short_only", or "long_short"
+- indicators: Array of indicators with parameters, e.g. ["RSI(period=14)", "EMA(period=20)"]
+- entry_long: Precise long entry condition (empty string if not applicable)
+- entry_short: Precise short entry condition (empty string if not applicable)
+- exit_long: Precise long exit condition
+- exit_short: Precise short exit condition
+- risk_management: Position sizing and stop-loss description
+- tunable_params: Object mapping parameter names to default values, e.g. {"rsi_period": 14, "oversold": 30}
+- notes: Any special implementation considerations
+
+Available indicators: RSI, MACD, EMA, SMA, Bollinger Bands, Stochastic, Williams %R, ATR, ADX, CCI, OBV, VWAP.
+Available context: OHLCV candles, current position, open orders, account balance.
+Guard requirements: Must check is_new_bar before logic; must call get_open_orders before placing orders.
+"""
+
 _STRATEGY_PARAMS_UI_PROMPT = """## Tunable parameters (product UI)
 At **module level** (before the Strategy subclass), define:
 - `STRATEGY_PARAMS`: `dict[str, int | float | bool | str]` — every user-tunable default the UI may edit.
@@ -190,6 +213,10 @@ def build_system_prompt(user_prompt: str = "") -> str:
 
 def build_intake_system_prompt() -> str:
     return INTAKE_SYSTEM_PROMPT
+
+
+def build_planner_system_prompt() -> str:
+    return PLANNER_SYSTEM_PROMPT
 
 
 def build_repair_system_prompt() -> str:

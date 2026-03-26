@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useMemo } from "react";
 import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
-import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies, listTrades } from "@/lib/api";
-import { usePageVisibility } from "@/lib/usePageVisibility";
+import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies } from "@/lib/api";
+import { useLiveJobStream } from "@/lib/useLiveJobStream";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
-import type { JobSummary, Trade } from "@/lib/types";
+import type { JobSummary } from "@/lib/types";
 
 const DASHBOARD_RUNNING_LIMIT = 64;
 
@@ -39,60 +39,28 @@ function StatBadge({ label, value, color = "text-[#868993]" }: { label: string; 
   );
 }
 
-/* ── Aggregated live stats from trades ── */
+/* ── Aggregated live stats from SSE stream ── */
 
 type LiveStats = { netPnl: number; totalTrades: number; winRate: number | null };
 
-function useLiveTradeStats(runningJobs: JobSummary[]): LiveStats | null {
-  const isVisible = usePageVisibility();
-  const [allTrades, setAllTrades] = useState<Map<string, Trade[]>>(new Map());
-  const activeRef = useRef(true);
-  const jobIds = runningJobs.map((j) => j.job_id).sort().join(",");
+function useLiveTradeStats(hasRunningJobs: boolean): LiveStats | null {
+  const { jobs } = useLiveJobStream(hasRunningJobs);
 
-  useEffect(() => {
-    if (!jobIds) {
-      // Schedule reset in a microtask to avoid synchronous setState in effect body
-      const id = setTimeout(() => setAllTrades(new Map()), 0);
-      return () => clearTimeout(id);
-    }
-    activeRef.current = true;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  return useMemo(() => {
+    if (jobs.length === 0) return null;
+    const allTrades = jobs.flatMap((j) => j.trades);
+    if (allTrades.length === 0) return null;
 
-    const tick = async () => {
-      const ids = jobIds.split(",");
-      const results = await Promise.allSettled(ids.map((id) => listTrades(id)));
-      if (!activeRef.current) return;
-      const next = new Map<string, Trade[]>();
-      ids.forEach((id, i) => {
-        const r = results[i];
-        if (r.status === "fulfilled") next.set(id, r.value);
-      });
-      setAllTrades(next);
-      if (!activeRef.current) return;
-      const ms = isVisible ? 10_000 : 30_000;
-      timeoutId = setTimeout(() => void tick(), ms);
-    };
+    const netPnl = allTrades.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0);
+    const closedPnls = allTrades
+      .map((tr) => tr.realized_pnl)
+      .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p) && p !== 0);
+    const winCount = closedPnls.filter((p) => p > 0).length;
+    const totalClosed = closedPnls.length;
+    const winRate = totalClosed > 0 ? (winCount / totalClosed) * 100 : null;
 
-    void tick();
-    return () => {
-      activeRef.current = false;
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    };
-  }, [jobIds, isVisible]);
-
-  if (runningJobs.length === 0) return null;
-  const all = Array.from(allTrades.values()).flat();
-  if (all.length === 0) return null;
-
-  const netPnl = all.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0);
-  const closedPnls = all
-    .map((tr) => tr.realized_pnl)
-    .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p) && p !== 0);
-  const winCount = closedPnls.filter((p) => p > 0).length;
-  const totalClosed = closedPnls.length;
-  const winRate = totalClosed > 0 ? (winCount / totalClosed) * 100 : null;
-
-  return { netPnl, totalTrades: all.length, winRate };
+    return { netPnl, totalTrades: allTrades.length, winRate };
+  }, [jobs]);
 }
 
 export function DashboardPanel() {
@@ -141,8 +109,8 @@ export function DashboardPanel() {
   const lastBt = latestBacktest?.[0];
   const lastBtSummary = lastBt?.result_summary as Record<string, unknown> | null | undefined;
 
-  // Real-time aggregated stats from running live trades
-  const liveStats = useLiveTradeStats(runningLive);
+  // Real-time aggregated stats from SSE stream
+  const liveStats = useLiveTradeStats(runningLive.length > 0);
 
   return (
     <div className="w-full px-4 py-4">

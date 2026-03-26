@@ -732,6 +732,36 @@ async def list_trades(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 
     return list(result.scalars().all())
 
 
+async def list_trades_batch(
+    session: AsyncSession,
+    *,
+    job_ids: list[uuid.UUID],
+    limit_per_job: int = 200,
+) -> dict[uuid.UUID, list[Trade]]:
+    """Fetch trades for multiple jobs in a single query."""
+    if not job_ids:
+        return {}
+    from sqlalchemy import func as sa_func  # noqa: F811
+    # Use window function to rank per job, then filter
+    row_num = sa_func.row_number().over(
+        partition_by=Trade.job_id,
+        order_by=Trade.ts.desc(),
+    ).label("rn")
+    subq = (
+        select(Trade, row_num)
+        .where(Trade.job_id.in_(job_ids))
+        .subquery()
+    )
+    result = await session.execute(
+        select(Trade).join(subq, Trade.id == subq.c.id).where(subq.c.rn <= limit_per_job)
+    )
+    rows = list(result.scalars().all())
+    out: dict[uuid.UUID, list[Trade]] = {jid: [] for jid in job_ids}
+    for trade in rows:
+        out.setdefault(trade.job_id, []).append(trade)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Strategy quality logs
 # ---------------------------------------------------------------------------

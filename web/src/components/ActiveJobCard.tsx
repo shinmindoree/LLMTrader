@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
 
+import useSWR from "swr";
 import { listTrades } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
@@ -40,32 +40,16 @@ export function ActiveJobCard({
 }) {
   const { t } = useI18n();
   const isVisible = usePageVisibility();
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const activeRef = useRef(true);
+  const isActive = !FINISHED_STATUSES.has(job.status);
 
-  useEffect(() => {
-    if (FINISHED_STATUSES.has(job.status)) return;
-    activeRef.current = true;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-    const tick = async () => {
-      try {
-        const data = await listTrades(job.job_id);
-        if (activeRef.current) setTrades(data);
-      } catch {
-        // ignore
-      }
-      if (!activeRef.current) return;
-      const ms = isVisible ? 5_000 : 15_000;
-      timeoutId = setTimeout(() => void tick(), ms);
-    };
-
-    void tick();
-    return () => {
-      activeRef.current = false;
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    };
-  }, [job.job_id, job.status, isVisible]);
+  const { data: trades = [] } = useSWR<Trade[]>(
+    isActive ? ["trades", job.job_id] : null,
+    () => listTrades(job.job_id),
+    {
+      refreshInterval: isVisible ? 10_000 : 30_000,
+      dedupingInterval: 5_000,
+    },
+  );
 
   const netPnl = trades.length > 0
     ? trades.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0)

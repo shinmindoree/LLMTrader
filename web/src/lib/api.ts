@@ -653,6 +653,13 @@ export async function listTrades(jobId: string): Promise<Trade[]> {
   return json<Trade[]>(`/api/backend/api/jobs/${jobId}/trades`);
 }
 
+export async function listTradesBatch(jobIds: string[]): Promise<Record<string, Trade[]>> {
+  if (jobIds.length === 0) return {};
+  const params = new URLSearchParams();
+  params.set("job_ids", jobIds.join(","));
+  return json<Record<string, Trade[]>>(`/api/backend/api/jobs/trades/batch?${params.toString()}`);
+}
+
 export async function createJob(body: {
   type: "BACKTEST" | "LIVE";
   strategy_path: string;

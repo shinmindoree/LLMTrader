@@ -28,6 +28,7 @@ from relay.prompts import (
     SUMMARY_SYSTEM_PROMPT,
     TEST_SYSTEM_PROMPT,
     build_intake_system_prompt,
+    build_planner_system_prompt,
     build_repair_system_prompt,
     build_strategy_chat_system_prompt,
     build_system_prompt,
@@ -685,6 +686,7 @@ async def repair(
             config,
             system_content=build_repair_system_prompt(),
             user_content=repair_user_content,
+            model=config.resolved_reviewer_model,
         )
     except Exception as e:
         _raise_llm_http_error("/repair", e)
@@ -749,18 +751,21 @@ async def generate(
 
     try:
         system_content = build_system_prompt(user_prompt=prompt_text)
+        coder_model = config.resolved_coder_model
         if messages:
             openai_messages = [{"role": m.role, "content": m.content} for m in messages]
             content, model_used = chat_completion_messages(
                 config,
                 system_content=system_content,
                 messages=openai_messages,
+                model=coder_model,
             )
         else:
             content, model_used = chat_completion(
                 config,
                 system_content=system_content,
                 user_content=prompt,
+                model=coder_model,
             )
     except Exception as e:
         _raise_llm_http_error("/generate", e)
@@ -771,6 +776,7 @@ async def generate(
 
     code = _extract_python_code(content)
 
+    reviewer_model = config.resolved_reviewer_model
     for attempt in range(_MAX_REPAIR_ATTEMPTS):
         error = _verify_strategy_code(code)
         if not error:
@@ -794,6 +800,7 @@ async def generate(
                 config,
                 system_content=build_repair_system_prompt(),
                 user_content="\n".join(repair_parts),
+                model=reviewer_model,
             )
             if repaired and repaired.strip():
                 code = _extract_python_code(repaired)
@@ -817,15 +824,39 @@ async def _generate_stream_body(body: StrategyRequest):
 
     prompt_text = _user_prompt_text(prompt, messages)
 
-    # Phase 1: analyzing
-    yield f"data: {json.dumps({'phase': 'analyzing'})}\n\n"
+    # Phase 1: Planning — Planner agent analyzes requirements and produces a structured spec
+    yield f"data: {json.dumps({'phase': 'planning'})}\n\n"
+
+    plan_spec: dict[str, Any] | None = None
+    try:
+        planner_input = prompt_text
+        if messages:
+            planner_parts = [f"[{m.role}]: {m.content}" for m in messages if m.content]
+            planner_input = "\n".join(planner_parts)
+
+        plan_content, _ = chat_completion(
+            config,
+            system_content=build_planner_system_prompt(),
+            user_content=planner_input,
+            model=config.resolved_planner_model,
+            text_format={"type": "json_object"},
+        )
+        plan_spec = _extract_json_object(plan_content)
+        if plan_spec:
+            logger.info("Planner produced spec: strategy_name=%s", plan_spec.get("strategy_name", "?"))
+    except Exception:
+        logger.warning("Planner agent failed, proceeding with direct generation", exc_info=True)
+
+    # Phase 2: Generating — Coder agent writes the code (streaming)
+    yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
 
     try:
         system_content = build_system_prompt(user_prompt=prompt_text)
+        if plan_spec:
+            plan_json = json.dumps(plan_spec, indent=2, ensure_ascii=False)
+            system_content += f"\n\n## Implementation Plan\n\nFollow this specification produced by the planning agent:\n\n```json\n{plan_json}\n```"
 
-        # Phase 2: generating
-        yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
-
+        coder_model = config.resolved_coder_model
         code_acc: list[str] = []
         token_count = 0
         if messages:
@@ -834,6 +865,7 @@ async def _generate_stream_body(body: StrategyRequest):
                 config,
                 system_content=system_content,
                 messages=openai_messages,
+                model=coder_model,
             ):
                 code_acc.append(token)
                 token_count += 1
@@ -845,6 +877,7 @@ async def _generate_stream_body(body: StrategyRequest):
                 config,
                 system_content=system_content,
                 user_content=prompt,
+                model=coder_model,
             ):
                 code_acc.append(token)
                 token_count += 1
@@ -858,16 +891,17 @@ async def _generate_stream_body(body: StrategyRequest):
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
             return
 
-        # Phase 3: verifying
+        # Phase 3: Verifying — Reviewer agent checks the code
         yield f"data: {json.dumps({'phase': 'verifying'})}\n\n"
         verification_error = _verify_strategy_code(code)
 
         repaired = False
         repair_attempts = 0
+        reviewer_model = config.resolved_reviewer_model
         for attempt in range(_MAX_REPAIR_ATTEMPTS):
             if verification_error is None:
                 break
-            # Phase 4: repairing
+            # Phase 4: Repairing — Reviewer agent fixes the code
             repair_attempts = attempt + 1
             yield f"data: {json.dumps({'phase': 'repairing', 'attempt': repair_attempts, 'max_attempts': _MAX_REPAIR_ATTEMPTS})}\n\n"
 
@@ -890,6 +924,7 @@ async def _generate_stream_body(body: StrategyRequest):
                     config,
                     system_content=build_repair_system_prompt(),
                     user_content="\n".join(repair_parts),
+                    model=reviewer_model,
                 )
                 if repaired_content and repaired_content.strip():
                     code = _extract_python_code(repaired_content)

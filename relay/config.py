@@ -21,6 +21,18 @@ class RelayConfig(BaseSettings):
         validation_alias=AliasChoices("OPENAI_MODEL", "AZURE_OPENAI_MODEL"),
     )
     relay_api_key: str = Field(default="", alias="RELAY_API_KEY")
+    planner_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("PLANNER_MODEL", "AZURE_OPENAI_PLANNER_MODEL"),
+    )
+    coder_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("CODER_MODEL", "AZURE_OPENAI_CODER_MODEL"),
+    )
+    reviewer_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("REVIEWER_MODEL", "AZURE_OPENAI_REVIEWER_MODEL"),
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -48,6 +60,27 @@ class RelayConfig(BaseSettings):
         if configured:
             return configured
         return self._first_env_value("OPENAI_MODEL", "AZURE_OPENAI_MODEL")
+
+    @property
+    def resolved_planner_model(self) -> str:
+        configured = self.planner_model.strip()
+        if configured:
+            return configured
+        return self._first_env_value("PLANNER_MODEL", "AZURE_OPENAI_PLANNER_MODEL") or self.resolved_openai_model
+
+    @property
+    def resolved_coder_model(self) -> str:
+        configured = self.coder_model.strip()
+        if configured:
+            return configured
+        return self._first_env_value("CODER_MODEL", "AZURE_OPENAI_CODER_MODEL") or self.resolved_openai_model
+
+    @property
+    def resolved_reviewer_model(self) -> str:
+        configured = self.reviewer_model.strip()
+        if configured:
+            return configured
+        return self._first_env_value("REVIEWER_MODEL", "AZURE_OPENAI_REVIEWER_MODEL") or self.resolved_openai_model
 
     def is_azure_configured(self) -> bool:
         if not self.resolved_openai_model:

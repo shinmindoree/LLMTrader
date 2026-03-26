@@ -37,14 +37,6 @@ function isAdminOnlyPath(path: string): boolean {
 const PROXY_TIMEOUT_MS = 120_000;
 
 async function proxy(req: NextRequest, params: { path: string[] }): Promise<Response> {
-  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-  if (isRateLimited(clientIp)) {
-    return NextResponse.json(
-      { error: "Too many requests" },
-      { status: 429, headers: getRateLimitHeaders(clientIp) },
-    );
-  }
-
   const url = new URL(req.url);
   const relPath = params.path.join("/");
   const target = new URL(relPath, API_ORIGIN.endsWith("/") ? API_ORIGIN : `${API_ORIGIN}/`);
@@ -62,6 +54,16 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   if (!proxyAuth) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Rate limit by userId (falls back to IP if no userId)
+  const rateLimitKey = proxyAuth.userId || req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  if (isRateLimited(rateLimitKey, req.method)) {
+    return NextResponse.json(
+      { error: "Too many requests" },
+      { status: 429, headers: getRateLimitHeaders(rateLimitKey, req.method) },
+    );
+  }
+
   if (isAdminOnlyPath(relPath) && !isAdminEmail(proxyAuth.email)) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
@@ -80,8 +82,10 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     body = await req.arrayBuffer();
   }
 
+  // SSE/streaming endpoints should not have a timeout — they're long-lived connections
+  const isStreamEndpoint = /\/(stream|live\/stream)$/.test(relPath);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+  const timeout = isStreamEndpoint ? null : setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
 
   let res: globalThis.Response;
   try {
@@ -93,12 +97,12 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
       signal: controller.signal,
     });
   } catch (err) {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
     const message = err instanceof Error ? err.message : "Backend request failed";
     const status = controller.signal.aborted ? 504 : 502;
     return NextResponse.json({ error: message }, { status });
   }
-  clearTimeout(timeout);
+  if (timeout) clearTimeout(timeout);
 
   const resHeaders = new Headers(res.headers);
   resHeaders.delete("content-encoding");
@@ -117,7 +121,13 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     req.method === "GET" &&
     res.ok &&
     /^api\/(strategies\/chat\/sessions\/list|strategies\/list|jobs\/list)/.test(relPath);
-  resHeaders.set("cache-control", isCacheableListing ? "private, max-age=5" : "no-store");
+  const isSSE = res.headers.get("content-type")?.includes("text/event-stream");
+  if (isSSE) {
+    resHeaders.set("cache-control", "no-cache");
+    resHeaders.set("connection", "keep-alive");
+  } else {
+    resHeaders.set("cache-control", isCacheableListing ? "private, max-age=5" : "no-store");
+  }
 
   return new NextResponse(res.body, { status: res.status, headers: resHeaders });
 }

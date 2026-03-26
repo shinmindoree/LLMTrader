@@ -473,6 +473,7 @@ const ko: TranslationKeys = {
     typing: "답변 작성 중...",
     codeGenerating: "코드 생성 중...",
     phaseAnalyzing: "요구사항 분석 중...",
+    phasePlanning: "전략 아키텍처 설계 중...",
     phaseGenerating: "코드 생성 중...",
     phaseVerifying: "코드 검증 중...",
     phaseRepairing: "코드 자동 수정 중 ({attempt}/{max})...",

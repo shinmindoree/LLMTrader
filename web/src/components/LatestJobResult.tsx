@@ -65,7 +65,6 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
         return 5_000;
       },
       dedupingInterval: 3_000,
-      revalidateOnFocus: true,
     },
   );
 
@@ -74,8 +73,8 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
     isLiveActive ? ["trades", job.job_id] : null,
     () => listTrades(job!.job_id),
     {
-      refreshInterval: isVisible ? 3_000 : 12_000,
-      dedupingInterval: 2_000,
+      refreshInterval: isVisible ? 10_000 : 30_000,
+      dedupingInterval: 5_000,
     },
   );
 

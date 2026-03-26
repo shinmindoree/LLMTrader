@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
+import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
 import { getJob, listTrades, stopJob } from "@/lib/api";
 import { usePageVisibility } from "@/lib/usePageVisibility";
@@ -50,40 +51,41 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
   const raw = params?.jobId;
   const jobId = Array.isArray(raw) ? raw[0] : raw;
   const validJobId = typeof jobId === "string" && isUuid(jobId);
-  const [job, setJob] = useState<Job | null>(null);
-  const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!validJobId || !jobId) return;
-    let active = true;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const jobFinished = (j: Job | null | undefined) =>
+    j != null && FINISHED_STATUSES.has(j.status);
 
-    const tick = async () => {
-      if (!active) return;
-      try {
-        const [jobData, tradesData] = await Promise.all([getJob(jobId), listTrades(jobId)]);
-        if (!active) return;
-        setError(null);
-        setJob(jobData);
-        setTrades(tradesData);
-        if (FINISHED_STATUSES.has(jobData.status)) return;
-        const ms = !isVisible ? 12_000 : 2_500;
-        timeoutId = setTimeout(() => void tick(), ms);
-      } catch (e) {
-        if (active) setError(String(e));
-        const ms = !isVisible ? 20_000 : 5_000;
-        timeoutId = setTimeout(() => void tick(), ms);
-      }
-    };
+  const { data: job = null, error: fetchError } = useSWR<Job>(
+    validJobId && jobId ? ["job", jobId] : null,
+    () => getJob(jobId!),
+    {
+      refreshInterval: (latestData: Job | null | undefined) => {
+        if (jobFinished(latestData)) return 0;
+        return isVisible ? 5_000 : 15_000;
+      },
+      dedupingInterval: 3_000,
+    },
+  );
 
-    void tick();
+  const isLiveActive = job != null && job.type === "LIVE" && !FINISHED_STATUSES.has(job.status);
+  const { data: trades = [] } = useSWR<Trade[]>(
+    validJobId && jobId ? ["trades", jobId] : null,
+    () => listTrades(jobId!),
+    {
+      refreshInterval: (latestData: Trade[] | undefined) => {
+        if (jobFinished(job)) {
+          // For finished jobs: fetch once (if no trades yet), then stop
+          if (!latestData || latestData.length === 0) return 5_000;
+          return 0;
+        }
+        return isVisible ? 10_000 : 30_000;
+      },
+      dedupingInterval: 5_000,
+    },
+  );
 
-    return () => {
-      active = false;
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    };
-  }, [jobId, validJobId, isVisible]);
+  const displayError = error || (fetchError ? String(fetchError) : null);
 
   const onStop = async () => {
     try {
@@ -109,9 +111,9 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
   return (
     <main className="w-full px-6 py-10">
-      {error ? (
+      {displayError ? (
         <p className="mb-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
-          {error}
+          {displayError}
         </p>
       ) : null}
 

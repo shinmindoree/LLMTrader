@@ -519,7 +519,7 @@ export default function StrategiesPage() {
       const statusUpdate = (msgs: ChatMessage[]) =>
         msgs.map((m) =>
           m.id === assistantId
-            ? { ...m, status: "streaming" as const, statusText: t.strategy.phaseAnalyzing }
+            ? { ...m, status: "streaming" as const, statusText: t.strategy.phasePlanning }
             : m,
         );
       setChatMessages(statusUpdate);
@@ -527,6 +527,8 @@ export default function StrategiesPage() {
 
       const phaseToStatusText = (phase: string, detail?: { progress?: number; attempt?: number; max_attempts?: number }): string => {
         switch (phase) {
+          case "planning":
+            return t.strategy.phasePlanning;
           case "analyzing":
             return t.strategy.phaseAnalyzing;
           case "generating":
