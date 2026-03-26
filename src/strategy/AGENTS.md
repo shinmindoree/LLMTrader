@@ -93,6 +93,10 @@ class StrategyContext(Protocol):
 **Indicators (builtin + custom):**
 - builtin 지표는 TA-Lib 함수명으로 바로 호출한다. 예: `ctx.get_indicator("RSI", period=14)`
 - custom 지표는 전략에서 `initialize()` 시점에 `ctx.register_indicator(name, func)`로 등록한다.
+- `price=` 파라미터로 입력 소스를 지정할 수 있다:
+  - OHLCV 키: `price="high"`, `price="low"`, `price="open"` 등
+  - 파생 지표: `price="ATR"` → ATR을 먼저 계산한 후 그 결과를 입력으로 사용 (예: SMA of ATR)
+  - 예: `ctx.get_indicator("SMA", period=20, price="ATR")` — ATR 값의 20기간 SMA
 
 ---
 

@@ -93,6 +93,8 @@ def compute(
     if "period" in params and "timeperiod" not in params:
         params["timeperiod"] = params.pop("period")
 
+    price_source = params.pop("price", None)
+
     normalized_name = name.strip().upper()
     if not normalized_name:
         raise ValueError("indicator name is required")
@@ -124,6 +126,22 @@ def compute(
     # OHLCV 기반 컨텍스트에서 호출하는 사용성을 위해 close -> real alias를 제공한다.
     if "real" not in prepared_inputs and "close" in prepared_inputs:
         prepared_inputs["real"] = prepared_inputs["close"]
+
+    # Handle price= kwarg: use OHLCV column or compute derived indicator as input
+    _OHLCV_KEYS = {"open", "high", "low", "close", "volume", "real"}
+    if price_source is not None:
+        if price_source.lower() in _OHLCV_KEYS:
+            prepared_inputs["real"] = prepared_inputs.get(price_source.lower(), prepared_inputs.get("close"))
+        else:
+            derived_fn = abstract.Function(price_source.strip().upper())
+            derived_result = derived_fn(prepared_inputs)
+            if isinstance(derived_result, dict):
+                derived_series = list(derived_result.values())[0]
+            elif isinstance(derived_result, (list, tuple)):
+                derived_series = derived_result[0]
+            else:
+                derived_series = derived_result
+            prepared_inputs["real"] = _as_float_array(np, derived_series) if not hasattr(derived_series, "dtype") else derived_series
 
     result = fn(prepared_inputs, **params)
 

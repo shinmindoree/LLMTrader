@@ -59,9 +59,12 @@ def register_talib_indicator_all_outputs(ctx: StrategyContext, name: str) -> Non
     except Exception:  # noqa: BLE001
         return
 
+    _OHLCV_KEYS = {"open", "high", "low", "close", "volume", "real"}
+
     def _indicator(inner_ctx: Any, *args: Any, **kwargs: Any) -> Any:
         output = kwargs.pop("output", None)
         output_index = kwargs.pop("output_index", None)
+        price_source = kwargs.pop("price", None)
 
         if args:
             if len(args) == 1 and "period" not in kwargs and "timeperiod" not in kwargs:
@@ -82,6 +85,21 @@ def register_talib_indicator_all_outputs(ctx: StrategyContext, name: str) -> Non
         }
         if "real" not in prepared_inputs and "close" in prepared_inputs:
             prepared_inputs["real"] = prepared_inputs["close"]
+
+        # Handle price= kwarg: use OHLCV column or compute derived indicator as input
+        if price_source is not None:
+            if price_source.lower() in _OHLCV_KEYS:
+                prepared_inputs["real"] = prepared_inputs.get(price_source.lower(), prepared_inputs.get("close"))
+            else:
+                derived_fn = abstract.Function(price_source.strip().upper())
+                derived_result = derived_fn(prepared_inputs)
+                if isinstance(derived_result, dict):
+                    derived_series = list(derived_result.values())[0]
+                elif isinstance(derived_result, (list, tuple)):
+                    derived_series = derived_result[0]
+                else:
+                    derived_series = derived_result
+                prepared_inputs["real"] = np.asarray(derived_series, dtype="float64") if not hasattr(derived_series, "dtype") else derived_series
 
         normalized = name.strip().upper()
         fn = abstract.Function(normalized)
