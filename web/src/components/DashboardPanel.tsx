@@ -16,6 +16,17 @@ function strategyNameFromPath(path: string): string {
   return base.replace(/\.[^.]+$/, "");
 }
 
+/* ── Shared tiny components ── */
+
+function StatBadge({ label, value, color = "text-[#868993]" }: { label: string; value: string; color?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1 rounded bg-[#2a2e39] px-1.5 py-0.5 text-[11px] font-medium ${color}`}>
+      {label && <span className="text-[#555]">{label}</span>}
+      {value}
+    </span>
+  );
+}
+
 export function DashboardPanel() {
   const { t } = useI18n();
 
@@ -66,78 +77,10 @@ export function DashboardPanel() {
   // Latest completed backtest summary
   const lastBt = latestBacktest?.[0];
   const lastBtSummary = lastBt?.result_summary as Record<string, unknown> | null | undefined;
-  const btSub = lastBt
-    ? (() => {
-        const name = strategyNameFromPath(lastBt.strategy_path);
-        const parts = [name];
-        if (typeof lastBtSummary?.win_rate === "number") {
-          parts.push(`${t.dashboard.labelWinRate} ${lastBtSummary.win_rate.toFixed(1)}%`);
-        } else if (typeof lastBtSummary?.total_return_pct === "number") {
-          const r = lastBtSummary.total_return_pct;
-          parts.push(`${t.dashboard.labelReturn} ${r >= 0 ? "+" : ""}${r.toFixed(1)}%`);
-        }
-        if (typeof lastBtSummary?.total_trades === "number") {
-          parts.push(`${lastBtSummary.total_trades.toLocaleString()} ${t.dashboard.labelTrades}`);
-        }
-        return parts.join(" · ");
-      })()
-    : null;
 
-  // Running live jobs summary — show names + last completed stats
+  // Running live jobs summary
   const lastLive = latestLiveCompleted?.[0];
   const lastLiveSummary = lastLive?.result_summary as Record<string, unknown> | null | undefined;
-  const liveSub = (() => {
-    if (runningLive.length === 0) return t.dashboard.statNoRunning;
-    const names = runningLive.slice(0, 2).map((j) => strategyNameFromPath(j.strategy_path)).join(", ");
-    // Append last completed live result if available
-    if (lastLiveSummary) {
-      const parts: string[] = [];
-      if (typeof lastLiveSummary.win_rate === "number") {
-        parts.push(`${t.dashboard.labelWinRate} ${lastLiveSummary.win_rate.toFixed(1)}%`);
-      }
-      const trades = typeof lastLiveSummary.total_trades === "number" ? lastLiveSummary.total_trades
-        : typeof lastLiveSummary.num_filled_orders === "number" ? lastLiveSummary.num_filled_orders : 0;
-      if (trades > 0) {
-        parts.push(`${trades.toLocaleString()} ${t.dashboard.labelTrades}`);
-      }
-      if (parts.length > 0) {
-        return `${names} (${t.dashboard.labelLastResult}: ${parts.join(", ")})`;
-      }
-    }
-    return names;
-  })();
-
-  const stats = [
-    {
-      label: t.dashboard.strategyCount,
-      value:
-        strategies === undefined && strategiesLoading ? null : (strategies?.length ?? 0),
-      sub: latestStrategy ? `${t.dashboard.statLatest}: ${latestStrategy}` : null,
-      href: "/strategies",
-      color: "text-[#d1d4dc]",
-      hoverBorder: "hover:border-[#2962ff]",
-    },
-    {
-      label: t.dashboard.backtestCount,
-      value:
-        jobCounts === undefined && jobCountsLoading ? null : (jobCounts?.backtest_total ?? 0),
-      sub: btSub,
-      href: "/backtest",
-      color: "text-[#d1d4dc]",
-      hoverBorder: "hover:border-[#2962ff]",
-    },
-    {
-      label: t.dashboard.runningLive,
-      value:
-        liveRunningJobs === undefined && liveRunningLoading
-          ? null
-          : (liveRunningJobs?.length ?? 0),
-      sub: liveSub,
-      href: "/live",
-      color: "text-[#26a69a]",
-      hoverBorder: "hover:border-[#26a69a]",
-    },
-  ];
 
   return (
     <div className="w-full px-4 py-4">
@@ -146,6 +89,7 @@ export function DashboardPanel() {
         <p className="mt-1 max-w-xl text-sm text-[#868993]">{t.dashboard.subtitle}</p>
       </header>
 
+      {/* Exchange connection bar */}
       <div className="flex flex-col gap-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-[#868993]">{t.dashboard.exchangeLabel}</span>
@@ -186,22 +130,158 @@ export function DashboardPanel() {
         <p className="mt-2 text-xs text-[#868993]">{t.dashboard.hintNoStrategies}</p>
       )}
 
+      {/* ── Stat cards ── */}
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
-        {stats.map((s) => (
-          <Link
-            key={s.href}
-            href={s.href}
-            className={`block rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4 transition-colors ${s.hoverBorder}`}
-          >
-            <div className="text-xs text-[#868993]">{s.label}</div>
-            <div className={`mt-1 flex min-h-[2rem] items-center text-2xl font-semibold ${s.color}`}>
-              {s.value === null ? <LoadingSpinner size="md" /> : s.value}
+
+        {/* Card: My Strategies */}
+        <Link
+          href="/strategies"
+          className="group flex flex-col rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4 transition-colors hover:border-[#2962ff]"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-[#868993]">
+              {t.dashboard.strategyCount}
+            </span>
+            <svg className="h-4 w-4 text-[#555] transition-colors group-hover:text-[#2962ff]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25" />
+            </svg>
+          </div>
+          <div className="mt-2 text-3xl font-bold text-[#d1d4dc]">
+            {strategies === undefined && strategiesLoading
+              ? <LoadingSpinner size="md" />
+              : (strategies?.length ?? 0)}
+          </div>
+          {latestStrategy && (
+            <div className="mt-3 flex flex-col gap-1 border-t border-[#2a2e39] pt-3">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-[#555]">{t.dashboard.statLatest}</span>
+              <span className="truncate text-xs text-[#b2b5be]">{latestStrategy}</span>
             </div>
-            {s.sub && (
-              <div className="mt-1 truncate text-xs text-[#868993]">{s.sub}</div>
+          )}
+        </Link>
+
+        {/* Card: Simulations */}
+        <Link
+          href="/backtest"
+          className="group flex flex-col rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4 transition-colors hover:border-[#2962ff]"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-[#868993]">
+              {t.dashboard.backtestCount}
+            </span>
+            <svg className="h-4 w-4 text-[#555] transition-colors group-hover:text-[#2962ff]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+            </svg>
+          </div>
+          <div className="mt-2 text-3xl font-bold text-[#d1d4dc]">
+            {jobCounts === undefined && jobCountsLoading
+              ? <LoadingSpinner size="md" />
+              : (jobCounts?.backtest_total ?? 0)}
+          </div>
+          {lastBt && (
+            <div className="mt-3 flex flex-col gap-1.5 border-t border-[#2a2e39] pt-3">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-[#555]">{t.dashboard.labelLastResult}</span>
+              <span className="truncate text-xs text-[#b2b5be]">{strategyNameFromPath(lastBt.strategy_path)}</span>
+              <div className="flex flex-wrap gap-1.5">
+                {typeof lastBtSummary?.win_rate === "number" && (
+                  <StatBadge
+                    label={t.dashboard.labelWinRate}
+                    value={`${lastBtSummary.win_rate.toFixed(1)}%`}
+                    color={lastBtSummary.win_rate >= 50 ? "text-[#26a69a]" : "text-[#ef5350]"}
+                  />
+                )}
+                {typeof lastBtSummary?.total_return_pct === "number" && (
+                  <StatBadge
+                    label={t.dashboard.labelReturn}
+                    value={`${lastBtSummary.total_return_pct >= 0 ? "+" : ""}${lastBtSummary.total_return_pct.toFixed(1)}%`}
+                    color={lastBtSummary.total_return_pct >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}
+                  />
+                )}
+                {typeof lastBtSummary?.total_trades === "number" && lastBtSummary.total_trades > 0 && (
+                  <StatBadge label="" value={`${lastBtSummary.total_trades.toLocaleString()} ${t.dashboard.labelTrades}`} />
+                )}
+              </div>
+            </div>
+          )}
+        </Link>
+
+        {/* Card: Live Trading */}
+        <Link
+          href="/live"
+          className="group flex flex-col rounded-lg border border-[#2a2e39] bg-[#1e222d] p-4 transition-colors hover:border-[#26a69a]"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-[#868993]">
+              {t.dashboard.runningLive}
+            </span>
+            {runningLive.length > 0 ? (
+              <span className="relative flex h-3 w-3">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#26a69a] opacity-60" />
+                <span className="relative inline-flex h-3 w-3 rounded-full bg-[#26a69a]" />
+              </span>
+            ) : (
+              <svg className="h-4 w-4 text-[#555] transition-colors group-hover:text-[#26a69a]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5" />
+              </svg>
             )}
-          </Link>
-        ))}
+          </div>
+          <div className="mt-2 text-3xl font-bold text-[#26a69a]">
+            {liveRunningJobs === undefined && liveRunningLoading
+              ? <LoadingSpinner size="md" />
+              : (runningLive.length)}
+          </div>
+          <div className="mt-3 flex flex-col gap-2 border-t border-[#2a2e39] pt-3">
+            {runningLive.length > 0 ? (
+              <>
+                {runningLive.slice(0, 3).map((j) => {
+                  const name = strategyNameFromPath(j.strategy_path);
+                  const cfg = j.config as Record<string, unknown>;
+                  const symbol = typeof cfg?.symbol === "string" ? cfg.symbol : null;
+                  const interval = typeof cfg?.interval === "string" ? cfg.interval : null;
+                  return (
+                    <div key={j.job_id} className="flex flex-col gap-1">
+                      <span className="truncate text-xs font-medium text-[#b2b5be]">{name}</span>
+                      {(symbol || interval) && (
+                        <div className="flex gap-1.5">
+                          {symbol && <StatBadge label="" value={symbol} color="text-[#d1d4dc]" />}
+                          {interval && <StatBadge label="" value={interval} color="text-[#868993]" />}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {runningLive.length > 3 && (
+                  <span className="text-[11px] text-[#555]">+{runningLive.length - 3} more</span>
+                )}
+                {/* Last completed live result */}
+                {lastLiveSummary && (() => {
+                  const wr = typeof lastLiveSummary.win_rate === "number" ? lastLiveSummary.win_rate : null;
+                  const trades = typeof lastLiveSummary.total_trades === "number"
+                    ? lastLiveSummary.total_trades
+                    : typeof lastLiveSummary.num_filled_orders === "number"
+                      ? lastLiveSummary.num_filled_orders
+                      : null;
+                  if (wr === null && (trades === null || trades === 0)) return null;
+                  return (
+                    <div className="mt-1 border-t border-[#2a2e39] pt-2">
+                      <span className="text-[10px] font-medium uppercase tracking-wider text-[#555]">{t.dashboard.labelLastResult}</span>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {wr !== null && (
+                          <StatBadge label={t.dashboard.labelWinRate} value={`${wr.toFixed(1)}%`} color={wr >= 50 ? "text-[#26a69a]" : "text-[#ef5350]"} />
+                        )}
+                        {trades !== null && trades > 0 && (
+                          <StatBadge label="" value={`${trades.toLocaleString()} ${t.dashboard.labelTrades}`} />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </>
+            ) : (
+              <span className="text-xs text-[#555]">{t.dashboard.statNoRunning}</span>
+            )}
+          </div>
+        </Link>
+
       </div>
 
       <div className="mt-6">
