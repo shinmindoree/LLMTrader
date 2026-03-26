@@ -7,6 +7,7 @@ Auth strategy:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -59,6 +60,10 @@ def _build_async_credential(config: RelayConfig) -> AsyncTokenCredential:
 
 # Timeout applied to every OpenAI API call (connection + read + write).
 _OPENAI_TIMEOUT = httpx.Timeout(120.0, connect=30.0)
+# Streaming calls may take longer before first token; use a generous read timeout.
+_OPENAI_STREAM_TIMEOUT = httpx.Timeout(300.0, connect=30.0)
+
+_STREAM_MAX_RETRIES = 2
 
 
 def _create_client(config: RelayConfig) -> OpenAI:
@@ -233,7 +238,7 @@ async def chat_completion_stream(
     user_content: str | None = None,
     messages: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
-    """Stream OpenAI Responses API text deltas."""
+    """Stream OpenAI Responses API text deltas with pre-first-token retry."""
     request_kwargs = _build_response_kwargs(
         config,
         system_content=system_content,
@@ -242,24 +247,46 @@ async def chat_completion_stream(
         stream=True,
     )
 
-    emitted = False
-    final_text: str | None = None
-    async with _create_async_client(config) as client:
-        stream = await client.responses.create(**request_kwargs)
-        async for event in stream:
-            event_type = getattr(event, "type", None)
-            if event_type == "response.output_text.delta" and getattr(event, "delta", None):
-                emitted = True
-                yield event.delta
-            elif event_type == "response.output_text.done" and getattr(event, "text", None):
-                final_text = event.text
-    if not emitted:
-        if final_text and final_text.strip():
-            yield final_text
-            return
-        diag = {"reason": "empty_stream"}
-        logger.warning("LLM returned empty stream: %s", json.dumps(diag, ensure_ascii=False))
-        raise ValueError(f"Empty streamed completion from model. diagnostics={json.dumps(diag)}")
+    last_error: Exception | None = None
+    for attempt in range(_STREAM_MAX_RETRIES + 1):
+        emitted = False
+        final_text: str | None = None
+        try:
+            async with _create_async_client(config) as client:
+                stream = await client.responses.create(**request_kwargs)
+                async for event in stream:
+                    event_type = getattr(event, "type", None)
+                    if event_type == "response.output_text.delta" and getattr(event, "delta", None):
+                        emitted = True
+                        yield event.delta
+                    elif event_type == "response.output_text.done" and getattr(event, "text", None):
+                        final_text = event.text
+            if emitted:
+                return
+            if final_text and final_text.strip():
+                yield final_text
+                return
+            last_error = ValueError("Empty streamed completion from model")
+        except Exception as exc:
+            last_error = exc
+            if emitted:
+                # Already yielded tokens — cannot safely retry.
+                raise
+
+        if attempt < _STREAM_MAX_RETRIES:
+            wait = 1.0 * (attempt + 1)
+            logger.warning(
+                "Stream attempt %d/%d failed (%s), retrying in %.1fs…",
+                attempt + 1,
+                _STREAM_MAX_RETRIES + 1,
+                last_error,
+                wait,
+            )
+            await asyncio.sleep(wait)
+
+    diag = {"reason": "empty_stream", "attempts": _STREAM_MAX_RETRIES + 1}
+    logger.warning("LLM returned empty stream after retries: %s", json.dumps(diag, ensure_ascii=False))
+    raise last_error or ValueError(f"Empty streamed completion from model. diagnostics={json.dumps(diag)}")
 
 
 def chat_completion(

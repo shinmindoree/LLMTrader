@@ -1145,6 +1145,8 @@ def create_app() -> FastAPI:
         openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
 
         code_acc: list[str] = []
+        stream_repaired = False
+        stream_repair_attempts = 0
         try:
             if messages:
                 stream = client.generate_strategy_stream("", messages=openai_messages)
@@ -1161,10 +1163,18 @@ def create_app() -> FastAPI:
                     )
                     yield f"data: {json.dumps(event)}\n\n"
                     return
+                # Forward phase events from relay to frontend
+                if "phase" in event:
+                    yield f"data: {json.dumps(event)}\n\n"
                 if "token" in event:
                     code_acc.append(event["token"])
                     yield f"data: {json.dumps({'token': event['token']})}\n\n"
                 if event.get("done"):
+                    # Relay already did verify+repair; extract results
+                    stream_repaired = event.get("repaired", False)
+                    stream_repair_attempts = event.get("repair_attempts", 0)
+                    if event.get("code"):
+                        code_acc = [event["code"]]
                     break
         except Exception as exc:  # noqa: BLE001
             await _log_once(
@@ -1191,8 +1201,8 @@ def create_app() -> FastAPI:
             generation_attempted=True,
             generation_success=True,
             verification_passed=True,
-            repaired=False,
-            repair_attempts=0,
+            repaired=stream_repaired,
+            repair_attempts=stream_repair_attempts,
         )
         yield (
             "data: "
@@ -1202,8 +1212,8 @@ def create_app() -> FastAPI:
                     "code": code,
                     "summary": None,
                     "backtest_ok": False,
-                    "repaired": False,
-                    "repair_attempts": 0,
+                    "repaired": stream_repaired,
+                    "repair_attempts": stream_repair_attempts,
                 }
             )
             + "\n\n"

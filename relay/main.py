@@ -817,8 +817,17 @@ async def _generate_stream_body(body: StrategyRequest):
 
     prompt_text = _user_prompt_text(prompt, messages)
 
+    # Phase 1: analyzing
+    yield f"data: {json.dumps({'phase': 'analyzing'})}\n\n"
+
     try:
         system_content = build_system_prompt(user_prompt=prompt_text)
+
+        # Phase 2: generating
+        yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
+
+        code_acc: list[str] = []
+        token_count = 0
         if messages:
             openai_messages = [{"role": m.role, "content": m.content} for m in messages]
             async for token in chat_completion_stream(
@@ -826,15 +835,71 @@ async def _generate_stream_body(body: StrategyRequest):
                 system_content=system_content,
                 messages=openai_messages,
             ):
+                code_acc.append(token)
+                token_count += 1
                 yield f"data: {json.dumps({'token': token})}\n\n"
+                if token_count % 50 == 0:
+                    yield f"data: {json.dumps({'phase': 'generating', 'progress': min(90, token_count // 8)})}\n\n"
         else:
             async for token in chat_completion_stream(
                 config,
                 system_content=system_content,
                 user_content=prompt,
             ):
+                code_acc.append(token)
+                token_count += 1
                 yield f"data: {json.dumps({'token': token})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
+                if token_count % 50 == 0:
+                    yield f"data: {json.dumps({'phase': 'generating', 'progress': min(90, token_count // 8)})}\n\n"
+
+        raw_code = "".join(code_acc)
+        code = _extract_python_code(raw_code)
+        if not code:
+            yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
+            return
+
+        # Phase 3: verifying
+        yield f"data: {json.dumps({'phase': 'verifying'})}\n\n"
+        verification_error = _verify_strategy_code(code)
+
+        repaired = False
+        repair_attempts = 0
+        for attempt in range(_MAX_REPAIR_ATTEMPTS):
+            if verification_error is None:
+                break
+            # Phase 4: repairing
+            repair_attempts = attempt + 1
+            yield f"data: {json.dumps({'phase': 'repairing', 'attempt': repair_attempts, 'max_attempts': _MAX_REPAIR_ATTEMPTS})}\n\n"
+
+            logger.info(
+                "Stream strategy verification failed (attempt %d/%d): %s",
+                repair_attempts,
+                _MAX_REPAIR_ATTEMPTS,
+                verification_error,
+            )
+            repair_parts = [
+                "Fix the strategy code based on the verification failure below.",
+                "",
+                f"Verification error:\n{verification_error}",
+            ]
+            if prompt_text:
+                repair_parts.extend(["", f"Original user request:\n{prompt_text}"])
+            repair_parts.extend(["", "Current code:", code])
+            try:
+                repaired_content, _ = chat_completion(
+                    config,
+                    system_content=build_repair_system_prompt(),
+                    user_content="\n".join(repair_parts),
+                )
+                if repaired_content and repaired_content.strip():
+                    code = _extract_python_code(repaired_content)
+                    repaired = True
+            except Exception:
+                logger.exception("Stream repair attempt %d failed", repair_attempts)
+                break
+            verification_error = _verify_strategy_code(code)
+
+        yield f"data: {json.dumps({'done': True, 'code': code, 'repaired': repaired, 'repair_attempts': repair_attempts})}\n\n"
     except Exception as e:
         logger.exception("LLM stream failed at /generate/stream: %s", e)
         yield f"data: {json.dumps({'error': str(e)})}\n\n"

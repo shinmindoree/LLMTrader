@@ -407,6 +407,7 @@ export async function deleteStrategyChatSession(sessionId: string): Promise<Dele
 
 export type GenerateStreamCallbacks = {
   onToken: (token: string) => void;
+  onPhase?: (phase: string, detail?: { progress?: number; attempt?: number; max_attempts?: number }) => void;
   onDone: (payload: {
     code?: string;
     summary?: string | null;
@@ -423,8 +424,8 @@ export async function generateStrategyStream(
   strategyName?: string,
   messages?: { role: string; content: string }[],
 ): Promise<void> {
-  const FIRST_EVENT_TIMEOUT_MS = 45_000;
-  const EVENT_GAP_TIMEOUT_MS = 60_000;
+  const FIRST_EVENT_TIMEOUT_MS = 60_000;
+  const EVENT_GAP_TIMEOUT_MS = 90_000;
 
   const body: Record<string, unknown> = {
     user_prompt: userPrompt,
@@ -528,6 +529,13 @@ export async function generateStrategyStream(
         armStallTimer(EVENT_GAP_TIMEOUT_MS);
         try {
           const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+          if (typeof data.phase === "string" && callbacks.onPhase) {
+            callbacks.onPhase(data.phase, {
+              progress: typeof data.progress === "number" ? data.progress : undefined,
+              attempt: typeof data.attempt === "number" ? data.attempt : undefined,
+              max_attempts: typeof data.max_attempts === "number" ? data.max_attempts : undefined,
+            });
+          }
           if (typeof data.token === "string") {
             callbacks.onToken(data.token);
           }

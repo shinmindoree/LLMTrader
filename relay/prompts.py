@@ -134,10 +134,23 @@ def _load_example_strategies(user_prompt: str = "") -> str:
     return "\n\n".join(parts)
 
 
-def build_system_prompt(user_prompt: str = "") -> str:
+# --- Cached static system prompt (identical across all requests → Azure OpenAI prompt caching) ---
+
+_cached_static_system_prompt: str | None = None
+
+
+def _build_static_system_prompt() -> str:
+    """Build the fixed portion of the system prompt: interface + template + rules + params.
+
+    This never changes between requests, so Azure OpenAI's automatic prompt caching
+    will cache the KV projections for this prefix, reducing TTFT on subsequent calls.
+    """
+    global _cached_static_system_prompt  # noqa: PLW0603
+    if _cached_static_system_prompt is not None:
+        return _cached_static_system_prompt
+
     template, skill = _load_template_and_skill()
     interface = _load_interface_docs()
-    examples = _load_example_strategies(user_prompt)
     sections: list[str] = []
     if interface:
         sections.append(f"## Strategy Interface\n\n{interface}")
@@ -145,10 +158,34 @@ def build_system_prompt(user_prompt: str = "") -> str:
         sections.append(f"## Template\n\n{template}")
     if skill:
         sections.append(f"## Rules\n\n{skill}")
-    if examples:
-        sections.append(f"## Examples\n\n{examples}")
+    # Default examples are always included in the static portion for cache consistency
+    default_examples = "\n\n".join(
+        f"### {p.name}\n\n{_read_file(p)}"
+        for p in _DEFAULT_EXAMPLES
+        if p.exists() and _read_file(p)
+    )
+    if default_examples:
+        sections.append(f"## Examples\n\n{default_examples}")
     sections.append(_STRATEGY_PARAMS_UI_PROMPT)
-    return "\n\n".join(sections) if sections else ""
+    _cached_static_system_prompt = "\n\n".join(sections) if sections else ""
+    return _cached_static_system_prompt
+
+
+def build_system_prompt(user_prompt: str = "") -> str:
+    static = _build_static_system_prompt()
+    # Only append extra prompt-relevant examples if they differ from defaults
+    if user_prompt:
+        extra_paths = _select_example_strategies(user_prompt)
+        extra_parts: list[str] = []
+        for path in extra_paths:
+            if path in _DEFAULT_EXAMPLES:
+                continue  # already in static prompt
+            content = _read_file(path)
+            if content:
+                extra_parts.append(f"### {path.name}\n\n{content}")
+        if extra_parts:
+            return static + "\n\n## Additional Examples\n\n" + "\n\n".join(extra_parts)
+    return static
 
 
 def build_intake_system_prompt() -> str:
@@ -156,20 +193,8 @@ def build_intake_system_prompt() -> str:
 
 
 def build_repair_system_prompt() -> str:
-    template, skill = _load_template_and_skill()
+    static = _build_static_system_prompt()
     verify_skill = _load_verify_skill()
-    interface = _load_interface_docs()
-    examples = _load_example_strategies()
-    sections: list[str] = []
-    if interface:
-        sections.append(str(interface))
-    if skill:
-        sections.append(str(skill))
     if verify_skill:
-        sections.append(str(verify_skill))
-    if template:
-        sections.append(str(template))
-    if examples:
-        sections.append(str(examples))
-    sections.append(_STRATEGY_PARAMS_UI_PROMPT)
-    return "\n\n".join(sections) if sections else ""
+        return static + "\n\n" + verify_skill
+    return static

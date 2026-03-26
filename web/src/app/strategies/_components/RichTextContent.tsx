@@ -114,13 +114,14 @@ function parseRichTextBlocksComplete(content: string): RichTextBlock[] {
   return blocks;
 }
 
-export function CodePlaceholderBlock({ language }: { language: string }) {
+export function CodePlaceholderBlock({ language, statusText }: { language: string; statusText?: string | null }) {
   const { t } = useI18n();
+  const displayText = statusText || t.strategy.codeGenerating;
   return (
     <div
       className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]"
       role="status"
-      aria-label={t.strategy.codeGenerating}
+      aria-label={displayText}
     >
       <div className="border-b border-[#2d313b] px-4 py-3 text-xs font-medium uppercase tracking-[0.18em] text-[#8f96a3]">
         {language || "Code"}
@@ -135,7 +136,7 @@ export function CodePlaceholderBlock({ language }: { language: string }) {
             />
           ))}
         </div>
-        <span className="text-sm text-[#8f96a3]">{t.strategy.codeGenerating}</span>
+        <span className="text-sm text-[#8f96a3]">{displayText}</span>
       </div>
     </div>
   );

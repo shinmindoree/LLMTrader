@@ -519,14 +519,47 @@ export default function StrategiesPage() {
       const statusUpdate = (msgs: ChatMessage[]) =>
         msgs.map((m) =>
           m.id === assistantId
-            ? { ...m, status: "streaming" as const, statusText: t.strategy.codeGenerating }
+            ? { ...m, status: "streaming" as const, statusText: t.strategy.phaseAnalyzing }
             : m,
         );
       setChatMessages(statusUpdate);
       updateStreamingSession(statusUpdate);
+
+      const phaseToStatusText = (phase: string, detail?: { progress?: number; attempt?: number; max_attempts?: number }): string => {
+        switch (phase) {
+          case "analyzing":
+            return t.strategy.phaseAnalyzing;
+          case "generating":
+            return detail?.progress
+              ? `${t.strategy.phaseGenerating.replace("...", "")} (${detail.progress}%)...`
+              : t.strategy.phaseGenerating;
+          case "verifying":
+            return t.strategy.phaseVerifying;
+          case "repairing":
+            return t.strategy.phaseRepairing
+              .replace("{attempt}", String(detail?.attempt ?? 1))
+              .replace("{max}", String(detail?.max_attempts ?? 3));
+          default:
+            return t.strategy.codeGenerating;
+        }
+      };
+
       return generateStrategyStream(
         trimmed,
         {
+          onPhase(phase, detail) {
+            const phaseText = phaseToStatusText(phase, detail);
+            const phaseUpdate = (prev: ChatMessage[]) => {
+              const last = prev[prev.length - 1];
+              if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+              return [
+                ...prev.slice(0, -1),
+                { ...last, status: "streaming" as const, statusText: phaseText },
+              ];
+            };
+            setChatMessages(phaseUpdate);
+            updateStreamingSession(phaseUpdate);
+          },
           onToken(token) {
             const tokenUpdate = (prev: ChatMessage[]) => {
               const last = prev[prev.length - 1];
@@ -537,7 +570,6 @@ export default function StrategiesPage() {
                   ...last,
                   content: last.content + token,
                   status: "streaming" as const,
-                  statusText: t.strategy.codeGenerating,
                 },
               ];
             };
@@ -1219,7 +1251,7 @@ export default function StrategiesPage() {
                             ) : (
                               <>
                                 {message.status === "streaming" || message.status === "thinking" ? (
-                                  <CodePlaceholderBlock language="python" />
+                                  <CodePlaceholderBlock language="python" statusText={message.statusText} />
                                 ) : message.content && hasPythonCode ? (
                                   <div className="overflow-hidden rounded-[24px] border border-[#343946] bg-[#171a21] shadow-[0_14px_40px_rgba(0,0,0,0.2)]">
                                     <div className="flex items-center justify-between gap-3 border-b border-[#2d313b] px-4 py-3">

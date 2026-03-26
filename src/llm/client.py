@@ -392,7 +392,7 @@ class LLMClient:
         user_prompt: str,
         messages: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """전략 코드 생성 스트리밍. Yields {'token': str} or {'done': True} or {'error': str}."""
+        """전략 코드 생성 스트리밍. Yields {'token': str}, {'phase': str}, {'done': True}, or {'error': str}."""
         payload: dict[str, Any] = {"user_prompt": (user_prompt or "").strip()}
         if messages:
             payload["messages"] = messages
@@ -400,8 +400,10 @@ class LLMClient:
         if self.api_key:
             headers["X-API-Key"] = self.api_key
             headers["Authorization"] = f"Bearer {self.api_key}"
+        # Stream includes verify+repair phases; use a generous timeout.
+        stream_timeout = httpx.Timeout(300.0, connect=30.0)
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=stream_timeout) as client:
                 async with client.stream(
                     "POST",
                     f"{self.base_url}/generate/stream",
