@@ -373,6 +373,7 @@ export function BacktestExecutionChart({
       mainChart.remove();
       oscChart?.remove();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartDataKey, buildChart]);
 
   if (!candles.length) {

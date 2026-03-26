@@ -617,9 +617,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     );
   }
 
-  const balanceLabel = job.type === "BACKTEST" ? t.result.initialBalance : t.result.initialEquity;
-  const finalLabel = job.type === "BACKTEST" ? t.result.finalBalance : t.result.finalEquity;
-
   const tabButtonBase =
     "rounded border border-[#2a2e39] px-3 py-1.5 text-xs font-medium transition-colors";
   const tabButtonActive = "bg-[#131722] text-[#d1d4dc]";

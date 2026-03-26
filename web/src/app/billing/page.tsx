@@ -52,6 +52,7 @@ export default function BillingPage() {
       .then(setBilling)
       .catch(() => setError(t.billing.loadFailed))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSubscribe(plan: string) {

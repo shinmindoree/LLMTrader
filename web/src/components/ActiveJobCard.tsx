@@ -70,9 +70,6 @@ export function ActiveJobCard({
   const netPnl = trades.length > 0
     ? trades.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0)
     : null;
-  const totalCommission = trades.length > 0
-    ? trades.reduce((s, tr) => s + (tr.commission ?? 0), 0)
-    : null;
   const closedPnls = trades
     .map((tr) => tr.realized_pnl)
     .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p) && p !== 0);

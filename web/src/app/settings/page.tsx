@@ -35,6 +35,7 @@ export default function SettingsPage() {
       })
       .catch(() => setMessage({ type: "error", text: t.settingsPage.loadFailed }))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSaveKeys(e: React.FormEvent) {

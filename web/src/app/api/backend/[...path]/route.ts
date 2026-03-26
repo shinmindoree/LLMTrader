@@ -8,7 +8,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const API_ORIGIN = process.env.API_ORIGIN ?? "http://localhost:8000";
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const AUTH_SECRET = process.env.AUTH_SECRET ?? "";
 
 type ProxyAuthState = {
