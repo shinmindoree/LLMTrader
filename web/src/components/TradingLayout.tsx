@@ -7,13 +7,27 @@ const TradingViewChart = dynamic(
   () => import("@/components/TradingViewChart").then((mod) => mod.TradingViewChart),
   { ssr: false },
 );
+const BacktestExecutionChart = dynamic(
+  () => import("@/components/BacktestExecutionChart").then((mod) => mod.BacktestExecutionChart),
+  { ssr: false },
+);
 import { TradingTabs } from "@/components/TradingTabs";
+import { TopChartProvider, useTopChart } from "@/components/TopChartContext";
 
 const DEFAULT_CHART_RATIO = 0.45;
 const OVERLAY_THRESHOLD_RATIO = 1 / 3;
 const MIN_TAB_HEIGHT = 80;
 
 export function TradingLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <TopChartProvider>
+      <TradingLayoutInner>{children}</TradingLayoutInner>
+    </TopChartProvider>
+  );
+}
+
+function TradingLayoutInner({ children }: { children: React.ReactNode }) {
+  const { backtestChart } = useTopChart();
   const pathname = usePathname();
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -110,7 +124,17 @@ export function TradingLayout({ children }: { children: React.ReactNode }) {
         className="shrink-0 overflow-hidden"
         style={{ height: `${chartHeight}px` }}
       >
-        <TradingViewChart />
+        {backtestChart ? (
+          <div className="h-full overflow-auto">
+            <BacktestExecutionChart
+              chart={backtestChart.chart}
+              trades={backtestChart.trades}
+              height={chartHeight}
+            />
+          </div>
+        ) : (
+          <TradingViewChart />
+        )}
       </div>
 
       <div

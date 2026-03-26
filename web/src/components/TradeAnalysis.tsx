@@ -1,15 +1,11 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
-const BacktestExecutionChart = dynamic(
-  () => import("@/components/BacktestExecutionChart").then((mod) => mod.BacktestExecutionChart),
-  { ssr: false },
-);
+import { useTopChart } from "@/components/TopChartContext";
 
 type NormalizedTrade = {
   id: string | number;
@@ -476,6 +472,7 @@ function Chart({
 
 export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade[] }) {
   const { t } = useI18n();
+  const { setBacktestChart } = useTopChart();
   const [activeTab, setActiveTab] = useState<"chart" | "trades">("chart");
   const result = job.result ?? null;
 
@@ -563,6 +560,28 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     return chartRaw as BacktestChartPayload;
   }, [job.type, summary]);
 
+  const topChartTrades = useMemo(
+    () =>
+      sortedTrades.map((trade) => ({
+        timestamp: trade.timestamp,
+        side: trade.side,
+        price: trade.price,
+        pnl: trade.pnl,
+        reason: trade.reason,
+        exitReason: trade.exitReason,
+      })),
+    [sortedTrades],
+  );
+
+  useEffect(() => {
+    if (backtestChartPayload) {
+      setBacktestChart({ chart: backtestChartPayload, trades: topChartTrades });
+    }
+    return () => {
+      setBacktestChart(null);
+    };
+  }, [backtestChartPayload, topChartTrades, setBacktestChart]);
+
   const downloadCsv = useCallback(() => {
     const enriched =
       job.type === "BACKTEST" ? enrichedBacktest : enrichedLive;
@@ -649,19 +668,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
       <div className="rounded border border-[#2a2e39] bg-[#131722] p-4">
           {activeTab === "chart" ? (
             <>
-              {job.type === "BACKTEST" && backtestChartPayload ? (
-                <BacktestExecutionChart
-                  chart={backtestChartPayload}
-                  trades={sortedTrades.map((trade) => ({
-                    timestamp: trade.timestamp,
-                    side: trade.side,
-                    price: trade.price,
-                    pnl: trade.pnl,
-                    reason: trade.reason,
-                    exitReason: trade.exitReason,
-                  }))}
-                />
-              ) : null}
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {totalReturnPct !== null && netProfit !== null && (
                   <MetricCard

@@ -90,9 +90,11 @@ function findTradesAtTime(tradesByTime: Map<number, MarkerTrade[]>, timeSec: num
 export function BacktestExecutionChart({
   chart: chartPayload,
   trades,
+  height,
 }: {
   chart: BacktestChartPayload;
   trades: MarkerTrade[];
+  height?: number;
 }) {
   const mainRef = useRef<HTMLDivElement>(null);
   const oscRef = useRef<HTMLDivElement>(null);
@@ -233,7 +235,11 @@ export function BacktestExecutionChart({
     const mainContainer = mainRef.current;
     mainContainer.innerHTML = "";
 
-    const mainChart = buildChart(mainContainer, hasOscillator ? 400 : 560);
+    const oscHeight = 160;
+    const mainHeight = height
+      ? (hasOscillator ? height - oscHeight - 4 : height)
+      : (hasOscillator ? 400 : 560);
+    const mainChart = buildChart(mainContainer, Math.max(mainHeight, 200));
 
     const candleSeries = mainChart.addCandlestickSeries({
       upColor: "#26a69a",
@@ -286,7 +292,7 @@ export function BacktestExecutionChart({
       const oscContainer = oscRef.current;
       oscContainer.innerHTML = "";
 
-      oscChart = buildChart(oscContainer, 160);
+      oscChart = buildChart(oscContainer, oscHeight);
 
       oscillatorIndicators.forEach((series, idx) => {
         const useHistogram =
@@ -374,7 +380,7 @@ export function BacktestExecutionChart({
       oscChart?.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartDataKey, buildChart]);
+  }, [chartDataKey, buildChart, height]);
 
   if (!candles.length) {
     return (
@@ -384,9 +390,11 @@ export function BacktestExecutionChart({
     );
   }
 
+  const isEmbedded = height !== undefined;
+
   return (
-    <section className="mb-4 rounded border border-[#2a2e39] bg-[#131722] p-4">
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+    <section className={isEmbedded ? "bg-[#131722] px-2 py-1" : "mb-4 rounded border border-[#2a2e39] bg-[#131722] p-4"}>
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded border border-[#2a2e39] bg-[#1e222d] px-2 py-1 text-[#d1d4dc]">
           {chartPayload.symbol ?? "-"}
         </span>
