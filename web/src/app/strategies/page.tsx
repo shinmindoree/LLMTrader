@@ -104,6 +104,7 @@ export default function StrategiesPage() {
   const skipSessionSyncRef = useRef(false);
   const chatSessionsRef = useRef<ChatSessionRecord[]>([]);
   const shouldAutoScrollRef = useRef(true);
+  const streamingSessionIdRef = useRef<string | null>(null);
   const AUTO_SCROLL_THRESHOLD = 80;
 
   const routeWheelToScrollTarget = (_event: React.WheelEvent, target: HTMLElement | null) => {
@@ -487,6 +488,7 @@ export default function StrategiesPage() {
 
     setChatError(null);
     setIsSending(true);
+    streamingSessionIdRef.current = activeSessionId;
     const userMessage: ChatMessage = {
       id: createId(),
       role: "user",
@@ -500,21 +502,33 @@ export default function StrategiesPage() {
     const activeCode = workspaceCodeTrimmed || lastCodeSummary?.code || "";
     const activeSummary = workspaceCodeTrimmed ? workspaceSummary : (lastCodeSummary?.summary ?? null);
 
+    const updateStreamingSession = (updater: (msgs: ChatMessage[]) => ChatMessage[]) => {
+      const targetId = streamingSessionIdRef.current;
+      if (!targetId) return;
+      setChatSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== targetId) return s;
+          return { ...s, messages: updater(s.messages) };
+        }),
+      );
+    };
+
     const doGenerate = (
       messagesToSend?: { role: string; content: string }[],
     ) => {
-      setChatMessages((prev) =>
-        prev.map((m) =>
+      const statusUpdate = (msgs: ChatMessage[]) =>
+        msgs.map((m) =>
           m.id === assistantId
-            ? { ...m, status: "streaming", statusText: t.strategy.codeGenerating }
+            ? { ...m, status: "streaming" as const, statusText: t.strategy.codeGenerating }
             : m,
-        ),
-      );
+        );
+      setChatMessages(statusUpdate);
+      updateStreamingSession(statusUpdate);
       return generateStrategyStream(
         trimmed,
         {
           onToken(token) {
-            setChatMessages((prev) => {
+            const tokenUpdate = (prev: ChatMessage[]) => {
               const last = prev[prev.length - 1];
               if (last?.role !== "assistant" || last.id !== assistantId) return prev;
               return [
@@ -522,23 +536,26 @@ export default function StrategiesPage() {
                 {
                   ...last,
                   content: last.content + token,
-                  status: "streaming",
+                  status: "streaming" as const,
                   statusText: t.strategy.codeGenerating,
                 },
               ];
-            });
+            };
+            setChatMessages(tokenUpdate);
+            updateStreamingSession(tokenUpdate);
           },
           onDone(payload) {
             if (payload.error) {
               setChatError(payload.error);
-              setChatMessages((prev) =>
-                prev.filter((m) => m.id !== assistantId),
-              );
+              const errorUpdate = (prev: ChatMessage[]) =>
+                prev.filter((m) => m.id !== assistantId);
+              setChatMessages(errorUpdate);
+              updateStreamingSession(errorUpdate);
             } else {
               const resolvedCode = payload.code ?? "";
               const resolvedSummary = payload.summary ?? null;
               const resolvedIsPythonCode = looksLikePythonCode(resolvedCode);
-              setChatMessages((prev) => {
+              const doneUpdate = (prev: ChatMessage[]) => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== "assistant" || last.id !== assistantId) return prev;
                 return [
@@ -551,30 +568,44 @@ export default function StrategiesPage() {
                     repaired: payload.repaired ?? false,
                     repair_attempts: payload.repair_attempts ?? 0,
                     textOnly: !resolvedIsPythonCode,
-                    status: null,
-                    statusText: null,
+                    status: null as ChatMessage["status"],
+                    statusText: null as ChatMessage["statusText"],
                   },
                 ];
-              });
+              };
+              setChatMessages(doneUpdate);
+              updateStreamingSession(doneUpdate);
               if (resolvedCode && resolvedIsPythonCode) {
                 setWorkspaceCode(resolvedCode);
                 setWorkspaceSourceMessageId(assistantId);
                 setWorkspaceSummary(resolvedSummary);
                 setWorkspaceDirty(false);
                 setInitialGeneratedCode((prev) => prev ?? resolvedCode ?? null);
+                // Also persist workspace state to the streaming session
+                const targetId = streamingSessionIdRef.current;
+                if (targetId) {
+                  setChatSessions((prev) =>
+                    prev.map((s) =>
+                      s.id === targetId
+                        ? { ...s, workspaceCode: resolvedCode, workspaceSummary: resolvedSummary, workspaceSourceMessageId: assistantId, initialGeneratedCode: s.initialGeneratedCode ?? resolvedCode }
+                        : s,
+                    ),
+                  );
+                }
                 if (!resolvedSummary) {
-                  setChatMessages((prev) =>
-                    prev.map((message) =>
+                  const summaryStartUpdate = (msgs: ChatMessage[]) =>
+                    msgs.map((message) =>
                       message.id === assistantId
                         ? {
                             ...message,
                             summary: "",
-                            status: "streaming",
+                            status: "streaming" as const,
                             statusText: t.strategy.summaryGenerating,
                           }
                         : message,
-                    ),
-                  );
+                    );
+                  setChatMessages(summaryStartUpdate);
+                  updateStreamingSession(summaryStartUpdate);
                   setWorkspaceSummary("");
                   void strategyChatStream(
                     resolvedCode,
@@ -582,37 +613,43 @@ export default function StrategiesPage() {
                     [{ role: "user", content: buildGeneratedStrategySummaryPrompt(trimmed) }],
                     {
                       onToken(token) {
-                        setChatMessages((prev) =>
-                          prev.map((message) =>
+                        const summaryTokenUpdate = (msgs: ChatMessage[]) =>
+                          msgs.map((message) =>
                             message.id === assistantId
                               ? {
                                   ...message,
                                   summary: (message.summary ?? "") + token,
                                 }
                               : message,
-                          ),
-                        );
+                          );
+                        setChatMessages(summaryTokenUpdate);
+                        updateStreamingSession(summaryTokenUpdate);
                         setWorkspaceSummary((prev) => (prev ?? "") + token);
                       },
                       onDone({ error }) {
-                        setChatMessages((prev) =>
-                          prev.map((message) =>
+                        const summaryDoneUpdate = (msgs: ChatMessage[]) =>
+                          msgs.map((message) =>
                             message.id === assistantId
                               ? {
                                   ...message,
-                                  status: null,
-                                  statusText: null,
+                                  status: null as ChatMessage["status"],
+                                  statusText: null as ChatMessage["statusText"],
                                   summary: error ? null : message.summary,
                                 }
                               : message,
-                          ),
-                        );
+                          );
+                        setChatMessages(summaryDoneUpdate);
+                        updateStreamingSession(summaryDoneUpdate);
                         if (error) {
                           setWorkspaceSummary(null);
                         }
+                        streamingSessionIdRef.current = null;
                       },
                     },
                   );
+                  // Don't clear streamingSessionIdRef here — summary stream still running
+                  setIsSending(false);
+                  return;
                 }
               } else if (resolvedCode && !resolvedIsPythonCode) {
                 setWorkspaceSummary(null);
@@ -622,6 +659,7 @@ export default function StrategiesPage() {
                 .catch((e) => setError(String(e)));
             }
             setIsSending(false);
+            streamingSessionIdRef.current = null;
           },
         },
         undefined,
@@ -647,7 +685,9 @@ export default function StrategiesPage() {
 
     if (options?.forceChat && activeCode) {
       shouldAutoScrollRef.current = true;
-      setChatMessages((prev) => [...prev, { ...assistantMessage, textOnly: true }]);
+      const addAssistant = (prev: ChatMessage[]) => [...prev, { ...assistantMessage, textOnly: true }];
+      setChatMessages(addAssistant);
+      updateStreamingSession(addAssistant);
       try {
         const chatMessagesForApi = toApiMessages(nextMessages);
         const res = await strategyChat(
@@ -658,15 +698,20 @@ export default function StrategiesPage() {
         await animateAssistantTyping(assistantId, res.content);
       } catch (e) {
         setChatError(String(e));
-        setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        const removeAssistant = (prev: ChatMessage[]) => prev.filter((m) => m.id !== assistantId);
+        setChatMessages(removeAssistant);
+        updateStreamingSession(removeAssistant);
       } finally {
         setIsSending(false);
+        streamingSessionIdRef.current = null;
       }
       return;
     }
 
     shouldAutoScrollRef.current = true;
-    setChatMessages((prev) => [...prev, assistantMessage]);
+    const addMsg = (prev: ChatMessage[]) => [...prev, assistantMessage];
+    setChatMessages(addMsg);
+    updateStreamingSession(addMsg);
     try {
       const messagesToSend = buildMessagesForGeneration(
         nextMessages,
@@ -676,8 +721,11 @@ export default function StrategiesPage() {
       await doGenerate(messagesToSend);
     } catch (e) {
       setChatError(String(e));
-      setChatMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      const removeMsg = (prev: ChatMessage[]) => prev.filter((m) => m.id !== assistantId);
+      setChatMessages(removeMsg);
+      updateStreamingSession(removeMsg);
       setIsSending(false);
+      streamingSessionIdRef.current = null;
     }
   };
 
@@ -794,19 +842,21 @@ export default function StrategiesPage() {
   };
 
   const handleNewChatSession = () => {
-    if (isSending || isLoadingStrategy) return;
+    if (isLoadingStrategy) return;
+    snapshotCurrentSession();
     const nextSession = createEmptySession();
     setChatSessions((prev) => [nextSession, ...prev]);
     setActiveSessionId(nextSession.id);
   };
 
   const handleSelectSession = (sessionId: string) => {
-    if (sessionId === activeSessionId || isSending || isLoadingStrategy) return;
+    if (sessionId === activeSessionId || isLoadingStrategy) return;
+    snapshotCurrentSession();
     setActiveSessionId(sessionId);
   };
 
   const handleDeleteSession = (sessionId: string) => {
-    if (isSending || isLoadingStrategy) return;
+    if (isLoadingStrategy) return;
     setChatSessions((prev) => {
       const remaining = prev.filter((session) => session.id !== sessionId);
       if (remaining.length === 0) {
@@ -944,6 +994,27 @@ export default function StrategiesPage() {
     ? chatSessions.find((session) => session.id === activeSessionId) ?? null
     : null;
   const chatBusy = isSending || isLoadingStrategy;
+  const chatLocked = isLoadingStrategy;
+
+  const snapshotCurrentSession = () => {
+    if (!activeSessionId) return;
+    setChatSessions((prev) =>
+      prev.map((s) =>
+        s.id === activeSessionId
+          ? {
+              ...s,
+              title: deriveSessionTitle(chatMessages),
+              updatedAt: new Date().toISOString(),
+              messages: chatMessages,
+              workspaceCode,
+              workspaceSummary,
+              workspaceSourceMessageId,
+              initialGeneratedCode,
+            }
+          : s,
+      ),
+    );
+  };
 
   return (
     <main className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden px-4 py-3">
@@ -984,7 +1055,7 @@ export default function StrategiesPage() {
                 type="button"
                 className="w-full rounded-xl border border-[#343946] bg-[#2a2d35] px-3 py-2 text-sm text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
                 onClick={handleNewChatSession}
-                disabled={chatBusy || !sessionsReady}
+                disabled={chatLocked || !sessionsReady}
               >
                 + New chat
               </button>
@@ -1027,7 +1098,7 @@ export default function StrategiesPage() {
                           type="button"
                           className="w-full text-left"
                           onClick={() => handleSelectSession(session.id)}
-                          disabled={chatBusy}
+                          disabled={chatLocked}
                         >
                           <p className="truncate text-sm text-[#d1d4dc]">{session.title}</p>
                           <p className="mt-1 text-[11px] text-[#8f96a3]">
@@ -1042,7 +1113,7 @@ export default function StrategiesPage() {
                             type="button"
                             className="rounded border border-[#ef5350]/40 px-2 py-1 text-[11px] text-[#ef9a9a] transition hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50"
                             onClick={() => handleDeleteSession(session.id)}
-                            disabled={chatBusy}
+                            disabled={chatLocked}
                           >
                             Delete
                           </button>
@@ -1076,7 +1147,7 @@ export default function StrategiesPage() {
                     className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
                     value={activeSessionId ?? ""}
                     onChange={(e) => handleSelectSession(e.target.value)}
-                    disabled={chatBusy || !sessionsReady}
+                    disabled={chatLocked || !sessionsReady}
                   >
                     {chatSessions.map((session) => (
                       <option key={`mobile-session-${session.id}`} value={session.id}>
@@ -1088,7 +1159,7 @@ export default function StrategiesPage() {
                     type="button"
                     className="shrink-0 rounded-xl border border-[#343946] bg-[#2a2d35] px-2 py-1.5 text-xs text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
                     onClick={handleNewChatSession}
-                    disabled={chatBusy || !sessionsReady}
+                    disabled={chatLocked || !sessionsReady}
                   >
                     New
                   </button>
@@ -1218,7 +1289,7 @@ export default function StrategiesPage() {
                 <div className="flex-shrink-0 border-t border-[#2a2e39] px-6 py-5">
                   <div className="mx-auto flex w-full max-w-4xl justify-center">
                     <PromptComposer
-                      disabled={chatBusy}
+                      disabled={chatLocked}
                       isSending={isSending}
                       onChange={setPrompt}
                       onCompositionEnd={() => setIsComposingPrompt(false)}
@@ -1259,7 +1330,7 @@ export default function StrategiesPage() {
                 <div className="mt-10 flex w-full justify-center">
                   <PromptComposer
                     centered
-                    disabled={chatBusy}
+                    disabled={chatLocked}
                     isSending={isSending}
                     onChange={setPrompt}
                     onCompositionEnd={() => setIsComposingPrompt(false)}

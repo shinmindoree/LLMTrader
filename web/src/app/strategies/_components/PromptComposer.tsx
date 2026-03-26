@@ -29,7 +29,7 @@ export function PromptComposer({
             className={`flex-1 resize-none bg-transparent text-[15px] leading-7 text-[#ececf1] placeholder:text-[#8f96a3] focus:outline-none ${
               centered ? "min-h-[160px] px-1 py-1" : "min-h-[28px] max-h-[220px] px-1 py-2"
             }`}
-            disabled={busy}
+            disabled={disabled}
             onChange={(e) => onChange(e.target.value)}
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
