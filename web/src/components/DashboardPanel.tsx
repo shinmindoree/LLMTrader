@@ -240,26 +240,28 @@ export function DashboardPanel() {
               : (jobCounts?.backtest_total ?? 0)}
           </div>
           {lastBt && (
-            <div className="mt-3 flex flex-col gap-1.5 border-t border-[#2a2e39] pt-3">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-[#555]">{t.dashboard.labelLastResult}</span>
-              <span className="truncate text-xs text-[#b2b5be]">{strategyNameFromPath(lastBt.strategy_path)}</span>
-              <div className="flex flex-wrap gap-1.5">
-                {typeof lastBtSummary?.win_rate === "number" && (
-                  <StatBadge
-                    label={t.dashboard.labelWinRate}
-                    value={`${lastBtSummary.win_rate.toFixed(1)}%`}
-                    color={lastBtSummary.win_rate >= 50 ? "text-[#26a69a]" : "text-[#ef5350]"}
-                  />
-                )}
+            <div className="mt-3 flex flex-col gap-2 border-t border-[#2a2e39] pt-3">
+              <span className="truncate text-xs font-medium text-[#b2b5be]">{strategyNameFromPath(lastBt.strategy_path)}</span>
+              <div className="grid grid-cols-3 gap-1.5">
                 {typeof lastBtSummary?.total_return_pct === "number" && (
-                  <StatBadge
-                    label={t.dashboard.labelReturn}
-                    value={`${lastBtSummary.total_return_pct >= 0 ? "+" : ""}${lastBtSummary.total_return_pct.toFixed(1)}%`}
-                    color={lastBtSummary.total_return_pct >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}
-                  />
+                  <div className="rounded bg-[#131722] px-2 py-1.5">
+                    <div className="text-[10px] text-[#555]">{t.dashboard.labelReturn}</div>
+                    <div className={`text-xs font-semibold ${lastBtSummary.total_return_pct >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
+                      {lastBtSummary.total_return_pct >= 0 ? "+" : ""}{lastBtSummary.total_return_pct.toFixed(1)}%
+                    </div>
+                  </div>
                 )}
                 {typeof lastBtSummary?.total_trades === "number" && lastBtSummary.total_trades > 0 && (
-                  <StatBadge label="" value={`${lastBtSummary.total_trades.toLocaleString()} ${t.dashboard.labelTrades}`} />
+                  <div className="rounded bg-[#131722] px-2 py-1.5">
+                    <div className="text-[10px] text-[#555]">{t.dashboard.labelTotalTrades}</div>
+                    <div className="text-xs font-semibold text-[#d1d4dc]">{lastBtSummary.total_trades.toLocaleString()}</div>
+                  </div>
+                )}
+                {typeof lastBtSummary?.win_rate === "number" && (
+                  <div className="rounded bg-[#131722] px-2 py-1.5">
+                    <div className="text-[10px] text-[#555]">{t.dashboard.labelWinRate}</div>
+                    <div className="text-xs font-semibold text-[#d1d4dc]">{lastBtSummary.win_rate.toFixed(1)}%</div>
+                  </div>
                 )}
               </div>
             </div>
