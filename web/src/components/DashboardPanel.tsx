@@ -8,7 +8,6 @@ import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies } 
 import { useLiveJobStream } from "@/lib/useLiveJobStream";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
-import type { JobSummary } from "@/lib/types";
 
 const DASHBOARD_RUNNING_LIMIT = 64;
 

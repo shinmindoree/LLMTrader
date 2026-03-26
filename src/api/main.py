@@ -1634,6 +1634,101 @@ def create_app() -> FastAPI:
         await session.commit()
         return DeleteAllResponse(**counts)
 
+    # ------------------------------------------------------------------
+    # Batch trades endpoint (must be before {job_id} routes)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/jobs/trades/batch")
+    async def trades_batch(
+        job_ids: str = Query(..., description="Comma-separated job UUIDs"),
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, list[TradeResponse]]:
+        """Fetch trades for multiple jobs in a single request."""
+        raw_ids = [s.strip() for s in job_ids.split(",") if s.strip()]
+        if len(raw_ids) > 20:
+            raise HTTPException(status_code=400, detail="Maximum 20 job IDs per batch request")
+        parsed: list[uuid.UUID] = []
+        for raw in raw_ids:
+            try:
+                parsed.append(uuid.UUID(raw))
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid UUID: {raw}")  # noqa: B904
+        # Verify all jobs belong to the user
+        for jid in parsed:
+            job = await get_job(session, jid, user_id=user.user_id)
+            if not job:
+                raise HTTPException(status_code=404, detail=f"Job not found: {jid}")
+        batch = await list_trades_batch(session, job_ids=parsed)
+        return {
+            str(jid): [
+                TradeResponse(
+                    trade_id=t.trade_id, symbol=t.symbol, order_id=t.order_id,
+                    quantity=t.quantity, price=t.price, realized_pnl=t.realized_pnl,
+                    commission=t.commission, ts=t.ts, raw=t.raw_json,
+                )
+                for t in trades_list
+            ]
+            for jid, trades_list in batch.items()
+        }
+
+    # ------------------------------------------------------------------
+    # SSE: Live job trades stream (must be before {job_id} routes)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/jobs/live/stream", response_class=StreamingResponse)
+    async def live_jobs_stream(
+        user: AuthenticatedUser = Depends(require_auth),
+    ) -> StreamingResponse:
+        """SSE stream that pushes live job summaries + trades periodically."""
+        async def gen() -> AsyncIterator[bytes]:
+            yield b"retry: 5000\n\n"
+            try:
+                while True:
+                    async with session_maker() as session:
+                        running_jobs = await list_jobs(
+                            session,
+                            user_id=user.user_id,
+                            job_type=JobType.LIVE,
+                            status=JobStatus.RUNNING,
+                            limit=20,
+                        )
+                        job_ids = [j.job_id for j in running_jobs]
+                        trades_map: dict[uuid.UUID, list[Any]] = {}
+                        if job_ids:
+                            trades_map = await list_trades_batch(session, job_ids=job_ids)
+                        payload = {
+                            "jobs": [
+                                {
+                                    "job_id": str(j.job_id),
+                                    "status": j.status.value if hasattr(j.status, "value") else str(j.status),
+                                    "strategy_path": j.strategy_path,
+                                    "config": _public_job_config(j.config),
+                                    "started_at": j.started_at.isoformat() if j.started_at else None,
+                                    "trades": [
+                                        {
+                                            "trade_id": t.trade_id,
+                                            "symbol": t.symbol,
+                                            "realized_pnl": t.realized_pnl,
+                                            "quantity": t.quantity,
+                                            "price": t.price,
+                                            "commission": t.commission,
+                                            "ts": t.ts.isoformat(),
+                                        }
+                                        for t in trades_map.get(j.job_id, [])
+                                    ],
+                                }
+                                for j in running_jobs
+                            ],
+                        }
+                    data = json.dumps(payload, ensure_ascii=False, default=str)
+                    yield f"data: {data}\n\n".encode("utf-8")
+                    await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                return
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
     @app.get("/api/jobs/{job_id}", response_model=JobResponse)
     async def job_detail(
         job_id: uuid.UUID,
