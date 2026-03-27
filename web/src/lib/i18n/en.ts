@@ -221,6 +221,7 @@ const en = {
     startLive: "Start Live",
     slotsFullMessage: "All {maxSlots} slots are in use. Stop a running strategy to free a slot.",
     slotsRemaining: "slots available",
+    openPosition: "Open Position",
   },
   form: {
     strategy: "Strategy",
