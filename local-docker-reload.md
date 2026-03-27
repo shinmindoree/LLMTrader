@@ -43,29 +43,9 @@ override 없이 `docker compose --profile full up` 한 경우, 또는 CI/배포 
 
 ---
 
-## Supabase DB 사용(상용 권장)
+## Azure PostgreSQL DB 사용(상용)
 
-- `.env`에서 `DATABASE_URL` 또는 `SUPABASE_DATABASE_URL`을 Supabase Postgres DSN으로 설정하면 API/Runner가 해당 DB를 사용합니다.
-- 우선순위는 `DATABASE_URL` > `SUPABASE_DATABASE_URL` 입니다.
+- `.env`에서 `DATABASE_URL`을 Azure PostgreSQL DSN으로 설정하면 API/Runner가 해당 DB를 사용합니다.
 - 변경 후 반영: `docker compose --profile full up -d --build api runner`
 
 ---
-
-## Supabase 가입/인증 활성화
-
-아래 환경변수를 `.env`에 설정한 뒤 재기동하면 `web`에 `/auth` (회원가입/로그인) 화면이 활성화됩니다.
-
-```env
-SUPABASE_AUTH_ENABLED=true
-SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_ANON_KEY=<supabase-anon-key>
-AUTH_ALLOW_ADMIN_TOKEN_FALLBACK=false
-
-NEXT_PUBLIC_SUPABASE_AUTH_ENABLED=true
-NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<supabase-anon-key>
-```
-
-- `SUPABASE_AUTH_ENABLED=true`이면 FastAPI는 `Authorization: Bearer <token>`을 Supabase `/auth/v1/user`로 검증합니다.
-- `AUTH_ALLOW_ADMIN_TOKEN_FALLBACK=false` 권장 (운영에서 `x-admin-token` 우회 차단).
-- 반영 명령어: `docker compose --profile full up -d --build api web`

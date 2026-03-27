@@ -40,18 +40,6 @@ class RelayServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-class SupabaseAuthSettings(BaseSettings):
-    """Supabase 인증 설정 (레거시 — EntraAuthSettings로 마이그레이션됨)."""
-
-    enabled: bool = Field(default=False, alias="SUPABASE_AUTH_ENABLED")
-    url: str = Field(default="", alias="SUPABASE_URL")
-    anon_key: str = Field(default="", alias="SUPABASE_ANON_KEY")
-    auth_timeout_seconds: float = Field(default=5.0, alias="SUPABASE_AUTH_TIMEOUT_SECONDS")
-    allow_admin_fallback: bool = Field(default=True, alias="AUTH_ALLOW_ADMIN_TOKEN_FALLBACK")
-
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-
 class NextAuthSettings(BaseSettings):
     """NextAuth.js 인증 설정 (shared secret 기반)."""
 
@@ -87,16 +75,6 @@ class EntraAuthSettings(BaseSettings):
         if self.tenant_id:
             return f"https://login.microsoftonline.com/{self.tenant_id}/discovery/v2.0/keys"
         return ""
-
-
-class SupabaseStorageSettings(BaseSettings):
-    """Supabase Storage 설정."""
-
-    url: str = Field(default="", alias="SUPABASE_STORAGE_URL")
-    service_role_key: str = Field(default="", alias="SUPABASE_SERVICE_ROLE_KEY", repr=False)
-    bucket_name: str = Field(default="strategies", alias="SUPABASE_STORAGE_BUCKET")
-
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 class EncryptionSettings(BaseSettings):
@@ -149,7 +127,6 @@ class Settings(BaseSettings):
 
     env: str = Field(default="local", alias="ENV")
     database_url: str = Field(default="", alias="DATABASE_URL")
-    supabase_database_url: str = Field(default="", alias="SUPABASE_DATABASE_URL")
     admin_token: str = Field(default="dev-admin-token", alias="ADMIN_TOKEN")
     admin_email: str = Field(default="elgd00@gmail.com", alias="ADMIN_EMAIL")
     strategy_dirs: str = Field(default="scripts/strategies", alias="STRATEGY_DIRS")
@@ -170,8 +147,6 @@ class Settings(BaseSettings):
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
     relay_server: RelayServerSettings = Field(default_factory=RelayServerSettings)
-    supabase_auth: SupabaseAuthSettings = Field(default_factory=SupabaseAuthSettings)
-    supabase_storage: SupabaseStorageSettings = Field(default_factory=SupabaseStorageSettings)
     encryption: EncryptionSettings = Field(default_factory=EncryptionSettings)
     stripe: StripeSettings = Field(default_factory=StripeSettings)
     entra_auth: EntraAuthSettings = Field(default_factory=EntraAuthSettings)
@@ -186,9 +161,6 @@ class Settings(BaseSettings):
         explicit = self.database_url.strip()
         if explicit:
             return explicit
-        supabase = self.supabase_database_url.strip()
-        if supabase:
-            return supabase
         return "postgresql+asyncpg://llmtrader:llmtrader@localhost:5432/llmtrader"
 
 

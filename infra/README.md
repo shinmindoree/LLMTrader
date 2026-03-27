@@ -53,16 +53,13 @@ Web will be available on `http://localhost:3000` and API on `http://localhost:80
 You'll also typically set:
 
 - `DATABASE_URL` (recommended)
-- `ADMIN_TOKEN` (used when `SUPABASE_AUTH_ENABLED=false`, or as fallback if enabled)
+- `ADMIN_TOKEN`
 
-### Production DB (Supabase)
+### Production DB (Azure PostgreSQL)
 
-For production, point API/runner to Supabase Postgres by setting one of:
+For production, point API/runner to Azure PostgreSQL Flexible Server:
 
-- `DATABASE_URL=postgresql+asyncpg://...` (preferred, explicit)
-- or `SUPABASE_DATABASE_URL=postgresql+asyncpg://...` (used when `DATABASE_URL` is empty)
-
-`DATABASE_URL` has higher priority than `SUPABASE_DATABASE_URL`.
+- `DATABASE_URL=postgresql+asyncpg://...` (set as Container App secret)
 
 ## Stop everything
 
