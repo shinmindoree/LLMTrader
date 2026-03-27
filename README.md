@@ -41,15 +41,10 @@ brew install ta-lib
 uv sync --extra talib
 ```
 
-### 웹 UI 실행 (권장)
-```bash
-uv run streamlit run streamlit_app.py
-```
-
-브라우저에서 `http://localhost:8501`로 접속하면 웹 UI가 열립니다.
-
 ### API 서버
-현재 저장소에는 FastAPI 기반 API 서버가 포함되어 있지 않습니다(추후 추가 예정).
+```bash
+uv run uvicorn src.api.main:app --reload
+```
 
 ## 주요 기능
 
@@ -107,8 +102,6 @@ LLMTrader/
 │   ├── common/        # 공통 모듈(리스크 설정/검증 등)
 │   ├── notifications/ # Slack 알림 등
 │   └── settings.py    # 환경변수(.env) 설정 로더
-├── pages/             # Streamlit 페이지
-│   └── 4_🔴_라이브_트레이딩.py
 ├── scripts/           # 실행 스크립트
 └── *.py               # 샘플 전략 파일 등
 ```

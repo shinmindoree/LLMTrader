@@ -26,7 +26,7 @@
 - **Observability**: 구조화 로그, Slack/Email 알림, 메트릭(지연, 체결 성공률, PnL).
 
 ## 5. 기술 스택 제안
-- Python 3.11+, Pydantic, httpx/aiohttp, Streamlit
+- Python 3.11+, Pydantic, httpx/aiohttp, FastAPI, Next.js
 - Tooling: uv, ruff, black, mypy
 
 ## 6. 개발 단계별 계획 (MVP 우선)

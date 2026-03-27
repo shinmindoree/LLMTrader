@@ -873,7 +873,6 @@ export default function StrategiesPage() {
   };
 
   const handleNewChatSession = () => {
-    if (isLoadingStrategy) return;
     snapshotCurrentSession();
     const nextSession = createEmptySession();
     setChatSessions((prev) => [nextSession, ...prev]);
@@ -881,13 +880,13 @@ export default function StrategiesPage() {
   };
 
   const handleSelectSession = (sessionId: string) => {
-    if (sessionId === activeSessionId || isLoadingStrategy) return;
+    if (sessionId === activeSessionId) return;
     snapshotCurrentSession();
     setActiveSessionId(sessionId);
   };
 
   const handleDeleteSession = (sessionId: string) => {
-    if (isLoadingStrategy) return;
+    if (streamingSessionIdRef.current === sessionId) return;
     setChatSessions((prev) => {
       const remaining = prev.filter((session) => session.id !== sessionId);
       if (remaining.length === 0) {
@@ -1005,8 +1004,9 @@ export default function StrategiesPage() {
   const activeSession = activeSessionId
     ? chatSessions.find((session) => session.id === activeSessionId) ?? null
     : null;
-  const chatBusy = isSending || isLoadingStrategy;
-  const chatLocked = isLoadingStrategy;
+  const activeSessionBusy = isSending && streamingSessionIdRef.current === activeSessionId && activeSessionId != null;
+  const chatBusy = activeSessionBusy || isLoadingStrategy;
+  const chatLocked = isLoadingStrategy || activeSessionBusy;
 
   const snapshotCurrentSession = () => {
     if (!activeSessionId) return;
@@ -1067,7 +1067,7 @@ export default function StrategiesPage() {
                 type="button"
                 className="w-full rounded-xl border border-[#343946] bg-[#2a2d35] px-3 py-2 text-sm text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
                 onClick={handleNewChatSession}
-                disabled={chatLocked || !sessionsReady}
+                disabled={!sessionsReady}
               >
                 + New chat
               </button>
@@ -1110,7 +1110,6 @@ export default function StrategiesPage() {
                           type="button"
                           className="w-full text-left"
                           onClick={() => handleSelectSession(session.id)}
-                          disabled={chatLocked}
                         >
                           <p className="truncate text-sm text-[#d1d4dc]">{session.title}</p>
                           <p className="mt-1 text-[11px] text-[#8f96a3]">
@@ -1125,7 +1124,7 @@ export default function StrategiesPage() {
                             type="button"
                             className="rounded border border-[#ef5350]/40 px-2 py-1 text-[11px] text-[#ef9a9a] transition hover:border-[#ef5350] hover:text-[#ef5350] disabled:opacity-50"
                             onClick={() => handleDeleteSession(session.id)}
-                            disabled={chatLocked}
+                            disabled={isSending && streamingSessionIdRef.current === session.id}
                           >
                             Delete
                           </button>
@@ -1159,7 +1158,7 @@ export default function StrategiesPage() {
                     className="min-w-0 flex-1 rounded-xl border border-[#343946] bg-[#1f232b] px-2 py-1.5 text-xs text-[#d1d4dc] focus:border-[#505765] focus:outline-none"
                     value={activeSessionId ?? ""}
                     onChange={(e) => handleSelectSession(e.target.value)}
-                    disabled={chatLocked || !sessionsReady}
+                    disabled={!sessionsReady}
                   >
                     {chatSessions.map((session) => (
                       <option key={`mobile-session-${session.id}`} value={session.id}>
@@ -1171,7 +1170,7 @@ export default function StrategiesPage() {
                     type="button"
                     className="shrink-0 rounded-xl border border-[#343946] bg-[#2a2d35] px-2 py-1.5 text-xs text-[#ececf1] transition hover:border-[#505765] hover:bg-[#31353f] disabled:opacity-50"
                     onClick={handleNewChatSession}
-                    disabled={chatLocked || !sessionsReady}
+                    disabled={!sessionsReady}
                   >
                     New
                   </button>
@@ -1276,7 +1275,7 @@ export default function StrategiesPage() {
                   <div className="mx-auto flex w-full max-w-4xl justify-center">
                     <PromptComposer
                       disabled={chatLocked}
-                      isSending={isSending}
+                      isSending={activeSessionBusy}
                       onChange={setPrompt}
                       onCompositionEnd={() => setIsComposingPrompt(false)}
                       onCompositionStart={() => setIsComposingPrompt(true)}
@@ -1317,7 +1316,7 @@ export default function StrategiesPage() {
                   <PromptComposer
                     centered
                     disabled={chatLocked}
-                    isSending={isSending}
+                    isSending={activeSessionBusy}
                     onChange={setPrompt}
                     onCompositionEnd={() => setIsComposingPrompt(false)}
                     onCompositionStart={() => setIsComposingPrompt(true)}
