@@ -110,10 +110,11 @@ export function ActiveJobCard({
     [job.config],
   );
 
+  const positions = snapshot?.positions;
   const matchedPositions = useMemo(() => {
-    if (!snapshot?.positions || symbols.length === 0) return [];
-    return snapshot.positions.filter((p) => symbols.includes(p.symbol.toUpperCase()));
-  }, [snapshot?.positions, symbols]);
+    if (!positions || symbols.length === 0) return [];
+    return positions.filter((p) => symbols.includes(p.symbol.toUpperCase()));
+  }, [positions, symbols]);
 
   const netPnl = trades.length > 0
     ? trades.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0)
