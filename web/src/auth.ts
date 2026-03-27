@@ -23,7 +23,7 @@ export const authConfig: NextAuthConfig = {
 
         if (!email || !password) return null;
 
-        // Validate against configured admin credentials or user store
+        // 1. Check admin credentials from env
         const adminEmail = (process.env.ADMIN_EMAIL ?? "").trim().toLowerCase();
         const adminPassword = (process.env.ADMIN_PASSWORD ?? "").trim();
 
@@ -31,8 +31,26 @@ export const authConfig: NextAuthConfig = {
           return { id: `cred-${email}`, email, name: email.split("@")[0] };
         }
 
-        // For now, reject unknown credentials.
-        // Expand this with a DB user store when needed.
+        // 2. Verify against DB via backend API
+        const apiOrigin = process.env.API_ORIGIN ?? "http://localhost:8000";
+        try {
+          const res = await fetch(`${apiOrigin}/api/auth/verify-credentials`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            return {
+              id: data.user_id,
+              email: data.email,
+              name: data.display_name || email.split("@")[0],
+            };
+          }
+        } catch {
+          // Backend unreachable — fall through to reject
+        }
+
         return null;
       },
     }),

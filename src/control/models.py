@@ -27,6 +27,8 @@ class UserProfile(Base):
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
     binance_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     binance_api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     binance_base_url: Mapped[str] = mapped_column(

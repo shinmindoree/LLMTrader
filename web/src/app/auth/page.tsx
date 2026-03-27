@@ -17,15 +17,52 @@ export default function AuthPage() {
 
   const callbackUrl = returnUrl && isValidAuthReturnPath(returnUrl) ? returnUrl : "/";
 
+  const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [credError, setCredError] = useState("");
+  const [signupSuccess, setSignupSuccess] = useState(false);
 
   async function handleCredentialsSubmit(e: FormEvent) {
     e.preventDefault();
     setCredError("");
     setSubmitting(true);
+
+    if (mode === "signup") {
+      if (password.length < 8) {
+        setCredError("Password must be at least 8 characters");
+        setSubmitting(false);
+        return;
+      }
+      if (password !== passwordConfirm) {
+        setCredError("Passwords do not match");
+        setSubmitting(false);
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/auth/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setCredError(data.error || t.auth.requestError);
+        } else {
+          setSignupSuccess(true);
+          setMode("login");
+        }
+      } catch {
+        setCredError(t.auth.requestError);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     try {
       const result = await signIn("credentials", {
         email,
@@ -47,7 +84,7 @@ export default function AuthPage() {
     <main className="mx-auto w-full max-w-md px-6 py-16">
       <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
         <h1 className="text-lg font-semibold text-[#d1d4dc]">
-          {t.auth.login}
+          {mode === "login" ? t.auth.login : t.auth.signup}
         </h1>
         <p className="mt-2 text-sm text-[#868993]">
           {t.auth.description}
@@ -61,6 +98,11 @@ export default function AuthPage() {
         {showAuthFailed ? (
           <p className="mt-3 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-3 py-2 text-sm text-[#ef5350]">
             {t.auth.authFailed}
+          </p>
+        ) : null}
+        {signupSuccess ? (
+          <p className="mt-3 rounded border border-[#26a69a]/40 bg-[#1a2e2a]/50 px-3 py-2 text-sm text-[#26a69a]">
+            {t.auth.signupSuccess}
           </p>
         ) : null}
 
@@ -108,14 +150,41 @@ export default function AuthPage() {
             onChange={(e) => setPassword(e.target.value)}
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder-[#868993] outline-none focus:border-[#2962ff]"
           />
+          {mode === "signup" ? (
+            <input
+              id="passwordConfirm"
+              name="passwordConfirm"
+              type="password"
+              required
+              placeholder="Confirm Password"
+              value={passwordConfirm}
+              onChange={(e) => setPasswordConfirm(e.target.value)}
+              className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder-[#868993] outline-none focus:border-[#2962ff]"
+            />
+          ) : null}
           <button
             type="submit"
             disabled={submitting}
             className="w-full rounded bg-[#2962ff] px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#2962ff]/90 disabled:opacity-60"
           >
-            {submitting ? t.auth.submitting : t.auth.login}
+            {submitting ? t.auth.submitting : mode === "login" ? t.auth.login : t.auth.signup}
           </button>
         </form>
+
+        {/* Toggle login/signup */}
+        <div className="mt-4 text-center">
+          <button
+            type="button"
+            className="text-sm text-[#2962ff] hover:underline"
+            onClick={() => {
+              setMode(mode === "login" ? "signup" : "login");
+              setCredError("");
+              setSignupSuccess(false);
+            }}
+          >
+            {mode === "login" ? t.auth.switchToSignup : t.auth.switchToLogin}
+          </button>
+        </div>
       </div>
     </main>
   );

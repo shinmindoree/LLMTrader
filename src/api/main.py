@@ -2161,6 +2161,82 @@ def create_app() -> FastAPI:
 
         return {"status": "ok"}
 
+    # ------------------------------------------------------------------
+    # /api/auth — Registration & credential verification (no auth required)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/auth/register")
+    async def register(
+        request: Any,
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        import bcrypt
+        from control.models import UserProfile
+
+        body = await request.json()
+        email = (body.get("email") or "").strip().lower()
+        password = body.get("password") or ""
+        display_name = (body.get("displayName") or email.split("@")[0])[:100]
+
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="Email and password are required")
+        if len(password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+        # Check if email already exists
+        existing = await session.execute(
+            select(UserProfile).where(UserProfile.email == email).limit(1)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        user_id = f"cred-{email}"
+        hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+        profile = UserProfile(
+            user_id=user_id,
+            email=email,
+            display_name=display_name,
+            password_hash=hashed,
+        )
+        session.add(profile)
+        await session.commit()
+
+        return {"ok": True, "user_id": user_id, "email": email}
+
+    @app.post("/api/auth/verify-credentials")
+    async def verify_credentials(
+        request: Any,
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        import bcrypt
+        from control.models import UserProfile
+
+        body = await request.json()
+        email = (body.get("email") or "").strip().lower()
+        password = body.get("password") or ""
+
+        if not email or not password:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        result = await session.execute(
+            select(UserProfile).where(UserProfile.email == email).limit(1)
+        )
+        profile = result.scalar_one_or_none()
+
+        if not profile or not profile.password_hash:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        if not bcrypt.checkpw(password.encode("utf-8"), profile.password_hash.encode("utf-8")):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        return {
+            "ok": True,
+            "user_id": profile.user_id,
+            "email": profile.email,
+            "display_name": profile.display_name,
+        }
+
     return app
 
 

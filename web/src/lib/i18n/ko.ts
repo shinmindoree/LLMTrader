@@ -102,7 +102,7 @@ const ko: TranslationKeys = {
     authFailed: "인증에 실패했습니다.",
     requestError: "요청 처리 중 오류가 발생했습니다.",
     sessionExpired: "세션이 만료되었습니다. 다시 로그인해 주세요.",
-    description: "Microsoft 또는 조직 계정으로 로그인합니다.",
+    description: "Google 또는 이메일/비밀번호로 로그인합니다.",
     continueWithGoogle: "Google로 계속하기",
     orUseEmail: "또는 이메일로",
     oauthFailed: "로그인에 실패했습니다. 다시 시도해 주세요.",
