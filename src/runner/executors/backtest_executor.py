@@ -292,8 +292,13 @@ async def run_backtest(
         strategy_class = load_strategy_class(strategy_file)
         strategy = build_strategy(strategy_class, dict(strategy_params) if isinstance(strategy_params, dict) else {})
 
+        _last_reported_pct = 0.0
+
         def progress_cb(pct: float) -> None:
-            sink.emit_from_thread(kind=EventKind.PROGRESS, message="BACKTEST_PROGRESS", payload={"pct": pct})
+            nonlocal _last_reported_pct
+            if pct - _last_reported_pct >= 0.5 or pct >= 100.0:
+                sink.emit_from_thread(kind=EventKind.PROGRESS, message="BACKTEST_PROGRESS", payload={"pct": pct})
+                _last_reported_pct = pct
             if should_stop.is_set():
                 raise RuntimeError("STOP_REQUESTED")
 
