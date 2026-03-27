@@ -872,6 +872,12 @@ async def _generate_stream_body(body: StrategyRequest):
         yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': rejection_msg, 'repaired': False, 'repair_attempts': 0})}\n\n"
         return
 
+    # Intent routing: if planner classifies as "question", signal frontend to use chat instead
+    if plan_spec and plan_spec.get("intent") == "question":
+        logger.info("Planner classified request as question — routing to chat")
+        yield f"data: {json.dumps({'intent': 'question'})}\n\n"
+        return
+
     # Phase 2: Generating — Coder agent writes the code (streaming)
     yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
 

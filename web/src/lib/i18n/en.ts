@@ -476,6 +476,7 @@ const en = {
     phaseVerifying: "Verifying code...",
     phaseRepairing: "Auto-fixing code ({attempt}/{max})...",
     summaryGenerating: "Writing strategy summary...",
+    modificationSummaryGenerating: "Summarizing changes...",
     workspaceTabParams: "Parameters",
     workspaceTabCode: "Code",
     workspaceTabCodeHint: "Advanced — edit Python only if you need to.",

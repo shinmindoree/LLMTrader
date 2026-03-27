@@ -34,6 +34,7 @@ import {
   buildCodeDiffLines,
   buildGeneratedStrategySummaryPrompt,
   buildMessagesForGeneration,
+  buildModificationSummaryPrompt,
   createEmptySession,
   createId,
   deriveSessionTitle,
@@ -385,6 +386,7 @@ export default function StrategiesPage() {
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
+      // Only show loading when there is no existing snapshot to display
       setStrategyParamsLoading(true);
       extractStrategyParams(code)
         .then((res) => {
@@ -399,8 +401,7 @@ export default function StrategiesPage() {
         })
         .catch(() => {
           if (cancelled) return;
-          setStrategyParamsSnapshot({ supported: false, values: {}, schema_fields: {} });
-          setParamDraft({});
+          // Keep previous snapshot if available instead of resetting
         })
         .finally(() => {
           if (!cancelled) {
@@ -515,6 +516,8 @@ export default function StrategiesPage() {
     const doGenerate = (
       messagesToSend?: { role: string; content: string }[],
     ) => {
+      let intentRouted = false;
+
       const statusUpdate = (msgs: ChatMessage[]) =>
         msgs.map((m) =>
           m.id === assistantId
@@ -563,6 +566,45 @@ export default function StrategiesPage() {
             setChatMessages(phaseUpdate);
             updateStreamingSession(phaseUpdate);
           },
+          onIntent(intent) {
+            if (intent === "question" && activeCode) {
+              intentRouted = true;
+              // Fall back to chat stream for question-type messages
+              const chatMessagesForApi = toApiMessages(nextMessages);
+              void strategyChatStream(
+                activeCode,
+                activeSummary,
+                chatMessagesForApi,
+                {
+                  onToken(token) {
+                    const chatTokenUpdate = (prev: ChatMessage[]) => {
+                      const last = prev[prev.length - 1];
+                      if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+                      return [
+                        ...prev.slice(0, -1),
+                        { ...last, content: last.content + token, textOnly: true, status: "streaming" as const, statusText: t.strategy.typing },
+                      ];
+                    };
+                    setChatMessages(chatTokenUpdate);
+                    updateStreamingSession(chatTokenUpdate);
+                  },
+                  onDone({ error }) {
+                    const chatDoneUpdate = (prev: ChatMessage[]) =>
+                      prev.map((m) =>
+                        m.id === assistantId
+                          ? { ...m, status: null as ChatMessage["status"], statusText: null as ChatMessage["statusText"] }
+                          : m,
+                      );
+                    setChatMessages(chatDoneUpdate);
+                    updateStreamingSession(chatDoneUpdate);
+                    if (error) setChatError(error);
+                    setIsSending(false);
+                    streamingSessionIdRef.current = null;
+                  },
+                },
+              );
+            }
+          },
           onToken(token) {
             const tokenUpdate = (prev: ChatMessage[]) => {
               const last = prev[prev.length - 1];
@@ -580,6 +622,8 @@ export default function StrategiesPage() {
             updateStreamingSession(tokenUpdate);
           },
           onDone(payload) {
+            // If intent was routed to chat, skip the generate onDone processing
+            if (intentRouted) return;
             if (payload.error) {
               setChatError(payload.error);
               const errorUpdate = (prev: ChatMessage[]) =>
@@ -628,6 +672,13 @@ export default function StrategiesPage() {
                   );
                 }
                 if (!resolvedSummary) {
+                  const isModification = initialGeneratedCode !== null;
+                  const summaryPrompt = isModification
+                    ? buildModificationSummaryPrompt(trimmed)
+                    : buildGeneratedStrategySummaryPrompt(trimmed);
+                  const summaryStatusText = isModification
+                    ? t.strategy.modificationSummaryGenerating
+                    : t.strategy.summaryGenerating;
                   const summaryStartUpdate = (msgs: ChatMessage[]) =>
                     msgs.map((message) =>
                       message.id === assistantId
@@ -635,7 +686,7 @@ export default function StrategiesPage() {
                             ...message,
                             summary: "",
                             status: "streaming" as const,
-                            statusText: t.strategy.summaryGenerating,
+                            statusText: summaryStatusText,
                           }
                         : message,
                     );
@@ -645,7 +696,7 @@ export default function StrategiesPage() {
                   void strategyChatStream(
                     resolvedCode,
                     null,
-                    [{ role: "user", content: buildGeneratedStrategySummaryPrompt(trimmed) }],
+                    [{ role: "user", content: summaryPrompt }],
                     {
                       onToken(token) {
                         const summaryTokenUpdate = (msgs: ChatMessage[]) =>
@@ -1408,11 +1459,11 @@ export default function StrategiesPage() {
                       <div className="min-h-0 flex-1 px-3 py-3">
                         {!workspaceCode.trim() ? (
                           <p className="text-center text-sm text-[#868993]">{t.strategy.codeGenHint}</p>
-                        ) : strategyParamsLoading ? (
+                        ) : strategyParamsLoading && !strategyParamsSnapshot?.supported ? (
                           <p className="text-sm text-[#8fa8ff]">{t.strategy.workspaceParamsLoading}</p>
                         ) : strategyParamsSnapshot?.supported ? (
                           <form
-                            className="flex flex-col gap-3"
+                            className={`flex flex-col gap-3 transition-opacity${strategyParamsLoading ? " pointer-events-none opacity-50" : ""}`}
                             onSubmit={(e) => {
                               e.preventDefault();
                               void handleApplyStrategyParams();

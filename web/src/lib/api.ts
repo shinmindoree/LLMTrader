@@ -408,6 +408,7 @@ export async function deleteStrategyChatSession(sessionId: string): Promise<Dele
 export type GenerateStreamCallbacks = {
   onToken: (token: string) => void;
   onPhase?: (phase: string, detail?: { progress?: number; attempt?: number; max_attempts?: number }) => void;
+  onIntent?: (intent: string) => void;
   onDone: (payload: {
     code?: string;
     summary?: string | null;
@@ -536,6 +537,10 @@ export async function generateStrategyStream(
               attempt: typeof data.attempt === "number" ? data.attempt : undefined,
               max_attempts: typeof data.max_attempts === "number" ? data.max_attempts : undefined,
             });
+          }
+          if (typeof data.intent === "string" && callbacks.onIntent) {
+            callbacks.onIntent(data.intent);
+            return;
           }
           if (typeof data.token === "string") {
             callbacks.onToken(data.token);

@@ -71,6 +71,16 @@ export const buildGeneratedStrategySummaryPrompt = (userRequest: string) =>
     "Do not include code fences or repeat the full code.",
   ].join("\n");
 
+export const buildModificationSummaryPrompt = (userRequest: string) =>
+  [
+    `User's modification request: ${userRequest}`,
+    "Summarize what was changed in the strategy, in the same language as the user's request.",
+    "Write like a normal assistant reply — not a report.",
+    "Focus on: what was modified, why, and any side-effects.",
+    "Use backticks for parameter or indicator names when useful.",
+    "Do not include code fences or repeat the full code.",
+  ].join("\n");
+
 export function looksLikePythonCode(content: string): boolean {
   const text = content.trim();
   if (!text) return false;

@@ -480,6 +480,7 @@ const ko: TranslationKeys = {
     phaseVerifying: "코드 검증 중...",
     phaseRepairing: "코드 자동 수정 중 ({attempt}/{max})...",
     summaryGenerating: "전략 요약 작성 중...",
+    modificationSummaryGenerating: "변경 사항 요약 중...",
     workspaceTabParams: "파라미터",
     workspaceTabCode: "코드",
     workspaceTabCodeHint: "고급 — 필요할 때만 파이썬을 직접 수정합니다.",
