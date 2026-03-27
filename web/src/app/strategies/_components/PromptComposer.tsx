@@ -3,6 +3,7 @@
 import type { PromptComposerProps } from "../_lib/helpers";
 
 export function PromptComposer({
+  busyHint,
   centered = false,
   disabled = false,
   isSending,
@@ -63,8 +64,11 @@ export function PromptComposer({
         </div>
       </form>
       <p className={`mt-3 text-xs text-[#8f96a3] ${centered ? "text-center" : ""}`}>
-        Note: execution settings in the Backtest/Live forms override values mentioned in this
-        prompt.
+        {busyHint ? (
+          <span className="text-[#f0b232]">{busyHint}</span>
+        ) : (
+          <>Note: execution settings in the Backtest/Live forms override values mentioned in this prompt.</>
+        )}
       </p>
     </div>
   );

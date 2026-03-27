@@ -1005,6 +1005,7 @@ export default function StrategiesPage() {
     ? chatSessions.find((session) => session.id === activeSessionId) ?? null
     : null;
   const activeSessionBusy = isSending && streamingSessionIdRef.current === activeSessionId && activeSessionId != null;
+  const otherSessionBusy = isSending && !activeSessionBusy;
   const chatBusy = activeSessionBusy || isLoadingStrategy;
   const chatLocked = isLoadingStrategy || activeSessionBusy;
 
@@ -1274,7 +1275,8 @@ export default function StrategiesPage() {
                 <div className="flex-shrink-0 border-t border-[#2a2e39] px-6 py-5">
                   <div className="mx-auto flex w-full max-w-4xl justify-center">
                     <PromptComposer
-                      disabled={chatLocked}
+                      busyHint={otherSessionBusy ? t.strategy.otherSessionBusy : undefined}
+                      disabled={chatLocked || otherSessionBusy}
                       isSending={activeSessionBusy}
                       onChange={setPrompt}
                       onCompositionEnd={() => setIsComposingPrompt(false)}
@@ -1315,7 +1317,8 @@ export default function StrategiesPage() {
                 <div className="mt-10 flex w-full justify-center">
                   <PromptComposer
                     centered
-                    disabled={chatLocked}
+                    busyHint={otherSessionBusy ? t.strategy.otherSessionBusy : undefined}
+                    disabled={chatLocked || otherSessionBusy}
                     isSending={activeSessionBusy}
                     onChange={setPrompt}
                     onCompositionEnd={() => setIsComposingPrompt(false)}

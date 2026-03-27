@@ -495,6 +495,8 @@ const ko: TranslationKeys = {
     workspaceParamsApplyError: "파라미터를 반영하지 못했습니다.",
     previousCodeContext:
       "아래는 직전까지 사용 중인 전략 코드입니다. 사용자의 최신 요청이 수정/개선 지시라면 이 코드를 기반으로 재생성하세요.\n\n",
+    otherSessionBusy:
+      "다른 채팅에서 전략을 생성 중입니다. 완료 후 입력할 수 있습니다.",
   },
   settings: {
     llmTest: "LLM 연결 테스트",

@@ -491,6 +491,8 @@ const en = {
     workspaceParamsApplyError: "Could not apply parameters.",
     previousCodeContext:
       "Below is the strategy code you were using previously. If the user's latest request is a modification or improvement, regenerate based on this code.\n\n",
+    otherSessionBusy:
+      "Another chat is generating a strategy. You can send messages once it finishes.",
   },
   settings: {
     llmTest: "LLM Connection Test",

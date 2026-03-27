@@ -35,6 +35,7 @@ export type ChatSessionRecord = {
 };
 
 export type PromptComposerProps = {
+  busyHint?: string;
   centered?: boolean;
   disabled?: boolean;
   isSending: boolean;
