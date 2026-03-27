@@ -324,6 +324,7 @@ const ko: TranslationKeys = {
     tradeDetail: "트레이드 상세",
     pnl: "손익 (PnL)",
     equity: "자본금 (Equity)",
+    afterFees: "수수료 적용",
     balance: "잔고",
     totalTrades: "총 트레이드 수",
     noResultStructured: "결과 데이터가 요약 형식이 아닙니다. 아래 원본 데이터를 확인하세요.",

@@ -320,6 +320,7 @@ const en = {
     tradeDetail: "Trade detail",
     pnl: "PnL",
     equity: "Equity",
+    afterFees: "After fees",
     balance: "Balance",
     totalTrades: "Total Trades",
     noResultStructured: "Result payload is not structured for summary. See raw payload below.",

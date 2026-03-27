@@ -28,7 +28,10 @@ type ChartPoint = {
   index: number;
   timestamp: number | null;
   pnl: number;
+  pnlNet: number;
   equity: number;
+  equityGross: number;
+  commission: number;
   symbol: string | null;
   side: string | null;
   positionSizeUsdt: number | null;
@@ -233,14 +236,16 @@ function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
 }
 
 function buildEquitySeries(trades: NormalizedTrade[], initialEquity: number | null): ChartPoint[] {
-  let equity = initialEquity ?? 0;
+  let equityNet = initialEquity ?? 0;
+  let equityGross = initialEquity ?? 0;
   const points: ChartPoint[] = [];
   let tradeIndex = 0;
 
   for (const trade of trades) {
     const pnl = trade.pnl ?? 0;
     const commission = trade.commission ?? 0;
-    equity += pnl - commission;
+    equityNet += pnl - commission;
+    equityGross += pnl;
 
     if (trade.pnl !== null && trade.pnl !== 0) {
       tradeIndex += 1;
@@ -248,7 +253,10 @@ function buildEquitySeries(trades: NormalizedTrade[], initialEquity: number | nu
         index: tradeIndex,
         timestamp: trade.timestamp,
         pnl: trade.pnl,
-        equity,
+        pnlNet: trade.pnl - commission,
+        equity: equityNet,
+        equityGross,
+        commission,
         symbol: trade.symbol,
         side: trade.side,
         positionSizeUsdt: trade.positionSizeUsdt,
@@ -308,6 +316,9 @@ function Chart({
   const { t } = useI18n();
   const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [afterFees, setAfterFees] = useState(true);
+
+  const hasAnyCommission = points.some((p) => p.commission > 0);
 
   if (!points.length) {
     return (
@@ -325,12 +336,15 @@ function Chart({
   const step = points.length > 1 ? plotWidth / (points.length - 1) : plotWidth;
   const barWidth = Math.max(4, Math.min(18, step * 0.6));
 
-  const pnlValues = points.map((p) => p.pnl);
+  const getPnl = (p: ChartPoint) => (afterFees ? p.pnlNet : p.pnl);
+  const getEquity = (p: ChartPoint) => (afterFees ? p.equity : p.equityGross);
+
+  const pnlValues = points.map(getPnl);
   const maxAbsPnl = Math.max(...pnlValues.map((v) => Math.abs(v)), 1);
   const yZero = padding + plotHeight / 2;
   const pnlScale = plotHeight / (2 * maxAbsPnl);
 
-  const equityValues = points.map((p) => p.equity);
+  const equityValues = points.map(getEquity);
   const eqMin = Math.min(...equityValues);
   const eqMax = Math.max(...equityValues);
   const eqRange = Math.max(eqMax - eqMin, 1);
@@ -341,7 +355,7 @@ function Chart({
   const linePath = points
     .map((p, idx) => {
       const x = padding + idx * step;
-      const y = yEq(p.equity);
+      const y = yEq(getEquity(p));
       return `${idx === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(" ");
@@ -362,8 +376,21 @@ function Chart({
             <span className="h-0.5 w-4 rounded-full bg-[#42a5f5]" /> {t.tradeAnalysis.equity}
           </span>
         </div>
-        <div>
-          {points.length} trades - PnL range +/-{formatNumber(maxAbsPnl, 2)} USDT
+        <div className="flex items-center gap-3">
+          <span>{points.length} trades - PnL range +/-{formatNumber(maxAbsPnl, 2)} USDT</span>
+          {hasAnyCommission && (
+            <label className="inline-flex cursor-pointer items-center gap-1.5 select-none">
+              <input
+                type="checkbox"
+                checked={afterFees}
+                onChange={() => setAfterFees((v) => !v)}
+                className="h-3 w-3 accent-[#2962ff]"
+              />
+              <span className={afterFees ? "text-[#d1d4dc]" : "text-[#868993]"}>
+                {t.tradeAnalysis.afterFees}
+              </span>
+            </label>
+          )}
         </div>
       </div>
       {hoveredPoint ? (
@@ -385,13 +412,16 @@ function Chart({
               PnL:{" "}
               <span
                 className={
-                  hoveredPoint.pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
+                  getPnl(hoveredPoint) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
                 }
               >
-                {formatSigned(hoveredPoint.pnl, "USDT")}
+                {formatSigned(getPnl(hoveredPoint), "USDT")}
               </span>
+              {afterFees && hoveredPoint.commission > 0 && (
+                <span className="text-[#868993]"> (fee: {formatNumber(hoveredPoint.commission, 4)})</span>
+              )}
             </li>
-            <li>Equity: {formatNumber(hoveredPoint.equity, 2)} USDT</li>
+            <li>Equity: {formatNumber(getEquity(hoveredPoint), 2)} USDT</li>
             <li>Reason: {hoveredPoint.reason ?? "-"}</li>
           </ul>
         </div>
@@ -406,10 +436,11 @@ function Chart({
         <line x1={padding} y1={yZero} x2={width - padding} y2={yZero} stroke="#2a2e39" strokeWidth={1} />
         {points.map((p, idx) => {
           const xCenter = padding + idx * step;
-          const y = yPnl(p.pnl);
+          const pnlVal = getPnl(p);
+          const y = yPnl(pnlVal);
           const barHeight = Math.max(2, Math.abs(y - yZero));
-          const yTop = p.pnl >= 0 ? y : yZero;
-          const color = p.pnl >= 0 ? "#26a69a" : "#ef5350";
+          const yTop = pnlVal >= 0 ? y : yZero;
+          const color = pnlVal >= 0 ? "#26a69a" : "#ef5350";
           return (
             <g
               key={`bar-${p.index}`}
@@ -428,7 +459,7 @@ function Chart({
                 rx={2}
               >
                 <title>
-                  {`#${p.index} ${formatDateTime(p.timestamp)}\nPnL ${formatSigned(p.pnl, "USDT")}`}
+                  {`#${p.index} ${formatDateTime(p.timestamp)}\nPnL ${formatSigned(pnlVal, "USDT")}`}
                 </title>
               </rect>
             </g>
@@ -439,7 +470,8 @@ function Chart({
             <path d={linePath} fill="none" stroke="#42a5f5" strokeWidth={2} />
             {points.map((p, idx) => {
               const x = padding + idx * step;
-              const y = yEq(p.equity);
+              const eqVal = getEquity(p);
+              const y = yEq(eqVal);
               return (
                 <g
                   key={`pt-${p.index}`}
@@ -452,7 +484,7 @@ function Chart({
                   <circle cx={x} cy={y} r={8} fill="transparent" />
                   <circle cx={x} cy={y} r={3} fill="#42a5f5">
                     <title>
-                      {`#${p.index} ${formatDateTime(p.timestamp)}\nEquity ${formatSigned(p.equity, "USDT")}`}
+                      {`#${p.index} ${formatDateTime(p.timestamp)}\nEquity ${formatSigned(eqVal, "USDT")}`}
                     </title>
                   </circle>
                 </g>
