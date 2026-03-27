@@ -539,6 +539,7 @@ if "backtest_results" in st.session_state:
         if trades:
             st.divider()
             st.subheader("📊 거래 분석")
+            include_fee = st.checkbox("수수료 적용", value=True, help="체크 해제 시 수수료를 제외한 순수 손익을 표시합니다")
             
             # 거래별 손익 및 자산 변동 데이터 구성
             initial_balance = results.get("initial_balance", 0)
@@ -569,27 +570,28 @@ if "backtest_results" in st.session_state:
                 
                 pnl = trade.get("pnl")
                 commission = trade.get("commission", 0.0) or 0.0
+                effective_commission = commission if include_fee else 0.0
                 side = trade.get("side", "")
                 
                 # 거래 처리
                 if side == "BUY":
                     if pnl is not None and pnl != 0:
                         # BUY (숏 청산): pnl - commission
-                        current_balance += (pnl - commission)
+                        current_balance += (pnl - effective_commission)
                         cumulative_pnl += pnl
                     else:
                         # BUY (롱 진입/추가): 수수료만 차감
-                        current_balance -= commission
+                        current_balance -= effective_commission
                 elif side == "SELL":
                     if pnl is not None and pnl != 0:
                         # SELL (롱 청산): pnl - commission
-                        current_balance += (pnl - commission)
+                        current_balance += (pnl - effective_commission)
                         cumulative_pnl += pnl
                     else:
                         # SELL (숏 진입): 수수료만 차감
-                        current_balance -= commission
+                        current_balance -= effective_commission
                 
-                cumulative_commission += commission
+                cumulative_commission += effective_commission
                 
                 dt = datetime.fromtimestamp(timestamp / 1000)
                 equity_data.append({
@@ -613,23 +615,24 @@ if "backtest_results" in st.session_state:
                 
                 pnl = trade.get("pnl")
                 commission = trade.get("commission", 0.0) or 0.0
+                effective_commission = commission if include_fee else 0.0
                 side = trade.get("side", "")
                 
                 # 거래 처리하여 자산 업데이트
                 if side == "BUY":
                     if pnl is not None and pnl != 0:
                         # BUY (숏 청산): pnl - commission
-                        current_balance_for_chart += (pnl - commission)
+                        current_balance_for_chart += (pnl - effective_commission)
                     else:
                         # BUY (롱 진입/추가): 수수료만 차감
-                        current_balance_for_chart -= commission
+                        current_balance_for_chart -= effective_commission
                 elif side == "SELL":
                     if pnl is not None and pnl != 0:
                         # SELL (롱 청산): pnl - commission
-                        current_balance_for_chart += (pnl - commission)
+                        current_balance_for_chart += (pnl - effective_commission)
                     else:
                         # SELL (숏 진입): 수수료만 차감
-                        current_balance_for_chart -= commission
+                        current_balance_for_chart -= effective_commission
                 
                 # pnl이 있는 거래만 차트 데이터에 추가
                 if pnl is not None and pnl != 0:
@@ -729,7 +732,8 @@ if "backtest_results" in st.session_state:
                 with col2:
                     st.metric("최종 자산", f"${final_equity:,.2f}", delta=f"${final_equity - initial_equity:+,.2f}")
                 with col3:
-                    st.metric("총 손익", f"${total_pnl:+,.2f}", f"수수료: ${cumulative_commission:,.2f}")
+                    fee_label = f"수수료: ${cumulative_commission:,.2f}" if include_fee else "수수료 미적용"
+                    st.metric("총 손익", f"${total_pnl:+,.2f}", fee_label)
             
             st.divider()
             
