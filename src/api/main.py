@@ -1240,6 +1240,10 @@ def create_app() -> FastAPI:
                 # Forward phase events from relay to frontend
                 if "phase" in event:
                     yield f"data: {json.dumps(event)}\n\n"
+                # Forward intent routing events (e.g. question) to frontend
+                if "intent" in event:
+                    yield f"data: {json.dumps(event)}\n\n"
+                    return
                 if "token" in event:
                     code_acc.append(event["token"])
                     yield f"data: {json.dumps({'token': event['token']})}\n\n"
@@ -1336,9 +1340,6 @@ def create_app() -> FastAPI:
 
     async def _strategy_chat_stream_events(body: StrategyChatRequest):
         code = (body.code or "").strip()
-        if not code:
-            yield f"data: {json.dumps({'error': 'code must be non-empty'})}\n\n"
-            return
         if not body.messages:
             yield f"data: {json.dumps({'error': 'messages must be non-empty'})}\n\n"
             return

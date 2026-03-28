@@ -1,11 +1,8 @@
-"""Email sending utility for verification and transactional emails."""
+"""Email sending utility using Azure Communication Services Email."""
 
 from __future__ import annotations
 
 import asyncio
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from settings import get_settings
 
@@ -98,36 +95,40 @@ def _build_verification_text(verify_url: str, user_name: str) -> str:
 
 
 async def send_verification_email(to_email: str, user_name: str, verify_url: str) -> bool:
-    """Send verification email. Returns True on success."""
+    """Send verification email via Azure Communication Services. Returns True on success."""
     settings = get_settings()
-    smtp_cfg = settings.smtp
+    acs_cfg = settings.acs_email
 
-    if not smtp_cfg.is_configured:
-        print(f"[email] SMTP not configured — skipping verification email to {to_email}")
+    if not acs_cfg.is_configured:
+        print(f"[email] ACS Email not configured — skipping verification email to {to_email}")
         print(f"[email] Verification URL: {verify_url}")
         return False
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Verify your email — AlphaWeaver"
-    msg["From"] = f"{smtp_cfg.from_name} <{smtp_cfg.from_email or smtp_cfg.user}>"
-    msg["To"] = to_email
-
-    text_body = _build_verification_text(verify_url, user_name)
-    html_body = _build_verification_html(verify_url, user_name)
-    msg.attach(MIMEText(text_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-
     def _send() -> bool:
         try:
-            if smtp_cfg.use_tls:
-                server = smtplib.SMTP(smtp_cfg.host, smtp_cfg.port, timeout=15)
-                server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(smtp_cfg.host, smtp_cfg.port, timeout=15)
-            server.login(smtp_cfg.user, smtp_cfg.password)
-            server.send_message(msg)
-            server.quit()
-            return True
+            from azure.communication.email import EmailClient
+
+            client = EmailClient.from_connection_string(acs_cfg.connection_string)
+
+            message = {
+                "senderAddress": acs_cfg.sender_address,
+                "content": {
+                    "subject": "Verify your email — AlphaWeaver",
+                    "plainText": _build_verification_text(verify_url, user_name),
+                    "html": _build_verification_html(verify_url, user_name),
+                },
+                "recipients": {
+                    "to": [{"address": to_email}],
+                },
+                "headers": {
+                    "X-Priority": "1",
+                },
+            }
+
+            poller = client.begin_send(message)
+            result = poller.result()
+            print(f"[email] ACS email sent to {to_email}, messageId={result['id']}, status={result['status']}")
+            return result["status"] == "Succeeded"
         except Exception as exc:
             print(f"[email] Failed to send verification email to {to_email}: {exc}")
             return False

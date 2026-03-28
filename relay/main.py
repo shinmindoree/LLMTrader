@@ -533,8 +533,6 @@ async def strategy_chat(
     _: None = Depends(require_api_key),
 ) -> StrategyChatResponse:
     code = (body.code or "").strip()
-    if not code:
-        raise HTTPException(status_code=422, detail="code must be non-empty")
     messages = body.messages or []
     if not messages:
         raise HTTPException(status_code=422, detail="messages must be non-empty")
@@ -566,9 +564,6 @@ async def strategy_chat(
 
 async def _strategy_chat_stream_body(body: StrategyChatRequest):
     code = (body.code or "").strip()
-    if not code:
-        yield f"data: {json.dumps({'error': 'code must be non-empty'})}\n\n"
-        return
     messages = body.messages or []
     if not messages:
         yield f"data: {json.dumps({'error': 'messages must be non-empty'})}\n\n"

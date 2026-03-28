@@ -103,22 +103,18 @@ class StripeSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-class SmtpSettings(BaseSettings):
-    """SMTP 이메일 발송 설정."""
+class AcsEmailSettings(BaseSettings):
+    """Azure Communication Services Email 설정."""
 
-    host: str = Field(default="", alias="SMTP_HOST")
-    port: int = Field(default=587, alias="SMTP_PORT")
-    user: str = Field(default="", alias="SMTP_USER")
-    password: str = Field(default="", alias="SMTP_PASSWORD", repr=False)
-    from_email: str = Field(default="", alias="SMTP_FROM_EMAIL")
-    from_name: str = Field(default="AlphaWeaver", alias="SMTP_FROM_NAME")
-    use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
+    connection_string: str = Field(default="", alias="ACS_EMAIL_CONNECTION_STRING", repr=False)
+    sender_address: str = Field(default="", alias="ACS_EMAIL_SENDER_ADDRESS")
+    sender_name: str = Field(default="AlphaWeaver", alias="ACS_EMAIL_SENDER_NAME")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def is_configured(self) -> bool:
-        return bool(self.host and self.user and self.password)
+        return bool(self.connection_string and self.sender_address)
 
 
 class AzureBlobSettings(BaseSettings):
@@ -171,7 +167,7 @@ class Settings(BaseSettings):
     nextauth: NextAuthSettings = Field(default_factory=NextAuthSettings)
     azure_blob: AzureBlobSettings = Field(default_factory=AzureBlobSettings)
     azure_keyvault: AzureKeyVaultSettings = Field(default_factory=AzureKeyVaultSettings)
-    smtp: SmtpSettings = Field(default_factory=SmtpSettings)
+    acs_email: AcsEmailSettings = Field(default_factory=AcsEmailSettings)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

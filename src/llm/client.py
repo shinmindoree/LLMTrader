@@ -222,7 +222,7 @@ class LLMClient:
         messages: list[dict[str, str]],
     ) -> str | None:
         """전략에 대한 질문/설명 요청. 코드 생성 없이 텍스트만 반환."""
-        if not code or not code.strip() or not messages:
+        if not messages:
             return None
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -252,11 +252,11 @@ class LLMClient:
         messages: list[dict[str, str]],
     ) -> AsyncIterator[dict[str, Any]]:
         """전략 채팅/요약 스트리밍. token / done / error 이벤트를 yield."""
-        if not code or not code.strip() or not messages:
-            yield {"error": "code and messages are required"}
+        if not messages:
+            yield {"error": "messages are required"}
             return
         payload: dict[str, Any] = {
-            "code": code.strip(),
+            "code": (code or "").strip(),
             "summary": summary,
             "messages": messages,
         }

@@ -79,7 +79,14 @@ Reference: `scripts/strategies/rsi_long_short_strategy.py`.
 
 
 def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
-    return f"Strategy code:\n{code}\n\nSummary:\n{summary or 'N/A'}"
+    if code and code.strip():
+        return f"Strategy code:\n{code}\n\nSummary:\n{summary or 'N/A'}"
+    return (
+        "You are a trading strategy expert assistant. "
+        "Answer the user's question about trading strategies, markets, indicators, and technical analysis. "
+        "Respond in the same language as the user's message. "
+        "Provide clear, informative answers. Do NOT generate Python code unless explicitly asked."
+    )
 
 
 def _read_file(path: Path) -> str | None:

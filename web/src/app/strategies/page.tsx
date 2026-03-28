@@ -567,12 +567,12 @@ export default function StrategiesPage() {
             updateStreamingSession(phaseUpdate);
           },
           onIntent(intent) {
-            if (intent === "question" && activeCode) {
+            if (intent === "question") {
               intentRouted = true;
               // Fall back to chat stream for question-type messages
               const chatMessagesForApi = toApiMessages(nextMessages);
               void strategyChatStream(
-                activeCode,
+                activeCode || "",
                 activeSummary,
                 chatMessagesForApi,
                 {
