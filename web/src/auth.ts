@@ -47,7 +47,13 @@ export const authConfig: NextAuthConfig = {
               name: data.display_name || email.split("@")[0],
             };
           }
-        } catch {
+          if (res.status === 403) {
+            throw new Error("EMAIL_NOT_VERIFIED");
+          }
+        } catch (err) {
+          if (err instanceof Error && err.message === "EMAIL_NOT_VERIFIED") {
+            throw err;
+          }
           // Backend unreachable — fall through to reject
         }
 
@@ -84,7 +90,7 @@ export const authConfig: NextAuthConfig = {
       const isLoggedIn = !!auth?.user;
       const isPublic =
         nextUrl.pathname === "/" ||
-        nextUrl.pathname === "/auth" ||
+        nextUrl.pathname.startsWith("/auth") ||
         nextUrl.pathname.startsWith("/api/") ||
         nextUrl.pathname.startsWith("/_next") ||
         nextUrl.pathname === "/favicon.ico" ||

@@ -24,6 +24,9 @@ export default function AuthPage() {
   const [submitting, setSubmitting] = useState(false);
   const [credError, setCredError] = useState("");
   const [signupSuccess, setSignupSuccess] = useState(false);
+  const [emailNotVerified, setEmailNotVerified] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendDone, setResendDone] = useState(false);
 
   async function handleCredentialsSubmit(e: FormEvent) {
     e.preventDefault();
@@ -71,12 +74,35 @@ export default function AuthPage() {
         redirect: false,
       });
       if (result?.error) {
-        setCredError(t.auth.authFailed);
+        if (result.error.includes("EMAIL_NOT_VERIFIED") || result.code === "EMAIL_NOT_VERIFIED") {
+          setEmailNotVerified(true);
+          setCredError("");
+        } else {
+          setCredError(t.auth.authFailed);
+          setEmailNotVerified(false);
+        }
       } else if (result?.url) {
         window.location.href = result.url;
       }
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleResendVerification() {
+    setResending(true);
+    setResendDone(false);
+    try {
+      await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      setResendDone(true);
+    } catch {
+      // ignore
+    } finally {
+      setResending(false);
     }
   }
 
@@ -104,6 +130,25 @@ export default function AuthPage() {
           <p className="mt-3 rounded border border-[#26a69a]/40 bg-[#1a2e2a]/50 px-3 py-2 text-sm text-[#26a69a]">
             {t.auth.signupSuccess}
           </p>
+        ) : null}
+        {emailNotVerified ? (
+          <div className="mt-3 rounded border border-[#ff9800]/40 bg-[#2d2a1a]/50 px-3 py-3">
+            <p className="text-sm text-[#ffb74d]">
+              {t.auth.emailNotVerified ?? "Please verify your email before signing in. Check your inbox for a verification link."}
+            </p>
+            <button
+              type="button"
+              disabled={resending || resendDone}
+              onClick={handleResendVerification}
+              className="mt-2 text-xs font-medium text-[#ff9800] underline hover:text-[#ffb74d] disabled:opacity-60 disabled:no-underline"
+            >
+              {resendDone
+                ? (t.auth.resendDone ?? "Verification email sent!")
+                : resending
+                  ? (t.auth.submitting ?? "Processing...")
+                  : (t.auth.resendVerification ?? "Resend verification email")}
+            </button>
+          </div>
         ) : null}
 
         {/* Google Sign-In */}

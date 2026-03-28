@@ -28,6 +28,8 @@ class UserProfile(Base):
     plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    email_verification_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     binance_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     binance_api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)

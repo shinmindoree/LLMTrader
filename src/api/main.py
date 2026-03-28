@@ -2170,8 +2170,10 @@ def create_app() -> FastAPI:
         request: Request,
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
+        import secrets
         import bcrypt
         from control.models import UserProfile
+        from notifications.email import send_verification_email
 
         body = await request.json()
         email = (body.get("email") or "").strip().lower()
@@ -2192,17 +2194,92 @@ def create_app() -> FastAPI:
 
         user_id = f"cred-{email}"
         hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        verification_token = secrets.token_urlsafe(48)
 
         profile = UserProfile(
             user_id=user_id,
             email=email,
             display_name=display_name,
             password_hash=hashed,
+            email_verified=False,
+            email_verification_token=verification_token,
         )
         session.add(profile)
         await session.commit()
 
+        # Send verification email
+        frontend_url = settings.frontend_url.rstrip("/")
+        verify_url = f"{frontend_url}/auth/verify-email?token={verification_token}&email={email}"
+        await send_verification_email(to_email=email, user_name=display_name, verify_url=verify_url)
+
         return {"ok": True, "user_id": user_id, "email": email}
+
+    @app.get("/api/auth/verify-email")
+    async def verify_email(
+        token: str = Query(...),
+        email: str = Query(...),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.models import UserProfile
+
+        normalized_email = email.strip().lower()
+        result = await session.execute(
+            select(UserProfile).where(
+                UserProfile.email == normalized_email,
+                UserProfile.email_verification_token == token,
+            ).limit(1)
+        )
+        profile = result.scalar_one_or_none()
+
+        if not profile:
+            raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+
+        if profile.email_verified:
+            return {"ok": True, "already_verified": True}
+
+        profile.email_verified = True
+        profile.email_verification_token = None
+        await session.commit()
+
+        return {"ok": True, "already_verified": False}
+
+    @app.post("/api/auth/resend-verification")
+    async def resend_verification(
+        request: Request,
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        import secrets
+        from control.models import UserProfile
+        from notifications.email import send_verification_email
+
+        body = await request.json()
+        email = (body.get("email") or "").strip().lower()
+
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+
+        result = await session.execute(
+            select(UserProfile).where(UserProfile.email == email).limit(1)
+        )
+        profile = result.scalar_one_or_none()
+
+        if not profile or profile.email_verified:
+            # Don't reveal whether account exists
+            return {"ok": True}
+
+        verification_token = secrets.token_urlsafe(48)
+        profile.email_verification_token = verification_token
+        await session.commit()
+
+        frontend_url = settings.frontend_url.rstrip("/")
+        verify_url = f"{frontend_url}/auth/verify-email?token={verification_token}&email={email}"
+        await send_verification_email(
+            to_email=email,
+            user_name=profile.display_name or email.split("@")[0],
+            verify_url=verify_url,
+        )
+
+        return {"ok": True}
 
     @app.post("/api/auth/verify-credentials")
     async def verify_credentials(
@@ -2229,6 +2306,9 @@ def create_app() -> FastAPI:
 
         if not bcrypt.checkpw(password.encode("utf-8"), profile.password_hash.encode("utf-8")):
             raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        if not profile.email_verified:
+            raise HTTPException(status_code=403, detail="Email not verified")
 
         return {
             "ok": True,
