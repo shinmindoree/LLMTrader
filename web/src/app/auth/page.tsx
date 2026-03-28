@@ -31,6 +31,7 @@ export default function AuthPage() {
   async function handleCredentialsSubmit(e: FormEvent) {
     e.preventDefault();
     setCredError("");
+    setEmailNotVerified(false);
     setSubmitting(true);
 
     if (mode === "signup") {
@@ -66,6 +67,30 @@ export default function AuthPage() {
       return;
     }
 
+    // Pre-check credentials to detect unverified email before NextAuth signIn
+    try {
+      const check = await fetch("/api/auth/check-credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const checkData = await check.json();
+
+      if (!check.ok) {
+        if (checkData.reason === "EMAIL_NOT_VERIFIED") {
+          setEmailNotVerified(true);
+          setResendDone(false);
+          setSubmitting(false);
+          return;
+        }
+        setCredError(t.auth.invalidCredentials);
+        setSubmitting(false);
+        return;
+      }
+    } catch {
+      // If pre-check fails (network), fall through to NextAuth
+    }
+
     try {
       const result = await signIn("credentials", {
         email,
@@ -74,13 +99,7 @@ export default function AuthPage() {
         redirect: false,
       });
       if (result?.error) {
-        if (result.error.includes("EMAIL_NOT_VERIFIED") || result.code === "EMAIL_NOT_VERIFIED") {
-          setEmailNotVerified(true);
-          setCredError("");
-        } else {
-          setCredError(t.auth.authFailed);
-          setEmailNotVerified(false);
-        }
+        setCredError(t.auth.invalidCredentials);
       } else if (result?.url) {
         window.location.href = result.url;
       }
@@ -106,6 +125,70 @@ export default function AuthPage() {
     }
   }
 
+  // Full-screen email verification prompt
+  if (emailNotVerified) {
+    return (
+      <main className="mx-auto w-full max-w-md px-6 py-16">
+        <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-8 text-center">
+          {/* Mail icon */}
+          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-[#2962ff]/10">
+            <svg className="h-8 w-8 text-[#2962ff]" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+            </svg>
+          </div>
+
+          <h2 className="text-xl font-semibold text-[#d1d4dc]">
+            {t.auth.checkYourEmail}
+          </h2>
+
+          <p className="mt-3 text-sm leading-relaxed text-[#868993]">
+            {t.auth.verificationSentTo}
+          </p>
+          <p className="mt-1 text-sm font-medium text-[#d1d4dc]">
+            {email}
+          </p>
+          <p className="mt-3 text-sm leading-relaxed text-[#868993]">
+            {t.auth.clickLinkToActivate}
+          </p>
+
+          {/* Resend section */}
+          <div className="mt-6 rounded-lg border border-[#2a2e39] bg-[#131722] px-4 py-3">
+            <p className="text-xs text-[#868993]">
+              {t.auth.didntReceiveEmail}
+            </p>
+            {resendDone ? (
+              <p className="mt-2 text-sm font-medium text-[#26a69a]">
+                {t.auth.resendDone}
+              </p>
+            ) : (
+              <button
+                type="button"
+                disabled={resending}
+                onClick={handleResendVerification}
+                className="mt-2 text-sm font-medium text-[#2962ff] hover:text-[#2962ff]/80 disabled:opacity-60"
+              >
+                {resending ? t.auth.submitting : t.auth.resendVerification}
+              </button>
+            )}
+          </div>
+
+          {/* Back to login */}
+          <button
+            type="button"
+            className="mt-6 text-sm text-[#868993] hover:text-[#d1d4dc]"
+            onClick={() => {
+              setEmailNotVerified(false);
+              setCredError("");
+              setResendDone(false);
+            }}
+          >
+            &larr; {t.auth.backToLogin}
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto w-full max-w-md px-6 py-16">
       <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
@@ -127,27 +210,14 @@ export default function AuthPage() {
           </p>
         ) : null}
         {signupSuccess ? (
-          <p className="mt-3 rounded border border-[#26a69a]/40 bg-[#1a2e2a]/50 px-3 py-2 text-sm text-[#26a69a]">
-            {t.auth.signupSuccess}
-          </p>
-        ) : null}
-        {emailNotVerified ? (
-          <div className="mt-3 rounded border border-[#ff9800]/40 bg-[#2d2a1a]/50 px-3 py-3">
-            <p className="text-sm text-[#ffb74d]">
-              {t.auth.emailNotVerified ?? "Please verify your email before signing in. Check your inbox for a verification link."}
-            </p>
-            <button
-              type="button"
-              disabled={resending || resendDone}
-              onClick={handleResendVerification}
-              className="mt-2 text-xs font-medium text-[#ff9800] underline hover:text-[#ffb74d] disabled:opacity-60 disabled:no-underline"
-            >
-              {resendDone
-                ? (t.auth.resendDone ?? "Verification email sent!")
-                : resending
-                  ? (t.auth.submitting ?? "Processing...")
-                  : (t.auth.resendVerification ?? "Resend verification email")}
-            </button>
+          <div className="mt-4 rounded-lg border border-[#26a69a]/30 bg-[#1a2e2a]/50 px-4 py-4 text-center">
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-[#26a69a]/10">
+              <svg className="h-5 w-5 text-[#26a69a]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+              </svg>
+            </div>
+            <p className="text-sm font-medium text-[#26a69a]">{t.auth.signupSuccess}</p>
+            <p className="mt-1 text-xs text-[#868993]">{t.auth.signupSuccessHint}</p>
           </div>
         ) : null}
 
