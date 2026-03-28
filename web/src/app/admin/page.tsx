@@ -8,7 +8,6 @@ import { getStrategyCapabilities, getStrategyQualitySummary, testLlmEndpoint, ge
 import { useI18n } from "@/lib/i18n";
 import type {
   CountItem,
-  AdminUserItem,
   AdminUsersResponse,
   StrategyCapabilitiesResponse,
   StrategyQualitySummaryResponse,

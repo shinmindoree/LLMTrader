@@ -11,13 +11,12 @@ export default function VerifyEmailPage() {
   const token = searchParams.get("token");
   const email = searchParams.get("email");
 
-  const [status, setStatus] = useState<"loading" | "success" | "already" | "error">("loading");
-  const [errorMsg, setErrorMsg] = useState("");
+  const missingParams = !token || !email;
+  const [status, setStatus] = useState<"loading" | "success" | "already" | "error">(missingParams ? "error" : "loading");
+  const [errorMsg, setErrorMsg] = useState(missingParams ? "Invalid verification link." : "");
 
   useEffect(() => {
     if (!token || !email) {
-      setStatus("error");
-      setErrorMsg("Invalid verification link.");
       return;
     }
 
