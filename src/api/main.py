@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
@@ -2167,7 +2167,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/auth/register")
     async def register(
-        request: Any,
+        request: Request,
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         import bcrypt
@@ -2206,7 +2206,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/auth/verify-credentials")
     async def verify_credentials(
-        request: Any,
+        request: Request,
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         import bcrypt
