@@ -233,7 +233,7 @@ class LLMClient:
                 response = await client.post(
                     f"{self.base_url}/strategy/chat",
                     json={
-                        "code": code.strip(),
+                        "code": (code or "").strip(),
                         "summary": summary,
                         "messages": messages,
                     },

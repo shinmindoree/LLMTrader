@@ -1324,8 +1324,6 @@ def create_app() -> FastAPI:
     )
     async def strategy_chat(body: StrategyChatRequest) -> StrategyChatResponse:
         code = (body.code or "").strip()
-        if not code:
-            raise HTTPException(status_code=422, detail="code must be non-empty")
         if not body.messages:
             raise HTTPException(status_code=422, detail="messages must be non-empty")
         try:
