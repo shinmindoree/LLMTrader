@@ -139,6 +139,20 @@ class StrategyChatResponse(BaseModel):
     content: str
 
 
+class AdminUserItem(BaseModel):
+    user_id: str
+    email: str
+    display_name: str
+    plan: str
+    email_verified: bool
+    created_at: datetime
+
+
+class AdminUsersResponse(BaseModel):
+    users: list[AdminUserItem]
+    total: int
+
+
 class LlmTestRequest(BaseModel):
     input: str = "Hello"
 

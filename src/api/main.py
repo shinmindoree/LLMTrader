@@ -114,6 +114,8 @@ from api.schemas import (
     StrategyParamsExtractResponse,
     LlmTestRequest,
     LlmTestResponse,
+    AdminUserItem,
+    AdminUsersResponse,
     TradeResponse,
     BinanceAssetBalance,
     BinancePositionSummary,
@@ -967,6 +969,55 @@ def create_app() -> FastAPI:
             top_unsupported_requirements=_top_counts(unsupported_req_counter, limit=5),
             top_error_stages=_top_counts(error_stage_counter, limit=5),
         )
+
+    # ── Admin: User management ──────────────────────────────────────
+
+    @app.get(
+        "/api/admin/users",
+        response_model=AdminUsersResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def admin_list_users(
+        session: AsyncSession = Depends(_db_session),
+    ) -> AdminUsersResponse:
+        from control.models import UserProfile
+
+        result = await session.execute(
+            select(UserProfile).order_by(UserProfile.created_at.desc())
+        )
+        rows = result.scalars().all()
+        items = [
+            AdminUserItem(
+                user_id=r.user_id,
+                email=r.email,
+                display_name=r.display_name,
+                plan=r.plan,
+                email_verified=r.email_verified,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
+        return AdminUsersResponse(users=items, total=len(items))
+
+    @app.delete(
+        "/api/admin/users/{user_id:path}",
+        dependencies=[Depends(require_admin)],
+    )
+    async def admin_delete_user(
+        user_id: str,
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.models import UserProfile
+
+        result = await session.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id).limit(1)
+        )
+        profile = result.scalar_one_or_none()
+        if not profile:
+            raise HTTPException(status_code=404, detail="User not found")
+        await session.delete(profile)
+        await session.commit()
+        return {"deleted": True, "user_id": user_id}
 
     @app.post(
         "/api/strategies/generate",

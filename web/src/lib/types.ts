@@ -226,6 +226,20 @@ export type UserProfile = {
   created_at: string;
 };
 
+export type AdminUserItem = {
+  user_id: string;
+  email: string;
+  display_name: string;
+  plan: string;
+  email_verified: boolean;
+  created_at: string;
+};
+
+export type AdminUsersResponse = {
+  users: AdminUserItem[];
+  total: number;
+};
+
 export type BinanceKeysStatus = {
   configured: boolean;
   api_key_masked?: string;

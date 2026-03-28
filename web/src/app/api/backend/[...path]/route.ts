@@ -31,6 +31,7 @@ function isAdminOnlyPath(path: string): boolean {
     path === "api/llm-test"
     || path === "api/strategies/capabilities"
     || path === "api/strategies/quality/summary"
+    || path.startsWith("api/admin/")
   );
 }
 

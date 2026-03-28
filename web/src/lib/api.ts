@@ -29,6 +29,7 @@ import type {
   StrategySyntaxCheckResponse,
   Trade,
   UserProfile,
+  AdminUsersResponse,
 } from "@/lib/types";
 
 const CHAT_USER_ID_STORAGE_KEY = "llmtrader.chat_user_id";
@@ -162,6 +163,17 @@ export async function getStrategyCapabilities(): Promise<StrategyCapabilitiesRes
 export async function getStrategyQualitySummary(days = 7): Promise<StrategyQualitySummaryResponse> {
   return json<StrategyQualitySummaryResponse>(
     `/api/backend/api/strategies/quality/summary?days=${encodeURIComponent(String(days))}`,
+  );
+}
+
+export async function getAdminUsers(): Promise<AdminUsersResponse> {
+  return json<AdminUsersResponse>("/api/backend/api/admin/users");
+}
+
+export async function deleteAdminUser(userId: string): Promise<{ deleted: boolean; user_id: string }> {
+  return json<{ deleted: boolean; user_id: string }>(
+    `/api/backend/api/admin/users/${encodeURIComponent(userId)}`,
+    { method: "DELETE" },
   );
 }
 

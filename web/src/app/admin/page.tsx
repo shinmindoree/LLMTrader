@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import useSWR from "swr";
-import { getStrategyCapabilities, getStrategyQualitySummary, testLlmEndpoint } from "@/lib/api";
+import { getStrategyCapabilities, getStrategyQualitySummary, testLlmEndpoint, getAdminUsers, deleteAdminUser } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type {
   CountItem,
+  AdminUserItem,
+  AdminUsersResponse,
   StrategyCapabilitiesResponse,
   StrategyQualitySummaryResponse,
 } from "@/lib/types";
@@ -190,10 +192,12 @@ export default function AdminPage() {
   const router = useRouter();
   const { t } = useI18n();
   const [accessState, setAccessState] = useState<"checking" | "allowed" | "denied">("checking");
+  const [activeTab, setActiveTab] = useState<"quality" | "users">("quality");
   const [llmInput, setLlmInput] = useState("Hello");
   const [llmOutput, setLlmOutput] = useState<string | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -236,6 +240,25 @@ export default function AdminPage() {
   const error = summaryError ? String(summaryError) : null;
   const capabilityError = capabilityErrorObj ? String(capabilityErrorObj) : null;
 
+  const { data: usersData, error: usersErrorObj, isLoading: usersLoading, mutate: refreshUsers } = useSWR<AdminUsersResponse>(
+    isAllowed && activeTab === "users" ? "adminUsers" : null,
+    () => getAdminUsers(),
+  );
+  const usersError = usersErrorObj ? String(usersErrorObj) : null;
+
+  async function handleDeleteUser(userId: string, email: string) {
+    if (!confirm(`Delete user "${email}"?\nThis cannot be undone.`)) return;
+    setDeletingUserId(userId);
+    try {
+      await deleteAdminUser(userId);
+      await refreshUsers();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to delete user");
+    } finally {
+      setDeletingUserId(null);
+    }
+  }
+
   async function handleTestLlm() {
     setLlmLoading(true);
     setLlmOutput(null);
@@ -276,10 +299,123 @@ export default function AdminPage() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-[#d1d4dc]">Admin</h1>
-          <p className="mt-1 text-xs text-[#868993]">
-            Strategy quality metrics for the last {summary?.window_days ?? 7} days
-          </p>
         </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="mt-4 flex gap-1 border-b border-[#2a2e39]">
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === "quality"
+              ? "border-b-2 border-[#2962ff] text-[#d1d4dc]"
+              : "text-[#868993] hover:text-[#d1d4dc]"
+          }`}
+          onClick={() => setActiveTab("quality")}
+        >
+          Strategy Quality
+        </button>
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === "users"
+              ? "border-b-2 border-[#2962ff] text-[#d1d4dc]"
+              : "text-[#868993] hover:text-[#d1d4dc]"
+          }`}
+          onClick={() => setActiveTab("users")}
+        >
+          Users {usersData ? `(${usersData.total})` : ""}
+        </button>
+      </div>
+
+      {/* Users Tab */}
+      {activeTab === "users" ? (
+        <div className="mt-6">
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-xs text-[#868993]">
+              {usersData ? `${usersData.total} registered users` : "Loading..."}
+            </p>
+            <button
+              className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-sm text-[#d1d4dc] transition-colors hover:border-[#2962ff] hover:bg-[#252936] disabled:opacity-60"
+              disabled={usersLoading}
+              onClick={() => void refreshUsers()}
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
+          {usersError ? (
+            <p className="mt-4 rounded border border-[#ef5350]/30 bg-[#2d1f1f]/50 px-4 py-3 text-sm text-[#ef5350]">
+              Failed to load users: {usersError}
+            </p>
+          ) : null}
+          {usersLoading && !usersData ? (
+            <div className="mt-4 rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
+              Loading users...
+            </div>
+          ) : usersData ? (
+            <div className="mt-4 overflow-x-auto rounded border border-[#2a2e39]">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-[#2a2e39] bg-[#1e222d]">
+                    <th className="px-4 py-3 text-xs font-semibold text-[#868993]">Email</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-[#868993]">Display Name</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-[#868993]">Plan</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-[#868993]">Verified</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-[#868993]">Registered</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-[#868993]"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usersData.users.map((user) => (
+                    <tr key={user.user_id} className="border-b border-[#2a2e39] bg-[#131722] hover:bg-[#1e222d]">
+                      <td className="px-4 py-3 text-[#d1d4dc]">{user.email}</td>
+                      <td className="px-4 py-3 text-[#9aa0ad]">{user.display_name}</td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+                          user.plan === "free"
+                            ? "bg-[#2a2e39] text-[#868993]"
+                            : "bg-[#2962ff]/20 text-[#8fa8ff]"
+                        }`}>
+                          {user.plan}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {user.email_verified ? (
+                          <span className="text-[#26a69a]">✓</span>
+                        ) : (
+                          <span className="text-[#ef5350]">✗</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-[#868993]">
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          className="rounded px-2 py-1 text-xs text-[#ef5350] transition-colors hover:bg-[#ef5350]/10 disabled:opacity-40"
+                          disabled={deletingUserId === user.user_id}
+                          onClick={() => void handleDeleteUser(user.user_id, user.email)}
+                        >
+                          {deletingUserId === user.user_id ? "Deleting..." : "Delete"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Quality Tab */}
+      {activeTab === "quality" ? (
+        <>
+      <div className="mt-6 flex items-center justify-between gap-4">
+        <p className="text-xs text-[#868993]">
+          Strategy quality metrics for the last {summary?.window_days ?? 7} days
+        </p>
         <button
           className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-2 text-sm text-[#d1d4dc] transition-colors hover:border-[#2962ff] hover:bg-[#252936] disabled:opacity-60"
           disabled={loading}
@@ -502,6 +638,8 @@ export default function AdminPage() {
           <p className="mt-2 text-xs text-[#868993]">Loading capability info...</p>
         )}
       </section>
+        </>
+      ) : null}
     </main>
   );
 }
