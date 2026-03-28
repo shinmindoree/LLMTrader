@@ -20,7 +20,7 @@ export default function VerifyEmailPage() {
       return;
     }
 
-    fetch(`/api/backend/api/auth/verify-email?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`)
+    fetch(`/api/auth/verify-email?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`)
       .then(async (res) => {
         if (res.ok) {
           const data = await res.json();
