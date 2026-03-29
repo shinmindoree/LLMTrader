@@ -1039,7 +1039,21 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 <div className="max-h-[520px] overflow-auto">
                   <div className="divide-y divide-[#2a2e39]">
                     {[...positions].reverse().map((pos, idx) => (
-                      <div key={idx} className="px-4 py-4">
+                      <div
+                        key={idx}
+                        className={`px-4 py-4${pos.status === "Open" ? " animate-pulse-subtle" : ""}`}
+                        style={pos.status === "Open" ? {
+                          animation: "pulse-border 2s ease-in-out infinite",
+                        } : undefined}
+                      >
+                        {pos.status === "Open" && (
+                          <style>{`
+                            @keyframes pulse-border {
+                              0%, 100% { background-color: transparent; }
+                              50% { background-color: rgba(42, 46, 57, 0.4); }
+                            }
+                          `}</style>
+                        )}
                         <div className="mb-3 flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-[#d1d4dc]">{pos.symbol}</span>
                           <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#868993]">Perp</span>
@@ -1056,7 +1070,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                           <span className="text-xs text-[#868993]">{pos.status}</span>
                           <div className="ml-auto flex gap-4 text-[10px] text-[#868993]">
                             <span>{pos.openedAt} Opened</span>
-                            {pos.closedAt && <span>{pos.closedAt}</span>}
+                            {pos.closedAt && <span>{pos.closedAt} Closed</span>}
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
