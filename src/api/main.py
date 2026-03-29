@@ -4,6 +4,7 @@ import asyncio
 import ast
 import importlib.util
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -573,6 +575,29 @@ def create_app() -> FastAPI:
     app.state.engine = engine
     app.state.session_maker = session_maker
 
+    _logger = logging.getLogger("api")
+
+    @app.exception_handler(Exception)
+    async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        _logger.error(
+            "Unhandled exception on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=True,
+        )
+        from sqlalchemy.exc import OperationalError, InterfaceError
+
+        if isinstance(exc, (OperationalError, InterfaceError, OSError)):
+            return JSONResponse(
+                status_code=503,
+                content={"detail": f"Database temporarily unavailable: {type(exc).__name__}"},
+            )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal server error: {type(exc).__name__}"},
+        )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -613,8 +638,21 @@ def create_app() -> FastAPI:
             print("[api] DB keep-alive task stopped")
 
     async def _db_session() -> AsyncIterator[AsyncSession]:
-        async with session_maker() as session:
-            yield session
+        from sqlalchemy.exc import OperationalError, InterfaceError
+
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                async with session_maker() as session:
+                    yield session
+                    return
+            except (OperationalError, InterfaceError, OSError) as exc:
+                if attempt < max_retries:
+                    _logger.warning("DB session error (attempt %d/%d): %s", attempt + 1, max_retries + 1, exc)
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    _logger.error("DB session failed after %d attempts: %s", max_retries + 1, exc)
+                    raise
 
     strategy_pipeline_version = "multi-agent-v1"
 

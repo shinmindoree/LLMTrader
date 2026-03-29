@@ -47,8 +47,9 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   try {
     proxyAuth = await resolveProxyAuth();
   } catch (error) {
+    console.error("[proxy] resolveProxyAuth() failed:", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Auth initialization failed" },
+      { error: "Auth service error", detail: error instanceof Error ? error.message : "Unknown" },
       { status: 500 },
     );
   }
@@ -101,6 +102,7 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     if (timeout) clearTimeout(timeout);
     const message = err instanceof Error ? err.message : "Backend request failed";
     const status = controller.signal.aborted ? 504 : 502;
+    console.error(`[proxy] fetch to ${target.pathname} failed (${status}):`, message);
     return NextResponse.json({ error: message }, { status });
   }
   if (timeout) clearTimeout(timeout);
@@ -111,8 +113,9 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   // If backend returned a non-JSON error (e.g. HTML 502), normalise to JSON
   if (!res.ok && !res.headers.get("content-type")?.includes("application/json")) {
     const text = await res.text().catch(() => "");
+    console.error(`[proxy] Backend ${res.status} (non-JSON) for ${relPath}:`, text.slice(0, 200));
     return NextResponse.json(
-      { error: text.slice(0, 200) || `Backend returned ${res.status}` },
+      { error: text.slice(0, 200) || `Backend returned ${res.status}`, path: relPath },
       { status: res.status },
     );
   }

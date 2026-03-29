@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -8,6 +9,8 @@ import asyncio
 
 import jwt
 from fastapi import Depends, Header, HTTPException
+
+logger = logging.getLogger(__name__)
 from jwt import PyJWKClient
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -120,40 +123,53 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
             return user
 
     sm = _get_session_maker()
-    async with sm() as session:
-        # First, try to find an existing profile by email (handles auth migration).
-        # This preserves data associations when user_id changes across auth providers.
-        if norm_email:
-            existing = await session.execute(
-                select(UserProfile)
-                .where(UserProfile.email == norm_email)
-                .order_by(UserProfile.created_at)
-                .limit(1)
-            )
-            existing_profile = existing.scalar_one_or_none()
-            if existing_profile:
-                user.user_id = existing_profile.user_id
-                user.plan = existing_profile.plan or "free"
-                _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
-                return user
+    max_retries = 2
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            async with sm() as session:
+                if norm_email:
+                    existing = await session.execute(
+                        select(UserProfile)
+                        .where(UserProfile.email == norm_email)
+                        .order_by(UserProfile.created_at)
+                        .limit(1)
+                    )
+                    existing_profile = existing.scalar_one_or_none()
+                    if existing_profile:
+                        user.user_id = existing_profile.user_id
+                        user.plan = existing_profile.plan or "free"
+                        _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
+                        return user
 
-        # No existing profile found by email — create a new one.
-        stmt = (
-            insert(UserProfile)
-            .values(user_id=user.user_id, email=user.email or "", display_name="")
-            .on_conflict_do_nothing(index_elements=[UserProfile.user_id])
-        )
-        await session.execute(stmt)
-        await session.commit()
+                stmt = (
+                    insert(UserProfile)
+                    .values(user_id=user.user_id, email=user.email or "", display_name="")
+                    .on_conflict_do_nothing(index_elements=[UserProfile.user_id])
+                )
+                await session.execute(stmt)
+                await session.commit()
 
-        result = await session.execute(
-            select(UserProfile.plan).where(UserProfile.user_id == user.user_id)
-        )
-        plan = result.scalar_one_or_none() or "free"
-        user.plan = plan
-        if norm_email:
-            _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
-    return user
+                result = await session.execute(
+                    select(UserProfile.plan).where(UserProfile.user_id == user.user_id)
+                )
+                plan = result.scalar_one_or_none() or "free"
+                user.plan = plan
+                if norm_email:
+                    _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
+            return user
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < max_retries:
+                logger.warning("DB error in _ensure_user_profile (attempt %d/%d): %s", attempt + 1, max_retries + 1, exc)
+                await asyncio.sleep(0.5 * (attempt + 1))
+            else:
+                logger.error("DB error in _ensure_user_profile after %d attempts: %s", max_retries + 1, exc, exc_info=True)
+
+    raise HTTPException(
+        status_code=503,
+        detail=f"Database temporarily unavailable: {type(last_exc).__name__}",
+    )
 
 
 async def _verify_nextauth_user(
