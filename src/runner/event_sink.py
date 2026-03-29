@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from control.enums import EventKind
-from control.repo import append_event, insert_trade, upsert_order
+from control.repo import append_event, insert_trade, list_trade_ids, upsert_order
 
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -197,6 +197,50 @@ class DbEventSink:
                 raw_json=_sanitize_for_json(raw_json),
             )
             await session.commit()
+
+    async def backfill_trades(
+        self,
+        symbol: str,
+        trades: list[dict[str, Any]],
+    ) -> int:
+        """Backfill missing trades from Binance REST into DB.
+
+        Compares REST trade_ids against DB and inserts missing ones.
+        Returns number of newly inserted trades.
+        """
+        if not trades:
+            return 0
+
+        async with self._session_maker() as session:
+            existing_ids = await list_trade_ids(session, job_id=self._job_id)
+            inserted = 0
+
+            for trade in trades:
+                raw_trade_id = trade.get("id")
+                if raw_trade_id is None:
+                    continue
+                trade_id = int(raw_trade_id)
+                if trade_id in existing_ids:
+                    continue
+
+                order_id = trade.get("orderId")
+                await insert_trade(
+                    session,
+                    job_id=self._job_id,
+                    symbol=symbol,
+                    trade_id=trade_id,
+                    order_id=int(order_id) if order_id is not None else None,
+                    quantity=float(trade["qty"]) if trade.get("qty") is not None else None,
+                    price=float(trade["price"]) if trade.get("price") is not None else None,
+                    realized_pnl=float(trade["realizedPnl"]) if trade.get("realizedPnl") is not None else None,
+                    commission=float(trade["commission"]) if trade.get("commission") is not None else None,
+                    raw_json=_sanitize_for_json(trade),
+                )
+                inserted += 1
+
+            if inserted > 0:
+                await session.commit()
+            return inserted
 
     async def _run(self) -> None:
         while True:

@@ -41,6 +41,7 @@ class LiveContext:
         indicator_config: dict[str, Any] | None = None,
         risk_reporter: Callable[[float], None] | None = None,
         audit_hook: Callable[[str, dict[str, Any]], None] | None = None,
+        trade_backfill_hook: Callable[..., Any] | None = None,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -65,6 +66,7 @@ class LiveContext:
         self._indicator_nan_logged: set[str] = set()
         self._risk_reporter = risk_reporter
         self._audit_hook = audit_hook
+        self._trade_backfill_hook = trade_backfill_hook
         
         self.candle_interval: str = "1m"
 
@@ -97,6 +99,11 @@ class LiveContext:
         self._processed_trade_ids: set[int] = set()
         self._processed_order_ids: set[int] = set()
         self._chase_order_ids: list[int] = []
+        
+        # Periodic backfill: Binance REST → DB (5 min)
+        self._backfill_interval: float = 300.0
+        self._backfill_task: asyncio.Task | None = None
+        self._job_start_time_ms: int = int(time.time() * 1000)
         
         # 피라미딩 카운터 (최초 진입 제외, 추가 진입 횟수)
         self._pyramid_count: int = 0
@@ -334,6 +341,7 @@ class LiveContext:
         self._last_trade_check_time = now
         self._user_stream_task = asyncio.create_task(self._user_stream.start())
         self._user_stream_task.add_done_callback(self._handle_user_stream_task_result)
+        self._start_backfill_loop()
 
     def attach_user_stream(self) -> None:
         """외부(UserStreamHub 등)에서 구동하는 User Stream을 이 컨텍스트에 연결한다.
@@ -347,9 +355,11 @@ class LiveContext:
         self._last_user_stream_account_update = now
         self._last_reconcile_time = now
         self._last_trade_check_time = now
+        self._start_backfill_loop()
 
     async def stop_user_stream(self) -> None:
         """유저데이터 스트림 중지."""
+        self._stop_backfill_loop()
         if self._user_stream:
             await self._user_stream.stop()
         if self._user_stream_task:
@@ -485,6 +495,15 @@ class LiveContext:
                 if is_actual_disconnect:
                     print("✅ 모든 거래가 이미 처리됨")
             
+            # Backfill to DB (bypasses _processed_trade_ids, checks DB directly)
+            if self._trade_backfill_hook and trades:
+                try:
+                    inserted = await self._trade_backfill_hook(self.symbol, trades)
+                    if inserted > 0 and is_actual_disconnect:
+                        print(f"🔄 재연결 백필: {inserted}건 누락 거래 DB 저장")
+                except Exception:  # noqa: BLE001
+                    pass
+
             self._last_trade_check_time = time.time()
             
         except Exception as e:  # noqa: BLE001
@@ -518,10 +537,71 @@ class LiveContext:
                         "trade": trade,
                     })
             
+            # Backfill to DB (bypasses _processed_trade_ids, checks DB directly)
+            if self._trade_backfill_hook and trades:
+                try:
+                    await self._trade_backfill_hook(self.symbol, trades)
+                except Exception:  # noqa: BLE001
+                    pass
+
             self._last_trade_check_time = time.time()
             
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ 최근 거래 확인 실패: {e}")
+
+    async def _periodic_backfill_loop(self) -> None:
+        """Periodic trade backfill: Binance REST → DB (every 5 min).
+
+        Checks DB directly (not _processed_trade_ids) to catch trades
+        lost due to DB write failures or missed WS events.
+        """
+        await asyncio.sleep(10.0)  # initial delay for system stabilization
+        await self._run_backfill()
+        while True:
+            await asyncio.sleep(self._backfill_interval)
+            await self._run_backfill()
+
+    async def _run_backfill(self) -> None:
+        """Execute one backfill cycle."""
+        if not self._trade_backfill_hook:
+            return
+        try:
+            trades = await self.client.fetch_user_trades(
+                symbol=self.symbol,
+                start_time=self._job_start_time_ms,
+                limit=1000,
+            )
+            if not trades:
+                return
+            inserted = await self._trade_backfill_hook(self.symbol, trades)
+            if inserted > 0:
+                self._log_audit("BACKFILL_TRADES_INSERTED", {
+                    "inserted": inserted,
+                    "total_from_rest": len(trades),
+                })
+                print(f"🔄 백필: {inserted}건 누락 거래 복구 ({self.symbol}, REST {len(trades)}건 중)")
+            # Sync processed_trade_ids with REST results
+            for t in trades:
+                tid = t.get("id")
+                if tid:
+                    self._processed_trade_ids.add(tid)
+        except Exception as e:  # noqa: BLE001
+            self._log_audit("BACKFILL_FAILED", {"error": str(e)})
+            print(f"⚠️ 백필 실패 ({self.symbol}): {e}")
+
+    def _start_backfill_loop(self) -> None:
+        """Start the periodic backfill task if not already running."""
+        if self._trade_backfill_hook and (self._backfill_task is None or self._backfill_task.done()):
+            self._backfill_task = asyncio.create_task(
+                self._periodic_backfill_loop(),
+                name=f"trade-backfill:{self.symbol}",
+            )
+
+    def _stop_backfill_loop(self) -> None:
+        """Cancel the periodic backfill task."""
+        if self._backfill_task and not self._backfill_task.done():
+            self._backfill_task.cancel()
+        self._backfill_task = None
 
     async def _verify_order_with_rest(
         self,

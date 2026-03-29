@@ -161,6 +161,7 @@ async def run_live(
             indicator_config=indicator_config if isinstance(indicator_config, dict) else None,
             risk_reporter=portfolio_risk_manager.record_trade,
             audit_hook=sink.audit_hook,
+            trade_backfill_hook=sink.backfill_trades,
         )
         trade_contexts[sym] = ctx
 

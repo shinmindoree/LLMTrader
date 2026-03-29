@@ -725,6 +725,18 @@ async def list_orders(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 
     return list(result.scalars().all())
 
 
+async def list_trade_ids(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+) -> set[int]:
+    """Fetch all trade_ids for a job (for backfill dedup)."""
+    result = await session.execute(
+        select(Trade.trade_id).where(Trade.job_id == job_id)
+    )
+    return set(result.scalars().all())
+
+
 async def list_trades(session: AsyncSession, *, job_id: uuid.UUID, limit: int = 200) -> list[Trade]:
     result = await session.execute(
         select(Trade).where(Trade.job_id == job_id).order_by(Trade.ts.desc()).limit(limit)
