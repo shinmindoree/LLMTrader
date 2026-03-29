@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { InfoTooltip } from "@/components/InfoTooltip";
+import StrategyParamsEditor from "@/components/StrategyParamsEditor";
 import { createJob, listFuturesSymbols, preflightJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { Job, StrategyInfo } from "@/lib/types";
@@ -74,6 +75,7 @@ export function LiveForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
+  const [strategyParams, setStrategyParams] = useState<Record<string, unknown>>({});
 
   const slotsAvailable = maxSlots - activeCount;
   const canCreate = slotsAvailable > 0;
@@ -96,7 +98,7 @@ export function LiveForm({
     setSubmitting(true);
     onSubmittingChange?.(true);
     try {
-      const config = {
+      const config: Record<string, unknown> = {
         streams: [
           {
             symbol,
@@ -111,6 +113,9 @@ export function LiveForm({
           },
         ],
       };
+      if (Object.keys(strategyParams).length > 0) {
+        config.strategy_params = strategyParams;
+      }
 
       const preflight = await preflightJob({ type: "LIVE", config });
       if (!preflight.ok) {
@@ -175,7 +180,7 @@ export function LiveForm({
           <select
             className={inputCls}
             value={strategyPath}
-            onChange={(e) => setStrategyPath(e.target.value)}
+            onChange={(e) => { setStrategyPath(e.target.value); setStrategyParams({}); }}
           >
             {strategies.map((s) => (
               <option key={s.path} value={s.path} className="bg-[#131722]">
@@ -279,6 +284,19 @@ export function LiveForm({
           />
         </label>
       </div>
+
+      {/* Strategy Parameters */}
+      {strategyPath && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-medium text-[#868993]">전략 파라미터</p>
+          <StrategyParamsEditor
+            strategyPath={strategyPath}
+            values={strategyParams}
+            onChange={setStrategyParams}
+            disabled={submitting}
+          />
+        </div>
+      )}
 
       <div className="mt-5 flex justify-end gap-3">
         {onClose && (

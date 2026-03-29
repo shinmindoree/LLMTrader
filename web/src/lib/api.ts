@@ -14,6 +14,8 @@ import type {
   JobType,
   Order,
   PortalResponse,
+  QuickBacktestRequest,
+  QuickBacktestResponse,
   StopAllResponse,
   StrategyCapabilitiesResponse,
   StrategyContentResponse,
@@ -233,6 +235,15 @@ export async function applyStrategyParams(
   return json<StrategyParamsApplyResponse>("/api/backend/api/strategies/params/apply", {
     method: "POST",
     body: JSON.stringify({ code, param_values }),
+  });
+}
+
+export async function quickBacktest(
+  params: QuickBacktestRequest,
+): Promise<QuickBacktestResponse> {
+  return json<QuickBacktestResponse>("/api/backend/api/strategies/backtest/quick", {
+    method: "POST",
+    body: JSON.stringify(params),
   });
 }
 

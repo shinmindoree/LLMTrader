@@ -52,6 +52,8 @@ import {
 import { PendingReply, ChatPanelLoading } from "./_components/ChatLoading";
 import { RichTextContent, CodePlaceholderBlock } from "./_components/RichTextContent";
 import { PromptComposer } from "./_components/PromptComposer";
+import QuickBacktestPanel from "./_components/QuickBacktestPanel";
+import { formatBacktestResultsForAI } from "./_components/BacktestResultsFormatter";
 
 export default function StrategiesPage() {
   const { t } = useI18n();
@@ -1471,11 +1473,24 @@ export default function StrategiesPage() {
                         >
                           {t.strategy.workspaceTabCode}
                         </button>
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 text-xs font-medium transition ${
+                            workspaceSideTab === "backtest"
+                              ? "bg-[#2962ff]/25 text-[#b4c8ff]"
+                              : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
+                          }`}
+                          onClick={() => setWorkspaceSideTab("backtest")}
+                        >
+                          Backtest
+                        </button>
                       </div>
                       <p className="mt-1 text-[11px] text-[#868993]">
                         {workspaceSideTab === "params"
                           ? t.strategy.workspaceParamsHint
-                          : t.strategy.workspaceTabCodeHint}
+                          : workspaceSideTab === "code"
+                            ? t.strategy.workspaceTabCodeHint
+                            : "전략을 빠르게 백테스트하고 AI에게 분석을 요청하세요."}
                       </p>
                     </div>
                     <button
@@ -1668,6 +1683,59 @@ export default function StrategiesPage() {
                         )}
                       </div>
                     </div>
+                  ) : workspaceSideTab === "backtest" ? (
+                    <QuickBacktestPanel
+                      code={workspaceCode}
+                      strategyParams={paramDraft && Object.keys(paramDraft).length > 0 ? paramDraft : undefined}
+                      onAnalyzeWithAI={(btResult, btConfig) => {
+                        const formatted = formatBacktestResultsForAI(btResult, btConfig);
+                        const userMsg: ChatMessage = {
+                          id: createId(),
+                          role: "user",
+                          content: `다음 백테스트 결과를 분석하고 전략 개선안을 제시해주세요:\n\n${formatted}`,
+                          timestamp: new Date().toISOString(),
+                        };
+                        setChatMessages((prev) => [...prev, userMsg]);
+                        setActiveTab("chat");
+                        setTimeout(() => {
+                          const assistantMsg: ChatMessage = {
+                            id: createId(),
+                            role: "assistant",
+                            content: "",
+                            timestamp: new Date().toISOString(),
+                            status: "streaming",
+                          };
+                          setChatMessages((prev) => [...prev, assistantMsg]);
+                          const assistantId = assistantMsg.id;
+                          const messagesForApi = toApiMessages([...chatMessages, userMsg]);
+                          strategyChatStream(
+                            workspaceCode,
+                            workspaceSummary,
+                            messagesForApi,
+                            {
+                              onToken: (token) => {
+                                setChatMessages((prev) =>
+                                  prev.map((m) =>
+                                    m.id === assistantId
+                                      ? { ...m, content: m.content + token }
+                                      : m
+                                  )
+                                );
+                              },
+                              onDone: () => {
+                                setChatMessages((prev) =>
+                                  prev.map((m) =>
+                                    m.id === assistantId
+                                      ? { ...m, status: "done" }
+                                      : m
+                                  )
+                                );
+                              },
+                            }
+                          );
+                        }, 100);
+                      }}
+                    />
                   ) : workspaceCode.trim() ? (
                     <div className="flex h-full overflow-hidden">
                       <div

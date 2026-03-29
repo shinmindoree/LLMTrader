@@ -8,6 +8,7 @@ class PlanLimits:
     max_live_jobs: int
     max_backtest_per_month: int
     max_llm_generate_per_month: int
+    max_quick_backtest_per_day: int
     portfolio_mode: bool
     priority_queue: bool
 
@@ -17,6 +18,7 @@ PLANS: dict[str, PlanLimits] = {
         max_live_jobs=5,
         max_backtest_per_month=10,
         max_llm_generate_per_month=5,
+        max_quick_backtest_per_day=10,
         portfolio_mode=True,
         priority_queue=False,
     ),
@@ -24,6 +26,7 @@ PLANS: dict[str, PlanLimits] = {
         max_live_jobs=5,
         max_backtest_per_month=100,
         max_llm_generate_per_month=50,
+        max_quick_backtest_per_day=100,
         portfolio_mode=True,
         priority_queue=True,
     ),
@@ -31,6 +34,7 @@ PLANS: dict[str, PlanLimits] = {
         max_live_jobs=10,
         max_backtest_per_month=9999,
         max_llm_generate_per_month=9999,
+        max_quick_backtest_per_day=9999,
         portfolio_mode=True,
         priority_queue=True,
     ),

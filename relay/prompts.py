@@ -84,13 +84,24 @@ Reference: `scripts/strategies/rsi_long_short_strategy.py`.
 
 
 def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
+    backtest_analysis_instruction = (
+        "\n\nWhen the user provides backtest results (e.g., return%, win rate, max drawdown, "
+        "Sharpe ratio, trade counts), you MUST:\n"
+        "1. Analyze the key metrics and identify strengths and weaknesses\n"
+        "2. Explain why the strategy may be underperforming (if applicable)\n"
+        "3. Suggest specific parameter changes or logic improvements with rationale\n"
+        "4. If the user asks for improvement, generate the full improved strategy code\n"
+        "5. Focus on actionable advice: concrete numbers for parameter changes, specific conditions to add/modify\n"
+        "Respond in the same language as the user's message."
+    )
     if code and code.strip():
-        return f"Strategy code:\n{code}\n\nSummary:\n{summary or 'N/A'}"
+        return f"Strategy code:\n{code}\n\nSummary:\n{summary or 'N/A'}{backtest_analysis_instruction}"
     return (
         "You are a trading strategy expert assistant. "
         "Answer the user's question about trading strategies, markets, indicators, and technical analysis. "
         "Respond in the same language as the user's message. "
         "Provide clear, informative answers. Do NOT generate Python code unless explicitly asked."
+        + backtest_analysis_instruction
     )
 
 

@@ -34,6 +34,8 @@ dependencies = [
     "PyJWT>=2.8.0",
     "bcrypt>=4.1.0",
     "azure-communication-email>=1.0.0",
+    "redis[hiredis]>=5.0.0",
+    "msgpack>=1.0.0",
 ]
 
 [project.optional-dependencies]

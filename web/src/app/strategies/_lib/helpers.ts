@@ -56,7 +56,7 @@ export type RichTextBlock =
   | { type: "code-placeholder"; language: string };
 
 export type TabId = "chat" | "list";
-export type WorkspaceSideTab = "params" | "code";
+export type WorkspaceSideTab = "params" | "code" | "backtest";
 
 export const LOADED_STRATEGY_SUMMARY_PROMPT =
   "Briefly explain this strategy in plain English in 5 bullets: overview, entry logic, exit logic, risk management, and practical cautions. Keep it concise.";

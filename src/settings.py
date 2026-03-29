@@ -117,6 +117,19 @@ class AcsEmailSettings(BaseSettings):
         return bool(self.connection_string and self.sender_address)
 
 
+class RedisSettings(BaseSettings):
+    """Redis 캐시 설정."""
+
+    url: str = Field(default="", alias="REDIS_URL")
+    kline_cache_ttl: int = Field(default=300, alias="REDIS_KLINE_CACHE_TTL")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.url.strip())
+
+
 class AzureBlobSettings(BaseSettings):
     """Azure Blob Storage 설정."""
 
@@ -168,6 +181,7 @@ class Settings(BaseSettings):
     azure_blob: AzureBlobSettings = Field(default_factory=AzureBlobSettings)
     azure_keyvault: AzureKeyVaultSettings = Field(default_factory=AzureKeyVaultSettings)
     acs_email: AcsEmailSettings = Field(default_factory=AcsEmailSettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

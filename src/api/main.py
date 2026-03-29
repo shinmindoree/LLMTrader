@@ -120,6 +120,8 @@ from api.schemas import (
     BinanceAssetBalance,
     BinancePositionSummary,
     BinanceAccountSummaryResponse,
+    QuickBacktestRequest,
+    QuickBacktestResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 from api.strategy_params import (
@@ -1588,6 +1590,18 @@ def create_app() -> FastAPI:
             return StrategyParamsApplyResponse(code=new_code)
         except StrategyParamsError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/strategies/backtest/quick",
+        response_model=QuickBacktestResponse,
+    )
+    async def quick_backtest_endpoint(
+        body: QuickBacktestRequest,
+        user: AuthenticatedUser = Depends(require_auth),
+    ) -> QuickBacktestResponse:
+        from api.quick_backtest import run_quick_backtest
+
+        return await run_quick_backtest(body, user_id=user.user_id, plan=user.plan)
 
     @app.post(
         "/api/jobs/preflight",

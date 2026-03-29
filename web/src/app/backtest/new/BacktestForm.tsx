@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { FocusEvent, MouseEvent } from "react";
 
 import { InfoTooltip } from "@/components/InfoTooltip";
+import StrategyParamsEditor from "@/components/StrategyParamsEditor";
 import { createJob, listFuturesSymbols, preflightJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { Job, StrategyInfo } from "@/lib/types";
@@ -89,6 +90,7 @@ export function BacktestForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
+  const [strategyParams, setStrategyParams] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -128,7 +130,7 @@ export function BacktestForm({
       if (startTs > endTs) {
         throw new Error(t.form.startBeforeEnd);
       }
-      const config = {
+      const config: Record<string, unknown> = {
         symbol,
         interval,
         leverage,
@@ -139,6 +141,9 @@ export function BacktestForm({
         start_ts: startTs,
         end_ts: endTs,
       };
+      if (Object.keys(strategyParams).length > 0) {
+        config.strategy_params = strategyParams;
+      }
 
       const preflight = await preflightJob({
         type: "BACKTEST",
@@ -204,7 +209,7 @@ export function BacktestForm({
             name="strategy"
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             value={strategyPath}
-            onChange={(e) => setStrategyPath(e.target.value)}
+            onChange={(e) => { setStrategyPath(e.target.value); setStrategyParams({}); }}
           >
             {strategies.map((s) => (
               <option key={s.path} value={s.path} className="bg-[#131722]">
@@ -338,6 +343,19 @@ export function BacktestForm({
           />
         </label>
       </div>
+
+      {/* Strategy Parameters */}
+      {strategyPath && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-medium text-[#868993]">전략 파라미터</p>
+          <StrategyParamsEditor
+            strategyPath={strategyPath}
+            values={strategyParams}
+            onChange={setStrategyParams}
+            disabled={submitting}
+          />
+        </div>
+      )}
 
       <div className="mt-5 flex justify-end gap-3">
         {onClose && (

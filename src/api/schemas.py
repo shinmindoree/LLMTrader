@@ -346,3 +346,59 @@ class BinanceAccountSummaryResponse(BaseModel):
     assets: list[BinanceAssetBalance] = Field(default_factory=list)
     positions: list[BinancePositionSummary] = Field(default_factory=list)
     error: str | None = None
+
+
+# ── Quick Backtest ──────────────────────────────────────────
+
+
+class QuickBacktestRequest(BaseModel):
+    code: str
+    symbol: str = "BTCUSDT"
+    interval: str = "1h"
+    days: int = Field(default=30, ge=1, le=90)
+    initial_balance: float = Field(default=10000.0, gt=0)
+    leverage: int = Field(default=1, ge=1, le=20)
+    commission: float = Field(default=0.0004, ge=0, le=0.01)
+    stop_loss_pct: float = Field(default=0.05, gt=0, le=0.5)
+    strategy_params: dict[str, Any] | None = None
+
+
+class QuickBacktestMetrics(BaseModel):
+    initial_balance: float
+    final_balance: float
+    total_return_pct: float
+    total_pnl: float
+    total_trades: int
+    win_rate: float
+    max_drawdown_pct: float
+    sharpe_ratio: float
+    avg_win_pct: float
+    avg_loss_pct: float
+    net_profit: float
+    total_commission: float
+
+
+class QuickBacktestTrade(BaseModel):
+    side: str
+    entry_price: float
+    exit_price: float
+    quantity: float
+    pnl: float
+    return_pct: float
+
+
+class QuickBacktestEquityPoint(BaseModel):
+    ts: int
+    balance: float
+
+
+class QuickBacktestResponse(BaseModel):
+    success: bool
+    error_code: str | None = None
+    message: str | None = None
+    metrics: QuickBacktestMetrics | None = None
+    trades_summary: list[QuickBacktestTrade] = Field(default_factory=list)
+    equity_curve: list[QuickBacktestEquityPoint] = Field(default_factory=list)
+    duration_ms: int = 0
+    quota_remaining: int | None = None
+    quota_reset_at: str | None = None

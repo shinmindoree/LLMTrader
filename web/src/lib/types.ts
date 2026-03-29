@@ -129,6 +129,61 @@ export type StrategyParamsApplyResponse = {
   code: string;
 };
 
+// ── Quick Backtest ──────────────────────────────────────────
+
+export type QuickBacktestRequest = {
+  code: string;
+  symbol?: string;
+  interval?: string;
+  days?: number;
+  initial_balance?: number;
+  leverage?: number;
+  commission?: number;
+  stop_loss_pct?: number;
+  strategy_params?: Record<string, unknown>;
+};
+
+export type QuickBacktestMetrics = {
+  initial_balance: number;
+  final_balance: number;
+  total_return_pct: number;
+  total_pnl: number;
+  total_trades: number;
+  win_rate: number;
+  max_drawdown_pct: number;
+  sharpe_ratio: number;
+  avg_win_pct: number;
+  avg_loss_pct: number;
+  net_profit: number;
+  total_commission: number;
+};
+
+export type QuickBacktestTrade = {
+  side: string;
+  entry_price: number;
+  exit_price: number;
+  quantity: number;
+  pnl: number;
+  return_pct: number;
+};
+
+export type QuickBacktestEquityPoint = {
+  ts: number;
+  balance: number;
+};
+
+export type QuickBacktestResponse = {
+  success: boolean;
+  error_code?: string;
+  message?: string;
+  metrics?: QuickBacktestMetrics;
+  trades_summary: QuickBacktestTrade[];
+  equity_curve: QuickBacktestEquityPoint[];
+  duration_ms: number;
+  quota_remaining?: number;
+  quota_reset_at?: string;
+};
+
 export type Job = {
   job_id: string;
   type: JobType;
