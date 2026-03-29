@@ -1693,7 +1693,6 @@ export default function StrategiesPage() {
                           id: createId(),
                           role: "user",
                           content: `다음 백테스트 결과를 분석하고 전략 개선안을 제시해주세요:\n\n${formatted}`,
-                          timestamp: new Date().toISOString(),
                         };
                         setChatMessages((prev) => [...prev, userMsg]);
                         setActiveTab("chat");
@@ -1702,7 +1701,6 @@ export default function StrategiesPage() {
                             id: createId(),
                             role: "assistant",
                             content: "",
-                            timestamp: new Date().toISOString(),
                             status: "streaming",
                           };
                           setChatMessages((prev) => [...prev, assistantMsg]);
@@ -1726,7 +1724,7 @@ export default function StrategiesPage() {
                                 setChatMessages((prev) =>
                                   prev.map((m) =>
                                     m.id === assistantId
-                                      ? { ...m, status: "done" }
+                                      ? { ...m, status: null }
                                       : m
                                   )
                                 );
