@@ -22,6 +22,22 @@ type NormalizedTrade = {
   balanceAfter: number | null;
   reason: string | null;
   exitReason: string | null;
+  orderId: number | null;
+  role: "Maker" | "Taker" | null;
+};
+
+type Position = {
+  symbol: string;
+  direction: string;
+  status: "Closed" | "Open";
+  realizedPnl: number;
+  roi: number;
+  closedVol: number;
+  entryPrice: number;
+  avgClosePrice: number | null;
+  maxOi: number;
+  openedAt: string;
+  closedAt: string | null;
 };
 
 type ChartPoint = {
@@ -190,6 +206,8 @@ function normalizeBacktestTrades(raw: unknown): NormalizedTrade[] {
         balanceAfter: asNumber(t.balance_after),
         reason: asString(t.reason),
         exitReason: asString(t.exit_reason),
+        orderId: null,
+        role: null,
       } satisfies NormalizedTrade;
     });
 }
@@ -216,6 +234,9 @@ function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
     const reason =
       reasonFromRaw ?? exitReasonFromRaw ?? (derivedSide === "BUY" ? "Entry Long" : "Exit Long");
     const exitReason = exitReasonFromRaw ?? (isExit ? "Exit Long" : null);
+    const orderId = t.order_id ?? (raw ? (typeof raw.orderId === "number" ? raw.orderId : null) : null);
+    const makerRaw = raw ? raw.maker : null;
+    const role: "Maker" | "Taker" | null = typeof makerRaw === "boolean" ? (makerRaw ? "Maker" : "Taker") : null;
     return {
       id: t.trade_id,
       timestamp,
@@ -231,6 +252,8 @@ function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
       balanceAfter: null,
       reason,
       exitReason,
+      orderId: typeof orderId === "number" ? orderId : null,
+      role,
     } satisfies NormalizedTrade;
   });
 }
@@ -302,6 +325,100 @@ function enrichLiveTrades(
     equity += delta;
     return { ...trade, balanceChange: delta, balanceAfter: equity };
   });
+}
+
+function buildPositions(trades: NormalizedTrade[], leverage: number): Position[] {
+  const positions: Position[] = [];
+  let entryTrades: NormalizedTrade[] = [];
+  let exitTrades: NormalizedTrade[] = [];
+  let entryDirection: string | null = null;
+
+  for (const trade of trades) {
+    const side = trade.side?.toUpperCase();
+    if (!side) continue;
+
+    const isEntry = side === "BUY" && (entryDirection === null || entryDirection === "Long");
+    const isShortEntry = side === "SELL" && (entryDirection === null || entryDirection === "Short");
+
+    if (entryDirection === null) {
+      if (side === "BUY") {
+        entryDirection = "Long";
+        entryTrades = [trade];
+        exitTrades = [];
+      } else if (side === "SELL") {
+        entryDirection = "Short";
+        entryTrades = [trade];
+        exitTrades = [];
+      }
+    } else if (
+      (entryDirection === "Long" && side === "SELL") ||
+      (entryDirection === "Short" && side === "BUY")
+    ) {
+      exitTrades.push(trade);
+      const entryQty = entryTrades.reduce((s, t) => s + (t.quantity ?? 0), 0);
+      const exitQty = exitTrades.reduce((s, t) => s + (t.quantity ?? 0), 0);
+
+      if (exitQty >= entryQty - 1e-12) {
+        const totalPnl = exitTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+        const totalCommission = [...entryTrades, ...exitTrades].reduce((s, t) => s + (t.commission ?? 0), 0);
+        const realizedPnl = totalPnl - totalCommission;
+        const avgEntry =
+          entryTrades.reduce((s, t) => s + (t.price ?? 0) * (t.quantity ?? 0), 0) / (entryQty || 1);
+        const avgExit =
+          exitTrades.reduce((s, t) => s + (t.price ?? 0) * (t.quantity ?? 0), 0) / (exitQty || 1);
+        const maxOi = Math.max(...entryTrades.map((t) => t.quantity ?? 0));
+        const costBasis = avgEntry * entryQty;
+        const roi = costBasis > 0 ? (realizedPnl / costBasis) * 100 * leverage : 0;
+
+        positions.push({
+          symbol: entryTrades[0]?.symbol ?? "-",
+          direction: `Cross ${entryDirection}`,
+          status: "Closed",
+          realizedPnl,
+          roi,
+          closedVol: entryQty,
+          entryPrice: avgEntry,
+          avgClosePrice: avgExit,
+          maxOi,
+          openedAt: entryTrades[0]?.timeLabel ?? "-",
+          closedAt: exitTrades[exitTrades.length - 1]?.timeLabel ?? "-",
+        });
+
+        entryDirection = null;
+        entryTrades = [];
+        exitTrades = [];
+      }
+    } else if (
+      (entryDirection === "Long" && side === "BUY") ||
+      (entryDirection === "Short" && side === "SELL")
+    ) {
+      entryTrades.push(trade);
+    }
+  }
+
+  // Open position (not yet closed)
+  if (entryDirection && entryTrades.length > 0) {
+    const entryQty = entryTrades.reduce((s, t) => s + (t.quantity ?? 0), 0);
+    const avgEntry =
+      entryTrades.reduce((s, t) => s + (t.price ?? 0) * (t.quantity ?? 0), 0) / (entryQty || 1);
+    const maxOi = Math.max(...entryTrades.map((t) => t.quantity ?? 0));
+
+    positions.push({
+      symbol: entryTrades[0]?.symbol ?? "-",
+      direction: `Cross ${entryDirection}`,
+      status: "Open",
+      realizedPnl: 0,
+      roi: 0,
+      closedVol: 0,
+      entryPrice: avgEntry,
+      avgClosePrice: null,
+      maxOi,
+      openedAt: entryTrades[0]?.timeLabel ?? "-",
+      closedAt: null,
+    });
+  }
+
+  return positions;
 }
 
 function Chart({
@@ -505,7 +622,7 @@ function Chart({
 export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade[] }) {
   const { t } = useI18n();
   const { setBacktestChart } = useTopChart();
-  const [activeTab, setActiveTab] = useState<"chart" | "trades">("chart");
+  const [activeTab, setActiveTab] = useState<"chart" | "trades" | "positions">("chart");
   const [timeSortAsc, setTimeSortAsc] = useState(true);
   const result = job.result ?? null;
 
@@ -552,6 +669,17 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   const enrichedLive = useMemo(
     () => (job.type === "LIVE" ? enrichLiveTrades(sortedTrades, initialEquity) : []),
     [job.type, sortedTrades, initialEquity],
+  );
+
+  const leverage = useMemo(() => {
+    if (!job.config) return 1;
+    const cfg = job.config as Record<string, unknown>;
+    return typeof cfg.leverage === "number" ? cfg.leverage : 1;
+  }, [job.config]);
+
+  const positions = useMemo(
+    () => buildPositions(sortedTrades, leverage),
+    [sortedTrades, leverage],
   );
 
   const finalEquity =
@@ -619,34 +747,30 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     const enriched =
       job.type === "BACKTEST" ? enrichedBacktest : enrichedLive;
     const headers = [
-      "#",
+      "Order No.",
       "Time",
       "Symbol",
-      "Price",
       "Side",
-      "Position(Qty)",
-      "Position(USDT)",
-      "PnL",
-      "Commission",
-      "Equity Change",
-      "Equity",
+      "Price",
+      "Quantity",
+      "Fee",
+      "Role",
+      "Realized Profit",
       "Reason",
     ];
     const rows = enriched.map((t, idx) => {
       const sym = t.symbol ?? (job.type === "BACKTEST" ? backtestSymbol : null) ?? "-";
       const reason = (t.exitReason ?? t.reason ?? "-") as string;
       return [
-        String(idx + 1),
+        String(t.orderId ?? idx + 1),
         t.timeLabel,
         sym,
+        t.side === "BUY" ? "Buy" : t.side === "SELL" ? "Sell" : t.side ?? "-",
         t.price !== null ? formatNumber(t.price, 2) : "-",
-        t.side ?? "-",
-        t.quantity !== null ? formatNumber(t.quantity, 6) : "-",
-        t.positionSizeUsdt !== null ? formatNumber(t.positionSizeUsdt, 2) : "-",
-        t.pnl !== null ? formatSigned(t.pnl, "USDT") : "-",
-        t.commission !== null ? formatNumber(t.commission, 4) : "-",
-        t.balanceChange !== null ? formatSigned(t.balanceChange, "USDT") : "-",
-        t.balanceAfter !== null ? formatNumber(t.balanceAfter, 2) : "-",
+        t.positionSizeUsdt !== null ? `${formatNumber(t.positionSizeUsdt, 1)} USDT` : "-",
+        t.commission !== null ? `${formatNumber(t.commission, 8)} USDT` : "-",
+        t.role ?? "-",
+        t.pnl !== null ? `${formatNumber(t.pnl, 8)} USDT` : "0.00000000 USDT",
         reason,
       ].map(escapeCsvValue);
     });
@@ -694,6 +818,14 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             aria-pressed={activeTab === "trades"}
           >
             {t.tradeAnalysis.trades}
+          </button>
+          <button
+            type="button"
+            className={`${tabButtonBase} ${activeTab === "positions" ? tabButtonActive : tabButtonInactive}`}
+            onClick={() => setActiveTab("positions")}
+            aria-pressed={activeTab === "positions"}
+          >
+            Positions
           </button>
         </nav>
       </div>
@@ -774,7 +906,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 backtestSymbol={backtestSymbol}
               />
             </>
-          ) : (
+          ) : activeTab === "trades" ? (
             <div className="rounded border border-[#2a2e39] bg-[#0f141f]">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2a2e39] px-4 py-2">
                 <span className="text-xs font-medium text-[#d1d4dc]">Trades ({sortedTrades.length})</span>
@@ -791,59 +923,50 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-[#131722]">
                 <tr className="border-b border-[#2a2e39] text-left text-[#868993]">
-                  <th className="px-4 py-2">#</th>
+                  <th className="px-4 py-2">Order No.</th>
                   <th className="px-4 py-2 cursor-pointer select-none hover:text-[#d1d4dc]" onClick={() => setTimeSortAsc((v) => !v)}>Time {timeSortAsc ? "▲" : "▼"}</th>
                   <th className="px-4 py-2">Symbol</th>
-                  <th className="px-4 py-2">Price</th>
                   <th className="px-4 py-2">Side</th>
-                  <th className="px-4 py-2">Position(Qty)</th>
-                  <th className="px-4 py-2">Position(USDT)</th>
-                  <th className="px-4 py-2">PnL</th>
-                  <th className="px-4 py-2">Commission</th>
-                  <th className="px-4 py-2">Equity Change</th>
-                  <th className="px-4 py-2">Equity</th>
+                  <th className="px-4 py-2">Price</th>
+                  <th className="px-4 py-2">Quantity</th>
+                  <th className="px-4 py-2">Fee</th>
+                  <th className="px-4 py-2">Role</th>
+                  <th className="px-4 py-2">Realized Profit</th>
                   <th className="px-4 py-2">Reason</th>
                 </tr>
               </thead>
               <tbody>
                 {(timeSortAsc ? enrichedBacktest : [...enrichedBacktest].reverse()).map((t, idx) => (
                   <tr key={`bt-${t.id}`} className="border-b border-[#2a2e39]">
-                    <td className="px-4 py-2 text-[#868993]">{idx + 1}</td>
+                    <td className="px-4 py-2 text-[#868993]">{t.orderId ?? idx + 1}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.symbol ?? backtestSymbol ?? "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
+                      {t.symbol ?? backtestSymbol ?? "-"}{" "}
+                      <span className="rounded bg-[#2a2e39] px-1 py-0.5 text-[10px] text-[#868993]">Perp</span>
                     </td>
                     <td
                       className={`px-4 py-2 font-medium ${
                         t.side === "BUY" ? "text-[#26a69a]" : "text-[#ef5350]"
                       }`}
                     >
-                      {t.side ?? "-"}
+                      {t.side === "BUY" ? "Buy" : t.side === "SELL" ? "Sell" : t.side ?? "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.quantity !== null ? formatNumber(t.quantity, 6) : "-"}
+                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.positionSizeUsdt !== null ? formatNumber(t.positionSizeUsdt, 2) : "-"}
+                      {t.positionSizeUsdt !== null ? `${formatNumber(t.positionSizeUsdt, 1)} USDT` : "-"}
                     </td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">
+                      {t.commission !== null ? `${formatNumber(t.commission, 8)} USDT` : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">{t.role ?? "-"}</td>
                     <td
                       className={`px-4 py-2 font-medium ${
-                        (t.pnl ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
+                        (t.pnl ?? 0) > 0 ? "text-[#26a69a]" : (t.pnl ?? 0) < 0 ? "text-[#ef5350]" : "text-[#d1d4dc]"
                       }`}
                     >
-                      {t.pnl !== null ? formatSigned(t.pnl, "USDT") : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.commission !== null ? formatNumber(t.commission, 4) : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.balanceChange !== null ? formatSigned(t.balanceChange, "USDT") : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.balanceAfter !== null ? formatNumber(t.balanceAfter, 2) : "-"}
+                      {t.pnl !== null ? `${formatNumber(t.pnl, 8)} USDT` : "0.00000000 USDT"}
                     </td>
                     <td className="px-4 py-2 text-[#868993]">
                       {t.exitReason ? `${t.exitReason}` : t.reason ?? "-"}
@@ -856,57 +979,50 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-[#131722]">
                 <tr className="border-b border-[#2a2e39] text-left text-[#868993]">
-                  <th className="px-4 py-2">#</th>
+                  <th className="px-4 py-2">Order No.</th>
                   <th className="px-4 py-2 cursor-pointer select-none hover:text-[#d1d4dc]" onClick={() => setTimeSortAsc((v) => !v)}>Time {timeSortAsc ? "▲" : "▼"}</th>
                   <th className="px-4 py-2">Symbol</th>
-                  <th className="px-4 py-2">Price</th>
                   <th className="px-4 py-2">Side</th>
-                  <th className="px-4 py-2">Position(Qty)</th>
-                  <th className="px-4 py-2">Position(USDT)</th>
-                  <th className="px-4 py-2">PnL</th>
-                  <th className="px-4 py-2">Commission</th>
-                  <th className="px-4 py-2">Equity Change</th>
-                  <th className="px-4 py-2">Equity</th>
+                  <th className="px-4 py-2">Price</th>
+                  <th className="px-4 py-2">Quantity</th>
+                  <th className="px-4 py-2">Fee</th>
+                  <th className="px-4 py-2">Role</th>
+                  <th className="px-4 py-2">Realized Profit</th>
                   <th className="px-4 py-2">Reason</th>
                 </tr>
               </thead>
               <tbody>
                 {(timeSortAsc ? enrichedLive : [...enrichedLive].reverse()).map((t, idx) => (
                   <tr key={`lv-${t.id}`} className="border-b border-[#2a2e39]">
-                    <td className="px-4 py-2 text-[#868993]">{idx + 1}</td>
+                    <td className="px-4 py-2 text-[#868993]">{t.orderId ?? idx + 1}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">{t.symbol ?? "-"}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
+                      {t.symbol ?? "-"}{" "}
+                      <span className="rounded bg-[#2a2e39] px-1 py-0.5 text-[10px] text-[#868993]">Perp</span>
                     </td>
                     <td
                       className={`px-4 py-2 font-medium ${
                         t.side === "BUY" ? "text-[#26a69a]" : t.side === "SELL" ? "text-[#ef5350]" : "text-[#d1d4dc]"
                       }`}
                     >
-                      {t.side ?? "-"}
+                      {t.side === "BUY" ? "Buy" : t.side === "SELL" ? "Sell" : t.side ?? "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.quantity !== null ? formatNumber(t.quantity, 6) : "-"}
+                      {t.price !== null ? formatNumber(t.price, 2) : "-"}
                     </td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.positionSizeUsdt !== null ? formatNumber(t.positionSizeUsdt, 2) : "-"}
+                      {t.positionSizeUsdt !== null ? `${formatNumber(t.positionSizeUsdt, 1)} USDT` : "-"}
                     </td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">
+                      {t.commission !== null ? `${formatNumber(t.commission, 8)} USDT` : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-[#d1d4dc]">{t.role ?? "-"}</td>
                     <td
                       className={`px-4 py-2 font-medium ${
-                        (t.pnl ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
+                        (t.pnl ?? 0) > 0 ? "text-[#26a69a]" : (t.pnl ?? 0) < 0 ? "text-[#ef5350]" : "text-[#d1d4dc]"
                       }`}
                     >
-                      {t.pnl !== null ? formatSigned(t.pnl, "USDT") : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.commission !== null ? formatNumber(t.commission, 4) : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.balanceChange !== null ? formatSigned(t.balanceChange, "USDT") : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">
-                      {t.balanceAfter !== null ? formatNumber(t.balanceAfter, 2) : "-"}
+                      {t.pnl !== null ? `${formatNumber(t.pnl, 8)} USDT` : "0.00000000 USDT"}
                     </td>
                     <td className="px-4 py-2 text-[#868993]">
                       {t.exitReason ? `${t.exitReason}` : t.reason ?? "-"}
@@ -917,6 +1033,74 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             </table>
           )}
               </div>
+            </div>
+          ) : (
+            /* Positions tab */
+            <div className="rounded border border-[#2a2e39] bg-[#0f141f]">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2a2e39] px-4 py-2">
+                <span className="text-xs font-medium text-[#d1d4dc]">Position History ({positions.length})</span>
+              </div>
+              {positions.length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-[#868993]">No position history</div>
+              ) : (
+                <div className="max-h-[520px] overflow-auto">
+                  <div className="divide-y divide-[#2a2e39]">
+                    {(timeSortAsc ? positions : [...positions].reverse()).map((pos, idx) => (
+                      <div key={idx} className="px-4 py-4">
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-[#d1d4dc]">{pos.symbol}</span>
+                          <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#868993]">Perp</span>
+                          <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#868993]">{leverage}x</span>
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                              pos.direction.includes("Long")
+                                ? "bg-[#26a69a]/20 text-[#26a69a]"
+                                : "bg-[#ef5350]/20 text-[#ef5350]"
+                            }`}
+                          >
+                            {pos.direction}
+                          </span>
+                          <span className="text-xs text-[#868993]">{pos.status}</span>
+                          <div className="ml-auto flex gap-4 text-[10px] text-[#868993]">
+                            <span>{pos.openedAt} Opened</span>
+                            {pos.closedAt && <span>{pos.closedAt}</span>}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
+                          <div>
+                            <div className="text-[#868993]">Realized PNL (USDT)</div>
+                            <div className={`font-medium ${pos.realizedPnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
+                              {formatSigned(pos.realizedPnl, "USDT")}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[#868993]">ROI</div>
+                            <div className={`font-medium ${pos.roi >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
+                              {formatSigned(pos.roi)}%
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[#868993]">Closed Vol. (BTC)</div>
+                            <div className="text-[#d1d4dc]">{pos.closedVol > 0 ? formatNumber(pos.closedVol, 3) : "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-[#868993]">Entry Price</div>
+                            <div className="text-[#d1d4dc]">{formatNumber(pos.entryPrice, 2)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[#868993]">Avg. Close Price</div>
+                            <div className="text-[#d1d4dc]">{pos.avgClosePrice !== null ? formatNumber(pos.avgClosePrice, 2) : "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-[#868993]">Max OI (BTC)</div>
+                            <div className="text-[#d1d4dc]">{formatNumber(pos.maxOi, 3)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
       </div>
