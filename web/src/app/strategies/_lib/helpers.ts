@@ -81,6 +81,28 @@ export const buildModificationSummaryPrompt = (userRequest: string) =>
     "Do not include code fences or repeat the full code.",
   ].join("\n");
 
+/**
+ * Strip trailing LLM refusal phrases that Azure OpenAI content filters
+ * may inject mid-stream (e.g. "I'm sorry, but I cannot assist with that request.").
+ */
+export function stripLlmRefusal(text: string): string {
+  // Common refusal patterns that can appear mid-stream from Azure OpenAI content filters
+  const refusalPatterns = [
+    /I'?m sorry,?\s*but I cannot assist with that request\.?\s*$/i,
+    /I'?m sorry,?\s*but I can'?t assist with that\.?\s*$/i,
+    /I cannot assist with that request\.?\s*$/i,
+    /I can'?t help with that request\.?\s*$/i,
+    /I'?m not able to (?:help|assist) with (?:that|this)\.?\s*$/i,
+    /Sorry,?\s*I can'?t (?:help|assist) with that\.?\s*$/i,
+    /This content may violate our (?:usage|content) polic(?:y|ies)\.?\s*$/i,
+  ];
+  let result = text;
+  for (const pattern of refusalPatterns) {
+    result = result.replace(pattern, "");
+  }
+  return result.trimEnd();
+}
+
 export function looksLikePythonCode(content: string): boolean {
   const text = content.trim();
   if (!text) return false;

@@ -45,6 +45,7 @@ import {
   normalizeStrategyParamPayload,
   sortSessionsByUpdated,
   strategyNameFromPath,
+  stripLlmRefusal,
   toApiMessages,
   toRemoteSessionData,
 } from "./_lib/helpers";
@@ -720,7 +721,7 @@ export default function StrategiesPage() {
                                   ...message,
                                   status: null as ChatMessage["status"],
                                   statusText: null as ChatMessage["statusText"],
-                                  summary: error ? null : message.summary,
+                                  summary: error ? null : stripLlmRefusal(message.summary ?? "") || null,
                                 }
                               : message,
                           );
@@ -728,6 +729,8 @@ export default function StrategiesPage() {
                         updateStreamingSession(summaryDoneUpdate);
                         if (error) {
                           setWorkspaceSummary(null);
+                        } else {
+                          setWorkspaceSummary((prev) => prev ? stripLlmRefusal(prev) || null : null);
                         }
                         streamingSessionIdRef.current = null;
                       },
@@ -1011,16 +1014,19 @@ export default function StrategiesPage() {
             prev.map((m) => {
               if (m.id !== loadedMsgId) return m;
               const onlyHeader = (m.content ?? "") === header;
+              const cleaned = error ? m.content : stripLlmRefusal(m.content ?? "");
               return {
                 ...m,
                 status: null,
                 statusText: null,
-                content: error && onlyHeader ? `${header}Summary is unavailable right now.` : m.content,
+                content: error && onlyHeader ? `${header}Summary is unavailable right now.` : cleaned,
               };
             }),
           );
           if (error) {
             setWorkspaceSummary((prev) => (prev && prev.trim() ? prev : null));
+          } else {
+            setWorkspaceSummary((prev) => prev ? stripLlmRefusal(prev) || null : null);
           }
         },
       });
