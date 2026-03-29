@@ -253,6 +253,7 @@ export async function strategyChat(
 
 export type StrategyChatStreamCallbacks = {
   onToken: (token: string) => void;
+  onRefusalReplace?: (message: string) => void;
   onDone: (payload: { error?: string }) => void;
 };
 
@@ -568,6 +569,7 @@ export async function generateStrategyStream(
               repaired: data.repaired === true,
               repair_attempts:
                 typeof data.repair_attempts === "number" ? Number(data.repair_attempts) : 0,
+              rejected: data.rejected === true,
               error: typeof data.error === "string" ? data.error : undefined,
             });
             return;

@@ -132,6 +132,28 @@ _GENERIC_REQUEST_PATTERNS = [
     r"알아서.*전략",
     r"strategy\s*(please|generate|create)?\s*$",
 ]
+
+_NON_TRADING_REJECTION_MSG = (
+    "죄송합니다. 이 요청은 트레이딩 전략과 관련이 없어 처리할 수 없습니다. "
+    "트레이딩 전략에 대해 설명해 주시면 도움드리겠습니다! 😊"
+)
+
+_MODEL_REFUSAL_PATTERNS = [
+    re.compile(r"I'?m sorry,?\s*but I cannot assist", re.IGNORECASE),
+    re.compile(r"I cannot assist with th(at|is) request", re.IGNORECASE),
+    re.compile(r"I'?m not able to (help|assist) with th(at|is)", re.IGNORECASE),
+    re.compile(r"I can'?t (help|assist) with th(at|is)", re.IGNORECASE),
+    re.compile(r"I'?m unable to (provide|generate|create|assist)", re.IGNORECASE),
+    re.compile(r"as an AI,?\s*I (cannot|can't|am unable)", re.IGNORECASE),
+]
+
+
+def _is_model_refusal(text: str) -> bool:
+    """Detect model-level safety refusal messages."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return any(p.search(stripped) for p in _MODEL_REFUSAL_PATTERNS)
 _MISSING_FIELD_ORDER = ("symbol", "timeframe", "entry_logic", "exit_logic", "risk")
 _MISSING_FIELD_QUESTIONS = {
     "symbol": "어떤 심볼로 거래할까요? (예: BTCUSDT)",
@@ -559,6 +581,10 @@ async def strategy_chat(
         logger.warning("LLM returned blank content at /strategy/chat")
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
+    if _is_model_refusal(content):
+        logger.info("Model self-refusal detected in /strategy/chat")
+        return StrategyChatResponse(content=_NON_TRADING_REJECTION_MSG)
+
     return StrategyChatResponse(content=content.strip())
 
 
@@ -577,12 +603,18 @@ async def _strategy_chat_stream_body(body: StrategyChatRequest):
     try:
         system_content = build_strategy_chat_system_prompt(code, body.summary)
         openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+        acc: list[str] = []
         async for token in chat_completion_stream(
             config,
             system_content=system_content,
             messages=openai_messages,
         ):
+            acc.append(token)
             yield f"data: {json.dumps({'token': token})}\n\n"
+        full_text = "".join(acc)
+        if _is_model_refusal(full_text):
+            logger.info("Model self-refusal detected in /strategy/chat/stream")
+            yield f"data: {json.dumps({'refusal_replace': _NON_TRADING_REJECTION_MSG})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
     except Exception as e:
         logger.exception("LLM stream failed at /strategy/chat/stream: %s", e)
@@ -862,9 +894,8 @@ async def _generate_stream_body(body: StrategyRequest):
 
     # Gatekeeping: if planner says request is NOT trading-related, reject early
     if plan_spec and plan_spec.get("is_trading_related") is False:
-        rejection_msg = plan_spec.get("rejection_message") or "이 시스템은 트레이딩 전략 생성 전용입니다. 트레이딩 전략을 설명해 주세요."
-        logger.info("Non-trading request rejected by planner: %s", rejection_msg[:80])
-        yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': rejection_msg, 'repaired': False, 'repair_attempts': 0})}\n\n"
+        logger.info("Non-trading request rejected by planner")
+        yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': _NON_TRADING_REJECTION_MSG, 'repaired': False, 'repair_attempts': 0})}\n\n"
         return
 
     # Intent routing: if planner classifies as "question", signal frontend to use chat instead
@@ -912,6 +943,13 @@ async def _generate_stream_body(body: StrategyRequest):
                     yield f"data: {json.dumps({'phase': 'generating', 'progress': min(90, token_count // 8)})}\n\n"
 
         raw_code = "".join(code_acc)
+
+        # Detect model-level safety refusal (not a content filter, but built-in model safety)
+        if _is_model_refusal(raw_code):
+            logger.info("Model self-refusal detected in code generation stream")
+            yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': _NON_TRADING_REJECTION_MSG, 'repaired': False, 'repair_attempts': 0})}\n\n"
+            return
+
         code = _sanitize_code_quotes(_extract_python_code(raw_code))
         if not code:
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"

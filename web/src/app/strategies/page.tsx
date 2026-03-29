@@ -589,6 +589,14 @@ export default function StrategiesPage() {
                     setChatMessages(chatTokenUpdate);
                     updateStreamingSession(chatTokenUpdate);
                   },
+                  onRefusalReplace(message) {
+                    const replaceUpdate = (prev: ChatMessage[]) =>
+                      prev.map((m) =>
+                        m.id === assistantId ? { ...m, content: message } : m,
+                      );
+                    setChatMessages(replaceUpdate);
+                    updateStreamingSession(replaceUpdate);
+                  },
                   onDone({ error }) {
                     const chatDoneUpdate = (prev: ChatMessage[]) =>
                       prev.map((m) =>
