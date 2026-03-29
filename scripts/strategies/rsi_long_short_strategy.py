@@ -14,11 +14,36 @@ STRATEGY_PARAMS: dict[str, Any] = {
 }
 
 STRATEGY_PARAM_SCHEMA: dict[str, Any] = {
-    "rsi_period": {"type": "integer", "min": 2, "max": 100, "label": "RSI 기간"},
-    "long_entry_rsi": {"type": "number", "min": 1, "max": 99, "label": "롱 진입 RSI (상향 돌파)"},
-    "long_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "롱 청산 RSI (상향 돌파)"},
-    "short_entry_rsi": {"type": "number", "min": 1, "max": 99, "label": "숏 진입 RSI (하향 돌파)"},
-    "short_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "숏 청산 RSI (하향 돌파)"},
+    "rsi_period": {
+        "type": "integer", "min": 2, "max": 100,
+        "label": "RSI 기간",
+        "description": "RSI 계산에 사용할 캔들 수입니다. 값이 작을수록 RSI가 민감하게 변하고, 클수록 부드러워집니다.",
+        "group": "지표 (Indicator)",
+    },
+    "long_entry_rsi": {
+        "type": "number", "min": 1, "max": 99,
+        "label": "롱 진입 RSI",
+        "description": "RSI가 이 값을 상향 돌파하면 롱 진입합니다. 낮을수록 더 깊은 과매도에서만 진입합니다.",
+        "group": "진입 (Entry)",
+    },
+    "long_exit_rsi": {
+        "type": "number", "min": 1, "max": 99,
+        "label": "롱 청산 RSI",
+        "description": "RSI가 이 값을 상향 돌파하면 롱 포지션을 청산합니다. 높을수록 더 오래 보유합니다.",
+        "group": "청산 (Exit)",
+    },
+    "short_entry_rsi": {
+        "type": "number", "min": 1, "max": 99,
+        "label": "숏 진입 RSI",
+        "description": "RSI가 이 값을 하향 돌파하면 숏 진입합니다. 높을수록 더 일찍 과매수 구간에서 진입합니다.",
+        "group": "진입 (Entry)",
+    },
+    "short_exit_rsi": {
+        "type": "number", "min": 1, "max": 99,
+        "label": "숏 청산 RSI",
+        "description": "RSI가 이 값을 하향 돌파하면 숏 포지션을 청산합니다. 낮을수록 더 오래 보유합니다.",
+        "group": "청산 (Exit)",
+    },
 }
 
 

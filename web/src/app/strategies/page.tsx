@@ -1505,12 +1505,37 @@ export default function StrategiesPage() {
                               void handleApplyStrategyParams();
                             }}
                           >
-                            {Object.keys(strategyParamsSnapshot.schema_fields).map((key) => {
+                            {(() => {
+                              const GROUP_ORDER = ["진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)"];
+                              const GROUP_ICONS: Record<string, string> = {
+                                "진입 (Entry)": "▶",
+                                "청산 (Exit)": "◼",
+                                "지표 (Indicator)": "📊",
+                                "리스크 관리 (Risk)": "🛡",
+                                "일반 (General)": "⚙",
+                              };
+                              const groups: Record<string, string[]> = {};
+                              for (const key of Object.keys(strategyParamsSnapshot.schema_fields)) {
+                                const g = strategyParamsSnapshot.schema_fields[key]?.group || "일반 (General)";
+                                (groups[g] ??= []).push(key);
+                              }
+                              const sortedGroups = Object.keys(groups).sort(
+                                (a, b) => (GROUP_ORDER.indexOf(a) === -1 ? 99 : GROUP_ORDER.indexOf(a))
+                                         - (GROUP_ORDER.indexOf(b) === -1 ? 99 : GROUP_ORDER.indexOf(b))
+                              );
+                              return sortedGroups.map((groupName) => (
+                                <fieldset key={groupName} className="rounded border border-[#2a2e39] px-3 pb-3 pt-2">
+                                  <legend className="px-1 text-[11px] font-semibold tracking-wide text-[#8fa8ff]">
+                                    {GROUP_ICONS[groupName] ?? "•"} {groupName}
+                                  </legend>
+                                  <div className="flex flex-col gap-3">
+                                    {groups[groupName].map((key) => {
                               const spec = strategyParamsSnapshot.schema_fields[key] ?? {};
                               const label =
                                 typeof spec.label === "string" && spec.label.trim()
                                   ? spec.label
                                   : key;
+                              const description = typeof spec.description === "string" && spec.description.trim() ? spec.description : null;
                               const tRaw = String(spec.type ?? "").toLowerCase();
                               const minV = typeof spec.min === "number" ? spec.min : undefined;
                               const maxV = typeof spec.max === "number" ? spec.max : undefined;
@@ -1518,20 +1543,22 @@ export default function StrategiesPage() {
 
                               if (tRaw === "boolean") {
                                 return (
-                                  <label
-                                    key={key}
-                                    className="flex cursor-pointer items-center gap-2 text-sm text-[#d1d4dc]"
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      className="h-4 w-4 rounded border border-[#2a2e39] bg-[#131722]"
-                                      checked={Boolean(draftVal)}
-                                      onChange={(e) =>
-                                        setParamDraft((prev) => ({ ...prev, [key]: e.target.checked }))
-                                      }
-                                    />
-                                    <span>{label}</span>
-                                  </label>
+                                  <div key={key} className="flex flex-col gap-0.5">
+                                    <label
+                                      className="flex cursor-pointer items-center gap-2 text-sm text-[#d1d4dc]"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4 rounded border border-[#2a2e39] bg-[#131722]"
+                                        checked={Boolean(draftVal)}
+                                        onChange={(e) =>
+                                          setParamDraft((prev) => ({ ...prev, [key]: e.target.checked }))
+                                        }
+                                      />
+                                      <span>{label}</span>
+                                    </label>
+                                    {description ? <p className="pl-6 text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
+                                  </div>
                                 );
                               }
 
@@ -1546,6 +1573,7 @@ export default function StrategiesPage() {
                                     <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${key}`}>
                                       {label}
                                     </label>
+                                    {description ? <p className="text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                                       <input
                                         id={`param-${key}`}
@@ -1600,6 +1628,7 @@ export default function StrategiesPage() {
                                   <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${key}`}>
                                     {label}
                                   </label>
+                                  {description ? <p className="text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
                                   <input
                                     id={`param-${key}`}
                                     type="text"
@@ -1611,7 +1640,11 @@ export default function StrategiesPage() {
                                   />
                                 </div>
                               );
-                            })}
+                                    })}
+                                  </div>
+                                </fieldset>
+                              ));
+                            })()}
                             {paramApplyError ? (
                               <p className="text-sm text-[#ef9a9a]">{paramApplyError}</p>
                             ) : null}

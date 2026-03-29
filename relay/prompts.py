@@ -70,7 +70,12 @@ Guard requirements: Must check is_new_bar before logic; must call get_open_order
 _STRATEGY_PARAMS_UI_PROMPT = """## Tunable parameters (product UI)
 At **module level** (before the Strategy subclass), define:
 - `STRATEGY_PARAMS`: `dict[str, int | float | bool | str]` — every user-tunable default the UI may edit.
-- Optional `STRATEGY_PARAM_SCHEMA`: same keys → metadata for the UI: `type` (`integer`|`number`|`boolean`|`string`), `label`, and optionally `min` / `max` / `enum`.
+- Optional `STRATEGY_PARAM_SCHEMA`: same keys → metadata for the UI: `type` (`integer`|`number`|`boolean`|`string`), `label`, and optionally `min` / `max` / `enum` / `description` / `group`.
+
+Schema field conventions:
+- `label`: Short parameter name (Korean), e.g. "RSI 기간"
+- `description`: One sentence explaining how this parameter affects the strategy logic (Korean). Example: "RSI가 이 값 아래로 내려가면 롱 진입 신호가 발생합니다. 값이 낮을수록 더 극단적인 과매도 구간에서만 진입합니다."
+- `group`: Category for grouping in the UI. Use exactly one of: "진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)". Every parameter MUST have a group.
 
 The strategy class **must** use `def __init__(self, **kwargs: Any) -> None:` and merge defaults with `merged = {**STRATEGY_PARAMS, **kwargs}`, then read all tunables from `merged` only (no duplicate magic numbers). Job runners may call `StrategyClass()` or `StrategyClass(**overrides)`.
 

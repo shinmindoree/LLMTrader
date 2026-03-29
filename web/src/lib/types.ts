@@ -112,6 +112,8 @@ export type StrategySyntaxCheckResponse = {
 export type StrategyParamFieldSpec = {
   type?: string;
   label?: string;
+  description?: string;
+  group?: string;
   min?: number;
   max?: number;
   enum?: unknown[];
