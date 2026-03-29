@@ -506,6 +506,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   const { t } = useI18n();
   const { setBacktestChart } = useTopChart();
   const [activeTab, setActiveTab] = useState<"chart" | "trades">("chart");
+  const [timeSortAsc, setTimeSortAsc] = useState(true);
   const result = job.result ?? null;
 
   const summary = useMemo(() => {
@@ -791,7 +792,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
               <thead className="sticky top-0 bg-[#131722]">
                 <tr className="border-b border-[#2a2e39] text-left text-[#868993]">
                   <th className="px-4 py-2">#</th>
-                  <th className="px-4 py-2">Time</th>
+                  <th className="px-4 py-2 cursor-pointer select-none hover:text-[#d1d4dc]" onClick={() => setTimeSortAsc((v) => !v)}>Time {timeSortAsc ? "▲" : "▼"}</th>
                   <th className="px-4 py-2">Symbol</th>
                   <th className="px-4 py-2">Price</th>
                   <th className="px-4 py-2">Side</th>
@@ -805,7 +806,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 </tr>
               </thead>
               <tbody>
-                {enrichedBacktest.map((t, idx) => (
+                {(timeSortAsc ? enrichedBacktest : [...enrichedBacktest].reverse()).map((t, idx) => (
                   <tr key={`bt-${t.id}`} className="border-b border-[#2a2e39]">
                     <td className="px-4 py-2 text-[#868993]">{idx + 1}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
@@ -856,7 +857,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
               <thead className="sticky top-0 bg-[#131722]">
                 <tr className="border-b border-[#2a2e39] text-left text-[#868993]">
                   <th className="px-4 py-2">#</th>
-                  <th className="px-4 py-2">Time</th>
+                  <th className="px-4 py-2 cursor-pointer select-none hover:text-[#d1d4dc]" onClick={() => setTimeSortAsc((v) => !v)}>Time {timeSortAsc ? "▲" : "▼"}</th>
                   <th className="px-4 py-2">Symbol</th>
                   <th className="px-4 py-2">Price</th>
                   <th className="px-4 py-2">Side</th>
@@ -870,7 +871,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 </tr>
               </thead>
               <tbody>
-                {enrichedLive.map((t, idx) => (
+                {(timeSortAsc ? enrichedLive : [...enrichedLive].reverse()).map((t, idx) => (
                   <tr key={`lv-${t.id}`} className="border-b border-[#2a2e39]">
                     <td className="px-4 py-2 text-[#868993]">{idx + 1}</td>
                     <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
