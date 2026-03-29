@@ -259,9 +259,14 @@ function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
   });
 }
 
-function buildEquitySeriesFromPositions(positions: Position[], initialEquity: number | null): ChartPoint[] {
-  let equityNet = initialEquity ?? 0;
-  let equityGross = initialEquity ?? 0;
+function buildEquitySeriesFromPositions(
+  positions: Position[],
+  initialEquity: number | null,
+  cumPnlMode: boolean = false,
+): ChartPoint[] {
+  const base = cumPnlMode ? 0 : (initialEquity ?? 0);
+  let equityNet = base;
+  let equityGross = base;
   const points: ChartPoint[] = [];
 
   for (let i = 0; i < positions.length; i++) {
@@ -425,10 +430,12 @@ function Chart({
   points,
   showEquity,
   backtestSymbol,
+  isLive = false,
 }: {
   points: ChartPoint[];
   showEquity: boolean;
   backtestSymbol: string | null;
+  isLive?: boolean;
 }) {
   const { t } = useI18n();
   const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
@@ -490,7 +497,7 @@ function Chart({
             <span className="h-2 w-2 rounded-sm bg-[#26a69a]" /> {t.tradeAnalysis.pnl}
           </span>
           <span className="inline-flex items-center gap-2">
-            <span className="h-0.5 w-4 rounded-full bg-[#42a5f5]" /> {t.tradeAnalysis.equity}
+            <span className="h-0.5 w-4 rounded-full bg-[#42a5f5]" /> {isLive ? "Cumulative PnL" : t.tradeAnalysis.equity}
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -535,7 +542,7 @@ function Chart({
                 {formatSigned(getPnl(hoveredPoint), "USDT")}
               </span>
             </li>
-            <li>Balance: {formatNumber(getEquity(hoveredPoint), 2)} USDT</li>
+            <li>{isLive ? "Cum. PnL" : "Balance"}: {isLive ? formatSigned(getEquity(hoveredPoint), "USDT") : `${formatNumber(getEquity(hoveredPoint), 2)} USDT`}</li>
           </ul>
         </div>
       ) : null}
@@ -676,7 +683,11 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     [sortedTrades, leverage],
   );
 
-  const chartPoints = useMemo(() => buildEquitySeriesFromPositions(positions, initialEquity), [positions, initialEquity]);
+  const isLive = job.type === "LIVE";
+  const chartPoints = useMemo(
+    () => buildEquitySeriesFromPositions(positions, initialEquity, isLive),
+    [positions, initialEquity, isLive],
+  );
 
   const finalEquity =
     initialEquity !== null ? initialEquity + totalPnl - totalCommission : null;
@@ -895,8 +906,9 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
 
               <Chart
                 points={chartPoints}
-                showEquity={initialEquity !== null}
+                showEquity={isLive || initialEquity !== null}
                 backtestSymbol={backtestSymbol}
+                isLive={isLive}
               />
             </>
           ) : activeTab === "trades" ? (
