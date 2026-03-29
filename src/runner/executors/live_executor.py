@@ -187,11 +187,15 @@ async def run_live(
         portfolio_risk_manager=portfolio_risk_manager,
         portfolio_multiplier=float(max(1, len(symbols))),
     )
+    _initial_equity_persisted = False
+
     async def _on_engine_ready(initial_equity: float) -> None:
+        nonlocal _initial_equity_persisted
         try:
             async with session_maker() as session:
                 await store_live_initial_equity(session, job_id, initial_equity)
                 await session.commit()
+            _initial_equity_persisted = True
         except Exception as exc:  # noqa: BLE001
             print(f"[runner] store initial_equity failed job_id={job_id}: {type(exc).__name__}: {exc}")
 
@@ -216,6 +220,7 @@ async def run_live(
     hb_interval = max(10, int(settings.runner_live_heartbeat_interval_sec))
 
     async def _heartbeat_loop() -> None:
+        nonlocal _initial_equity_persisted
         while not should_stop.is_set():
             await asyncio.sleep(hb_interval)
             if should_stop.is_set():
@@ -223,6 +228,11 @@ async def run_live(
             try:
                 async with session_maker() as session:
                     await update_live_job_heartbeat(session, job_id)
+                    if not _initial_equity_persisted and engine.snapshots:
+                        eq = float(engine.snapshots[0].get("portfolio_total_equity") or 0)
+                        if eq > 0:
+                            await store_live_initial_equity(session, job_id, eq)
+                            _initial_equity_persisted = True
                     await session.commit()
             except Exception as exc:  # noqa: BLE001
                 print(f"[runner] live heartbeat failed job_id={job_id}: {type(exc).__name__}: {exc}")
