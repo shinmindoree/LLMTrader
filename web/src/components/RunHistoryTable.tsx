@@ -46,6 +46,7 @@ export type RunHistoryRow = {
   dateMs: number;
   startedAt: string;
   endedAt: string;
+  endedAtMs: number;
   strategy: string;
   symbol: string;
   interval: string;
@@ -128,6 +129,7 @@ function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
     dateMs: createdAt,
     startedAt: job.started_at ? new Date(job.started_at).toLocaleString() : "-",
     endedAt: job.ended_at ? new Date(job.ended_at).toLocaleString() : "-",
+    endedAtMs: job.ended_at ? new Date(job.ended_at).getTime() : 0,
     strategy: strategyNameFromPath(job.strategy_path),
     symbol: extractSymbol(type, config),
     interval: extractInterval(type, config),
@@ -140,7 +142,7 @@ function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
   };
 }
 
-type SortKey = "date" | "strategy" | "symbol" | "interval" | "status" | "totalTrades" | "netProfit" | "returnPct" | "winRate";
+type SortKey = "date" | "endedAt" | "strategy" | "symbol" | "interval" | "status" | "totalTrades" | "netProfit" | "returnPct" | "winRate";
 type SortOrder = "asc" | "desc";
 
 function SortIcon({ active, order }: { active: boolean; order: SortOrder }) {
@@ -175,6 +177,9 @@ export function RunHistoryTable({
       switch (sortKey) {
         case "date":
           cmp = a.dateMs - b.dateMs;
+          break;
+        case "endedAt":
+          cmp = a.endedAtMs - b.endedAtMs;
           break;
         case "strategy":
           cmp = a.strategy.localeCompare(b.strategy);
@@ -241,8 +246,9 @@ export function RunHistoryTable({
               {t.runHistory.startedAt}
               <SortIcon active={sortKey === "date"} order={sortOrder} />
             </th>
-            <th className="px-3 py-2.5 text-left text-xs font-medium text-[#868993] whitespace-nowrap">
+            <th className={thClass} onClick={() => handleSort("endedAt")}>
               {t.runHistory.endedAt}
+              <SortIcon active={sortKey === "endedAt"} order={sortOrder} />
             </th>
             <th className={thClass} onClick={() => handleSort("strategy")}>
               {t.runHistory.strategy}
