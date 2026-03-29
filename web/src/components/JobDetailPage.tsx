@@ -12,7 +12,6 @@ import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
 import { jobDetailPath } from "@/lib/routes";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
-import { JobEventsConsole } from "@/app/jobs/[jobId]/JobEventsConsole";
 import { TradeAnalysis } from "@/components/TradeAnalysis";
 import { JobProgressGauge } from "@/components/JobProgressGauge";
 import { JobConfigSummary } from "@/components/JobConfigSummary";
@@ -204,12 +203,6 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       ) : null}
 
       {job ? <TradeAnalysis job={job} liveTrades={trades} /> : null}
-
-      {job?.type === "LIVE" && validJobId && jobId ? (
-        <div className="mt-6">
-          <JobEventsConsole jobId={jobId} />
-        </div>
-      ) : null}
     </main>
   );
 }
