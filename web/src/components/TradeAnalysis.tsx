@@ -1045,7 +1045,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
               ) : (
                 <div className="max-h-[520px] overflow-auto">
                   <div className="divide-y divide-[#2a2e39]">
-                    {(timeSortAsc ? positions : [...positions].reverse()).map((pos, idx) => (
+                    {[...positions].reverse().map((pos, idx) => (
                       <div key={idx} className="px-4 py-4">
                         <div className="mb-3 flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-[#d1d4dc]">{pos.symbol}</span>
