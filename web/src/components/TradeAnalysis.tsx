@@ -258,34 +258,31 @@ function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
   });
 }
 
-function buildEquitySeries(trades: NormalizedTrade[], initialEquity: number | null): ChartPoint[] {
+function buildEquitySeriesFromPositions(positions: Position[], initialEquity: number | null): ChartPoint[] {
   let equityNet = initialEquity ?? 0;
   let equityGross = initialEquity ?? 0;
   const points: ChartPoint[] = [];
-  let tradeIndex = 0;
 
-  for (const trade of trades) {
-    const pnl = trade.pnl ?? 0;
-    const commission = trade.commission ?? 0;
-    equityNet += pnl - commission;
-    equityGross += pnl;
+  for (let i = 0; i < positions.length; i++) {
+    const pos = positions[i];
+    if (pos.status !== "Closed") continue;
+    const grossPnl = pos.realizedPnl; // already net of commission in buildPositions
+    equityNet += grossPnl;
+    equityGross += grossPnl;
 
-    if (trade.pnl !== null && trade.pnl !== 0) {
-      tradeIndex += 1;
-      points.push({
-        index: tradeIndex,
-        timestamp: trade.timestamp,
-        pnl: trade.pnl,
-        pnlNet: trade.pnl - commission,
-        equity: equityNet,
-        equityGross,
-        commission,
-        symbol: trade.symbol,
-        side: trade.side,
-        positionSizeUsdt: trade.positionSizeUsdt,
-        reason: trade.exitReason ?? trade.reason,
-      });
-    }
+    points.push({
+      index: i + 1,
+      timestamp: pos.closedAt ? Date.parse(pos.closedAt) || null : null,
+      pnl: grossPnl,
+      pnlNet: grossPnl,
+      equity: equityNet,
+      equityGross,
+      commission: 0,
+      symbol: pos.symbol,
+      side: pos.direction,
+      positionSizeUsdt: pos.entryPrice * pos.closedVol,
+      reason: pos.direction,
+    });
   }
 
   return points;
@@ -494,7 +491,7 @@ function Chart({
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span>{points.length} trades - PnL range +/-{formatNumber(maxAbsPnl, 2)} USDT</span>
+          <span>{points.length} positions - PnL range +/-{formatNumber(maxAbsPnl, 2)} USDT</span>
           {hasAnyCommission && (
             <label className="inline-flex cursor-pointer items-center gap-1.5 select-none">
               <input
@@ -653,8 +650,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     });
   }, [normalizedTrades]);
 
-  const chartPoints = useMemo(() => buildEquitySeries(sortedTrades, initialEquity), [sortedTrades, initialEquity]);
-
   const totalPnl = useMemo(() => {
     return sortedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
   }, [sortedTrades]);
@@ -681,6 +676,8 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     () => buildPositions(sortedTrades, leverage),
     [sortedTrades, leverage],
   );
+
+  const chartPoints = useMemo(() => buildEquitySeriesFromPositions(positions, initialEquity), [positions, initialEquity]);
 
   const finalEquity =
     initialEquity !== null ? initialEquity + totalPnl - totalCommission : null;
