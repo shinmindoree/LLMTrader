@@ -1689,49 +1689,67 @@ export default function StrategiesPage() {
                       strategyParams={paramDraft && Object.keys(paramDraft).length > 0 ? paramDraft : undefined}
                       onAnalyzeWithAI={(btResult, btConfig) => {
                         const formatted = formatBacktestResultsForAI(btResult, btConfig);
+                        const userMsgId = createId();
                         const userMsg: ChatMessage = {
-                          id: createId(),
+                          id: userMsgId,
                           role: "user",
                           content: `다음 백테스트 결과를 분석하고 전략 개선안을 제시해주세요:\n\n${formatted}`,
                         };
-                        setChatMessages((prev) => [...prev, userMsg]);
-                        setActiveTab("chat");
-                        setTimeout(() => {
-                          const assistantMsg: ChatMessage = {
-                            id: createId(),
-                            role: "assistant",
-                            content: "",
-                            status: "streaming",
-                          };
-                          setChatMessages((prev) => [...prev, assistantMsg]);
-                          const assistantId = assistantMsg.id;
-                          const messagesForApi = toApiMessages([...chatMessages, userMsg]);
+
+                        const assistantId = createId();
+                        const assistantMsg: ChatMessage = {
+                          id: assistantId,
+                          role: "assistant",
+                          content: "",
+                          status: "streaming",
+                        };
+
+                        setChatMessages((prev) => {
+                          const updated = [...prev, userMsg, assistantMsg];
+                          // Build API messages from the updated array (excluding the empty assistant)
+                          const apiMsgs = toApiMessages(updated.filter((m) => m.id !== assistantId));
                           strategyChatStream(
                             workspaceCode,
                             workspaceSummary,
-                            messagesForApi,
+                            apiMsgs,
                             {
                               onToken: (token) => {
-                                setChatMessages((prev) =>
-                                  prev.map((m) =>
+                                setChatMessages((p) =>
+                                  p.map((m) =>
                                     m.id === assistantId
                                       ? { ...m, content: m.content + token }
                                       : m
                                   )
                                 );
                               },
-                              onDone: () => {
-                                setChatMessages((prev) =>
-                                  prev.map((m) =>
+                              onDone: (payload) => {
+                                setChatMessages((p) =>
+                                  p.map((m) =>
                                     m.id === assistantId
-                                      ? { ...m, status: null }
+                                      ? {
+                                          ...m,
+                                          status: null,
+                                          content: payload?.error
+                                            ? m.content || `분석 요청 중 오류가 발생했습니다: ${payload.error}`
+                                            : m.content,
+                                        }
                                       : m
                                   )
                                 );
                               },
                             }
-                          );
-                        }, 100);
+                          ).catch((err) => {
+                            setChatMessages((p) =>
+                              p.map((m) =>
+                                m.id === assistantId
+                                  ? { ...m, status: null, content: `AI 분석 요청에 실패했습니다: ${String(err)}` }
+                                  : m
+                              )
+                            );
+                          });
+                          return updated;
+                        });
+                        setActiveTab("chat");
                       }}
                     />
                   ) : workspaceCode.trim() ? (
