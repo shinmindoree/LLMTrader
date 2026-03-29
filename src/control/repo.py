@@ -485,6 +485,21 @@ async def update_live_job_heartbeat(session: AsyncSession, job_id: uuid.UUID) ->
     )
 
 
+async def store_live_initial_equity(
+    session: AsyncSession, job_id: uuid.UUID, initial_equity: float
+) -> None:
+    """Store initial_equity in result_json while the live job is still running."""
+    await session.execute(
+        update(Job)
+        .where(Job.job_id == job_id)
+        .where(Job.status == JobStatus.RUNNING)
+        .values(
+            result_json={"summary": {"initial_equity": initial_equity}},
+            updated_at=datetime.now(),
+        )
+    )
+
+
 async def claim_next_pending_job(
     session: AsyncSession,
     *,

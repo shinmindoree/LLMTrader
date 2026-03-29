@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from binance.market_stream import BinanceBookTickerStream
 from live.context import LiveContext
@@ -122,6 +122,7 @@ class PortfolioLiveTradingEngine:
         trade_intervals: dict[str, str],
         user_stream_hub: UserStreamHub,
         log_interval: int | None = None,
+        on_ready: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self.strategy = strategy
         self.ctx = portfolio_ctx
@@ -143,6 +144,7 @@ class PortfolioLiveTradingEngine:
         self._feed_tasks: list[asyncio.Task[None]] = []
         self._book_ticker_streams: list[BinanceBookTickerStream] = []
         self._book_ticker_tasks: list[asyncio.Task[None]] = []
+        self._on_ready = on_ready
 
         self.snapshots: list[dict[str, Any]] = []
 
@@ -160,6 +162,11 @@ class PortfolioLiveTradingEngine:
             self.user_stream_hub.register_reconnect_handler(ctx._on_user_stream_reconnect)  # noqa: SLF001
 
         await self.user_stream_hub.start()
+
+        # Report initial equity to caller (for DB persistence)
+        if self._on_ready:
+            initial_equity = self.ctx.portfolio_total_equity()
+            await self._on_ready(initial_equity)
 
         # 2) seed OHLCV for all candle streams
         seed_limit = 1000

@@ -8,7 +8,7 @@ from typing import Any
 from binance.client import BinanceHTTPClient
 from common.risk import RiskConfig
 from control.enums import EventKind
-from control.repo import update_live_job_heartbeat
+from control.repo import update_live_job_heartbeat, store_live_initial_equity
 from live.context import LiveContext
 from live.indicator_context import CandleStreamIndicatorContext
 from live.portfolio_context import PortfolioContext
@@ -187,6 +187,14 @@ async def run_live(
         portfolio_risk_manager=portfolio_risk_manager,
         portfolio_multiplier=float(max(1, len(symbols))),
     )
+    async def _on_engine_ready(initial_equity: float) -> None:
+        try:
+            async with session_maker() as session:
+                await store_live_initial_equity(session, job_id, initial_equity)
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[runner] store initial_equity failed job_id={job_id}: {type(exc).__name__}: {exc}")
+
     engine: Any = PortfolioLiveTradingEngine(
         strategy=strategy,
         portfolio_ctx=portfolio_ctx,
@@ -196,6 +204,7 @@ async def run_live(
         trade_intervals=trade_intervals,
         user_stream_hub=user_stream_hub,
         log_interval=log_interval_value,
+        on_ready=_on_engine_ready,
     )
 
     sink.emit(kind=EventKind.LOG, message="LIVE_START", payload={"streams": normalized_streams})
