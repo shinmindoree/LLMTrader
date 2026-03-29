@@ -113,10 +113,11 @@ function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
     const r = result as Record<string, unknown>;
     const summary = isRecord(r.summary) ? (r.summary as Record<string, unknown>) : r;
     const initial = asNumber(summary.initial_equity) ?? asNumber(summary.initial_balance);
-    const final = asNumber(summary.final_equity) ?? asNumber(summary.final_balance);
+    const final_ = asNumber(summary.final_equity) ?? asNumber(summary.final_balance);
     totalTrades = asNumber(summary.num_trades) ?? asNumber(summary.total_trades);
-    netProfit = asNumber(summary.net_profit) ?? (initial !== null && final !== null ? final - initial : null);
-    returnPct = asNumber(summary.total_return_pct) ?? (initial != null && initial > 0 && final !== null ? ((final - initial) / initial) * 100 : null);
+    netProfit = asNumber(summary.net_profit) ?? (initial !== null && final_ !== null ? final_ - initial : null);
+    returnPct = asNumber(summary.total_return_pct) ?? (initial != null && initial > 0 && final_ !== null ? ((final_ - initial) / initial) * 100 : null);
+    winRate = asNumber(summary.win_rate);
   }
 
   const createdAt = job.created_at ? new Date(job.created_at).getTime() : 0;

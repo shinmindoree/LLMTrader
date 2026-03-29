@@ -403,16 +403,27 @@ class PortfolioLiveTradingEngine:
         out: dict[str, Any] = {
             "initial_equity": initial_equity,
             "final_equity": final_equity,
+            "net_profit": round(final_equity - initial_equity, 8),
             "total_return_pct": total_return_pct,
             "num_snapshots": len(self.snapshots),
             "symbols": {},
         }
+
+        total_trades = 0
+        total_wins = 0
         for symbol, ctx in self.trade_contexts.items():
+            n_filled = len(ctx.filled_orders)
+            n_wins = sum(1 for o in ctx.filled_orders if float(o.get("realized_pnl", 0) or 0) > 0)
+            total_trades += n_filled
+            total_wins += n_wins
             out["symbols"][symbol] = {
                 "position_size": ctx.position_size,
                 "position_entry_price": ctx.position.entry_price,
                 "unrealized_pnl": ctx.unrealized_pnl,
-                "num_filled_orders": len(ctx.filled_orders),
+                "num_filled_orders": n_filled,
                 "num_pending_orders": len(ctx.pending_orders),
             }
+
+        out["num_trades"] = total_trades
+        out["win_rate"] = round((total_wins / total_trades * 100) if total_trades > 0 else 0.0, 2)
         return out
