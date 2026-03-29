@@ -938,12 +938,34 @@ export default function StrategiesPage() {
     snapshotCurrentSession();
     const nextSession = createEmptySession();
     setChatSessions((prev) => [nextSession, ...prev]);
+    // Immediately clear workspace state to prevent leaking into the new session
+    setChatMessages([]);
+    setChatError(null);
+    setPrompt("");
+    setWorkspaceCode("");
+    setWorkspaceSourceMessageId(null);
+    setInitialGeneratedCode(null);
+    setWorkspaceSummary(null);
+    setWorkspaceDirty(false);
+    setWorkspaceSyntax(null);
+    setWorkspaceSyntaxError(null);
     setActiveSessionId(nextSession.id);
   };
 
   const handleSelectSession = (sessionId: string) => {
     if (sessionId === activeSessionId) return;
     snapshotCurrentSession();
+    // Immediately clear workspace state to prevent leaking between sessions
+    setChatMessages([]);
+    setChatError(null);
+    setPrompt("");
+    setWorkspaceCode("");
+    setWorkspaceSourceMessageId(null);
+    setInitialGeneratedCode(null);
+    setWorkspaceSummary(null);
+    setWorkspaceDirty(false);
+    setWorkspaceSyntax(null);
+    setWorkspaceSyntaxError(null);
     setActiveSessionId(sessionId);
   };
 
