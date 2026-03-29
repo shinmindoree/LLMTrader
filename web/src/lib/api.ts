@@ -474,6 +474,7 @@ export async function generateStrategyStream(
     backtest_ok?: boolean;
     repaired?: boolean;
     repair_attempts?: number;
+    rejected?: boolean;
     error?: string;
   }) => {
     if (settled) return;
