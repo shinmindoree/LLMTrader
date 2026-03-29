@@ -688,17 +688,14 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
       ? ((finalEquity - initialEquity) / initialEquity) * 100
       : null;
 
-  const pnls = useMemo(
-    () =>
-      sortedTrades
-        .map((t) => t.pnl)
-        .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p)),
-    [sortedTrades],
+  const positionPnls = useMemo(
+    () => positions.filter((p) => p.status === "Closed").map((p) => p.realizedPnl),
+    [positions],
   );
-  const tradeStats = useMemo(() => computeTradeStats(pnls), [pnls]);
+  const tradeStats = useMemo(() => computeTradeStats(positionPnls), [positionPnls]);
 
-  const numTrades = sortedTrades.filter((t) => t.pnl != null && t.pnl !== 0).length;
-  const winCount = pnls.filter((p) => p > 0).length;
+  const numTrades = positions.filter((p) => p.status === "Closed").length;
+  const winCount = positionPnls.filter((p) => p > 0).length;
   const winRatePct = numTrades > 0 ? (winCount / numTrades) * 100 : 0;
 
   const backtestSymbol = useMemo(() => {
