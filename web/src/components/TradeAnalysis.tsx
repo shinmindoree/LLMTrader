@@ -38,6 +38,7 @@ type Position = {
   maxOi: number;
   openedAt: string;
   closedAt: string | null;
+  closedTimestamp: number | null;
 };
 
 type ChartPoint = {
@@ -272,7 +273,7 @@ function buildEquitySeriesFromPositions(positions: Position[], initialEquity: nu
 
     points.push({
       index: i + 1,
-      timestamp: pos.closedAt ? Date.parse(pos.closedAt) || null : null,
+      timestamp: pos.closedTimestamp,
       pnl: grossPnl,
       pnlNet: grossPnl,
       equity: equityNet,
@@ -379,6 +380,7 @@ function buildPositions(trades: NormalizedTrade[], leverage: number): Position[]
           maxOi,
           openedAt: entryTrades[0]?.timeLabel ?? "-",
           closedAt: exitTrades[exitTrades.length - 1]?.timeLabel ?? "-",
+          closedTimestamp: exitTrades[exitTrades.length - 1]?.timestamp ?? null,
         });
 
         entryDirection = null;
@@ -412,6 +414,7 @@ function buildPositions(trades: NormalizedTrade[], leverage: number): Position[]
       maxOi,
       openedAt: entryTrades[0]?.timeLabel ?? "-",
       closedAt: null,
+      closedTimestamp: null,
     });
   }
 
@@ -513,7 +516,7 @@ function Chart({
           style={{ left: tooltipPos.x + 12, top: tooltipPos.y + 12 }}
         >
           <ul className="list-inside list-disc space-y-1 text-[#d1d4dc]">
-            <li>Time: {formatDateTime(hoveredPoint.timestamp)}</li>
+            <li>Close Time: {formatDateTime(hoveredPoint.timestamp)}</li>
             <li>Symbol: {symbolLabel(hoveredPoint)}</li>
             <li>Side: {hoveredPoint.side ?? "-"}</li>
             <li>
@@ -531,12 +534,8 @@ function Chart({
               >
                 {formatSigned(getPnl(hoveredPoint), "USDT")}
               </span>
-              {afterFees && hoveredPoint.commission > 0 && (
-                <span className="text-[#868993]"> (fee: {formatNumber(hoveredPoint.commission, 4)})</span>
-              )}
             </li>
-            <li>Equity: {formatNumber(getEquity(hoveredPoint), 2)} USDT</li>
-            <li>Reason: {hoveredPoint.reason ?? "-"}</li>
+            <li>Balance: {formatNumber(getEquity(hoveredPoint), 2)} USDT</li>
           </ul>
         </div>
       ) : null}
