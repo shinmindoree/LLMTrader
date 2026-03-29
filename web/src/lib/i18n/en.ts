@@ -186,6 +186,8 @@ const en = {
   },
   runHistory: {
     date: "Date",
+    startedAt: "Started",
+    endedAt: "Ended",
     strategy: "Strategy",
     symbol: "Symbol",
     interval: "Interval",

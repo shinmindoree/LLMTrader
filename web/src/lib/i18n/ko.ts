@@ -190,6 +190,8 @@ const ko: TranslationKeys = {
   },
   runHistory: {
     date: "날짜",
+    startedAt: "시작 시간",
+    endedAt: "종료 시간",
     strategy: "전략",
     symbol: "심볼",
     interval: "주기",

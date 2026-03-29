@@ -44,6 +44,8 @@ export type RunHistoryRow = {
   job: AnyJob;
   date: string;
   dateMs: number;
+  startedAt: string;
+  endedAt: string;
   strategy: string;
   symbol: string;
   interval: string;
@@ -123,6 +125,8 @@ function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
     job,
     date: job.created_at ? new Date(job.created_at).toLocaleString() : "-",
     dateMs: createdAt,
+    startedAt: job.started_at ? new Date(job.started_at).toLocaleString() : "-",
+    endedAt: job.ended_at ? new Date(job.ended_at).toLocaleString() : "-",
     strategy: strategyNameFromPath(job.strategy_path),
     symbol: extractSymbol(type, config),
     interval: extractInterval(type, config),
@@ -233,8 +237,11 @@ export function RunHistoryTable({
         <thead>
           <tr className="border-b border-[#2a2e39] bg-[#131722]">
             <th className={thClass} onClick={() => handleSort("date")}>
-              {t.runHistory.date}
+              {t.runHistory.startedAt}
               <SortIcon active={sortKey === "date"} order={sortOrder} />
+            </th>
+            <th className="px-3 py-2.5 text-left text-xs font-medium text-[#868993] whitespace-nowrap">
+              {t.runHistory.endedAt}
             </th>
             <th className={thClass} onClick={() => handleSort("strategy")}>
               {t.runHistory.strategy}
@@ -282,7 +289,8 @@ export function RunHistoryTable({
               key={row.job.job_id}
               className="border-b border-[#2a2e39] hover:bg-[#252a37] transition-colors"
             >
-              <td className={tdClass}>{row.date}</td>
+              <td className={tdClass}>{row.startedAt}</td>
+              <td className={`${tdClass} text-[#868993]`}>{row.endedAt}</td>
               <td className={tdClass}>
                 <Link
                   className="font-medium text-[#2962ff] hover:underline"
