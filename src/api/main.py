@@ -610,32 +610,32 @@ def create_app() -> FastAPI:
 
     _keepalive_task: asyncio.Task[None] | None = None
 
-    async def _db_keepalive(interval: int = 300) -> None:
-        """Periodically send SELECT 1 to prevent idle DB shutdown."""
+    async def _db_keepalive(interval: int = 60) -> None:
+        """Periodically send SELECT 1 to prevent idle DB connection termination."""
         while True:
             await asyncio.sleep(interval)
             try:
                 async with session_maker() as session:
                     await session.execute(text("SELECT 1"))
             except Exception as exc:
-                print(f"[keepalive] DB ping failed: {exc}")
+                _logger.warning("DB keep-alive ping failed: %s", exc)
 
     @app.on_event("startup")
     async def _startup() -> None:
         nonlocal _keepalive_task
         if settings.auto_alembic_upgrade:
-            print("[api] applying database migrations (alembic upgrade head)...")
+            _logger.info("Applying database migrations (alembic upgrade head)...")
             await asyncio.to_thread(run_alembic_upgrade_head)
         await init_db(engine)
         _keepalive_task = asyncio.create_task(_db_keepalive())
-        print("[api] DB keep-alive task started (interval=300s)")
+        _logger.info("DB keep-alive task started (interval=60s)")
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         nonlocal _keepalive_task
         if _keepalive_task:
             _keepalive_task.cancel()
-            print("[api] DB keep-alive task stopped")
+            _logger.info("DB keep-alive task stopped")
 
     async def _db_session() -> AsyncIterator[AsyncSession]:
         from sqlalchemy.exc import OperationalError, InterfaceError

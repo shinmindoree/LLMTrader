@@ -24,6 +24,8 @@ _jwk_client: PyJWKClient | None = None
 # In-memory cache for user profiles: email -> (user_id, plan, timestamp)
 _PROFILE_CACHE: dict[str, tuple[str, str, float]] = {}
 _PROFILE_CACHE_TTL = 300  # 5 minutes
+_REDIS_PROFILE_TTL = 1800  # 30 minutes (shared across replicas)
+_REDIS_PROFILE_PREFIX = "profile:"
 
 
 def set_session_maker(sm: async_sessionmaker[AsyncSession]) -> None:
@@ -109,12 +111,54 @@ async def _verify_entra_user(id_token: str) -> AuthenticatedUser:
     return AuthenticatedUser(user_id=user_id, email=email, provider="entra")
 
 
+async def _redis_get_profile(norm_email: str) -> tuple[str, str] | None:
+    """L2 cache: try to read profile from Redis. Returns (user_id, plan) or None."""
+    try:
+        from api.kline_cache import _get_redis
+
+        r = await _get_redis()
+        if r is None:
+            return None
+        import json as _json
+
+        data = await r.get(f"{_REDIS_PROFILE_PREFIX}{norm_email}")
+        if data is None:
+            return None
+        parsed = _json.loads(data)
+        return (parsed["user_id"], parsed["plan"])
+    except Exception:  # noqa: BLE001
+        logger.debug("Redis profile cache read error", exc_info=True)
+        return None
+
+
+async def _redis_set_profile(norm_email: str, user_id: str, plan: str) -> None:
+    """L2 cache: write profile to Redis."""
+    try:
+        from api.kline_cache import _get_redis
+
+        r = await _get_redis()
+        if r is None:
+            return
+        import json as _json
+
+        data = _json.dumps({"user_id": user_id, "plan": plan})
+        await r.set(f"{_REDIS_PROFILE_PREFIX}{norm_email}", data.encode(), ex=_REDIS_PROFILE_TTL)
+    except Exception:  # noqa: BLE001
+        logger.debug("Redis profile cache write error", exc_info=True)
+
+
+def _set_local_cache(norm_email: str, user_id: str, plan: str) -> None:
+    """L1 cache: write to in-memory dict."""
+    if norm_email:
+        _PROFILE_CACHE[norm_email] = (user_id, plan, time.monotonic())
+
+
 async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
     from control.models import UserProfile
 
     norm_email = _normalize_email(user.email)
 
-    # Check in-memory cache first
+    # ── L1: in-memory cache (per-replica, 5min TTL) ──
     if norm_email and norm_email in _PROFILE_CACHE:
         cached_uid, cached_plan, cached_ts = _PROFILE_CACHE[norm_email]
         if time.monotonic() - cached_ts < _PROFILE_CACHE_TTL:
@@ -122,6 +166,15 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
             user.plan = cached_plan
             return user
 
+    # ── L2: Redis cache (shared across replicas, 30min TTL) ──
+    if norm_email:
+        redis_hit = await _redis_get_profile(norm_email)
+        if redis_hit is not None:
+            user.user_id, user.plan = redis_hit
+            _set_local_cache(norm_email, user.user_id, user.plan)
+            return user
+
+    # ── L3: PostgreSQL (source of truth) ──
     sm = _get_session_maker()
     max_retries = 2
     last_exc: Exception | None = None
@@ -139,7 +192,8 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
                     if existing_profile:
                         user.user_id = existing_profile.user_id
                         user.plan = existing_profile.plan or "free"
-                        _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
+                        _set_local_cache(norm_email, user.user_id, user.plan)
+                        await _redis_set_profile(norm_email, user.user_id, user.plan)
                         return user
 
                 stmt = (
@@ -155,8 +209,8 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
                 )
                 plan = result.scalar_one_or_none() or "free"
                 user.plan = plan
-                if norm_email:
-                    _PROFILE_CACHE[norm_email] = (user.user_id, user.plan, time.monotonic())
+                _set_local_cache(norm_email, user.user_id, user.plan)
+                await _redis_set_profile(norm_email, user.user_id, user.plan)
             return user
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
@@ -166,10 +220,13 @@ async def _ensure_user_profile(user: AuthenticatedUser) -> AuthenticatedUser:
             else:
                 logger.error("DB error in _ensure_user_profile after %d attempts: %s", max_retries + 1, exc, exc_info=True)
 
-    raise HTTPException(
-        status_code=503,
-        detail=f"Database temporarily unavailable: {type(last_exc).__name__}",
+    # ── L4: Graceful degradation — auth succeeds with plan=free ──
+    logger.warning(
+        "DB unavailable, using token-only auth for user=%s email=%s (last error: %s)",
+        user.user_id, user.email, last_exc,
     )
+    user.plan = "free"
+    return user
 
 
 async def _verify_nextauth_user(
