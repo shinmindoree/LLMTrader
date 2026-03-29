@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { deleteAllJobs, deleteJob, listJobSummaries, listStrategies, stopAllJobs } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -18,6 +19,7 @@ const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTE
 
 export default function BacktestJobsPage() {
   const { t } = useI18n();
+  const router = useRouter();
   const isVisible = usePageVisibility();
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -46,9 +48,10 @@ export default function BacktestJobsPage() {
 
   const refresh = useCallback(() => refreshItems(), [refreshItems]);
 
-  const onCreated = () => {
-    setNotice(t.backtest.runStarted);
+  const onCreated = (job: Job) => {
     refreshItems();
+    setFormOpen(false);
+    router.push(`/backtest/jobs/${job.job_id}`);
   };
 
   const onDeleteJob = async (job: Job | JobSummary) => {
@@ -182,10 +185,7 @@ export default function BacktestJobsPage() {
         {strategies.length ? (
           <BacktestForm
             strategies={strategies}
-            onCreated={() => {
-              onCreated();
-              setFormOpen(false);
-            }}
+            onCreated={onCreated}
             onSubmittingChange={setRunPending}
             onClose={() => setFormOpen(false)}
           />
