@@ -359,6 +359,8 @@ class LiveContext:
 
     async def stop_user_stream(self) -> None:
         """유저데이터 스트림 중지."""
+        # Final backfill before shutdown to cover gap since last periodic run
+        await self._run_backfill()
         self._stop_backfill_loop()
         if self._user_stream:
             await self._user_stream.stop()
