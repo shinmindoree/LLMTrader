@@ -471,6 +471,7 @@ export async function generateStrategyStream(
   let settled = false;
   let sawEvent = false;
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
+  const accumulatedTokens: string[] = [];
 
   const clearStallTimer = () => {
     if (stallTimer) {
@@ -491,6 +492,14 @@ export async function generateStrategyStream(
     if (settled) return;
     settled = true;
     clearStallTimer();
+    // If there's an error but we have partial output, include it
+    if (payload.error && !payload.code && accumulatedTokens.length > 0) {
+      const partialCode = accumulatedTokens.join("");
+      if (partialCode.trim().length > 50) {
+        payload.code = partialCode;
+        payload.error = `${payload.error} (partial output preserved)`;
+      }
+    }
     callbacks.onDone(payload);
   };
 
@@ -568,6 +577,7 @@ export async function generateStrategyStream(
             return;
           }
           if (typeof data.token === "string") {
+            accumulatedTokens.push(data.token);
             callbacks.onToken(data.token);
           }
           if (data.done === true) {

@@ -260,8 +260,13 @@ async def chat_completion_stream(
     messages: list[dict[str, str]] | None = None,
     *,
     model: str | None = None,
+    enable_continuation: bool = False,
 ) -> AsyncIterator[str]:
-    """Stream OpenAI Responses API text deltas with pre-first-token retry."""
+    """Stream OpenAI Responses API text deltas with pre-first-token retry.
+
+    If enable_continuation is True, attempts a single continuation call when
+    the stream ends mid-code (incomplete Python class/function).
+    """
     request_kwargs = _build_response_kwargs(
         config,
         system_content=system_content,
@@ -271,6 +276,7 @@ async def chat_completion_stream(
         model=model,
     )
 
+    accumulated: list[str] = []
     last_error: Exception | None = None
     for attempt in range(_STREAM_MAX_RETRIES + 1):
         emitted = False
@@ -282,10 +288,18 @@ async def chat_completion_stream(
                     event_type = getattr(event, "type", None)
                     if event_type == "response.output_text.delta" and getattr(event, "delta", None):
                         emitted = True
+                        accumulated.append(event.delta)
                         yield event.delta
                     elif event_type == "response.output_text.done" and getattr(event, "text", None):
                         final_text = event.text
             if emitted:
+                # Check if continuation is needed
+                if enable_continuation:
+                    partial = "".join(accumulated)
+                    if _looks_like_truncated_code(partial):
+                        logger.info("Detected truncated code output, attempting continuation")
+                        async for token in _continuation_stream(config, system_content, partial, model):
+                            yield token
                 return
             if final_text and final_text.strip():
                 yield final_text
@@ -295,7 +309,17 @@ async def chat_completion_stream(
             last_error = exc
             if emitted:
                 # Already yielded tokens — cannot safely retry.
-                raise
+                # But still try continuation if enabled
+                if enable_continuation:
+                    partial = "".join(accumulated)
+                    if _looks_like_truncated_code(partial):
+                        logger.info("Stream error after partial output, attempting continuation")
+                        try:
+                            async for token in _continuation_stream(config, system_content, partial, model):
+                                yield token
+                        except Exception:
+                            logger.warning("Continuation also failed", exc_info=True)
+                return
 
         if attempt < _STREAM_MAX_RETRIES:
             wait = 1.0 * (attempt + 1)
@@ -363,3 +387,59 @@ def chat_completion_messages(
         _raise_empty_completion(response)
     model_used = getattr(response, "model", None) or config.resolved_openai_model
     return content, model_used
+
+
+def _looks_like_truncated_code(text: str) -> bool:
+    """Heuristic: check if text appears to be truncated Python code."""
+    stripped = text.rstrip()
+    if not stripped:
+        return False
+    # Must contain at least some code indicators
+    if "class " not in stripped and "def " not in stripped:
+        return False
+    lines = stripped.splitlines()
+    if not lines:
+        return False
+    last_line = lines[-1]
+    # If the last line is mid-expression and deeply indented, it's truncated
+    if last_line and not last_line.startswith(("class ", "def ", "#")) and last_line.startswith("    "):
+        indent_levels = set()
+        for line in lines:
+            if line.strip() and not line.startswith("#"):
+                indent = len(line) - len(line.lstrip())
+                indent_levels.add(indent)
+        if indent_levels and max(indent_levels) >= 8:
+            if not any(lines[-1].strip().startswith(p) for p in ("return ", "pass", "raise ", "self.")):
+                return True
+    return False
+
+
+async def _continuation_stream(
+    config: RelayConfig,
+    system_content: str,
+    partial_code: str,
+    model: str | None,
+) -> AsyncIterator[str]:
+    """Attempt a single continuation of truncated code."""
+    continuation_prompt = (
+        "Continue the Python code from where it was cut off. "
+        "Do not repeat any code that was already written. "
+        "Continue from the exact point where it stopped.\n\n"
+        f"Previous output (DO NOT REPEAT):\n```python\n{partial_code[-2000:]}\n```"
+    )
+    continuation_kwargs = _build_response_kwargs(
+        config,
+        system_content=system_content,
+        user_content=continuation_prompt,
+        stream=True,
+        model=model,
+    )
+    try:
+        async with _create_async_client(config, timeout=_OPENAI_STREAM_TIMEOUT) as client:
+            stream = await client.responses.create(**continuation_kwargs)
+            async for event in stream:
+                event_type = getattr(event, "type", None)
+                if event_type == "response.output_text.delta" and getattr(event, "delta", None):
+                    yield event.delta
+    except Exception:
+        logger.warning("Continuation stream failed", exc_info=True)

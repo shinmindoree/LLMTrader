@@ -1008,6 +1008,7 @@ async def _generate_stream_body(body: StrategyRequest):
                 system_content=system_content,
                 messages=openai_messages,
                 model=coder_model,
+                enable_continuation=True,
             ):
                 code_acc.append(token)
                 token_count += 1
@@ -1020,6 +1021,7 @@ async def _generate_stream_body(body: StrategyRequest):
                 system_content=system_content,
                 user_content=prompt,
                 model=coder_model,
+                enable_continuation=True,
             ):
                 code_acc.append(token)
                 token_count += 1
