@@ -80,7 +80,10 @@ def _create_client(config: RelayConfig) -> OpenAI:
 
 
 @asynccontextmanager
-async def _create_async_client(config: RelayConfig):
+async def _create_async_client(
+    config: RelayConfig,
+    timeout: httpx.Timeout | None = None,
+):
     credential = _build_async_credential(config)
     token_provider = get_async_bearer_token_provider(
         credential,
@@ -89,7 +92,7 @@ async def _create_async_client(config: RelayConfig):
     client = AsyncOpenAI(
         base_url=config.resolved_openai_base_url.rstrip("/") + "/",
         api_key=token_provider,
-        timeout=_OPENAI_TIMEOUT,
+        timeout=timeout or _OPENAI_TIMEOUT,
     )
     try:
         yield client
@@ -151,6 +154,7 @@ def _build_response_kwargs(
         "instructions": system_content,
         "input": _build_response_input(user_content=user_content, messages=messages),
     }
+    kwargs["max_output_tokens"] = 16384
     if stream:
         kwargs["stream"] = True
     if text_format:
@@ -259,7 +263,7 @@ async def chat_completion_stream(
         emitted = False
         final_text: str | None = None
         try:
-            async with _create_async_client(config) as client:
+            async with _create_async_client(config, timeout=_OPENAI_STREAM_TIMEOUT) as client:
                 stream = await client.responses.create(**request_kwargs)
                 async for event in stream:
                     event_type = getattr(event, "type", None)

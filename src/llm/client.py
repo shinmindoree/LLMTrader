@@ -265,7 +265,9 @@ class LLMClient:
             headers["X-API-Key"] = self.api_key
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(180.0, connect=30.0),
+            ) as client:
                 async with client.stream(
                     "POST",
                     f"{self.base_url}/strategy/chat/stream",

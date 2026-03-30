@@ -274,8 +274,8 @@ export async function strategyChatStream(
   messages: { role: string; content: string }[],
   callbacks: StrategyChatStreamCallbacks,
 ): Promise<void> {
-  const FIRST_EVENT_TIMEOUT_MS = 45_000;
-  const EVENT_GAP_TIMEOUT_MS = 60_000;
+  const FIRST_EVENT_TIMEOUT_MS = 90_000;
+  const EVENT_GAP_TIMEOUT_MS = 120_000;
 
   const chatUserId = getChatUserId();
   const headers = new Headers();
@@ -450,8 +450,8 @@ export async function generateStrategyStream(
   strategyName?: string,
   messages?: { role: string; content: string }[],
 ): Promise<void> {
-  const FIRST_EVENT_TIMEOUT_MS = 60_000;
-  const EVENT_GAP_TIMEOUT_MS = 90_000;
+  const FIRST_EVENT_TIMEOUT_MS = 90_000;
+  const EVENT_GAP_TIMEOUT_MS = 150_000;
 
   const body: Record<string, unknown> = {
     user_prompt: userPrompt,
