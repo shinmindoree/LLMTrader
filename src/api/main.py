@@ -317,21 +317,25 @@ async def _list_strategies_for_user(
     session: AsyncSession,
     user: AuthenticatedUser,
 ) -> list[StrategyInfo]:
+    # Always include built-in filesystem strategies as baseline
+    root = _repo_root()
+    files = list_strategy_files(_strategy_dirs())
+    deduped: dict[str, StrategyInfo] = {
+        p.name: StrategyInfo(name=p.name, path=str(p.relative_to(root)))
+        for p in files
+    }
+
+    # Merge user's blob-stored strategies (overrides built-in if same name)
     storage = get_strategy_storage()
     if storage is not None:
         rows = await list_strategy_meta(session, user_id=user.user_id)
-        if rows:
-            deduped: dict[str, StrategyInfo] = {}
-            for row in rows:
-                deduped[row.strategy_name] = StrategyInfo(
-                    name=row.strategy_name,
-                    path=_logical_strategy_path(row.strategy_name),
-                )
-            return sorted(deduped.values(), key=lambda item: item.name)
+        for row in rows:
+            deduped[row.strategy_name] = StrategyInfo(
+                name=row.strategy_name,
+                path=_logical_strategy_path(row.strategy_name),
+            )
 
-    root = _repo_root()
-    files = list_strategy_files(_strategy_dirs())
-    return [StrategyInfo(name=p.name, path=str(p.relative_to(root))) for p in files]
+    return sorted(deduped.values(), key=lambda item: item.name)
 
 
 async def _resolve_strategy_code_for_user(
