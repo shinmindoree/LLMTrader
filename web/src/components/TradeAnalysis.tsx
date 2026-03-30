@@ -213,7 +213,7 @@ function normalizeBacktestTrades(raw: unknown): NormalizedTrade[] {
     });
 }
 
-function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
+export function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
   return trades.map((t) => {
     const raw = isRecord(t.raw) ? (t.raw as Record<string, unknown>) : null;
     const rawSide = raw ? asString(raw.side) : null;
@@ -330,7 +330,7 @@ function enrichLiveTrades(
   });
 }
 
-function buildPositions(trades: NormalizedTrade[], leverage: number): Position[] {
+export function buildPositions(trades: NormalizedTrade[], leverage: number): Position[] {
   const positions: Position[] = [];
   let entryTrades: NormalizedTrade[] = [];
   let exitTrades: NormalizedTrade[] = [];
@@ -1043,29 +1043,18 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
             /* Positions tab */
             <div className="rounded border border-[#2a2e39] bg-[#0f141f]">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2a2e39] px-4 py-2">
-                <span className="text-xs font-medium text-[#d1d4dc]">Position History ({positions.length})</span>
+                <span className="text-xs font-medium text-[#d1d4dc]">Position History ({positions.filter((p) => p.status === "Closed").length})</span>
               </div>
-              {positions.length === 0 ? (
+              {positions.filter((p) => p.status === "Closed").length === 0 ? (
                 <div className="px-4 py-6 text-center text-xs text-[#868993]">No position history</div>
               ) : (
                 <div className="max-h-[520px] overflow-auto">
                   <div className="divide-y divide-[#2a2e39]">
-                    {[...positions].reverse().map((pos, idx) => (
+                    {[...positions].filter((p) => p.status === "Closed").reverse().map((pos, idx) => (
                       <div
                         key={idx}
-                        className={`px-4 py-4${pos.status === "Open" ? " animate-pulse-subtle" : ""}`}
-                        style={pos.status === "Open" ? {
-                          animation: "pulse-border 2s ease-in-out infinite",
-                        } : undefined}
+                        className="px-4 py-4"
                       >
-                        {pos.status === "Open" && (
-                          <style>{`
-                            @keyframes pulse-border {
-                              0%, 100% { background-color: transparent; }
-                              50% { background-color: rgba(42, 46, 57, 0.4); }
-                            }
-                          `}</style>
-                        )}
                         <div className="mb-3 flex flex-wrap items-center gap-2">
                           <span className="text-sm font-semibold text-[#d1d4dc]">{pos.symbol}</span>
                           <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#868993]">Perp</span>

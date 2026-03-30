@@ -11,6 +11,7 @@ import type { BinanceAccountSummary, BinancePositionSummary, JobSummary, JobStat
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
+import { normalizeLiveTrades, buildPositions } from "@/components/TradeAnalysis";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -116,15 +117,29 @@ export function ActiveJobCard({
     return positions.filter((p) => symbols.includes(p.symbol.toUpperCase()));
   }, [positions, symbols]);
 
-  const netPnl = trades.length > 0
-    ? trades.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0)
-    : null;
-  const closedPnls = trades
-    .map((tr) => tr.realized_pnl)
-    .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p) && p !== 0);
-  const winCount = closedPnls.filter((p) => p > 0).length;
-  const totalClosed = closedPnls.length;
-  const winRate = totalClosed > 0 ? (winCount / totalClosed) * 100 : null;
+  const leverage = useMemo(() => {
+    if (!job.config) return 1;
+    const cfg = job.config as Record<string, unknown>;
+    return typeof cfg.leverage === "number" ? cfg.leverage : 1;
+  }, [job.config]);
+
+  const closedPositionsList = useMemo(() => {
+    const normalized = normalizeLiveTrades(trades);
+    const sorted = [...normalized].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+    const built = buildPositions(sorted, leverage);
+    return built.filter((p) => p.status === "Closed");
+  }, [trades, leverage]);
+
+  const netPnl = useMemo(() => {
+    if (trades.length === 0) return null;
+    const totalPnl = trades.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0);
+    const totalCommission = trades.reduce((s, tr) => s + (tr.commission ?? 0), 0);
+    return totalPnl - totalCommission;
+  }, [trades]);
+
+  const numTrades = closedPositionsList.length;
+  const winCount = closedPositionsList.filter((p) => p.realizedPnl > 0).length;
+  const winRate = numTrades > 0 ? (winCount / numTrades) * 100 : null;
 
   return (
     <li className="rounded-lg border border-[#2962ff]/30 bg-[#1a2340]/50 px-4 py-3">
@@ -168,7 +183,7 @@ export function ActiveJobCard({
           </div>
           <div className="rounded border border-[#2a2e39] bg-[#131722] px-3 py-2">
             <div className="text-[10px] text-[#868993]">{t.result.totalTrades}</div>
-            <div className="text-sm font-semibold text-[#d1d4dc]">{trades.length}</div>
+            <div className="text-sm font-semibold text-[#d1d4dc]">{numTrades}</div>
           </div>
           <div className="rounded border border-[#2a2e39] bg-[#131722] px-3 py-2">
             <div className="text-[10px] text-[#868993]">{t.result.winRate}</div>
@@ -184,14 +199,28 @@ export function ActiveJobCard({
       )}
 
       {matchedPositions.length > 0 && (
-        <div className="mt-2 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2">
-          <div className="mb-1 text-[10px] font-medium text-[#868993]">{t.live.openPosition}</div>
-          <div className="space-y-1">
-            {matchedPositions.map((p) => (
-              <PositionRow key={`${p.symbol}-${p.side}`} position={p} />
-            ))}
+        <>
+          <style>{`
+            @keyframes orange-glow {
+              0%, 100% { border-color: rgba(255, 152, 0, 0.2); box-shadow: none; }
+              50% { border-color: rgba(255, 152, 0, 0.5); box-shadow: 0 0 8px rgba(255, 152, 0, 0.1); }
+            }
+          `}</style>
+          <div
+            className="mt-2 rounded bg-[#131722] px-3 py-2"
+            style={{
+              border: "1px solid rgba(255, 152, 0, 0.2)",
+              animation: "orange-glow 2.5s ease-in-out infinite",
+            }}
+          >
+            <div className="mb-1 text-[10px] font-medium text-[#868993]">{t.live.openPosition}</div>
+            <div className="space-y-1">
+              {matchedPositions.map((p) => (
+                <PositionRow key={`${p.symbol}-${p.side}`} position={p} />
+              ))}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </li>
   );
