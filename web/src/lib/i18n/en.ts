@@ -257,6 +257,8 @@ const en = {
     slotsFullMessage: "All {maxSlots} slots are in use. Stop a running strategy to free a slot.",
     slotsRemaining: "slots available",
     openPosition: "Open Position",
+    lastTrade: "Last trade",
+    totalIncUnrealized: "Total",
   },
   form: {
     strategy: "Strategy",

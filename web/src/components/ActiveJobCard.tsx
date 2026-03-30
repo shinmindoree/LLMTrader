@@ -11,7 +11,7 @@ import type { BinanceAccountSummary, BinancePositionSummary, JobSummary, JobStat
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
-import { normalizeLiveTrades, buildPositions } from "@/components/TradeAnalysis";
+import { normalizeLiveTrades, buildPositions, computeTradeStats } from "@/components/TradeAnalysis";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -139,7 +139,52 @@ export function ActiveJobCard({
 
   const numTrades = closedPositionsList.length;
   const winCount = closedPositionsList.filter((p) => p.realizedPnl > 0).length;
+  const lossCount = numTrades - winCount;
   const winRate = numTrades > 0 ? (winCount / numTrades) * 100 : null;
+
+  const positionPnls = useMemo(
+    () => closedPositionsList.map((p) => p.realizedPnl),
+    [closedPositionsList],
+  );
+  const tradeStats = useMemo(() => computeTradeStats(positionPnls), [positionPnls]);
+
+  const unrealizedPnl = useMemo(() => {
+    return matchedPositions.reduce((s, p) => s + p.unrealized_pnl, 0);
+  }, [matchedPositions]);
+
+  const totalPnl = netPnl !== null ? netPnl + unrealizedPnl : null;
+
+  const runningDuration = useMemo(() => {
+    const ms = Date.now() - new Date(job.created_at).getTime();
+    if (ms < 0) return null;
+    const totalMin = Math.floor(ms / 60_000);
+    const d = Math.floor(totalMin / 1440);
+    const h = Math.floor((totalMin % 1440) / 60);
+    const m = totalMin % 60;
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  }, [job.created_at]);
+
+  const lastTradeAgo = useMemo(() => {
+    if (trades.length === 0) return null;
+    const timestamps = trades
+      .map((tr) => {
+        if (tr.ts) return typeof tr.ts === "number" ? tr.ts : Date.parse(String(tr.ts));
+        return null;
+      })
+      .filter((ts): ts is number => ts !== null && !Number.isNaN(ts));
+    if (timestamps.length === 0) return null;
+    const last = Math.max(...timestamps);
+    const ms = Date.now() - last;
+    if (ms < 0) return null;
+    const totalMin = Math.floor(ms / 60_000);
+    if (totalMin < 1) return "just now";
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h > 0) return `${h}h ${m}m ago`;
+    return `${m}m ago`;
+  }, [trades]);
 
   return (
     <li className="rounded-lg border border-[#2962ff]/30 bg-[#1a2340]/50 px-4 py-3">
@@ -169,8 +214,14 @@ export function ActiveJobCard({
           )}
         </div>
       </div>
-      <div className="mt-1 text-xs text-[#868993]">
-        {t.live.started} {new Date(job.created_at).toLocaleString()}
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-[#868993]">
+        <span>{t.live.started} {new Date(job.created_at).toLocaleString()}</span>
+        {runningDuration && (
+          <span className="text-[#d1d4dc]">· ⏱ {runningDuration}</span>
+        )}
+        {lastTradeAgo && (
+          <span>· {t.live.lastTrade} {lastTradeAgo}</span>
+        )}
       </div>
 
       {trades.length > 0 ? (
@@ -180,16 +231,33 @@ export function ActiveJobCard({
             <div className={`text-sm font-semibold ${netPnl !== null && netPnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
               {netPnl !== null ? formatSigned(netPnl, "USDT") : "-"}
             </div>
+            {matchedPositions.length > 0 && totalPnl !== null && (
+              <div className={`mt-0.5 text-[10px] ${totalPnl >= 0 ? "text-[#26a69a]/70" : "text-[#ef5350]/70"}`}>
+                {t.live.totalIncUnrealized} {formatSigned(totalPnl, "USDT")}
+              </div>
+            )}
           </div>
           <div className="rounded border border-[#2a2e39] bg-[#131722] px-3 py-2">
             <div className="text-[10px] text-[#868993]">{t.result.totalTrades}</div>
-            <div className="text-sm font-semibold text-[#d1d4dc]">{numTrades}</div>
+            <div className="text-sm font-semibold text-[#d1d4dc]">
+              {numTrades} <span className="text-[10px] font-normal text-[#868993]">({winCount}W / {lossCount}L)</span>
+            </div>
+            {tradeStats && (
+              <div className="mt-0.5 text-[10px] text-[#868993]">
+                PF {tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
+              </div>
+            )}
           </div>
           <div className="rounded border border-[#2a2e39] bg-[#131722] px-3 py-2">
             <div className="text-[10px] text-[#868993]">{t.result.winRate}</div>
-            <div className="text-sm font-semibold text-[#d1d4dc]">
+            <div className={`text-sm font-semibold ${winRate !== null && winRate >= 50 ? "text-[#26a69a]" : winRate !== null && winRate > 0 ? "text-[#ef5350]" : "text-[#d1d4dc]"}`}>
               {winRate !== null ? `${formatNumber(winRate, 1)}%` : "-"}
             </div>
+            {tradeStats?.expectancy != null && (
+              <div className={`mt-0.5 text-[10px] ${tradeStats.expectancy >= 0 ? "text-[#26a69a]/70" : "text-[#ef5350]/70"}`}>
+                Exp. {formatSigned(tradeStats.expectancy, "USDT")}
+              </div>
+            )}
           </div>
         </div>
       ) : (

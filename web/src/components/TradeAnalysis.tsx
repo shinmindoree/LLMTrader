@@ -122,7 +122,7 @@ type TradeStats = {
   expectancy: number | null;
 };
 
-function computeTradeStats(pnls: number[]): TradeStats | null {
+export function computeTradeStats(pnls: number[]): TradeStats | null {
   if (pnls.length === 0) return null;
   let wins = 0;
   let losses = 0;
