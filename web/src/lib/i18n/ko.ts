@@ -263,6 +263,13 @@ const ko: TranslationKeys = {
     openPosition: "포지션 현황",
     lastTrade: "마지막 거래",
     totalIncUnrealized: "합산",
+    strategyLabel: "전략",
+    configLabel: "거래 설정",
+    posQty: "수량",
+    posEntry: "진입가",
+    posNotional: "포지션 금액",
+    posLeverage: "레버리지",
+    posUnrealizedPnl: "미실현 손익",
   },
   form: {
     strategy: "트레이딩 전략",

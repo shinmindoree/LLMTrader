@@ -49,7 +49,7 @@ const formatSigned = (value: number, suffix = ""): string => {
   return `${sign}${formatted}${suffix ? ` ${suffix}` : ""}`;
 };
 
-function PositionRow({ position }: { position: BinancePositionSummary }) {
+function PositionRow({ position, t }: { position: BinancePositionSummary; t: ReturnType<typeof useI18n>["t"] }) {
   const pnlColor = position.unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
   const sideColor = position.side === "LONG" ? "text-[#26a69a]" : "text-[#ef5350]";
   return (
@@ -57,19 +57,19 @@ function PositionRow({ position }: { position: BinancePositionSummary }) {
       <span className="text-[#d1d4dc] font-medium">{position.symbol}</span>
       <span className={sideColor}>{position.side}</span>
       <span className="text-[#868993]">
-        Qty <span className="text-[#d1d4dc]">{formatNumber(Math.abs(position.position_amt), 5)}</span>
+        {t.live.posQty} <span className="text-[#d1d4dc]">{formatNumber(Math.abs(position.position_amt), 5)}</span>
       </span>
       <span className="text-[#868993]">
-        Entry <span className="text-[#d1d4dc]">{formatNumber(position.entry_price, 2)}</span>
+        {t.live.posEntry} <span className="text-[#d1d4dc]">{formatNumber(position.entry_price, 2)}</span>
       </span>
       <span className="text-[#868993]">
-        Notional <span className="text-[#d1d4dc]">{formatNumber(Math.abs(position.notional), 2)}</span>
+        {t.live.posNotional} <span className="text-[#d1d4dc]">{formatNumber(Math.abs(position.notional), 2)}</span>
       </span>
       <span className="text-[#868993]">
-        Lev <span className="text-[#d1d4dc]">{position.leverage}x</span>
+        {t.live.posLeverage} <span className="text-[#d1d4dc]">{position.leverage}x</span>
       </span>
       <span className="text-[#868993]">
-        uPnL <span className={pnlColor}>{formatSigned(position.unrealized_pnl, "USDT")}</span>
+        {t.live.posUnrealizedPnl} <span className={pnlColor}>{formatSigned(position.unrealized_pnl, "USDT")}</span>
       </span>
     </div>
   );
@@ -190,15 +190,15 @@ export function ActiveJobCard({
     <li className="rounded-lg border border-[#2962ff]/30 bg-[#1a2340]/50 px-4 py-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link
-            className="font-medium text-[#d1d4dc] hover:text-[#2962ff] hover:underline transition-colors"
-            href={jobDetailPath("LIVE", job.job_id)}
-          >
-            {strategyNameFromPath(job.strategy_path)}
-          </Link>
-          {job.config ? (
-            <span className="text-xs"><JobConfigInline type="LIVE" config={job.config} /></span>
-          ) : null}
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#868993]">{t.live.strategyLabel}</span>
+            <Link
+              className="font-medium text-[#d1d4dc] hover:text-[#2962ff] hover:underline transition-colors"
+              href={jobDetailPath("LIVE", job.job_id)}
+            >
+              {strategyNameFromPath(job.strategy_path)}
+            </Link>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <JobStatusBadge status={job.status} />
@@ -214,7 +214,16 @@ export function ActiveJobCard({
           )}
         </div>
       </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-[#868993]">
+
+      {/* Trading Config */}
+      {job.config ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#868993]">{t.live.configLabel}</span>
+          <JobConfigInline type="LIVE" config={job.config} />
+        </div>
+      ) : null}
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-xs text-[#868993]">
         <span>{t.live.started} {new Date(job.created_at).toLocaleString()}</span>
         {runningDuration && (
           <span className="text-[#d1d4dc]">· ⏱ {runningDuration}</span>
@@ -244,7 +253,7 @@ export function ActiveJobCard({
             </div>
             {tradeStats && (
               <div className="mt-0.5 text-[10px] text-[#868993]">
-                PF {tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
+                {t.result.profitFactor} {tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
               </div>
             )}
           </div>
@@ -255,7 +264,7 @@ export function ActiveJobCard({
             </div>
             {tradeStats?.expectancy != null && (
               <div className={`mt-0.5 text-[10px] ${tradeStats.expectancy >= 0 ? "text-[#26a69a]/70" : "text-[#ef5350]/70"}`}>
-                Exp. {formatSigned(tradeStats.expectancy, "USDT")}
+                {t.tradeAnalysis.expectancy} {formatSigned(tradeStats.expectancy, "USDT")}
               </div>
             )}
           </div>
@@ -284,7 +293,7 @@ export function ActiveJobCard({
             <div className="mb-1 text-[10px] font-medium text-[#868993]">{t.live.openPosition}</div>
             <div className="space-y-1">
               {matchedPositions.map((p) => (
-                <PositionRow key={`${p.symbol}-${p.side}`} position={p} />
+                <PositionRow key={`${p.symbol}-${p.side}`} position={p} t={t} />
               ))}
             </div>
           </div>

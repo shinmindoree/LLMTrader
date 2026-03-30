@@ -259,6 +259,13 @@ const en = {
     openPosition: "Open Position",
     lastTrade: "Last trade",
     totalIncUnrealized: "Total",
+    strategyLabel: "Strategy",
+    configLabel: "Config",
+    posQty: "Quantity",
+    posEntry: "Entry Price",
+    posNotional: "Notional",
+    posLeverage: "Leverage",
+    posUnrealizedPnl: "Unrealized PnL",
   },
   form: {
     strategy: "Strategy",

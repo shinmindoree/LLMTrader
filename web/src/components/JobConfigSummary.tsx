@@ -158,7 +158,7 @@ export function JobConfigInline({
       const c = streams[0];
       return (
         <span className="text-[#868993]">
-          {c.symbol} · {c.interval} · {c.leverage} · SL {c.stopLossPct}
+          {c.symbol} · {c.interval} · {t.jobConfig.leverage} {c.leverage} · {t.jobConfig.stopLoss} {c.stopLossPct}
         </span>
       );
     }
@@ -173,7 +173,7 @@ export function JobConfigInline({
   const c = extractBacktestConfig(config);
   return (
     <span className="text-[#868993]">
-      {c.symbol} · {c.interval} · {c.leverage} · {c.initialBalance} · {c.startDate}~{c.endDate}
+      {c.symbol} · {c.interval} · {t.jobConfig.leverage} {c.leverage} · {c.initialBalance} · {c.startDate}~{c.endDate}
     </span>
   );
 }
