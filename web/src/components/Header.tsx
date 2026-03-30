@@ -10,6 +10,7 @@ import { UserProfileMenu } from "@/components/UserProfileMenu";
 import { useI18n } from "@/lib/i18n";
 
 const NAV_LINKS = [
+  { href: "/chart", labelKey: "chart" as const },
   { href: "/dashboard", labelKey: "dashboard" as const },
   { href: "/strategies", labelKey: "strategies" as const },
   { href: "/backtest", labelKey: "backtest" as const },

@@ -10,7 +10,6 @@ const BacktestExecutionChart = dynamic(
   () => import("@/components/BacktestExecutionChart").then((mod) => mod.BacktestExecutionChart),
   { ssr: false },
 );
-import { TradingTabs } from "@/components/TradingTabs";
 import { TopChartProvider, useTopChart } from "@/components/TopChartContext";
 
 export function TradingLayout({ children }: { children: React.ReactNode }) {
@@ -28,7 +27,6 @@ function TradingLayoutInner({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-[#131722]">
-      <TradingTabs />
       {isChartTab ? (
         <div className="min-h-0 flex-1">
           {backtestChart ? (
