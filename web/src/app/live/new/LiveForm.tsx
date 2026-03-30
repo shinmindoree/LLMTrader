@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 
+import useSWR from "swr";
 import { InfoTooltip } from "@/components/InfoTooltip";
 import StrategyParamsEditor from "@/components/StrategyParamsEditor";
-import { createJob, listFuturesSymbols, preflightJob } from "@/lib/api";
+import { createJob, getBinanceAccountSummary, listFuturesSymbols, preflightJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import type { Job, StrategyInfo } from "@/lib/types";
+import type { BinanceAccountSummary, Job, StrategyInfo } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
 const LIVE_INTERVALS = ["1m", "5m", "15m", "1h"] as const;
@@ -79,6 +80,17 @@ export function LiveForm({
 
   const slotsAvailable = maxSlots - activeCount;
   const canCreate = slotsAvailable > 0;
+
+  const { data: accountSnapshot } = useSWR<BinanceAccountSummary>(
+    "binanceAccountSummary",
+    () => getBinanceAccountSummary(),
+    { dedupingInterval: 10_000 },
+  );
+
+  const totalWallet = accountSnapshot?.total_wallet_balance ?? null;
+  const availableBalance = accountSnapshot?.available_balance ?? null;
+  const estimatedPosition =
+    availableBalance !== null ? availableBalance * maxPosition * leverage : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -173,6 +185,42 @@ export function LiveForm({
           {t.form.defaultsAppliedLive}
         </p>
       ) : null}
+
+      {/* Wallet & Position Size Estimator */}
+      {accountSnapshot?.connected && availableBalance !== null && (
+        <div className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
+          <div className="mb-2 grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <span className="text-[#868993]">{t.binanceAccount.totalWallet}</span>
+              <div className="mt-0.5 text-sm font-semibold text-[#d1d4dc]">
+                {totalWallet !== null ? `${totalWallet.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : "-"}
+              </div>
+            </div>
+            <div>
+              <span className="text-[#868993]">{t.binanceAccount.availableBalance}</span>
+              <div className="mt-0.5 text-sm font-semibold text-[#26a69a]">
+                {availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-[#2a2e39] pt-2">
+            <div className="flex items-center gap-1.5 text-xs text-[#868993]">
+              <span>예상 진입 포지션</span>
+              <InfoTooltip text="가용 잔고 × Max Position × Leverage" />
+            </div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-lg font-bold text-[#d1d4dc]">
+                {estimatedPosition !== null
+                  ? `${estimatedPosition.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+                  : "-"}
+              </span>
+              <span className="text-[10px] text-[#868993]">
+                ({availableBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })} × {(maxPosition * 100).toFixed(0)}% × {leverage}x)
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
