@@ -47,6 +47,7 @@ dev = [
 relay = [
     "azure-ai-projects>=1.0.0",
     "openai>=1.12.0",
+    "tiktoken>=0.7.0",
 ]
 
 [project.urls]

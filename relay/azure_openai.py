@@ -23,6 +23,7 @@ from azure.identity.aio import get_bearer_token_provider as get_async_bearer_tok
 from openai import AsyncOpenAI, OpenAI
 
 from relay.config import RelayConfig
+from relay.token_budget import fit_messages
 
 logger = logging.getLogger(__name__)
 
@@ -149,12 +150,24 @@ def _build_response_kwargs(
     model: str | None = None,
     text_format: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    resolved_model = model or config.resolved_openai_model
+    max_output_tokens = 16384
+
+    # Apply token budget to multi-turn message histories.
+    if messages and len(messages) > 1:
+        messages = fit_messages(
+            system_prompt=system_content,
+            messages=messages,
+            model=resolved_model,
+            max_output_tokens=max_output_tokens,
+        )
+
     kwargs: dict[str, object] = {
-        "model": model or config.resolved_openai_model,
+        "model": resolved_model,
         "instructions": system_content,
         "input": _build_response_input(user_content=user_content, messages=messages),
     }
-    kwargs["max_output_tokens"] = 16384
+    kwargs["max_output_tokens"] = max_output_tokens
     if stream:
         kwargs["stream"] = True
     if text_format:

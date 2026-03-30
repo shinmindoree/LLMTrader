@@ -138,13 +138,31 @@ export function getLastCodeAndSummary(messages: ChatMessage[]): {
 }
 
 export function toApiMessages(messages: ChatMessage[]): { role: string; content: string }[] {
-  return messages.map((m) => ({
-    role: m.role,
-    content:
-      m.role === "assistant" && (m.summary != null || m.textOnly)
-        ? (m.summary ?? m.content)
-        : m.content,
-  }));
+  // Find the last assistant message containing strategy code.
+  let lastCodeIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && !m.textOnly && m.summary == null && looksLikePythonCode(m.content)) {
+      lastCodeIdx = i;
+      break;
+    }
+  }
+
+  return messages.map((m, idx) => {
+    // Assistant messages with summary or textOnly: use summary.
+    if (m.role === "assistant" && (m.summary != null || m.textOnly)) {
+      return { role: m.role, content: m.summary ?? m.content };
+    }
+    // Older assistant code messages: compress to placeholder.
+    if (
+      idx !== lastCodeIdx &&
+      m.role === "assistant" &&
+      looksLikePythonCode(m.content)
+    ) {
+      return { role: m.role, content: "[이전 전략 코드 — 워크스페이스에 반영됨]" };
+    }
+    return { role: m.role, content: m.content };
+  });
 }
 
 export function buildMessagesForGeneration(
