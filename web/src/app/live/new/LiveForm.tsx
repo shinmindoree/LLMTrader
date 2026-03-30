@@ -10,7 +10,7 @@ import { useI18n } from "@/lib/i18n";
 import type { BinanceAccountSummary, Job, StrategyInfo } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
-const LIVE_INTERVALS = ["1m", "5m", "15m", "1h"] as const;
+const LIVE_INTERVALS = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"] as const;
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -68,7 +68,8 @@ export function LiveForm({
   const [symbol, setSymbol] = useState(defaults.symbol);
   const [interval, setInterval] = useState(defaults.interval);
   const [leverage, setLeverage] = useState(1);
-  const [maxPosition, setMaxPosition] = useState(0.5);
+  const [maxPositionPct, setMaxPositionPct] = useState(50);
+  const maxPosition = maxPositionPct / 100;
   const [dailyLossLimit, setDailyLossLimit] = useState(500);
   const [stopLossPct, setStopLossPct] = useState(0.05);
   const [stoplossCooldownCandles, setStoplossCooldownCandles] = useState(0);
@@ -177,6 +178,7 @@ export function LiveForm({
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">Pos {maxPositionPct}%</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">SL {(stopLossPct * 100).toFixed(1)}%</span>
       </div>
 
@@ -215,7 +217,7 @@ export function LiveForm({
                   : "-"}
               </span>
               <span className="text-[10px] text-[#868993]">
-                ({availableBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })} × {(maxPosition * 100).toFixed(0)}% × {leverage}x)
+                ({availableBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })} × {maxPositionPct}% × {leverage}x)
               </span>
             </div>
           </div>
@@ -273,21 +275,24 @@ export function LiveForm({
             type="number"
             value={leverage}
             min={1}
-            max={10}
-            onChange={(e) => setLeverage(Number(e.target.value))}
+            max={125}
+            onChange={(e) => setLeverage(Math.min(125, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
           />
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.maxPosition}<InfoTooltip text={t.form.tooltipMaxPosition} /></></div>
-          <input
-            className={inputCls}
-            type="number"
-            step="0.01"
-            value={maxPosition}
-            min={0.01}
-            max={1}
-            onChange={(e) => setMaxPosition(Number(e.target.value))}
-          />
+          <div className="relative">
+            <input
+              className={`${inputCls} pr-8`}
+              type="number"
+              step="1"
+              value={maxPositionPct}
+              min={1}
+              max={100}
+              onChange={(e) => setMaxPositionPct(Math.min(100, Math.max(1, Math.round(Number(e.target.value) || 1))))}
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#868993]">%</span>
+          </div>
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.dailyLossLimit}<InfoTooltip text={t.form.tooltipDailyLossLimit} /></></div>
@@ -301,13 +306,18 @@ export function LiveForm({
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></div>
-          <input
-            className={inputCls}
-            type="number"
-            step="0.1"
-            value={stopLossPct * 100}
-            onChange={(e) => setStopLossPct(Number(e.target.value) / 100)}
-          />
+          <div className="relative">
+            <input
+              className={`${inputCls} pr-8`}
+              type="number"
+              step="0.1"
+              value={stopLossPct * 100}
+              min={0.1}
+              max={50}
+              onChange={(e) => setStopLossPct(Math.min(0.5, Math.max(0.001, Number(e.target.value) / 100)))}
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#868993]">%</span>
+          </div>
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLossCooldown}<InfoTooltip text={t.form.tooltipCooldown} /></></div>
