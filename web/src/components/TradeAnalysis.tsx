@@ -116,6 +116,10 @@ type TradeStats = {
   maxLoss: number | null;
   maxConsecutiveWins: number;
   maxConsecutiveLosses: number;
+  avgWin: number | null;
+  avgLoss: number | null;
+  payoffRatio: number | null;
+  expectancy: number | null;
 };
 
 function computeTradeStats(pnls: number[]): TradeStats | null {
@@ -153,6 +157,14 @@ function computeTradeStats(pnls: number[]): TradeStats | null {
   const totalTrades = wins + losses;
   const winRatePct = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
   const profitFactor = totalLoss > 0 ? totalProfit / totalLoss : totalProfit > 0 ? Infinity : 0;
+  const avgWin = wins > 0 ? totalProfit / wins : null;
+  const avgLoss = losses > 0 ? totalLoss / losses : null;
+  const payoffRatio = avgWin !== null && avgLoss !== null && avgLoss > 0 ? avgWin / avgLoss : null;
+  const winRate = totalTrades > 0 ? wins / totalTrades : 0;
+  const lossRate = totalTrades > 0 ? losses / totalTrades : 0;
+  const expectancy = avgWin !== null && avgLoss !== null
+    ? winRate * avgWin - lossRate * avgLoss
+    : null;
   return {
     winRatePct,
     profitFactor,
@@ -160,6 +172,10 @@ function computeTradeStats(pnls: number[]): TradeStats | null {
     maxLoss: Number.isFinite(maxLoss) ? maxLoss : null,
     maxConsecutiveWins,
     maxConsecutiveLosses,
+    avgWin,
+    avgLoss,
+    payoffRatio,
+    expectancy,
   };
 }
 
@@ -704,6 +720,22 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   );
   const tradeStats = useMemo(() => computeTradeStats(positionPnls), [positionPnls]);
 
+  const maxDrawdown = useMemo(() => {
+    if (!chartPoints.length) return { amount: 0, pct: 0 };
+    let peak = chartPoints[0].equity;
+    let maxDd = 0;
+    let maxDdPct = 0;
+    for (const p of chartPoints) {
+      if (p.equity > peak) peak = p.equity;
+      const dd = peak - p.equity;
+      if (dd > maxDd) {
+        maxDd = dd;
+        maxDdPct = peak > 0 ? (dd / peak) * 100 : 0;
+      }
+    }
+    return { amount: maxDd, pct: maxDdPct };
+  }, [chartPoints]);
+
   const numTrades = positions.filter((p) => p.status === "Closed").length;
   const winCount = positionPnls.filter((p) => p > 0).length;
   const winRatePct = numTrades > 0 ? (winCount / numTrades) * 100 : 0;
@@ -837,26 +869,55 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
       <div className="rounded border border-[#2a2e39] bg-[#131722] p-4">
           {activeTab === "chart" ? (
             <>
-              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {totalReturnPct !== null && netProfit !== null && (
+              {/* Row 1: Core Performance */}
+              <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {netProfit !== null && (
                   <MetricCard
-                    label={t.result.return}
-                    value={`${formatSigned(netProfit, "USDT")} (${formatNumber(totalReturnPct)}%)`}
+                    label={t.result.netProfit}
+                    value={`${formatSigned(netProfit, "USDT")}${totalReturnPct !== null ? ` (${formatNumber(totalReturnPct)}%)` : ""}`}
                     tone={netProfit >= 0 ? "positive" : "negative"}
                   />
                 )}
-                {initialEquity !== null && finalEquity !== null && (
+                <MetricCard
+                  label={t.result.winRate}
+                  value={`${formatNumber(winRatePct, 1)}%  (${winCount}W / ${numTrades - winCount}L of ${numTrades})`}
+                  tone={winRatePct >= 50 ? "positive" : winRatePct > 0 ? "negative" : "neutral"}
+                />
+                {tradeStats && (
                   <MetricCard
-                    label={t.tradeAnalysis.balance}
-                    value={`${formatNumber(initialEquity)} → ${formatNumber(finalEquity)} USDT`}
+                    label={t.result.profitFactor}
+                    value={tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
+                    tone={tradeStats.profitFactor >= 1.5 ? "positive" : tradeStats.profitFactor >= 1 ? "neutral" : "negative"}
                   />
                 )}
-                <MetricCard
-                  label={t.tradeAnalysis.totalTrades}
-                  value={`${numTrades} (${winCount} wins, ${formatNumber(winRatePct, 1)}%)`}
-                />
               </div>
 
+              {/* Row 2: Risk */}
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <MetricCard
+                  label={t.tradeAnalysis.maxDrawdown}
+                  value={maxDrawdown.amount > 0
+                    ? `${formatSigned(-maxDrawdown.amount, "USDT")} (${formatNumber(maxDrawdown.pct, 2)}%)`
+                    : "-"}
+                  tone={maxDrawdown.amount > 0 ? "negative" : "neutral"}
+                />
+                {tradeStats && (tradeStats.maxProfit !== null || tradeStats.maxLoss !== null) && (
+                  <MetricCard
+                    label={t.tradeAnalysis.bestWorst}
+                    value={`${tradeStats.maxProfit !== null ? formatSigned(tradeStats.maxProfit) : "-"} / ${tradeStats.maxLoss !== null ? formatSigned(tradeStats.maxLoss) : "-"} USDT`}
+                    tone="neutral"
+                  />
+                )}
+                {tradeStats?.payoffRatio != null && (
+                  <MetricCard
+                    label={t.tradeAnalysis.payoffRatio}
+                    value={formatNumber(tradeStats.payoffRatio, 2)}
+                    tone={tradeStats.payoffRatio >= 1 ? "positive" : "negative"}
+                  />
+                )}
+              </div>
+
+              {/* Expandable Detail */}
               <details className="mb-4 group">
                 <summary className="flex cursor-pointer list-none items-center rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-2 text-xs font-medium text-[#d1d4dc] hover:bg-[#252a37] [&::-webkit-details-marker]:hidden [&::marker]:hidden">
                   {t.tradeAnalysis.tradeDetail}
@@ -864,43 +925,65 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                     ▾
                   </span>
                 </summary>
-                <div className="grid gap-3 rounded-b border border-[#2a2e39] border-t-0 bg-[#131722] p-4 sm:grid-cols-2 lg:grid-cols-3">
-                  <MetricCard
-                    label={t.result.totalCommission}
-                    value={`${formatNumber(totalCommission)} USDT`}
-                    tone="negative"
-                  />
-                  {numTrades > 0 && netProfit !== null && (
-                    <MetricCard
-                      label={t.result.avgProfitPerTrade}
-                      value={formatSigned(netProfit / numTrades, "USDT")}
-                      tone={netProfit >= 0 ? "positive" : "negative"}
-                    />
-                  )}
-                  {tradeStats ? (
-                    <>
+                <div className="rounded-b border border-[#2a2e39] border-t-0 bg-[#131722] p-4">
+                  {/* Group A: Trade Distribution */}
+                  <div className="mb-3 text-[10px] font-medium uppercase tracking-wider text-[#868993]">
+                    {t.tradeAnalysis.groupDistribution}
+                  </div>
+                  <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    {numTrades > 0 && netProfit !== null && (
                       <MetricCard
-                        label={t.result.profitFactor}
-                        value={tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
+                        label={t.result.avgProfitPerTrade}
+                        value={formatSigned(netProfit / numTrades, "USDT")}
+                        tone={netProfit >= 0 ? "positive" : "negative"}
                       />
-                      {tradeStats.maxProfit !== null && (
-                        <MetricCard
-                          label={t.result.maxProfit}
-                          value={formatSigned(tradeStats.maxProfit, "USDT")}
-                          tone="positive"
-                        />
-                      )}
-                      {tradeStats.maxLoss !== null && (
-                        <MetricCard
-                          label={t.result.maxLoss}
-                          value={formatSigned(tradeStats.maxLoss, "USDT")}
-                          tone="negative"
-                        />
-                      )}
-                      <MetricCard label={t.result.maxConsecutiveWins} value={`${tradeStats.maxConsecutiveWins}`} />
-                      <MetricCard label={t.result.maxConsecutiveLosses} value={`${tradeStats.maxConsecutiveLosses}`} />
-                    </>
-                  ) : null}
+                    )}
+                    {tradeStats?.avgWin != null && (
+                      <MetricCard
+                        label={t.tradeAnalysis.avgWin}
+                        value={formatSigned(tradeStats.avgWin, "USDT")}
+                        tone="positive"
+                      />
+                    )}
+                    {tradeStats?.avgLoss != null && (
+                      <MetricCard
+                        label={t.tradeAnalysis.avgLoss}
+                        value={formatSigned(-tradeStats.avgLoss, "USDT")}
+                        tone="negative"
+                      />
+                    )}
+                    {tradeStats?.expectancy != null && (
+                      <MetricCard
+                        label={t.tradeAnalysis.expectancy}
+                        value={formatSigned(tradeStats.expectancy, "USDT")}
+                        tone={tradeStats.expectancy >= 0 ? "positive" : "negative"}
+                      />
+                    )}
+                  </div>
+
+                  {/* Group B: Streaks & Costs */}
+                  <div className="mb-3 text-[10px] font-medium uppercase tracking-wider text-[#868993]">
+                    {t.tradeAnalysis.groupStreaksCosts}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    {tradeStats && (
+                      <>
+                        <MetricCard label={t.result.maxConsecutiveWins} value={`${tradeStats.maxConsecutiveWins}`} tone="positive" />
+                        <MetricCard label={t.result.maxConsecutiveLosses} value={`${tradeStats.maxConsecutiveLosses}`} tone="negative" />
+                      </>
+                    )}
+                    <MetricCard
+                      label={t.result.totalCommission}
+                      value={`${formatNumber(totalCommission)} USDT`}
+                      tone="negative"
+                    />
+                    {initialEquity !== null && finalEquity !== null && (
+                      <MetricCard
+                        label={t.tradeAnalysis.balance}
+                        value={`${formatNumber(initialEquity)} → ${formatNumber(finalEquity)} USDT`}
+                      />
+                    )}
+                  </div>
                 </div>
               </details>
 
