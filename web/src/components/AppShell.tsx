@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import { TradingLayout } from "@/components/TradingLayout";
 
-const TRADING_PATHS = ["/dashboard", "/strategies", "/backtest", "/live"];
+const TRADING_PATHS = ["/chart", "/dashboard", "/strategies", "/backtest", "/live"];
 
 function isTradingPage(pathname: string): boolean {
   return TRADING_PATHS.some(

@@ -87,6 +87,7 @@ const ko: TranslationKeys = {
     },
   },
   nav: {
+    chart: "차트",
     features: "기능",
     dashboard: "대시보드",
     live: "라이브",

@@ -83,6 +83,7 @@ const en = {
     },
   },
   nav: {
+    chart: "Chart",
     features: "Features",
     dashboard: "Dashboard",
     live: "Live",

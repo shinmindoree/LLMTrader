@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
 const TradingViewChart = dynamic(
   () => import("@/components/TradingViewChart").then((mod) => mod.TradingViewChart),
   { ssr: false },
@@ -13,10 +12,6 @@ const BacktestExecutionChart = dynamic(
 );
 import { TradingTabs } from "@/components/TradingTabs";
 import { TopChartProvider, useTopChart } from "@/components/TopChartContext";
-
-const DEFAULT_CHART_RATIO = 0.45;
-const OVERLAY_THRESHOLD_RATIO = 1 / 3;
-const MIN_TAB_HEIGHT = 80;
 
 export function TradingLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -29,145 +24,26 @@ export function TradingLayout({ children }: { children: React.ReactNode }) {
 function TradingLayoutInner({ children }: { children: React.ReactNode }) {
   const { backtestChart } = useTopChart();
   const pathname = usePathname();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [splitY, setSplitY] = useState<number | null>(null);
-  const [containerH, setContainerH] = useState(0);
-  const isDraggingRef = useRef(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const tabRoot = `/${pathname.split("/").filter(Boolean)[0] ?? ""}`;
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const h = el.clientHeight;
-    setContainerH(h);
-    if (splitY === null) setSplitY(h * DEFAULT_CHART_RATIO);
-  }, [splitY]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setContainerH(entry.contentRect.height);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    isDraggingRef.current = true;
-    setIsDragging(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isDragging) return;
-
-    const onMove = (e: PointerEvent) => {
-      if (!containerRef.current || !isDraggingRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const y = e.clientY - rect.top;
-      setSplitY(Math.max(0, Math.min(y, rect.height - MIN_TAB_HEIGHT)));
-    };
-
-    const onUp = () => {
-      isDraggingRef.current = false;
-      setIsDragging(false);
-    };
-
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-    return () => {
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-    };
-  }, [isDragging]);
-
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
-    const storageKey = `trading-tab-scroll:${tabRoot}`;
-    const saved = window.sessionStorage.getItem(storageKey);
-    if (saved) {
-      const value = Number(saved);
-      if (!Number.isNaN(value)) {
-        requestAnimationFrame(() => {
-          if (contentRef.current) contentRef.current.scrollTop = value;
-        });
-      }
-    }
-
-    const onScroll = () => {
-      window.sessionStorage.setItem(storageKey, String(el.scrollTop));
-    };
-
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      window.sessionStorage.setItem(storageKey, String(el.scrollTop));
-      el.removeEventListener("scroll", onScroll);
-    };
-  }, [tabRoot]);
-
-  const currentSplitY = splitY ?? 300;
-  const threshold = containerH * OVERLAY_THRESHOLD_RATIO;
-  const isOverlay = currentSplitY < threshold;
-  const chartHeight = isOverlay ? threshold : currentSplitY;
+  const isChartTab = pathname === "/chart" || pathname.startsWith("/chart/");
 
   return (
-    <div
-      ref={containerRef}
-      className="relative flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-[#131722]"
-    >
-      <div
-        className="shrink-0 overflow-hidden"
-        style={{ height: `${chartHeight}px` }}
-      >
-        {backtestChart ? (
-          <div className="h-full overflow-auto">
+    <div className="flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-[#131722]">
+      <TradingTabs />
+      {isChartTab ? (
+        <div className="min-h-0 flex-1">
+          {backtestChart ? (
             <BacktestExecutionChart
               chart={backtestChart.chart}
               trades={backtestChart.trades}
-              height={chartHeight}
             />
-          </div>
-        ) : (
-          <TradingViewChart />
-        )}
-      </div>
-
-      <div
-        className={
-          isOverlay
-            ? "absolute left-0 right-0 bottom-0 z-10 flex flex-col"
-            : "flex min-h-0 flex-1 flex-col"
-        }
-        style={isOverlay ? { top: `${currentSplitY}px` } : undefined}
-      >
-        <div
-          onPointerDown={handlePointerDown}
-          className={[
-            "flex h-1.5 shrink-0 cursor-row-resize items-center justify-center border-t border-[#2a2e39] touch-none select-none",
-            isDragging
-              ? "bg-[#2962ff]/20"
-              : "bg-[#1e222d] hover:bg-[#252936]",
-          ].join(" ")}
-        >
-          <div className="h-0.5 w-8 rounded-full bg-[#868993]" />
+          ) : (
+            <TradingViewChart />
+          )}
         </div>
-
-        <TradingTabs />
-        <div
-          ref={contentRef}
-          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-[#131722]"
-        >
+      ) : (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-[#131722]">
           {children}
         </div>
-      </div>
-
-      {isDragging && (
-        <div className="fixed inset-0 z-50 cursor-row-resize" />
       )}
     </div>
   );
