@@ -27,6 +27,7 @@ from relay.config import get_config
 from relay.prompts import (
     SUMMARY_SYSTEM_PROMPT,
     TEST_SYSTEM_PROMPT,
+    build_analyst_system_prompt,
     build_intake_system_prompt,
     build_planner_system_prompt,
     build_repair_system_prompt,
@@ -100,6 +101,16 @@ class SummarizeRequest(BaseModel):
 
 class SummarizeResponse(BaseModel):
     summary: str
+
+
+class AnalyzeRequest(BaseModel):
+    code: str
+    backtest_results: str
+    summary: str | None = None
+
+
+class AnalyzeResponse(BaseModel):
+    analysis: dict[str, Any]
 
 
 class StrategyChatRequest(BaseModel):
@@ -766,6 +777,50 @@ async def summarize(
         raise HTTPException(status_code=502, detail="Empty completion from model")
 
     return SummarizeResponse(summary=content.strip())
+
+
+@app.post("/strategy/analyze", response_model=AnalyzeResponse)
+async def analyze_strategy(
+    body: AnalyzeRequest,
+    _: None = Depends(require_api_key),
+) -> AnalyzeResponse:
+    """Analyze backtest results with a lightweight analyst model."""
+    code = (body.code or "").strip()
+    backtest_results = (body.backtest_results or "").strip()
+    if not code or not backtest_results:
+        raise HTTPException(status_code=422, detail="code and backtest_results must be non-empty")
+
+    config = get_config()
+    if not config.is_azure_configured():
+        raise HTTPException(status_code=503, detail="Azure OpenAI not configured")
+
+    user_content = (
+        f"Strategy code:\n```python\n{code}\n```\n\n"
+        f"Backtest results:\n{backtest_results}"
+    )
+    if body.summary:
+        user_content += f"\n\nStrategy summary:\n{body.summary}"
+
+    try:
+        content, _ = chat_completion(
+            config,
+            system_content=build_analyst_system_prompt(),
+            user_content=user_content,
+            model=config.resolved_analyst_model,
+            text_format={"type": "json_object"},
+        )
+    except Exception as e:
+        _raise_llm_http_error("/strategy/analyze", e)
+
+    if not content or not content.strip():
+        raise HTTPException(status_code=502, detail="Empty completion from model")
+
+    try:
+        analysis = json.loads(content.strip())
+    except json.JSONDecodeError:
+        analysis = {"raw_analysis": content.strip()}
+
+    return AnalyzeResponse(analysis=analysis)
 
 
 @app.post("/generate", response_model=StrategyResponse)

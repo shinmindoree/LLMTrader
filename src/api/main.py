@@ -1407,6 +1407,23 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.post("/api/strategies/analyze")
+    async def analyze_strategy_endpoint(body: dict):
+        """Analyze backtest results with the analyst model."""
+        code = (body.get("code") or "").strip()
+        backtest_results = (body.get("backtest_results") or "").strip()
+        summary = body.get("summary")
+        if not code or not backtest_results:
+            raise HTTPException(status_code=422, detail="code and backtest_results required")
+        try:
+            client = LLMClient()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        analysis = await client.analyze_backtest(code, backtest_results, summary)
+        if analysis is None:
+            raise HTTPException(status_code=502, detail="Analysis failed")
+        return {"analysis": analysis}
+
     @app.get(
         "/api/strategies/chat/sessions",
         response_model=list[StrategyChatSessionResponse],

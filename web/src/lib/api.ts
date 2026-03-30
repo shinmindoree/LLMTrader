@@ -685,6 +685,40 @@ export async function listTrades(jobId: string): Promise<Trade[]> {
   return json<Trade[]>(`/api/backend/api/jobs/${jobId}/trades`);
 }
 
+export interface BacktestAnalysis {
+  strengths?: string[];
+  weaknesses?: string[];
+  suggestions?: string[];
+  parameter_changes?: Record<string, { current: unknown; suggested: unknown; reason: string }>;
+  risk_assessment?: string;
+  expected_impact?: string;
+  raw_analysis?: string;
+}
+
+export async function analyzeBacktestResults(
+  code: string,
+  backtestResults: string,
+  summary?: string | null,
+): Promise<BacktestAnalysis> {
+  const body: Record<string, unknown> = {
+    code,
+    backtest_results: backtestResults,
+  };
+  if (summary) {
+    body.summary = summary;
+  }
+  const res = await fetch("/api/backend/api/strategies/analyze", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Analyze failed: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.analysis as BacktestAnalysis;
+}
+
 export async function listTradesBatch(jobIds: string[]): Promise<Record<string, Trade[]>> {
   if (jobIds.length === 0) return {};
   const params = new URLSearchParams();

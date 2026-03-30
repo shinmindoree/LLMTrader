@@ -33,6 +33,14 @@ class RelayConfig(BaseSettings):
         default="",
         validation_alias=AliasChoices("REVIEWER_MODEL", "AZURE_OPENAI_REVIEWER_MODEL"),
     )
+    analyst_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("ANALYST_MODEL", "AZURE_OPENAI_ANALYST_MODEL"),
+    )
+    summarizer_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("SUMMARIZER_MODEL", "AZURE_OPENAI_SUMMARIZER_MODEL"),
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -81,6 +89,20 @@ class RelayConfig(BaseSettings):
         if configured:
             return configured
         return self._first_env_value("REVIEWER_MODEL", "AZURE_OPENAI_REVIEWER_MODEL") or self.resolved_openai_model
+
+    @property
+    def resolved_analyst_model(self) -> str:
+        configured = self.analyst_model.strip()
+        if configured:
+            return configured
+        return self._first_env_value("ANALYST_MODEL", "AZURE_OPENAI_ANALYST_MODEL") or self.resolved_openai_model
+
+    @property
+    def resolved_summarizer_model(self) -> str:
+        configured = self.summarizer_model.strip()
+        if configured:
+            return configured
+        return self._first_env_value("SUMMARIZER_MODEL", "AZURE_OPENAI_SUMMARIZER_MODEL") or self.resolved_openai_model
 
     def is_azure_configured(self) -> bool:
         if not self.resolved_openai_model:

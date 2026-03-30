@@ -287,6 +287,38 @@ class LLMClient:
         except Exception as e:
             yield {"error": str(e)}
 
+    async def analyze_backtest(
+        self,
+        code: str,
+        backtest_results: str,
+        summary: str | None = None,
+    ) -> dict[str, Any] | None:
+        """백테스트 결과 분석 요청 (analyst 모델 사용)."""
+        if not code or not backtest_results:
+            return None
+        payload: dict[str, Any] = {
+            "code": code.strip(),
+            "backtest_results": backtest_results.strip(),
+        }
+        if summary:
+            payload["summary"] = summary
+        headers: dict[str, str] = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/strategy/analyze",
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("analysis")
+        except Exception:
+            return None
+
     async def intake_strategy(
         self,
         user_prompt: str,
