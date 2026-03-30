@@ -4,16 +4,17 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
 import useSWR, { useSWRConfig } from "swr";
-import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, listJobSummaries, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
+import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { BillingStatus, BinanceKeysStatus, Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
+import type { BillingStatus, BinanceKeysStatus, Job, JobCounts, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
 import { ActiveJobCard } from "@/components/ActiveJobCard";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { RunHistoryTableSkeleton } from "@/components/skeletons/RunHistoryTableSkeleton";
 import { jobDetailPath } from "@/lib/routes";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { FormModal } from "@/components/FormModal";
+import { LiveEmptyState } from "@/components/LiveEmptyState";
 import { LiveForm } from "./new/LiveForm";
 
 const MAX_SLOTS_FALLBACK = 5;
@@ -44,6 +45,8 @@ export default function LiveJobsPage() {
     "billingStatus",
     () => getBillingStatus(),
   );
+
+  const { data: jobCounts } = useSWR<JobCounts>("jobCounts", () => getJobCounts());
 
   const hasActiveItems = (data: JobSummary[]) => data.some((j) => ACTIVE_STATUSES.has(j.status));
 
@@ -298,9 +301,14 @@ export default function LiveJobsPage() {
         {itemsLoading ? (
           <RunHistoryTableSkeleton />
         ) : items.filter((j) => !ACTIVE_STATUSES.has(j.status)).length === 0 && !error && !actionError ? (
-          <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
-            {t.live.emptyState}
-          </div>
+          <LiveEmptyState
+            strategies={strategies}
+            keysStatus={keysStatus}
+            hasBacktestHistory={(jobCounts?.backtest_total ?? 0) > 0}
+            onOpenForm={() => setFormOpen(true)}
+            activeCount={activeCount}
+            maxSlots={maxSlots}
+          />
         ) : (
           <RunHistoryTable
             items={items.filter((j) => !ACTIVE_STATUSES.has(j.status))}

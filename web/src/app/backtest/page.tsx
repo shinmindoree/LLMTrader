@@ -12,6 +12,7 @@ import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { RunHistoryTableSkeleton } from "@/components/skeletons/RunHistoryTableSkeleton";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { FormModal } from "@/components/FormModal";
+import { BacktestEmptyState } from "@/components/BacktestEmptyState";
 import { BacktestForm } from "./new/BacktestForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
@@ -205,9 +206,7 @@ export default function BacktestJobsPage() {
         {itemsLoading ? (
           <RunHistoryTableSkeleton />
         ) : items.length === 0 && !error && !actionError ? (
-          <div className="rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-8 text-center text-sm text-[#868993]">
-            {t.backtest.emptyState}
-          </div>
+          <BacktestEmptyState strategies={strategies} onOpenForm={() => setFormOpen(true)} />
         ) : (
           <RunHistoryTable
             items={items}
