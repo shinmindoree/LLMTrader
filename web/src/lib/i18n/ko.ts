@@ -154,8 +154,8 @@ const ko: TranslationKeys = {
     strategyCount: "나의 전략",
     backtestCount: "시뮬레이션",
     runningLive: "자동거래 실행 중",
-    exchangeLabel: "거래소",
-    binance: "Binance",
+    exchangeLabel: "Binance USDⓈ-M 선물",
+    binance: "Binance Futures",
     statusConnected: "연결됨",
     statusNotConnected: "미연결",
     exchangeChecking: "확인 중…",
@@ -184,9 +184,8 @@ const ko: TranslationKeys = {
     open: "사이드바 열기",
   },
   assetOverview: {
-    title: "자산 현황",
-    subtitle: "거래소별 자산 현황  (15초 자동 새로고침)",
-    comingSoon: "연동 준비 중입니다. 주요 코인 거래소 연동을 확장할 예정입니다.",
+    title: "바이낸스 선물 계정",
+    subtitle: "USDⓈ-M 선물 계정 잔고 (15초 자동 새로고침)",
   },
   runHistory: {
     date: "날짜",

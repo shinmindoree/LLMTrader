@@ -124,11 +124,11 @@ export function DashboardPanel() {
         <p className="mt-1 max-w-xl text-sm text-[#868993]">{t.dashboard.subtitle}</p>
       </header>
 
-      {/* Exchange connection bar */}
+      {/* Binance Futures connection bar */}
       <div className="flex flex-col gap-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-[#868993]">{t.dashboard.exchangeLabel}</span>
-          <span className="font-medium text-[#d1d4dc]">{t.dashboard.binance}</span>
+          <span className="font-semibold text-[#F0B90B]">₿</span>
+          <span className="font-medium text-[#d1d4dc]">Binance USDⓈ-M Futures</span>
           <span
             className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium ${
               keysLoading

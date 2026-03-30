@@ -150,8 +150,8 @@ const en = {
     strategyCount: "My strategies",
     backtestCount: "Simulations",
     runningLive: "Live trading (active)",
-    exchangeLabel: "Exchange",
-    binance: "Binance",
+    exchangeLabel: "Binance USDⓈ-M Futures",
+    binance: "Binance Futures",
     statusConnected: "Connected",
     statusNotConnected: "Not connected",
     exchangeChecking: "Checking…",
@@ -180,9 +180,8 @@ const en = {
     open: "Open sidebar",
   },
   assetOverview: {
-    title: "Asset Overview",
-    subtitle: "Assets by exchange (auto-refresh every 15s)",
-    comingSoon: "Integration coming soon. We plan to add more major exchanges.",
+    title: "Binance Futures Account",
+    subtitle: "USDⓈ-M Futures account balance (auto-refresh every 15s)",
   },
   runHistory: {
     date: "Date",

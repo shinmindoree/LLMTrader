@@ -33,6 +33,9 @@ export function Header() {
           >
             <Image alt="AlphaWeaver" height={24} priority src="/alphaweaver-logo.svg" width={24} />
             <span className="text-sm font-semibold text-[#d1d4dc]">AlphaWeaver</span>
+            <span className="hidden rounded bg-[#F0B90B]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[#F0B90B] sm:inline-block">
+              for Binance Futures
+            </span>
           </Link>
           <nav className="ml-4 hidden items-center gap-1 sm:flex">
             {NAV_LINKS.map((link) => {

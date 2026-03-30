@@ -24,11 +24,11 @@ export const metadata: Metadata = {
     default: "AlphaWeaver | Describe. Backtest. Trade.",
     template: "%s | AlphaWeaver",
   },
-  description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, and trade live.",
+  description: "AI-powered Binance Futures trading platform. Describe strategies in natural language, backtest, and trade live.",
   metadataBase: new URL(siteUrl),
   openGraph: {
-    title: "AlphaWeaver | Describe. Backtest. Trade.",
-    description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, and trade live.",
+    title: "AlphaWeaver | AI Trading for Binance Futures",
+    description: "AI-powered Binance Futures trading platform. Describe strategies in natural language, backtest, and trade live.",
     url: siteUrl,
     siteName: "AlphaWeaver",
     type: "website",
@@ -36,8 +36,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "AlphaWeaver | Describe. Backtest. Trade.",
-    description: "Describe strategies in natural language. AI generates code. Backtest, verify on testnet, and trade live.",
+    title: "AlphaWeaver | AI Trading for Binance Futures",
+    description: "AI-powered Binance Futures trading platform. Describe strategies in natural language, backtest, and trade live.",
   },
   robots: {
     index: true,

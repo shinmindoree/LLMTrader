@@ -1,62 +1,39 @@
 "use client";
 
-import { useState } from "react";
 import { BinanceAccountPanel } from "@/components/BinanceAccountPanel";
 import { useI18n } from "@/lib/i18n";
 import type { BinanceKeysStatus } from "@/lib/types";
 
-const EXCHANGE_TABS = [
-  { id: "binance", label: "Binance" },
-  { id: "bybit", label: "Bybit" },
-  { id: "okx", label: "OKX" },
-  { id: "kraken", label: "Kraken" },
-] as const;
-
 export function AssetOverviewPanel({ keysStatus }: { keysStatus: BinanceKeysStatus | null }) {
-  const [activeTab, setActiveTab] = useState<string>("binance");
   const { t } = useI18n();
   const binanceConnected = !!keysStatus?.configured;
 
   return (
     <section className="mt-8 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5">
-      <h2 className="text-lg font-semibold text-[#d1d4dc]">{t.assetOverview.title}</h2>
-      <p className="mt-1 text-xs text-[#868993]">
-        {t.assetOverview.subtitle}
-      </p>
-
-      <div className="mt-4 flex gap-1 border-b border-[#2a2e39]">
-        {EXCHANGE_TABS.map((tab) => {
-          const connected = tab.id === "binance" && binanceConnected;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-t px-4 py-2 text-sm font-medium transition-colors ${
-                activeTab === tab.id
-                  ? "border-b-2 border-[#2962ff] text-[#2962ff] bg-[#131722]"
-                  : "text-[#868993] hover:text-[#d1d4dc] hover:bg-[#252936]"
-              }`}
-            >
-              {tab.label}
-              <span
-                className={`ml-1.5 inline-block h-1.5 w-1.5 rounded-full ${
-                  connected ? "bg-[#26a69a]" : "bg-[#ef5350]"
-                }`}
-              />
-            </button>
-          );
-        })}
+      <div className="flex items-center gap-3">
+        <h2 className="text-lg font-semibold text-[#d1d4dc]">{t.assetOverview.title}</h2>
+        <span className="rounded bg-[#F0B90B]/15 px-2 py-0.5 text-[11px] font-semibold text-[#F0B90B]">
+          USDⓈ-M
+        </span>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium ${
+            binanceConnected
+              ? "bg-[#26a69a]/15 text-[#26a69a]"
+              : "bg-[#ef5350]/15 text-[#ef5350]"
+          }`}
+        >
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${
+              binanceConnected ? "bg-[#26a69a]" : "bg-[#ef5350]"
+            }`}
+          />
+          {binanceConnected ? t.dashboard.statusConnected : t.dashboard.statusNotConnected}
+        </span>
       </div>
+      <p className="mt-1 text-xs text-[#868993]">{t.assetOverview.subtitle}</p>
 
       <div className="mt-4">
-        {activeTab === "binance" ? (
-          <BinanceAccountPanel embedded />
-        ) : (
-          <div className="rounded border border-[#2a2e39] bg-[#131722] px-4 py-8 text-center text-sm text-[#868993]">
-            {t.assetOverview.comingSoon}
-          </div>
-        )}
+        <BinanceAccountPanel embedded />
       </div>
     </section>
   );
