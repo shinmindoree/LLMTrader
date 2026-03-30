@@ -904,6 +904,36 @@ async def _generate_stream_body(body: StrategyRequest):
         yield f"data: {json.dumps({'intent': 'question'})}\n\n"
         return
 
+    # DSL fast path: if plan_spec is DSL-compatible, generate code deterministically
+    dsl_code: str | None = None
+    if plan_spec and plan_spec.get("intent") == "modify":
+        try:
+            from relay.strategy_dsl import generate_strategy_code, parse_planner_dsl
+
+            dsl = parse_planner_dsl(plan_spec)
+            if dsl and not dsl.needs_llm_fallback():
+                logger.info("DSL fast path: generating %s deterministically", dsl.strategy_name)
+                dsl_code = generate_strategy_code(dsl)
+                verification_error = _verify_strategy_code(dsl_code)
+                if verification_error:
+                    logger.warning("DSL-generated code failed verification: %s — falling back to LLM", verification_error)
+                    dsl_code = None
+        except Exception:
+            logger.warning("DSL code generation failed, falling back to LLM", exc_info=True)
+            dsl_code = None
+
+    if dsl_code:
+        # Stream the DSL-generated code to the frontend
+        yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
+        # Emit tokens in chunks to maintain streaming UX
+        chunk_size = 80
+        for i in range(0, len(dsl_code), chunk_size):
+            chunk = dsl_code[i : i + chunk_size]
+            yield f"data: {json.dumps({'token': chunk})}\n\n"
+        yield f"data: {json.dumps({'phase': 'verifying'})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'code': dsl_code, 'repaired': False, 'repair_attempts': 0})}\n\n"
+        return
+
     # Phase 2: Generating — Coder agent writes the code (streaming)
     yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
 

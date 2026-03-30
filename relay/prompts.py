@@ -86,24 +86,37 @@ Output a JSON object. Always include these three fields first:
 - rejection_message: string — if is_trading_related is false, write a brief, friendly Korean message explaining that this system is for trading strategy generation only and suggesting they describe a trading strategy. Empty string if is_trading_related is true.
 - intent: string — one of "modify" or "question". "modify" if the user wants to create a new strategy or change/improve an existing one and code generation is needed. "question" if the user is asking about the strategy, requesting explanation, or discussing without needing code changes.
 
-If is_trading_related is true AND intent is "modify", also include:
+If is_trading_related is true AND intent is "modify", produce a DSL-compatible spec:
 - strategy_name: PascalCase class name ending in "Strategy" (e.g. "RSIOversoldBounceStrategy")
 - description: One-sentence summary of the strategy
 - symbol: Trading pair (default "BTCUSDT" if unspecified)
 - timeframe: Candle interval (default "15m" if unspecified)
 - direction: "long_only", "short_only", or "long_short"
-- indicators: Array of indicators with parameters, e.g. ["RSI(period=14)", "EMA(period=20)"]
-- entry_long: Precise long entry condition (empty string if not applicable)
-- entry_short: Precise short entry condition (empty string if not applicable)
-- exit_long: Precise long exit condition
-- exit_short: Precise short exit condition
-- risk_management: Position sizing and stop-loss description
-- tunable_params: Object mapping parameter names to default values, e.g. {"rsi_period": 14, "oversold": 30}
-- notes: Any special implementation considerations
+- indicators: Array of objects, each with: name (TA-Lib name), params (dict), alias (snake_case variable name)
+  Example: [{"name": "RSI", "params": {"period": 14}, "alias": "rsi"}, {"name": "EMA", "params": {"period": 20}, "alias": "ema"}]
+- state_vars: Array of strings for prev-value tracking, e.g. ["prev_rsi", "prev_ema"]
+- entry_long: Object with condition_expr (Python expression using indicator aliases and crossed_above/crossed_below) and reason_template
+  Example: {"condition_expr": "crossed_above(self.prev_rsi, rsi, self.rsi_entry)", "reason_template": "RSI crossed above entry level"}
+- exit_long: Same format as entry_long (null if not applicable)
+- entry_short: Same format (null if direction is "long_only")
+- exit_short: Same format (null if direction is "long_only")
+- risk: Object with optional stop_loss_pct and take_profit_pct
+- tunable_params: Object mapping param names to spec objects: {default, type, label, description, group, min?, max?}
+  type: "integer"|"number"|"boolean"|"string"
+  group: exactly one of "진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)"
+- run_on_tick: boolean (true only if strategy needs tick-level execution like trailing stop or take-profit)
+- custom_indicator: string|null — Set to a description if the strategy requires a CUSTOM indicator function not available in TA-Lib. null for standard strategies.
 
-Available indicators: RSI, MACD, EMA, SMA, Bollinger Bands, Stochastic, Williams %R, ATR, ADX, CCI, OBV, VWAP.
-Available context: OHLCV candles, current position, open orders, account balance.
-Guard requirements: Must check is_new_bar before logic; must call get_open_orders before placing orders.
+Standard TA-Lib indicators (use these directly): RSI, MACD, EMA, SMA, BBANDS, STOCH, STOCHF, STOCHRSI, WILLR, ATR, ADX, CCI, OBV, MOM, ROC, AROON.
+For MACD: returns dict {"macd", "macdsignal", "macdhist"}. Access: macd_data["macd"].
+For BBANDS: returns dict {"upperband", "middleband", "lowerband"}.
+For STOCH: returns dict {"slowk", "slowd"}.
+
+Condition helpers available: crossed_above(prev, current, level), crossed_below(prev, current, level).
+References to params: use self.param_name (e.g. self.rsi_period).
+References to indicators: use the alias directly (e.g. rsi, ema, macd_data["macd"]).
+
+Guard requirements: get_open_orders check and is_new_bar check are automatically generated — do NOT include them in conditions.
 """
 
 _STRATEGY_PARAMS_UI_PROMPT = """## Tunable parameters (product UI)
