@@ -1,5 +1,7 @@
 """System prompts for LLM strategy generation."""
 
+import ast
+import textwrap
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -31,9 +33,46 @@ _INDICATOR_KEYWORDS: dict[str, tuple[str, ...]] = {
     "takeprofit": ("takeprofit", "익절", "take profit", "tp"),
 }
 
-INTAKE_SYSTEM_PROMPT = ""
+INTAKE_SYSTEM_PROMPT = """You are a trading strategy specification assistant.
+Your job is to parse the user's natural-language request into a structured JSON specification for a trading strategy.
 
-SUMMARY_SYSTEM_PROMPT = ""
+Output a JSON object with these fields:
+- strategy_name: string (PascalCase ending in "Strategy", e.g. "RSIOversoldBounceStrategy")
+- description: string (one-sentence Korean summary of the strategy)
+- symbol: string (default "BTCUSDT")
+- timeframe: string (default "15m", options: "1m","5m","15m","1h","4h","1d")
+- direction: "long_only" | "short_only" | "long_short"
+- indicators: array of strings (e.g. ["RSI(period=14)", "EMA(period=20)"])
+- entry_conditions: string (precise entry logic)
+- exit_conditions: string (precise exit logic)
+- risk_params: object (stop_loss_pct, take_profit_pct if mentioned)
+- tunable_params: object (param_name -> default_value)
+- notes: string (special considerations, empty if none)
+
+Rules:
+- If the user doesn't specify symbol, default to "BTCUSDT"
+- If the user doesn't specify timeframe, default to "15m"
+- If the user mentions specific numbers, use them exactly
+- Extract ALL mentioned indicators and their parameters
+- Respond ONLY with the JSON object, no explanation
+"""
+
+SUMMARY_SYSTEM_PROMPT = """You are a trading strategy summarizer. Given a Python trading strategy's source code, produce a concise Korean summary.
+
+Output format:
+- 전략명: [strategy class name]
+- 방향: [롱/숏/양방향]
+- 사용 지표: [comma-separated indicator list with params]
+- 진입 조건: [1-2 sentence entry logic]
+- 청산 조건: [1-2 sentence exit logic]
+- 특이사항: [any notable features, empty if none]
+
+Rules:
+- Keep total summary under 200 characters
+- Use Korean for all descriptions
+- Be specific about indicator parameters and threshold values
+- Respond ONLY with the summary, no additional commentary
+"""
 
 TEST_SYSTEM_PROMPT = ""
 
@@ -95,7 +134,19 @@ def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         "Respond in the same language as the user's message."
     )
     if code and code.strip():
-        return f"Strategy code:\n{code}\n\nSummary:\n{summary or 'N/A'}{backtest_analysis_instruction}"
+        # Extract on_bar method body for compactness; fall back to full code
+        on_bar_src = _extract_on_bar(code)
+        code_section = (
+            f"Strategy on_bar logic:\n```python\n{on_bar_src}\n```"
+            if on_bar_src
+            else f"Strategy code:\n```python\n{code}\n```"
+        )
+        return (
+            f"{_CHAT_INTERFACE_REFERENCE}\n\n"
+            f"{code_section}\n\n"
+            f"Summary:\n{summary or 'N/A'}"
+            f"{backtest_analysis_instruction}"
+        )
     return (
         "You are a trading strategy expert assistant. "
         "Answer the user's question about trading strategies, markets, indicators, and technical analysis. "
@@ -103,6 +154,39 @@ def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         "Provide clear, informative answers. Do NOT generate Python code unless explicitly asked."
         + backtest_analysis_instruction
     )
+
+
+def _extract_on_bar(code: str) -> str | None:
+    """Extract the on_bar method source from strategy code using AST."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    lines = code.splitlines(keepends=True)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "on_bar":
+            start = node.lineno - 1
+            end = node.end_lineno or (start + 1)
+            return textwrap.dedent("".join(lines[start:end]))
+    return None
+
+
+_CHAT_INTERFACE_REFERENCE = """You are a trading strategy expert. When modifying or generating strategy code, follow these interface rules:
+
+### Key Context Methods
+- ctx.current_price, ctx.position_size (>0: long, <0: short, 0: none), ctx.position_entry_price
+- ctx.enter_long(reason=...), ctx.enter_short(reason=...), ctx.close_position(reason=...)
+- ctx.get_indicator(name, period=..., **kwargs) -> float | dict
+- ctx.get_open_orders() -> list
+- ctx.calc_entry_quantity(entry_pct=None) -> float
+
+### Mandatory Guards (on_bar)
+1. `if ctx.get_open_orders(): return`
+2. `if not bar.get("is_new_bar", True): return` (unless run_on_tick)
+3. Check ctx.position_size before entry/exit
+
+### bar dict keys
+timestamp, bar_timestamp, bar_close, price, is_new_bar, volume"""
 
 
 def _read_file(path: Path) -> str | None:
