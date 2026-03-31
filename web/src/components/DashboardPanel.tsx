@@ -10,8 +10,12 @@ import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies } 
 import type { JobSummary, QuickBacktestEquityPoint } from "@/lib/types";
 import { useLiveJobStream } from "@/lib/useLiveJobStream";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
+import { FuturesWatchlistRail } from "@/components/FuturesWatchlistRail";
+import { NewsFlowPanel } from "@/components/NewsFlowPanel";
 import { DashboardSkeleton } from "@/components/skeletons/DashboardSkeleton";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
+import { DASHBOARD_FUTURES_WATCH_SYMBOLS } from "@/lib/dashboardFuturesSymbols";
+import { useBinanceFuturesTickerStream } from "@/lib/useBinanceFuturesTickerStream";
 
 const MiniEquityCurve = dynamic(
   () => import("@/app/strategies/_components/MiniEquityCurve"),
@@ -164,6 +168,7 @@ function CardShell({
 
 export function DashboardPanel() {
   const { t, locale } = useI18n();
+  const futuresTickers = useBinanceFuturesTickerStream(DASHBOARD_FUTURES_WATCH_SYMBOLS);
 
   const {
     data: strategies,
@@ -311,7 +316,7 @@ export function DashboardPanel() {
   }
 
   return (
-    <div className="relative w-full px-4 py-4">
+    <div className="relative flex w-full px-4 py-4">
       <a
         href="#dashboard-main"
         className="absolute left-[-9999px] top-0 z-[60] rounded bg-[#2962ff] px-3 py-2 text-sm text-white focus:left-4 focus:top-20 focus:outline-none"
@@ -319,7 +324,9 @@ export function DashboardPanel() {
         {t.dashboard.skipToContent}
       </a>
 
-      <div className="mx-auto max-w-6xl" id="dashboard-main">
+      <div className="hidden min-w-0 flex-1 xl:block" aria-hidden />
+
+      <div className="mx-auto w-full max-w-6xl shrink-0" id="dashboard-main">
         {anyFetchError ? (
           <div
             className="mb-4 flex flex-col gap-2 rounded-lg border border-[#ef5350]/35 bg-[#ef5350]/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
@@ -650,7 +657,21 @@ export function DashboardPanel() {
         <div className="mt-6">
           <AssetOverviewPanel />
         </div>
+
+        <NewsFlowPanel tickersBySymbol={futuresTickers.bySymbol} />
       </div>
+
+      <aside
+        className="sticky top-2 hidden h-[calc(100dvh-5rem)] max-h-[calc(100dvh-5rem)] w-80 shrink-0 self-start overflow-hidden xl:block"
+        aria-label={t.dashboard.futuresRailTitle}
+      >
+        <FuturesWatchlistRail
+          symbols={DASHBOARD_FUTURES_WATCH_SYMBOLS}
+          bySymbol={futuresTickers.bySymbol}
+          status={futuresTickers.status}
+          onRetryRest={futuresTickers.refetchRest}
+        />
+      </aside>
     </div>
   );
 }
