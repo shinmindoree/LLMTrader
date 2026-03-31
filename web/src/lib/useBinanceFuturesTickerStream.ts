@@ -64,8 +64,10 @@ async function fetchRestTickers(symbols: readonly string[]): Promise<Record<stri
 
 export function useBinanceFuturesTickerStream(symbols: readonly string[]): UseBinanceFuturesTickerStreamResult {
   const [bySymbol, setBySymbol] = useState<Record<string, FuturesTickerRow>>({});
-  const [status, setStatus] = useState<FuturesTickerStreamStatus>("connecting");
+  const [internalStatus, setInternalStatus] = useState<FuturesTickerStreamStatus>("connecting");
+  const status: FuturesTickerStreamStatus = symbols.length === 0 ? "error" : internalStatus;
   const wsRef = useRef<WebSocket | null>(null);
+  const wsLiveRef = useRef(false);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const symbolsKey = symbols.join(",");
@@ -84,9 +86,9 @@ export function useBinanceFuturesTickerStream(symbols: readonly string[]): UseBi
         void fetchRestTickers(syms)
           .then((next) => {
             setBySymbol((prev) => ({ ...prev, ...next }));
-            setStatus((s) => (s === "error" ? "fallback" : s));
+            setInternalStatus((s) => (s === "error" ? "fallback" : s));
           })
-          .catch(() => setStatus("error"));
+          .catch(() => setInternalStatus("error"));
       };
       run();
       pollRef.current = setInterval(run, REST_POLL_MS);
@@ -98,20 +100,27 @@ export function useBinanceFuturesTickerStream(symbols: readonly string[]): UseBi
     void fetchRestTickers(symbols)
       .then((next) => {
         setBySymbol((prev) => ({ ...prev, ...next }));
-        setStatus("fallback");
+        setInternalStatus("fallback");
       })
-      .catch(() => setStatus("error"));
-  }, [symbolsKey]);
+      .catch(() => setInternalStatus("error"));
+  }, [symbols]);
 
   useEffect(() => {
     const syms = symbols.length > 0 ? symbols : [];
     if (syms.length === 0) {
-      setStatus("error");
       return;
     }
 
-    setStatus("connecting");
+    queueMicrotask(() => setInternalStatus("connecting"));
     let gotWsMessage = false;
+    wsLiveRef.current = false;
+
+    void fetchRestTickers(syms)
+      .then((next) => {
+        setBySymbol((prev) => ({ ...prev, ...next }));
+        if (!wsLiveRef.current) setInternalStatus("fallback");
+      })
+      .catch(() => {});
 
     if (fallbackTimerRef.current) {
       clearTimeout(fallbackTimerRef.current);
@@ -120,10 +129,10 @@ export function useBinanceFuturesTickerStream(symbols: readonly string[]): UseBi
 
     fallbackTimerRef.current = setTimeout(() => {
       if (!gotWsMessage) {
-        setStatus("fallback");
+        setInternalStatus("fallback");
         void fetchRestTickers(syms)
           .then((next) => setBySymbol(next))
-          .catch(() => setStatus("error"));
+          .catch(() => setInternalStatus("error"));
         startPolling(syms);
       }
     }, FALLBACK_AFTER_MS);
@@ -139,7 +148,8 @@ export function useBinanceFuturesTickerStream(symbols: readonly string[]): UseBi
         const row = parseCombinedPayload(parsed);
         if (!row) return;
         gotWsMessage = true;
-        setStatus("live");
+        wsLiveRef.current = true;
+        setInternalStatus("live");
         if (fallbackTimerRef.current) {
           clearTimeout(fallbackTimerRef.current);
           fallbackTimerRef.current = null;
@@ -156,22 +166,22 @@ export function useBinanceFuturesTickerStream(symbols: readonly string[]): UseBi
     };
 
     ws.onerror = () => {
-      if (!cleanedUp) setStatus((s) => (s === "live" ? s : "fallback"));
+      if (!cleanedUp) setInternalStatus((s) => (s === "live" ? s : "fallback"));
     };
 
     ws.onclose = () => {
       if (cleanedUp) return;
       if (!gotWsMessage) {
-        setStatus("fallback");
+        setInternalStatus("fallback");
         void fetchRestTickers(syms)
           .then((next) => setBySymbol(next))
-          .catch(() => setStatus("error"));
+          .catch(() => setInternalStatus("error"));
         startPolling(syms);
       } else {
-        setStatus("fallback");
+        setInternalStatus("fallback");
         void fetchRestTickers(syms)
           .then((next) => setBySymbol((prev) => ({ ...prev, ...next })))
-          .catch(() => setStatus("error"));
+          .catch(() => setInternalStatus("error"));
         startPolling(syms);
       }
     };
@@ -186,7 +196,7 @@ export function useBinanceFuturesTickerStream(symbols: readonly string[]): UseBi
       ws.close();
       wsRef.current = null;
     };
-  }, [symbolsKey, startPolling, stopPolling]);
+  }, [symbols, symbolsKey, startPolling, stopPolling]);
 
   return { bySymbol, status, refetchRest };
 }
