@@ -2,8 +2,11 @@
 #
 # main 브랜치 보호(필수 PR/리뷰)가 있으면 기본 GITHUB_TOKEN으로는 push가 거절될 수 있음.
 # 해결: (1) Rules에서 github-actions[bot]에게 bypass 허용
-#   또는 (2) repo 권한 PAT를 SYNC_MAIN_PAT 시크릿으로 등록 후 checkout에 token 지정:
-#   token: ${{ secrets.SYNC_MAIN_PAT }}
+#   또는 (2) repo 권한 PAT를 SYNC_MAIN_PAT 시크릿으로 등록 (아래 checkout token)
+#
+# GITHUB_TOKEN으로 main에 push하면 다른 워크플로(예: Deploy Web (test))가 트리거되지 않음.
+# main 푸시 후 자동 배포까지 원하면 반드시 SYNC_MAIN_PAT을 설정하세요.
+# 미설정 시 github.token으로 폴백(머지는 되나 Deploy는 수동 Run workflow 필요).
 
 name: Sync mac/minsuk to main
 
@@ -26,6 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.SYNC_MAIN_PAT || github.token }}
 
       # 로컬에서 하는 것과 동일:
       #   git checkout main && git pull origin main && git merge --ff-only mac/minsuk && git push origin main
