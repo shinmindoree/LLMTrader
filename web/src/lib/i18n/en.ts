@@ -90,6 +90,8 @@ const en = {
     backtest: "Backtest",
     settings: "Settings",
     strategies: "Strategies",
+    openMenu: "Open navigation menu",
+    closeMenu: "Close navigation menu",
   },
   auth: {
     login: "Login",

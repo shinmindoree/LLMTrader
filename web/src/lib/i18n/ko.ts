@@ -94,6 +94,8 @@ const ko: TranslationKeys = {
     backtest: "백테스트",
     settings: "설정",
     strategies: "전략",
+    openMenu: "내비게이션 메뉴 열기",
+    closeMenu: "내비게이션 메뉴 닫기",
   },
   auth: {
     login: "로그인",
