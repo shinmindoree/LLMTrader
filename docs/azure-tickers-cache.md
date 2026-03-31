@@ -47,7 +47,7 @@ Azure에서 선택 가능한 트리거 예시:
 
 ## 4. Copilot / MCP로 할 일 체크리스트
 
-- [ ] 리소스 그룹·Redis 인스턴스 생성
-- [ ] 앱 호스트(Container Apps 등)에 `REDIS_URL`, `TICKER_INGEST_SECRET` 설정
-- [ ] 타이머로 `POST .../api/internal/ticker-ingest` 등록(HTTPS, 시크릿 헤더)
+- [x] 리소스 그룹·Redis 인스턴스 생성 → `fdpo-test-redis` (Basic C0, southeastasia)
+- [x] 앱 호스트(Container Apps 등)에 `REDIS_URL`, `TICKER_INGEST_SECRET` 설정 → test-web, test-api
+- [x] 타이머로 `POST .../api/internal/ticker-ingest` 등록(HTTPS, 시크릿 헤더) → Logic App `fdpo-test-ticker-ingest` (30초 주기)
 - [ ] 스테이징에서 인제스트 후 대시보드 시세·상태 배지 확인

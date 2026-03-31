@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "tickerIngestSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Secret for x-ticker-ingest-secret header"
+      }
+    },
+    "webAppFqdn": {
+      "type": "string",
+      "defaultValue": "test-web.gentleflower-2ddd3cac.southeastasia.azurecontainerapps.io",
+      "metadata": {
+        "description": "FQDN of the web Container App"
+      }
+    }
+  },
+  "variables": {
+    "logicAppName": "fdpo-test-ticker-ingest",
+    "location": "[resourceGroup().location]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[variables('logicAppName')]",
+      "location": "southeastasia",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "triggers": {
+            "Recurrence": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Second",
+                "interval": 30
+              }
+            }
+          },
+          "actions": {
+            "HTTP_POST_Ticker_Ingest": {
+              "type": "Http",
+              "inputs": {
+                "method": "POST",
+                "uri": "[concat('https://', parameters('webAppFqdn'), '/api/internal/ticker-ingest')]",
+                "headers": {
+                  "x-ticker-ingest-secret": "@{parameters('tickerIngestSecret')}",
+                  "Content-Type": "application/json"
+                },
+                "body": {}
+              },
+              "runAfter": {}
+            }
+          },
+          "parameters": {
+            "tickerIngestSecret": {
+              "type": "SecureString"
+            }
+          }
+        },
+        "parameters": {
+          "tickerIngestSecret": {
+            "value": "[parameters('tickerIngestSecret')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppName": {
+      "type": "string",
+      "value": "[variables('logicAppName')]"
+    }
+  }
+}
