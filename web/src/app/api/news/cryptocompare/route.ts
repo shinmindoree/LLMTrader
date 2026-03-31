@@ -90,7 +90,9 @@ function normalizePosts(payload: unknown): NewsPostDto[] {
       }
     }
 
-    out.push({ id, title, url, publishedAt, sourceTitle, domain, currencies });
+    const body = typeof row.body === "string" && row.body.length > 0 ? row.body : null;
+
+    out.push({ id, title, url, publishedAt, sourceTitle, domain, currencies, body });
   }
   return out;
 }

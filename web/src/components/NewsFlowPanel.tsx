@@ -237,10 +237,10 @@ export function NewsFlowPanel({
             })}
           </div>
 
-          <div className="flex max-h-[420px] min-h-0 flex-col overflow-hidden rounded border border-[#2a2e39] bg-[#131722] p-4">
+          <div className="flex max-h-[420px] min-h-0 flex-col overflow-y-auto rounded border border-[#2a2e39] bg-[#131722] p-4">
             {selected ? (
               <>
-                <h3 className="text-sm font-semibold leading-snug text-[#d1d4dc]">{selected.title}</h3>
+                <h3 className="shrink-0 text-sm font-semibold leading-snug text-[#d1d4dc]">{selected.title}</h3>
                 <p className="mt-2 text-[11px] text-[#868993]">
                   {formatTime(selected.publishedAt)}
                   {selected.sourceTitle ? ` · ${selected.sourceTitle}` : ""}
@@ -256,7 +256,6 @@ export function NewsFlowPanel({
                     {t.dashboard.newsFlowOpenArticle} →
                   </a>
                 ) : null}
-                <p className="mt-4 text-xs leading-relaxed text-[#868993]">{t.dashboard.newsFlowBodyHint}</p>
 
                 {relatedSyms.length > 0 ? (
                   <div className="mt-4 border-t border-[#2a2e39] pt-3">
@@ -285,6 +284,14 @@ export function NewsFlowPanel({
                         );
                       })}
                     </div>
+                  </div>
+                ) : null}
+
+                {selected.body ? (
+                  <div className="mt-4 border-t border-[#2a2e39] pt-3">
+                    <p className="whitespace-pre-line text-xs leading-relaxed text-[#b2b5be]">
+                      {selected.body}
+                    </p>
                   </div>
                 ) : null}
               </>

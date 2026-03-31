@@ -6,4 +6,5 @@ export type NewsPostDto = {
   sourceTitle: string | null;
   domain: string | null;
   currencies: string[];
+  body: string | null;
 };
