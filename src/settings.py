@@ -31,15 +31,6 @@ class SlackSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-class RelayServerSettings(BaseSettings):
-    """LLM 중계(프록시) 서버 설정."""
-
-    url: str = Field(default="", alias="RELAY_SERVER_URL")
-    api_key: str = Field(default="", alias="RELAY_API_KEY")
-
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-
 class NextAuthSettings(BaseSettings):
     """NextAuth.js 인증 설정 (shared secret 기반)."""
 
@@ -173,7 +164,6 @@ class Settings(BaseSettings):
 
     binance: BinanceSettings = Field(default_factory=BinanceSettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
-    relay_server: RelayServerSettings = Field(default_factory=RelayServerSettings)
     encryption: EncryptionSettings = Field(default_factory=EncryptionSettings)
     stripe: StripeSettings = Field(default_factory=StripeSettings)
     entra_auth: EntraAuthSettings = Field(default_factory=EntraAuthSettings)
