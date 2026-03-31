@@ -179,6 +179,23 @@ const ko: TranslationKeys = {
     labelTotalTrades: "총 거래",
     labelLastResult: "직전",
     statNoRunning: "실행 중인 거래 없음",
+    statFeatured: "최근 활동 기준",
+    skipToContent: "대시보드 본문으로 건너뛰기",
+    errorPartialLoad: "대시보드 일부 데이터를 불러오지 못했습니다.",
+    retryLoad: "다시 시도",
+    lastUpdated: "마지막 갱신: {relative}",
+    lastUpdatedJustNow: "방금",
+    moreRunningJobs: "+{count}개 더",
+    viewAllLive: "모든 라이브 작업 보기",
+    ctaSettings: "설정 열기",
+    ctaStrategies: "전략 관리",
+    ctaBacktest: "시뮬레이션 실행",
+    ctaLive: "라이브 트레이딩 시작",
+    onboardingNext: "다음 단계",
+    labelEquityTrend: "자산 추이",
+    cardLoadError: "이 구역을 불러오지 못했습니다.",
+    ariaLiveStats: "라이브 {count}건, 순손익 {pnl} USDT, 승률 {wr}.",
+    openSection: "해당 화면 열기",
   },
   sidebar: {
     close: "사이드바 닫기",
@@ -186,7 +203,8 @@ const ko: TranslationKeys = {
   },
   assetOverview: {
     title: "바이낸스 선물 계정",
-    subtitle: "USDⓈ-M 선물 계정 잔고 (15초 자동 새로고침)",
+    subtitle:
+      "아래는 잔고·포지션입니다. 연결 상태는 대시보드 상단에서 확인하세요. 15초마다 자동 새로고침됩니다.",
   },
   runHistory: {
     date: "날짜",

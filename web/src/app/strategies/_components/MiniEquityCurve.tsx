@@ -6,16 +6,22 @@ type Props = {
   data: QuickBacktestEquityPoint[];
   initialBalance: number;
   height?: number;
+  emptyLabel?: string;
 };
 
-export default function MiniEquityCurve({ data, initialBalance, height = 120 }: Props) {
+export default function MiniEquityCurve({
+  data,
+  initialBalance,
+  height = 120,
+  emptyLabel = "거래 데이터 부족",
+}: Props) {
   if (data.length < 2) {
     return (
       <div
         className="flex items-center justify-center text-xs text-zinc-500"
         style={{ height }}
       >
-        거래 데이터 부족
+        {emptyLabel}
       </div>
     );
   }

@@ -175,6 +175,23 @@ const en = {
     labelTotalTrades: "Total Trades",
     labelLastResult: "Last",
     statNoRunning: "No active trading",
+    statFeatured: "From recent activity",
+    skipToContent: "Skip to dashboard content",
+    errorPartialLoad: "Some dashboard data could not be loaded.",
+    retryLoad: "Retry",
+    lastUpdated: "Last updated: {relative}",
+    lastUpdatedJustNow: "just now",
+    moreRunningJobs: "+{count} more",
+    viewAllLive: "View all live jobs",
+    ctaSettings: "Open settings",
+    ctaStrategies: "Manage strategies",
+    ctaBacktest: "Run simulation",
+    ctaLive: "Start live trading",
+    onboardingNext: "Next steps",
+    labelEquityTrend: "Equity trend",
+    cardLoadError: "Could not load this section.",
+    ariaLiveStats: "{count} live jobs, net PnL {pnl} USDT, win rate {wr}.",
+    openSection: "Open this section",
   },
   sidebar: {
     close: "Close sidebar",
@@ -182,7 +199,8 @@ const en = {
   },
   assetOverview: {
     title: "Binance Futures Account",
-    subtitle: "USDⓈ-M Futures account balance (auto-refresh every 15s)",
+    subtitle:
+      "Balances and positions below. Connection status is shown at the top of the dashboard. Auto-refresh every 15s.",
   },
   runHistory: {
     date: "Date",

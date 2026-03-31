@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
+import { TradingTabs } from "@/components/TradingTabs";
 const TradingViewChart = dynamic(
   () => import("@/components/TradingViewChart").then((mod) => mod.TradingViewChart),
   { ssr: false },
@@ -27,6 +28,11 @@ function TradingLayoutInner({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-[#131722]">
+      {!isChartTab ? (
+        <div className="shrink-0 sm:hidden">
+          <TradingTabs />
+        </div>
+      ) : null}
       {isChartTab ? (
         <div className="min-h-0 flex-1">
           {backtestChart ? (
