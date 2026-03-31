@@ -5,16 +5,16 @@ import useSWR from "swr";
 
 import { useI18n } from "@/lib/i18n";
 import { currencyCodesToUsdtPerps } from "@/lib/binanceSymbol";
-import type { CryptoPanicPostDto } from "@/lib/cryptopanicTypes";
+import type { NewsPostDto } from "@/lib/newsTypes";
 import type { FuturesTickerRow } from "@/lib/useBinanceFuturesTickerStream";
 
 const linkFocusRing =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2962ff] focus-visible:ring-offset-2 focus-visible:ring-offset-[#131722]";
 
-type NewsApiOk = { posts: CryptoPanicPostDto[]; filter: string; notConfigured?: boolean };
+type NewsApiOk = { posts: NewsPostDto[]; filter: string; notConfigured?: boolean };
 
 async function fetchNews(filter: string): Promise<NewsApiOk> {
-  const res = await fetch(`/api/news/cryptopanic?filter=${encodeURIComponent(filter)}`, {
+  const res = await fetch(`/api/news/cryptocompare?filter=${encodeURIComponent(filter)}`, {
     cache: "no-store",
   });
   const json = (await res.json()) as NewsApiOk & { error?: string };
@@ -24,7 +24,7 @@ async function fetchNews(filter: string): Promise<NewsApiOk> {
   return {
     posts: Array.isArray(json.posts) ? json.posts : [],
     filter: typeof json.filter === "string" ? json.filter : filter,
-    notConfigured: res.status === 503 || (typeof json.error === "string" && json.error.includes("CRYPTOPANIC_AUTH_TOKEN")),
+    notConfigured: res.status === 503 || (typeof json.error === "string" && json.error.includes("CRYPTOCOMPARE_API_KEY")),
   };
 }
 
@@ -56,7 +56,7 @@ export function NewsFlowPanel({
 }) {
   const { t, locale } = useI18n();
   const [filter, setFilter] = useState("hot");
-  const { data, error, isLoading, mutate } = useSWR(["news-cryptopanic", filter], () => fetchNews(filter), {
+  const { data, error, isLoading, mutate } = useSWR(["news-cryptocompare", filter], () => fetchNews(filter), {
     refreshInterval: 60_000,
     revalidateOnFocus: true,
   });
@@ -164,9 +164,6 @@ export function NewsFlowPanel({
           >
             <option value="hot">{t.dashboard.newsFlowFilterHot}</option>
             <option value="rising">{t.dashboard.newsFlowFilterRising}</option>
-            <option value="bullish">{t.dashboard.newsFlowFilterBullish}</option>
-            <option value="bearish">{t.dashboard.newsFlowFilterBearish}</option>
-            <option value="important">{t.dashboard.newsFlowFilterImportant}</option>
           </select>
           <button
             type="button"
