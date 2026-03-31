@@ -1,14 +1,36 @@
-"""LLM 클라이언트 - 중계 서버와의 통신 인터페이스."""
+"""LLM 클라이언트 — relay 모듈 직접 호출 (HTTP hop 제거).
 
-import asyncio
+이전: API → httpx → Relay HTTP → Azure OpenAI (4-hop SSE)
+현재: API → relay 모듈 직접 호출 → Azure OpenAI (직접 호출)
+"""
+
+from __future__ import annotations
+
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+from relay.azure_openai import chat_completion, chat_completion_messages, chat_completion_stream
+from relay.capability_registry import (
+    SUPPORTED_CONTEXT_METHODS,
+    SUPPORTED_DATA_SOURCES,
+    SUPPORTED_INDICATOR_SCOPES,
+    UNSUPPORTED_CAPABILITY_RULES,
+    capability_summary_lines,
+)
+from relay.config import RelayConfig, get_config
+from relay.prompts import (
+    SUMMARY_SYSTEM_PROMPT,
+    TEST_SYSTEM_PROMPT,
+    build_analyst_system_prompt,
+    build_intake_system_prompt,
+    build_repair_system_prompt,
+    build_strategy_chat_system_prompt,
+)
 
-from src.settings import get_settings
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,188 +53,74 @@ class StrategyRepairResult:
     model_used: str | None = None
 
 
+def _get_relay_config() -> RelayConfig:
+    """Get relay config, raising ValueError if not configured."""
+    config = get_config()
+    if not config.is_azure_configured():
+        raise ValueError("Azure OpenAI not configured (missing OPENAI_BASE_URL / OPENAI_MODEL)")
+    return config
+
+
 class LLMClient:
-    """LLM 클라이언트 - 중계 서버와 통신."""
+    """LLM 클라이언트 — relay 모듈을 직접 호출하여 Azure OpenAI와 통신."""
 
     def __init__(self, base_url: str | None = None, timeout: float = 60.0) -> None:
-        """LLM 클라이언트 초기화.
-
-        Args:
-            base_url: 중계 서버 기본 URL (None이면 환경 변수에서 읽음)
-            timeout: 요청 타임아웃 (초)
-        """
-        if base_url is None:
-            settings = get_settings()
-            base_url = settings.relay_server.url
-            if not base_url:
-                raise ValueError(
-                    "RELAY_SERVER_URL 환경 변수가 설정되지 않았습니다. .env 파일에 RELAY_SERVER_URL을 설정해주세요."
-                )
-            self.api_key = settings.relay_server.api_key
-        else:
-            self.api_key = ""
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self.max_retries = 3
-        self.retry_delay = 1.0  # 초
+        # base_url과 timeout은 하위호환 시그니처 유지용. 실제로는 relay config 사용.
+        self._config = _get_relay_config()
 
     async def health_check(self) -> bool:
-        """중계 서버 상태 확인.
-
-        Returns:
-            서버 연결 성공 여부
-        """
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                # /docs 또는 /openapi.json 접근 확인
-                response = await client.get(f"{self.base_url}/docs")
-                return response.status_code == 200
-        except Exception:
-            return False
+        """Azure OpenAI 설정 확인."""
+        return self._config.is_azure_configured()
 
     async def generate_strategy(
         self,
         user_prompt: str,
         messages: list[dict[str, str]] | None = None,
     ) -> StrategyGenerationResult:
-        """전략 코드 생성 요청.
-
-        Args:
-            user_prompt: 사용자의 자연어 전략 설명 (단일 턴 시 사용)
-            messages: 멀티턴 대화 목록 [{"role": "user"|"assistant", "content": "..."}]
-
-        Returns:
-            StrategyGenerationResult
-        """
+        """전략 코드 생성 (비스트리밍). generate_strategy_stream 사용 권장."""
         if not messages and (not user_prompt or not user_prompt.strip()):
-            return StrategyGenerationResult(
-                success=False,
-                error="user_prompt가 비어있습니다.",
-            )
+            return StrategyGenerationResult(success=False, error="user_prompt가 비어있습니다.")
 
-        payload: dict[str, Any] = {"user_prompt": (user_prompt or "").strip()}
-        if messages:
-            payload["messages"] = messages
-
-        for attempt in range(self.max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    headers = {}
-                    if self.api_key:
-                        headers["X-API-Key"] = self.api_key
-                        headers["Authorization"] = f"Bearer {self.api_key}"
-                    response = await client.post(
-                        f"{self.base_url}/generate",
-                        json=payload,
-                        headers=headers,
-                    )
-                    response.raise_for_status()
-
-                    data = response.json()
-
-                    # 응답 형식: {"code": "...", "model_used": "..."}
-                    code = data.get("code")
-                    model_used = data.get("model_used")
-
-                    if not code:
+        # Collect all tokens from the stream path
+        code_acc: list[str] = []
+        repaired = False
+        try:
+            async for event in self.generate_strategy_stream(user_prompt, messages):
+                if "error" in event:
+                    return StrategyGenerationResult(success=False, error=str(event["error"]))
+                if "token" in event:
+                    code_acc.append(event["token"])
+                if event.get("done"):
+                    if event.get("code"):
                         return StrategyGenerationResult(
-                            success=False,
-                            error="서버 응답에 code가 없습니다.",
-                            model_used=model_used,
+                            success=True,
+                            code=event["code"],
+                            model_used=event.get("model_used"),
                         )
+                    repaired = event.get("repaired", False)
+                    break
+        except Exception as e:
+            return StrategyGenerationResult(success=False, error=f"생성 실패: {e}")
 
-                    return StrategyGenerationResult(
-                        success=True,
-                        code=code,
-                        model_used=model_used,
-                    )
-
-            except httpx.TimeoutException:
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (attempt + 1))
-                    continue
-                return StrategyGenerationResult(
-                    success=False,
-                    error=f"요청 타임아웃 ({self.timeout}초 초과)",
-                )
-
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 422:
-                    # Validation Error
-                    try:
-                        error_data = e.response.json()
-                        detail = error_data.get("detail", [])
-                        if detail and isinstance(detail, list) and len(detail) > 0:
-                            error_msg = detail[0].get("msg", "Validation error")
-                        else:
-                            error_msg = "Validation error"
-                    except Exception:
-                        error_msg = "Validation error"
-                    return StrategyGenerationResult(
-                        success=False,
-                        error=f"요청 형식 오류: {error_msg}",
-                    )
-                elif e.response.status_code >= 500:
-                    # 서버 오류 - 재시도
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep(self.retry_delay * (attempt + 1))
-                        continue
-                    return StrategyGenerationResult(
-                        success=False,
-                        error=f"서버 오류: {e.response.status_code}",
-                    )
-                else:
-                    return StrategyGenerationResult(
-                        success=False,
-                        error=f"HTTP 오류: {e.response.status_code}",
-                    )
-
-            except httpx.ConnectError:
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (attempt + 1))
-                    continue
-                return StrategyGenerationResult(
-                    success=False,
-                    error=f"서버 연결 실패: {self.base_url}",
-                )
-
-            except Exception as e:
-                return StrategyGenerationResult(
-                    success=False,
-                    error=f"예상치 못한 오류: {str(e)}",
-                )
-
-        return StrategyGenerationResult(
-            success=False,
-            error="최대 재시도 횟수 초과",
-        )
+        code = "".join(code_acc).strip()
+        if code:
+            return StrategyGenerationResult(success=True, code=code)
+        return StrategyGenerationResult(success=False, error="빈 코드 생성")
 
     async def summarize_strategy(self, code: str) -> str | None:
-        """전략 코드 요약 요청.
-
-        Args:
-            code: 전략 Python 코드
-
-        Returns:
-            요약 문자열 또는 실패 시 None
-        """
+        """전략 코드 요약."""
         if not code or not code.strip():
             return None
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                headers = {}
-                if self.api_key:
-                    headers["X-API-Key"] = self.api_key
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                response = await client.post(
-                    f"{self.base_url}/summarize",
-                    json={"code": code.strip()},
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("summary") or None
+            content, _ = chat_completion(
+                self._config,
+                system_content=SUMMARY_SYSTEM_PROMPT,
+                user_content=code.strip(),
+                model=self._config.resolved_summarizer_model,
+            )
+            return content.strip() if content else None
         except Exception:
+            logger.warning("summarize_strategy failed", exc_info=True)
             return None
 
     async def strategy_chat(
@@ -221,28 +129,21 @@ class LLMClient:
         summary: str | None,
         messages: list[dict[str, str]],
     ) -> str | None:
-        """전략에 대한 질문/설명 요청. 코드 생성 없이 텍스트만 반환."""
+        """전략 채팅 (비스트리밍)."""
         if not messages:
             return None
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                headers = {}
-                if self.api_key:
-                    headers["X-API-Key"] = self.api_key
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                response = await client.post(
-                    f"{self.base_url}/strategy/chat",
-                    json={
-                        "code": (code or "").strip(),
-                        "summary": summary,
-                        "messages": messages,
-                    },
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("content") or None
+            system_content = build_strategy_chat_system_prompt(code or "", summary)
+            content, _ = chat_completion_messages(
+                self._config,
+                system_content=system_content,
+                messages=messages,
+            )
+            if not content or not content.strip():
+                return None
+            return content.strip()
         except Exception:
+            logger.warning("strategy_chat failed", exc_info=True)
             return None
 
     async def strategy_chat_stream(
@@ -251,40 +152,31 @@ class LLMClient:
         summary: str | None,
         messages: list[dict[str, str]],
     ) -> AsyncIterator[dict[str, Any]]:
-        """전략 채팅/요약 스트리밍. token / done / error 이벤트를 yield."""
+        """전략 채팅 스트리밍 — relay 직접 호출 (httpx hop 제거)."""
         if not messages:
             yield {"error": "messages are required"}
             return
-        payload: dict[str, Any] = {
-            "code": (code or "").strip(),
-            "summary": summary,
-            "messages": messages,
-        }
-        headers: dict[str, str] = {}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-            headers["Authorization"] = f"Bearer {self.api_key}"
+
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(180.0, connect=30.0),
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/strategy/chat/stream",
-                    json=payload,
-                    headers=headers,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            try:
-                                data = json.loads(line[6:])
-                                yield data
-                                if data.get("done") or data.get("error"):
-                                    return
-                            except json.JSONDecodeError:
-                                pass
+            system_content = build_strategy_chat_system_prompt(code or "", summary)
+            acc: list[str] = []
+            async for token in chat_completion_stream(
+                self._config,
+                system_content=system_content,
+                messages=messages,
+            ):
+                acc.append(token)
+                yield {"token": token}
+
+            full_text = "".join(acc)
+            # Check for model refusal
+            from relay.main import _is_model_refusal, _NON_TRADING_REJECTION_MSG
+
+            if _is_model_refusal(full_text):
+                yield {"refusal_replace": _NON_TRADING_REJECTION_MSG}
+            yield {"done": True}
         except Exception as e:
+            logger.exception("strategy_chat_stream failed: %s", e)
             yield {"error": str(e)}
 
     async def analyze_backtest(
@@ -293,30 +185,33 @@ class LLMClient:
         backtest_results: str,
         summary: str | None = None,
     ) -> dict[str, Any] | None:
-        """백테스트 결과 분석 요청 (analyst 모델 사용)."""
+        """백테스트 결과 분석 (analyst 모델 직접 호출)."""
         if not code or not backtest_results:
             return None
-        payload: dict[str, Any] = {
-            "code": code.strip(),
-            "backtest_results": backtest_results.strip(),
-        }
+
+        user_content = (
+            f"Strategy code:\n```python\n{code.strip()}\n```\n\n"
+            f"Backtest results:\n{backtest_results.strip()}"
+        )
         if summary:
-            payload["summary"] = summary
-        headers: dict[str, str] = {}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-            headers["Authorization"] = f"Bearer {self.api_key}"
+            user_content += f"\n\nStrategy summary:\n{summary}"
+
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/strategy/analyze",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("analysis")
+            content, _ = chat_completion(
+                self._config,
+                system_content=build_analyst_system_prompt(),
+                user_content=user_content,
+                model=self._config.resolved_analyst_model,
+                text_format={"type": "json_object"},
+            )
+            if not content or not content.strip():
+                return None
+            try:
+                return json.loads(content.strip())
+            except json.JSONDecodeError:
+                return {"raw_analysis": content.strip()}
         except Exception:
+            logger.warning("analyze_backtest failed", exc_info=True)
             return None
 
     async def intake_strategy(
@@ -324,52 +219,57 @@ class LLMClient:
         user_prompt: str,
         messages: list[dict[str, str]] | None = None,
     ) -> dict[str, Any] | None:
-        """전략 생성 전 입력 정형화/검증 요청."""
+        """전략 생성 전 입력 정형화/검증."""
         if not messages and (not user_prompt or not user_prompt.strip()):
             return None
 
-        payload: dict[str, Any] = {"user_prompt": (user_prompt or "").strip()}
-        if messages:
-            payload["messages"] = messages
-
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                headers = {}
-                if self.api_key:
-                    headers["X-API-Key"] = self.api_key
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                response = await client.post(
-                    f"{self.base_url}/intake",
-                    json=payload,
-                    headers=headers,
+            system_content = build_intake_system_prompt()
+            if messages:
+                content, _ = chat_completion_messages(
+                    self._config,
+                    system_content=system_content,
+                    messages=messages,
                 )
-                response.raise_for_status()
-                data = response.json()
-                if isinstance(data, dict):
-                    return data
+            else:
+                content, _ = chat_completion(
+                    self._config,
+                    system_content=system_content,
+                    user_content=(user_prompt or "").strip(),
+                )
+            if not content or not content.strip():
+                return None
+
+            from relay.main import _extract_json_object, _sanitize_intake_response, ChatMessage
+
+            payload = _extract_json_object(content) or {}
+            chat_messages = (
+                [ChatMessage(role=m["role"], content=m["content"]) for m in messages]
+                if messages
+                else []
+            )
+            result = _sanitize_intake_response(
+                payload,
+                prompt=(user_prompt or "").strip(),
+                messages=chat_messages,
+            )
+            return result.model_dump() if hasattr(result, "model_dump") else dict(result)
         except Exception:
+            logger.warning("intake_strategy failed", exc_info=True)
             return None
-        return None
 
     async def strategy_capabilities(self) -> dict[str, Any] | None:
         """전략 생성 가능 범위(지원/비지원 capability) 조회."""
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                headers = {}
-                if self.api_key:
-                    headers["X-API-Key"] = self.api_key
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                response = await client.get(
-                    f"{self.base_url}/capabilities",
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                if isinstance(data, dict):
-                    return data
+            return {
+                "supported_data_sources": list(SUPPORTED_DATA_SOURCES),
+                "supported_indicator_scopes": list(SUPPORTED_INDICATOR_SCOPES),
+                "supported_context_methods": list(SUPPORTED_CONTEXT_METHODS),
+                "unsupported_categories": [r.name for r in UNSUPPORTED_CAPABILITY_RULES],
+                "summary_lines": capability_summary_lines(),
+            }
         except Exception:
             return None
-        return None
 
     async def repair_strategy(
         self,
@@ -378,46 +278,39 @@ class LLMClient:
         user_prompt: str | None = None,
         messages: list[dict[str, str]] | None = None,
     ) -> StrategyRepairResult:
-        """검증 실패 코드를 자동 수정 요청."""
+        """검증 실패 코드를 자동 수정."""
         if not code or not code.strip():
             return StrategyRepairResult(success=False, error="code가 비어있습니다.")
         if not verification_error or not verification_error.strip():
             return StrategyRepairResult(success=False, error="verification_error가 비어있습니다.")
 
-        payload: dict[str, Any] = {
-            "code": code.strip(),
-            "verification_error": verification_error.strip(),
-            "user_prompt": (user_prompt or "").strip() or None,
-        }
+        prompt_parts = [
+            "Fix the strategy code based on the verification failure below.",
+            "",
+            f"Verification error:\n{verification_error.strip()}",
+        ]
+        if user_prompt and user_prompt.strip():
+            prompt_parts.extend(["", f"Original user request:\n{user_prompt.strip()}"])
         if messages:
-            payload["messages"] = messages
+            compact_msgs = [m for m in messages if (m.get("content") or "").strip()]
+            if compact_msgs:
+                prompt_parts.extend([
+                    "",
+                    "Conversation context (JSON):",
+                    json.dumps(compact_msgs, ensure_ascii=False),
+                ])
+        prompt_parts.extend(["", "Current code:", code.strip()])
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                headers = {}
-                if self.api_key:
-                    headers["X-API-Key"] = self.api_key
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                response = await client.post(
-                    f"{self.base_url}/repair",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                fixed_code = data.get("code")
-                model_used = data.get("model_used")
-                if not fixed_code:
-                    return StrategyRepairResult(
-                        success=False,
-                        error="서버 응답에 code가 없습니다.",
-                        model_used=model_used,
-                    )
-                return StrategyRepairResult(
-                    success=True,
-                    code=fixed_code,
-                    model_used=model_used,
-                )
+            content, model_used = chat_completion(
+                self._config,
+                system_content=build_repair_system_prompt(),
+                user_content="\n".join(prompt_parts),
+                model=self._config.resolved_reviewer_model,
+            )
+            if not content or not content.strip():
+                return StrategyRepairResult(success=False, error="빈 수정 결과")
+            return StrategyRepairResult(success=True, code=content.strip(), model_used=model_used)
         except Exception as e:
             return StrategyRepairResult(success=False, error=f"자동 수정 실패: {e}")
 
@@ -426,58 +319,44 @@ class LLMClient:
         user_prompt: str,
         messages: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """전략 코드 생성 스트리밍. Yields {'token': str}, {'phase': str}, {'done': True}, or {'error': str}."""
-        payload: dict[str, Any] = {"user_prompt": (user_prompt or "").strip()}
-        if messages:
-            payload["messages"] = messages
-        headers = {}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        # Stream includes verify+repair phases; use a generous timeout.
-        stream_timeout = httpx.Timeout(300.0, connect=30.0)
+        """전략 코드 생성 스트리밍 — relay _generate_stream_body 직접 호출."""
+        from relay.main import StrategyRequest, ChatMessage as RelayChatMessage, _generate_stream_body
+
+        relay_messages = (
+            [RelayChatMessage(role=m["role"], content=m["content"]) for m in messages]
+            if messages
+            else None
+        )
+        body = StrategyRequest(
+            user_prompt=(user_prompt or "").strip(),
+            messages=relay_messages,
+        )
+
         try:
-            async with httpx.AsyncClient(timeout=stream_timeout) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/generate/stream",
-                    json=payload,
-                    headers=headers,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            try:
-                                data = json.loads(line[6:])
-                                yield data
-                                if data.get("done") or data.get("error"):
-                                    return
-                            except json.JSONDecodeError:
-                                pass
+            async for sse_line in _generate_stream_body(body):
+                # _generate_stream_body yields SSE formatted strings: "data: {...}\n\n"
+                line = sse_line.strip()
+                if line.startswith("data: "):
+                    try:
+                        data = json.loads(line[6:])
+                        yield data
+                        if data.get("done") or data.get("error"):
+                            return
+                    except json.JSONDecodeError:
+                        pass
         except Exception as e:
+            logger.exception("generate_strategy_stream failed: %s", e)
             yield {"error": str(e)}
 
     async def test_llm(self, input_text: str) -> tuple[str | None, str | None]:
-        """LLM 연결 테스트. Relay /test 호출.
-
-        Returns:
-            (output, error) - 성공 시 output, 실패 시 error 메시지
-        """
+        """LLM 연결 테스트."""
         text = (input_text or "").strip() or "Hello"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                headers = {}
-                if self.api_key:
-                    headers["X-API-Key"] = self.api_key
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                response = await client.post(
-                    f"{self.base_url}/test",
-                    json={"input": text},
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                output = data.get("output")
-                return (str(output).strip() if output else None, None)
+            content, _ = chat_completion(
+                self._config,
+                system_content=TEST_SYSTEM_PROMPT,
+                user_content=text,
+            )
+            return (content.strip() if content else None, None)
         except Exception as e:
             return (None, str(e))

@@ -58,10 +58,10 @@ homepage = "https://github.com/minsuk/LLMTrader"
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src", "relay"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src"]
+include = ["src", "relay"]
 
 [tool.ruff]
 line-length = 100
