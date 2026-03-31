@@ -1,0 +1,37 @@
+# mac/minsuk 푸시 시 origin/main에 자동 머지 (수동 동기화 대체)
+#
+# main 브랜치 보호(필수 PR/리뷰)가 있으면 기본 GITHUB_TOKEN으로는 push가 거절될 수 있음.
+# 해결: (1) Rules에서 github-actions[bot]에게 bypass 허용
+#   또는 (2) repo 권한 PAT를 SYNC_MAIN_PAT 시크릿으로 등록 후 checkout에 token 지정:
+#   token: ${{ secrets.SYNC_MAIN_PAT }}
+
+name: Sync mac/minsuk to main
+
+on:
+  push:
+    branches:
+      - mac/minsuk
+
+concurrency:
+  group: sync-mac-minsuk-to-main
+  cancel-in-progress: true
+
+jobs:
+  merge-to-main:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge mac/minsuk into main and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git merge origin/mac/minsuk --no-edit -m "Merge branch 'mac/minsuk' into main (auto)"
+          git push origin main
