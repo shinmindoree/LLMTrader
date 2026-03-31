@@ -2,9 +2,8 @@
 
 export function DashboardSkeleton() {
   return (
-    <div className="flex w-full animate-pulse px-4 py-4">
-      <div className="hidden min-w-0 flex-1 xl:block" aria-hidden />
-      <div className="mx-auto w-full max-w-6xl shrink-0">
+    <div className="flex w-full animate-pulse py-4 pl-0 pr-4">
+      <div className="min-w-0 w-full max-w-6xl flex-1 shrink-0">
         <header className="mb-6">
           <div className="h-6 w-40 rounded bg-[#2a2e39]" />
           <div className="mt-2 h-4 w-64 rounded bg-[#2a2e39]" />

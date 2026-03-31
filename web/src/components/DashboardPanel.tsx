@@ -316,17 +316,15 @@ export function DashboardPanel() {
   }
 
   return (
-    <div className="relative flex w-full px-4 py-4">
+    <div className="relative flex w-full py-4 pl-0 pr-4">
       <a
         href="#dashboard-main"
-        className="absolute left-[-9999px] top-0 z-[60] rounded bg-[#2962ff] px-3 py-2 text-sm text-white focus:left-4 focus:top-20 focus:outline-none"
+        className="absolute left-[-9999px] top-0 z-[60] rounded bg-[#2962ff] px-3 py-2 text-sm text-white focus:left-0 focus:top-20 focus:outline-none"
       >
         {t.dashboard.skipToContent}
       </a>
 
-      <div className="hidden min-w-0 flex-1 xl:block" aria-hidden />
-
-      <div className="mx-auto w-full max-w-6xl shrink-0" id="dashboard-main">
+      <div className="min-w-0 w-full max-w-6xl flex-1 shrink-0" id="dashboard-main">
         {anyFetchError ? (
           <div
             className="mb-4 flex flex-col gap-2 rounded-lg border border-[#ef5350]/35 bg-[#ef5350]/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
