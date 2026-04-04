@@ -514,6 +514,84 @@ def _verify_strategy_code(code: str) -> str | None:
     if "is_new_bar" not in code:
         return "Missing bar-confirmation guard (is_new_bar check)."
 
+    return _verify_strategy_quality(code, tree, strategy_cls)
+
+
+def _verify_strategy_quality(
+    code: str, tree: ast.Module, strategy_cls: ast.ClassDef
+) -> str | None:
+    """Extended quality checks for consistent strategy code."""
+
+    # Check STRATEGY_PARAMS dict at module level (handles both x = ... and x: T = ...)
+    has_strategy_params = False
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "STRATEGY_PARAMS"
+            for t in node.targets
+        ):
+            has_strategy_params = True
+            break
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "STRATEGY_PARAMS"
+        ):
+            has_strategy_params = True
+            break
+    if not has_strategy_params:
+        return (
+            "Missing module-level STRATEGY_PARAMS dict. "
+            "Define STRATEGY_PARAMS: dict[str, Any] = {...} before the class."
+        )
+
+    # Check __init__ accepts **kwargs and merges with STRATEGY_PARAMS
+    init_error = _verify_init_pattern(code, strategy_cls)
+    if init_error:
+        return init_error
+
+    # Check indicator value validation (isfinite for scalar, isinstance for dict)
+    has_isfinite = "math.isfinite" in code or "isfinite" in code
+    has_isinstance_dict = "isinstance(" in code and "dict)" in code
+    if not has_isfinite and not has_isinstance_dict:
+        return (
+            "Missing indicator value validation. "
+            "Use math.isfinite() to guard against NaN/Inf indicator values."
+        )
+
+    # Check position_size usage for entry/exit safety
+    if "position_size" not in code:
+        return (
+            "Missing position_size check. "
+            "Check ctx.position_size before entry/exit to prevent duplicate positions."
+        )
+
+    return None
+
+
+def _verify_init_pattern(code: str, strategy_cls: ast.ClassDef) -> str | None:
+    """Verify __init__ follows the **kwargs + STRATEGY_PARAMS merge pattern."""
+    init_method: ast.FunctionDef | None = None
+    for node in ast.walk(strategy_cls):
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__":
+            init_method = node
+            break
+
+    if init_method is None:
+        return f"Class '{strategy_cls.name}' is missing __init__ method."
+
+    if not init_method.args.kwarg:
+        return (
+            f"Class '{strategy_cls.name}' __init__ must accept **kwargs "
+            "and merge with STRATEGY_PARAMS (p = {{**STRATEGY_PARAMS, **kwargs}})."
+        )
+
+    init_src = ast.get_source_segment(code, init_method) or ""
+    if "STRATEGY_PARAMS" not in init_src:
+        return (
+            f"Class '{strategy_cls.name}' __init__ must merge kwargs with "
+            "STRATEGY_PARAMS (p = {{**STRATEGY_PARAMS, **kwargs}})."
+        )
+
     return None
 
 
