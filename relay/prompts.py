@@ -316,6 +316,10 @@ def _build_static_system_prompt() -> str:
     sections.append(_CONDENSED_EXAMPLE)
 
     sections.append(_STRATEGY_PARAMS_UI_PROMPT)
+
+    # Quality checklist — enforced by post-generation verification
+    sections.append(_QUALITY_CHECKLIST)
+
     _cached_static_system_prompt = "\n\n".join(sections) if sections else ""
     return _cached_static_system_prompt
 
@@ -464,6 +468,32 @@ def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
             ctx.enter_short(reason=f"RSI crossed below {self.short_entry_rsi}")
     self.prev_rsi = rsi
 ```
+"""
+
+
+_QUALITY_CHECKLIST = """## Code Quality Checklist (MANDATORY)
+
+Every generated strategy MUST satisfy ALL of the following.
+The code is automatically verified after generation; violations will be rejected.
+
+1. **STRATEGY_PARAMS dict** — Define `STRATEGY_PARAMS: dict[str, Any] = { ... }` at module level with every tunable parameter and its default value.
+2. **STRATEGY_PARAM_SCHEMA dict** — Define `STRATEGY_PARAM_SCHEMA: dict[str, Any] = { ... }` with UI metadata (`type`, `label`, `description`, `group`) for each param. `group` must be one of: "진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)".
+3. **`__init__(self, **kwargs)` with merge** — Accept `**kwargs: Any`, merge as `p = {**STRATEGY_PARAMS, **kwargs}`, read all params from `p` only.
+4. **`initialize(self, ctx)` method** — Reset all state variables (prev values, flags).
+5. **`on_bar(self, ctx, bar)` execution order**:
+   a. Reset `self.is_closing = False` when `ctx.position_size == 0`
+   b. Guard: `if ctx.get_open_orders(): return`
+   c. Guard: `if not bool(bar.get("is_new_bar", True)): return`
+   d. Read indicators via `ctx.get_indicator(...)` and validate with `math.isfinite()`
+   e. Initialize prev values on first bar (`if self.prev_xxx is None: ...`)
+   f. Exit logic (check `ctx.position_size > 0` or `< 0` with `not self.is_closing`)
+   g. Entry logic (check `ctx.position_size == 0` before entering)
+   h. Update prev values at the end
+6. **`is_closing` flag** — Declare `self.is_closing: bool = False` in `__init__`; set `True` before `close_position()`; reset in step 5a.
+7. **`math.isfinite()` guard** — Every indicator value must be validated with `math.isfinite()` before use.
+8. **`position_size` checks** — Always check `ctx.position_size` before entry (`== 0`) and before exit (`> 0` for long, `< 0` for short).
+9. **Imports** — Include `from __future__ import annotations`, `import math`, `from typing import Any`, `from strategy.base import Strategy`, `from strategy.context import StrategyContext`.
+10. **No hardcoded magic numbers** — All thresholds and periods must come from STRATEGY_PARAMS.
 """
 
 
