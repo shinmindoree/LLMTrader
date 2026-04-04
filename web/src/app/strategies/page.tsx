@@ -97,6 +97,7 @@ export default function StrategiesPage() {
   const workspaceTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const workspaceResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [workspaceSideTab, setWorkspaceSideTab] = useState<WorkspaceSideTab>("params");
+  const [showMobileWorkspace, setShowMobileWorkspace] = useState(false);
   const [strategyParamsSnapshot, setStrategyParamsSnapshot] = useState<StrategyParamsExtractResponse | null>(
     null,
   );
@@ -1118,6 +1119,416 @@ export default function StrategiesPage() {
     );
   };
 
+  const mobileWorkspaceGutterRef = useRef<HTMLDivElement | null>(null);
+  const mobileWorkspaceTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const handleMobileWorkspaceScroll = () => {
+    if (!mobileWorkspaceTextAreaRef.current || !mobileWorkspaceGutterRef.current) return;
+    mobileWorkspaceGutterRef.current.scrollTop = mobileWorkspaceTextAreaRef.current.scrollTop;
+  };
+
+  const renderWorkspaceContent = (mobile: boolean) => {
+    const gutterRef = mobile ? mobileWorkspaceGutterRef : workspaceGutterRef;
+    const textAreaRef = mobile ? mobileWorkspaceTextAreaRef : workspaceTextAreaRef;
+    const onScroll = mobile ? handleMobileWorkspaceScroll : handleWorkspaceScroll;
+    return (
+      <>
+        <div className="border-b border-[#2a2e39] px-3 py-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 text-xs font-medium transition ${
+                    workspaceSideTab === "params"
+                      ? "bg-[#2962ff]/25 text-[#b4c8ff]"
+                      : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
+                  }`}
+                  onClick={() => setWorkspaceSideTab("params")}
+                >
+                  {t.strategy.workspaceTabParams}
+                </button>
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 text-xs font-medium transition ${
+                    workspaceSideTab === "code"
+                      ? "bg-[#2962ff]/25 text-[#b4c8ff]"
+                      : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
+                  }`}
+                  onClick={() => setWorkspaceSideTab("code")}
+                >
+                  {t.strategy.workspaceTabCode}
+                </button>
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 text-xs font-medium transition ${
+                    workspaceSideTab === "backtest"
+                      ? "bg-[#2962ff]/25 text-[#b4c8ff]"
+                      : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
+                  }`}
+                  onClick={() => setWorkspaceSideTab("backtest")}
+                >
+                  Backtest
+                </button>
+              </div>
+              <p className="mt-1 text-[11px] text-[#868993]">
+                {workspaceSideTab === "params"
+                  ? t.strategy.workspaceParamsHint
+                  : workspaceSideTab === "code"
+                    ? t.strategy.workspaceTabCodeHint
+                    : "전략을 빠르게 백테스트하고 AI에게 분석을 요청하세요."}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="shrink-0 rounded border border-[#2962ff]/70 px-2 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff]/15 disabled:opacity-50"
+              onClick={handleSaveWorkspace}
+              disabled={!workspaceCode.trim() || savingId !== null}
+            >
+              Save Strategy
+            </button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {workspaceSideTab === "params" ? (
+            <div className="scrollbar-hover flex h-full flex-col overflow-y-auto">
+              <div className="min-h-0 flex-1 px-3 py-3">
+                {!workspaceCode.trim() ? (
+                  <p className="text-center text-sm text-[#868993]">{t.strategy.codeGenHint}</p>
+                ) : strategyParamsLoading && !strategyParamsSnapshot?.supported ? (
+                  <p className="text-sm text-[#8fa8ff]">{t.strategy.workspaceParamsLoading}</p>
+                ) : strategyParamsSnapshot?.supported ? (
+                  <form
+                    className={`flex flex-col gap-3 transition-opacity${strategyParamsLoading ? " pointer-events-none opacity-50" : ""}`}
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleApplyStrategyParams();
+                    }}
+                  >
+                    {(() => {
+                      const GROUP_ORDER = ["진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)"];
+                      const GROUP_ICONS: Record<string, string> = {
+                        "진입 (Entry)": "▶",
+                        "청산 (Exit)": "◼",
+                        "지표 (Indicator)": "📊",
+                        "리스크 관리 (Risk)": "🛡",
+                        "일반 (General)": "⚙",
+                      };
+                      const groups: Record<string, string[]> = {};
+                      for (const key of Object.keys(strategyParamsSnapshot.schema_fields)) {
+                        const g = strategyParamsSnapshot.schema_fields[key]?.group || "일반 (General)";
+                        (groups[g] ??= []).push(key);
+                      }
+                      const sortedGroups = Object.keys(groups).sort(
+                        (a, b) => (GROUP_ORDER.indexOf(a) === -1 ? 99 : GROUP_ORDER.indexOf(a))
+                                 - (GROUP_ORDER.indexOf(b) === -1 ? 99 : GROUP_ORDER.indexOf(b))
+                      );
+                      return sortedGroups.map((groupName) => (
+                        <fieldset key={groupName} className="rounded border border-[#2a2e39] px-3 pb-3 pt-2">
+                          <legend className="px-1 text-[11px] font-semibold tracking-wide text-[#8fa8ff]">
+                            {GROUP_ICONS[groupName] ?? "•"} {groupName}
+                          </legend>
+                          <div className="flex flex-col gap-3">
+                            {groups[groupName].map((key) => {
+                      const spec = strategyParamsSnapshot.schema_fields[key] ?? {};
+                      const label =
+                        typeof spec.label === "string" && spec.label.trim()
+                          ? spec.label
+                          : key;
+                      const description = typeof spec.description === "string" && spec.description.trim() ? spec.description : null;
+                      const tRaw = String(spec.type ?? "").toLowerCase();
+                      const minV = typeof spec.min === "number" ? spec.min : undefined;
+                      const maxV = typeof spec.max === "number" ? spec.max : undefined;
+                      const draftVal = paramDraft[key];
+
+                      if (tRaw === "boolean") {
+                        return (
+                          <div key={key} className="flex flex-col gap-0.5">
+                            <label
+                              className="flex cursor-pointer items-center gap-2 text-sm text-[#d1d4dc]"
+                            >
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border border-[#2a2e39] bg-[#131722]"
+                                checked={Boolean(draftVal)}
+                                onChange={(e) =>
+                                  setParamDraft((prev) => ({ ...prev, [key]: e.target.checked }))
+                                }
+                              />
+                              <span>{label}</span>
+                            </label>
+                            {description ? <p className="pl-6 text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
+                          </div>
+                        );
+                      }
+
+                      if (tRaw === "integer" || tRaw === "number") {
+                        const num =
+                          typeof draftVal === "number"
+                            ? draftVal
+                            : Number.parseFloat(String(draftVal ?? ""));
+                        const display = Number.isFinite(num) ? num : "";
+                        return (
+                          <div key={key} className="flex flex-col gap-1">
+                            <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${mobile ? "m-" : ""}${key}`}>
+                              {label}
+                            </label>
+                            {description ? <p className="text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                              <input
+                                id={`param-${mobile ? "m-" : ""}${key}`}
+                                type="number"
+                                className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 font-mono text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none sm:max-w-[140px]"
+                                min={minV}
+                                max={maxV}
+                                step={tRaw === "integer" ? 1 : "any"}
+                                value={display === "" ? "" : display}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === "") {
+                                    setParamDraft((prev) => ({ ...prev, [key]: "" }));
+                                    return;
+                                  }
+                                  const parsed =
+                                    tRaw === "integer" ? Number.parseInt(v, 10) : Number.parseFloat(v);
+                                  setParamDraft((prev) => ({
+                                    ...prev,
+                                    [key]: Number.isFinite(parsed) ? parsed : v,
+                                  }));
+                                }}
+                              />
+                              {minV !== undefined && maxV !== undefined ? (
+                                <input
+                                  type="range"
+                                  className="h-2 w-full accent-[#2962ff]"
+                                  min={minV}
+                                  max={maxV}
+                                  step={tRaw === "integer" ? 1 : (maxV - minV) / 200}
+                                  value={
+                                    Number.isFinite(num)
+                                      ? Math.min(maxV, Math.max(minV, num))
+                                      : minV
+                                  }
+                                  onChange={(e) => {
+                                    const parsed = Number.parseFloat(e.target.value);
+                                    setParamDraft((prev) => ({
+                                      ...prev,
+                                      [key]: tRaw === "integer" ? Math.round(parsed) : parsed,
+                                    }));
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={key} className="flex flex-col gap-1">
+                          <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${mobile ? "m-" : ""}${key}`}>
+                            {label}
+                          </label>
+                          {description ? <p className="text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
+                          <input
+                            id={`param-${mobile ? "m-" : ""}${key}`}
+                            type="text"
+                            className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                            value={draftVal == null ? "" : String(draftVal)}
+                            onChange={(e) =>
+                              setParamDraft((prev) => ({ ...prev, [key]: e.target.value }))
+                            }
+                          />
+                        </div>
+                      );
+                            })}
+                          </div>
+                        </fieldset>
+                      ));
+                    })()}
+                    {paramApplyError ? (
+                      <p className="text-sm text-[#ef9a9a]">{paramApplyError}</p>
+                    ) : null}
+                    <button
+                      type="submit"
+                      className="mt-1 w-full rounded bg-[#2962ff] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#1e4bd8] disabled:opacity-50"
+                      disabled={strategyParamsApplying}
+                    >
+                      {strategyParamsApplying
+                        ? t.strategy.workspaceParamsApplying
+                        : t.strategy.workspaceParamsApply}
+                    </button>
+                  </form>
+                ) : (
+                  <div className="space-y-2 text-sm text-[#868993]">
+                    <p>{t.strategy.workspaceParamsNone}</p>
+                    <p className="text-[12px] leading-relaxed text-[#6b7383]">
+                      {t.strategy.workspaceParamsNoneDetail}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : workspaceSideTab === "backtest" ? (
+            <QuickBacktestPanel
+              code={workspaceCode}
+              strategyParams={paramDraft && Object.keys(paramDraft).length > 0 ? paramDraft : undefined}
+              onAnalyzeWithAI={(btResult, btConfig) => {
+                const formatted = formatBacktestResultsForAI(btResult, btConfig);
+                const userMsgId = createId();
+                const userMsg: ChatMessage = {
+                  id: userMsgId,
+                  role: "user",
+                  content: `다음 백테스트 결과를 분석하고 전략 개선안을 제시해주세요:\n\n${formatted}`,
+                };
+
+                const assistantId = createId();
+                const assistantMsg: ChatMessage = {
+                  id: assistantId,
+                  role: "assistant",
+                  content: "",
+                  status: "streaming",
+                };
+
+                setChatMessages((prev) => {
+                  const updated = [...prev, userMsg, assistantMsg];
+                  const apiMsgs = toApiMessages(updated.filter((m) => m.id !== assistantId));
+                  strategyChatStream(
+                    workspaceCode,
+                    workspaceSummary,
+                    apiMsgs,
+                    {
+                      onToken: (token) => {
+                        setChatMessages((p) =>
+                          p.map((m) =>
+                            m.id === assistantId
+                              ? { ...m, content: m.content + token }
+                              : m
+                          )
+                        );
+                      },
+                      onDone: (payload) => {
+                        setChatMessages((p) =>
+                          p.map((m) =>
+                            m.id === assistantId
+                              ? {
+                                  ...m,
+                                  status: null,
+                                  content: payload?.error
+                                    ? m.content || `분석 요청 중 오류가 발생했습니다: ${payload.error}`
+                                    : m.content,
+                                }
+                              : m
+                          )
+                        );
+                      },
+                    }
+                  ).catch((err) => {
+                    setChatMessages((p) =>
+                      p.map((m) =>
+                        m.id === assistantId
+                          ? { ...m, status: null, content: `AI 분석 요청에 실패했습니다: ${String(err)}` }
+                          : m
+                      )
+                    );
+                  });
+                  return updated;
+                });
+                setActiveTab("chat");
+                if (mobile) setShowMobileWorkspace(false);
+              }}
+            />
+          ) : workspaceCode.trim() ? (
+            <div className="flex h-full overflow-hidden">
+              <div
+                ref={gutterRef}
+                className="scrollbar-hover w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
+              >
+                {Array.from({ length: workspaceLineCount }, (_, idx) => {
+                  const lineNo = idx + 1;
+                  return (
+                    <div
+                      key={`workspace-line-${mobile ? "m-" : ""}${lineNo}`}
+                      className={`pr-2 ${lineNo === syntaxErrorLine ? "bg-[#3b1f26] text-[#ef9a9a]" : ""}`}
+                    >
+                      {lineNo}
+                    </div>
+                  );
+                })}
+              </div>
+              <textarea
+                id={mobile ? "mobile-workspace-code" : "workspace-code"}
+                name={mobile ? "mobile-workspace-code" : "workspace-code"}
+                ref={textAreaRef}
+                className="scrollbar-hover h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
+                spellCheck={false}
+                value={workspaceCode}
+                onChange={(e) => handleWorkspaceChange(e.target.value)}
+                onScroll={onScroll}
+              />
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[#868993]">
+              {t.strategy.codeGenHint}
+            </div>
+          )}
+        </div>
+
+        <div className="shrink-0 border-t border-[#2a2e39] px-3 py-2 text-xs">
+          {workspaceChecking ? (
+            <span className="text-[#8fa8ff]">Checking syntax...</span>
+          ) : workspaceSyntaxError ? (
+            <span className="text-[#ef9a9a]">Syntax check failed: {workspaceSyntaxError}</span>
+          ) : workspaceSyntax?.valid ? (
+            <span className="text-[#7fd4a6]">No syntax errors found</span>
+          ) : workspaceSyntax?.error ? (
+            <span className="text-[#ef9a9a]">
+              Syntax error: {workspaceSyntax.error.message}
+              {syntaxErrorLine ? ` (line ${syntaxErrorLine}` : ""}
+              {syntaxErrorColumn ? `, col ${syntaxErrorColumn}` : ""}
+              {syntaxErrorLine ? ")" : ""}
+            </span>
+          ) : (
+            <span className="text-[#868993]">Syntax check runs while you edit code.</span>
+          )}
+          {workspaceDirty ? (
+            <p className="mt-1 text-[11px] text-[#f9a825]">
+              Unsaved edits in workspace
+            </p>
+          ) : null}
+          {initialGeneratedCode ? (
+            <details className="mt-2 rounded border border-[#2a2e39] bg-[#101522] p-2">
+              <summary className="cursor-pointer text-[11px] text-[#9aa0ad]">
+                Diff from initial code {hasWorkspaceDiff ? "(modified)" : "(no changes)"}
+              </summary>
+              <div className="scrollbar-hover mt-2 max-h-48 overflow-auto rounded border border-[#2a2e39] bg-[#0d111a] font-mono text-[11px] leading-5">
+                {workspaceDiffLines.map((line, idx) => {
+                  const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+                  const rowClass =
+                    line.type === "add"
+                      ? "bg-[#1a2f25] text-[#8ad0a4]"
+                      : line.type === "remove"
+                        ? "bg-[#3a1f26] text-[#f3a6ae]"
+                        : "text-[#8690a3]";
+                  return (
+                    <div key={`diff-${mobile ? "m-" : ""}${idx}`} className={`grid grid-cols-[56px_1fr] px-2 ${rowClass}`}>
+                      <span className="select-none text-[#6b7383]">
+                        {line.leftLineNo ?? ""}{line.rightLineNo ? `:${line.rightLineNo}` : ""}
+                      </span>
+                      <span className="whitespace-pre-wrap break-words">
+                        {prefix} {line.text}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          ) : null}
+        </div>
+      </>
+    );
+  };
+
   return (
     <main className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden px-4 py-3">
       <div className="flex gap-1 border-b border-[#2a2e39]">
@@ -1445,402 +1856,7 @@ export default function StrategiesPage() {
               }
             }}
           >
-            {workspaceOpen ? (
-              <>
-                <div className="border-b border-[#2a2e39] px-3 py-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap gap-1">
-                        <button
-                          type="button"
-                          className={`rounded px-2 py-1 text-xs font-medium transition ${
-                            workspaceSideTab === "params"
-                              ? "bg-[#2962ff]/25 text-[#b4c8ff]"
-                              : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
-                          }`}
-                          onClick={() => setWorkspaceSideTab("params")}
-                        >
-                          {t.strategy.workspaceTabParams}
-                        </button>
-                        <button
-                          type="button"
-                          className={`rounded px-2 py-1 text-xs font-medium transition ${
-                            workspaceSideTab === "code"
-                              ? "bg-[#2962ff]/25 text-[#b4c8ff]"
-                              : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
-                          }`}
-                          onClick={() => setWorkspaceSideTab("code")}
-                        >
-                          {t.strategy.workspaceTabCode}
-                        </button>
-                        <button
-                          type="button"
-                          className={`rounded px-2 py-1 text-xs font-medium transition ${
-                            workspaceSideTab === "backtest"
-                              ? "bg-[#2962ff]/25 text-[#b4c8ff]"
-                              : "text-[#868993] hover:bg-[#2a2e39] hover:text-[#d1d4dc]"
-                          }`}
-                          onClick={() => setWorkspaceSideTab("backtest")}
-                        >
-                          Backtest
-                        </button>
-                      </div>
-                      <p className="mt-1 text-[11px] text-[#868993]">
-                        {workspaceSideTab === "params"
-                          ? t.strategy.workspaceParamsHint
-                          : workspaceSideTab === "code"
-                            ? t.strategy.workspaceTabCodeHint
-                            : "전략을 빠르게 백테스트하고 AI에게 분석을 요청하세요."}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="shrink-0 rounded border border-[#2962ff]/70 px-2 py-1 text-xs text-[#8fa8ff] transition hover:bg-[#2962ff]/15 disabled:opacity-50"
-                      onClick={handleSaveWorkspace}
-                      disabled={!workspaceCode.trim() || savingId !== null}
-                    >
-                      Save Strategy
-                    </button>
-                  </div>
-                </div>
-
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  {workspaceSideTab === "params" ? (
-                    <div className="scrollbar-hover flex h-full flex-col overflow-y-auto">
-                      <div className="min-h-0 flex-1 px-3 py-3">
-                        {!workspaceCode.trim() ? (
-                          <p className="text-center text-sm text-[#868993]">{t.strategy.codeGenHint}</p>
-                        ) : strategyParamsLoading && !strategyParamsSnapshot?.supported ? (
-                          <p className="text-sm text-[#8fa8ff]">{t.strategy.workspaceParamsLoading}</p>
-                        ) : strategyParamsSnapshot?.supported ? (
-                          <form
-                            className={`flex flex-col gap-3 transition-opacity${strategyParamsLoading ? " pointer-events-none opacity-50" : ""}`}
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void handleApplyStrategyParams();
-                            }}
-                          >
-                            {(() => {
-                              const GROUP_ORDER = ["진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)"];
-                              const GROUP_ICONS: Record<string, string> = {
-                                "진입 (Entry)": "▶",
-                                "청산 (Exit)": "◼",
-                                "지표 (Indicator)": "📊",
-                                "리스크 관리 (Risk)": "🛡",
-                                "일반 (General)": "⚙",
-                              };
-                              const groups: Record<string, string[]> = {};
-                              for (const key of Object.keys(strategyParamsSnapshot.schema_fields)) {
-                                const g = strategyParamsSnapshot.schema_fields[key]?.group || "일반 (General)";
-                                (groups[g] ??= []).push(key);
-                              }
-                              const sortedGroups = Object.keys(groups).sort(
-                                (a, b) => (GROUP_ORDER.indexOf(a) === -1 ? 99 : GROUP_ORDER.indexOf(a))
-                                         - (GROUP_ORDER.indexOf(b) === -1 ? 99 : GROUP_ORDER.indexOf(b))
-                              );
-                              return sortedGroups.map((groupName) => (
-                                <fieldset key={groupName} className="rounded border border-[#2a2e39] px-3 pb-3 pt-2">
-                                  <legend className="px-1 text-[11px] font-semibold tracking-wide text-[#8fa8ff]">
-                                    {GROUP_ICONS[groupName] ?? "•"} {groupName}
-                                  </legend>
-                                  <div className="flex flex-col gap-3">
-                                    {groups[groupName].map((key) => {
-                              const spec = strategyParamsSnapshot.schema_fields[key] ?? {};
-                              const label =
-                                typeof spec.label === "string" && spec.label.trim()
-                                  ? spec.label
-                                  : key;
-                              const description = typeof spec.description === "string" && spec.description.trim() ? spec.description : null;
-                              const tRaw = String(spec.type ?? "").toLowerCase();
-                              const minV = typeof spec.min === "number" ? spec.min : undefined;
-                              const maxV = typeof spec.max === "number" ? spec.max : undefined;
-                              const draftVal = paramDraft[key];
-
-                              if (tRaw === "boolean") {
-                                return (
-                                  <div key={key} className="flex flex-col gap-0.5">
-                                    <label
-                                      className="flex cursor-pointer items-center gap-2 text-sm text-[#d1d4dc]"
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        className="h-4 w-4 rounded border border-[#2a2e39] bg-[#131722]"
-                                        checked={Boolean(draftVal)}
-                                        onChange={(e) =>
-                                          setParamDraft((prev) => ({ ...prev, [key]: e.target.checked }))
-                                        }
-                                      />
-                                      <span>{label}</span>
-                                    </label>
-                                    {description ? <p className="pl-6 text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
-                                  </div>
-                                );
-                              }
-
-                              if (tRaw === "integer" || tRaw === "number") {
-                                const num =
-                                  typeof draftVal === "number"
-                                    ? draftVal
-                                    : Number.parseFloat(String(draftVal ?? ""));
-                                const display = Number.isFinite(num) ? num : "";
-                                return (
-                                  <div key={key} className="flex flex-col gap-1">
-                                    <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${key}`}>
-                                      {label}
-                                    </label>
-                                    {description ? <p className="text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                      <input
-                                        id={`param-${key}`}
-                                        type="number"
-                                        className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 font-mono text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none sm:max-w-[140px]"
-                                        min={minV}
-                                        max={maxV}
-                                        step={tRaw === "integer" ? 1 : "any"}
-                                        value={display === "" ? "" : display}
-                                        onChange={(e) => {
-                                          const v = e.target.value;
-                                          if (v === "") {
-                                            setParamDraft((prev) => ({ ...prev, [key]: "" }));
-                                            return;
-                                          }
-                                          const parsed =
-                                            tRaw === "integer" ? Number.parseInt(v, 10) : Number.parseFloat(v);
-                                          setParamDraft((prev) => ({
-                                            ...prev,
-                                            [key]: Number.isFinite(parsed) ? parsed : v,
-                                          }));
-                                        }}
-                                      />
-                                      {minV !== undefined && maxV !== undefined ? (
-                                        <input
-                                          type="range"
-                                          className="h-2 w-full accent-[#2962ff]"
-                                          min={minV}
-                                          max={maxV}
-                                          step={tRaw === "integer" ? 1 : (maxV - minV) / 200}
-                                          value={
-                                            Number.isFinite(num)
-                                              ? Math.min(maxV, Math.max(minV, num))
-                                              : minV
-                                          }
-                                          onChange={(e) => {
-                                            const parsed = Number.parseFloat(e.target.value);
-                                            setParamDraft((prev) => ({
-                                              ...prev,
-                                              [key]: tRaw === "integer" ? Math.round(parsed) : parsed,
-                                            }));
-                                          }}
-                                        />
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                );
-                              }
-
-                              return (
-                                <div key={key} className="flex flex-col gap-1">
-                                  <label className="text-[11px] font-medium text-[#9aa0ad]" htmlFor={`param-${key}`}>
-                                    {label}
-                                  </label>
-                                  {description ? <p className="text-[11px] leading-snug text-[#6b7383]">{description}</p> : null}
-                                  <input
-                                    id={`param-${key}`}
-                                    type="text"
-                                    className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
-                                    value={draftVal == null ? "" : String(draftVal)}
-                                    onChange={(e) =>
-                                      setParamDraft((prev) => ({ ...prev, [key]: e.target.value }))
-                                    }
-                                  />
-                                </div>
-                              );
-                                    })}
-                                  </div>
-                                </fieldset>
-                              ));
-                            })()}
-                            {paramApplyError ? (
-                              <p className="text-sm text-[#ef9a9a]">{paramApplyError}</p>
-                            ) : null}
-                            <button
-                              type="submit"
-                              className="mt-1 w-full rounded bg-[#2962ff] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#1e4bd8] disabled:opacity-50"
-                              disabled={strategyParamsApplying}
-                            >
-                              {strategyParamsApplying
-                                ? t.strategy.workspaceParamsApplying
-                                : t.strategy.workspaceParamsApply}
-                            </button>
-                          </form>
-                        ) : (
-                          <div className="space-y-2 text-sm text-[#868993]">
-                            <p>{t.strategy.workspaceParamsNone}</p>
-                            <p className="text-[12px] leading-relaxed text-[#6b7383]">
-                              {t.strategy.workspaceParamsNoneDetail}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ) : workspaceSideTab === "backtest" ? (
-                    <QuickBacktestPanel
-                      code={workspaceCode}
-                      strategyParams={paramDraft && Object.keys(paramDraft).length > 0 ? paramDraft : undefined}
-                      onAnalyzeWithAI={(btResult, btConfig) => {
-                        const formatted = formatBacktestResultsForAI(btResult, btConfig);
-                        const userMsgId = createId();
-                        const userMsg: ChatMessage = {
-                          id: userMsgId,
-                          role: "user",
-                          content: `다음 백테스트 결과를 분석하고 전략 개선안을 제시해주세요:\n\n${formatted}`,
-                        };
-
-                        const assistantId = createId();
-                        const assistantMsg: ChatMessage = {
-                          id: assistantId,
-                          role: "assistant",
-                          content: "",
-                          status: "streaming",
-                        };
-
-                        setChatMessages((prev) => {
-                          const updated = [...prev, userMsg, assistantMsg];
-                          // Build API messages from the updated array (excluding the empty assistant)
-                          const apiMsgs = toApiMessages(updated.filter((m) => m.id !== assistantId));
-                          strategyChatStream(
-                            workspaceCode,
-                            workspaceSummary,
-                            apiMsgs,
-                            {
-                              onToken: (token) => {
-                                setChatMessages((p) =>
-                                  p.map((m) =>
-                                    m.id === assistantId
-                                      ? { ...m, content: m.content + token }
-                                      : m
-                                  )
-                                );
-                              },
-                              onDone: (payload) => {
-                                setChatMessages((p) =>
-                                  p.map((m) =>
-                                    m.id === assistantId
-                                      ? {
-                                          ...m,
-                                          status: null,
-                                          content: payload?.error
-                                            ? m.content || `분석 요청 중 오류가 발생했습니다: ${payload.error}`
-                                            : m.content,
-                                        }
-                                      : m
-                                  )
-                                );
-                              },
-                            }
-                          ).catch((err) => {
-                            setChatMessages((p) =>
-                              p.map((m) =>
-                                m.id === assistantId
-                                  ? { ...m, status: null, content: `AI 분석 요청에 실패했습니다: ${String(err)}` }
-                                  : m
-                              )
-                            );
-                          });
-                          return updated;
-                        });
-                        setActiveTab("chat");
-                      }}
-                    />
-                  ) : workspaceCode.trim() ? (
-                    <div className="flex h-full overflow-hidden">
-                      <div
-                        ref={workspaceGutterRef}
-                        className="scrollbar-hover w-14 overflow-y-auto border-r border-[#2a2e39] bg-[#131722] py-3 text-right font-mono text-xs leading-6 text-[#5f6472]"
-                      >
-                        {Array.from({ length: workspaceLineCount }, (_, idx) => {
-                          const lineNo = idx + 1;
-                          return (
-                            <div
-                              key={`workspace-line-${lineNo}`}
-                              className={`pr-2 ${lineNo === syntaxErrorLine ? "bg-[#3b1f26] text-[#ef9a9a]" : ""}`}
-                            >
-                              {lineNo}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <textarea
-                        id="workspace-code"
-                        name="workspace-code"
-                        ref={workspaceTextAreaRef}
-                        className="scrollbar-hover h-full flex-1 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-6 text-[#d1d4dc] focus:outline-none"
-                        spellCheck={false}
-                        value={workspaceCode}
-                        onChange={(e) => handleWorkspaceChange(e.target.value)}
-                        onScroll={handleWorkspaceScroll}
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[#868993]">
-                      {t.strategy.codeGenHint}
-                    </div>
-                  )}
-                </div>
-
-                <div className="shrink-0 border-t border-[#2a2e39] px-3 py-2 text-xs">
-                  {workspaceChecking ? (
-                    <span className="text-[#8fa8ff]">Checking syntax...</span>
-                  ) : workspaceSyntaxError ? (
-                    <span className="text-[#ef9a9a]">Syntax check failed: {workspaceSyntaxError}</span>
-                  ) : workspaceSyntax?.valid ? (
-                    <span className="text-[#7fd4a6]">No syntax errors found</span>
-                  ) : workspaceSyntax?.error ? (
-                    <span className="text-[#ef9a9a]">
-                      Syntax error: {workspaceSyntax.error.message}
-                      {syntaxErrorLine ? ` (line ${syntaxErrorLine}` : ""}
-                      {syntaxErrorColumn ? `, col ${syntaxErrorColumn}` : ""}
-                      {syntaxErrorLine ? ")" : ""}
-                    </span>
-                  ) : (
-                    <span className="text-[#868993]">Syntax check runs while you edit code.</span>
-                  )}
-                  {workspaceDirty ? (
-                    <p className="mt-1 text-[11px] text-[#f9a825]">
-                      Unsaved edits in workspace
-                    </p>
-                  ) : null}
-                  {initialGeneratedCode ? (
-                    <details className="mt-2 rounded border border-[#2a2e39] bg-[#101522] p-2">
-                      <summary className="cursor-pointer text-[11px] text-[#9aa0ad]">
-                        Diff from initial code {hasWorkspaceDiff ? "(modified)" : "(no changes)"}
-                      </summary>
-                      <div className="scrollbar-hover mt-2 max-h-48 overflow-auto rounded border border-[#2a2e39] bg-[#0d111a] font-mono text-[11px] leading-5">
-                        {workspaceDiffLines.map((line, idx) => {
-                          const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
-                          const rowClass =
-                            line.type === "add"
-                              ? "bg-[#1a2f25] text-[#8ad0a4]"
-                              : line.type === "remove"
-                                ? "bg-[#3a1f26] text-[#f3a6ae]"
-                                : "text-[#8690a3]";
-                          return (
-                            <div key={`diff-${idx}`} className={`grid grid-cols-[56px_1fr] px-2 ${rowClass}`}>
-                              <span className="select-none text-[#6b7383]">
-                                {line.leftLineNo ?? ""}{line.rightLineNo ? `:${line.rightLineNo}` : ""}
-                              </span>
-                              <span className="whitespace-pre-wrap break-words">
-                                {prefix} {line.text}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </details>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
+            {workspaceOpen ? renderWorkspaceContent(false) : null}
           </aside>
           <button
             type="button"
@@ -1850,7 +1866,40 @@ export default function StrategiesPage() {
           >
             {workspaceOpen ? ">" : "<"}
           </button>
+
+          {/* Mobile workspace floating button */}
+          {workspaceCode.trim() ? (
+            <button
+              type="button"
+              className="absolute bottom-20 right-3 z-30 flex items-center gap-1.5 rounded-full border border-[#2962ff] bg-[#1e222d] px-3 py-2.5 text-xs font-medium text-[#8fa8ff] shadow-lg transition hover:bg-[#2962ff]/20 lg:hidden"
+              onClick={() => setShowMobileWorkspace(true)}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              Workspace
+              {workspaceDirty ? <span className="h-2 w-2 rounded-full bg-[#f9a825]" /> : null}
+            </button>
+          ) : null}
         </div>
+
+        {/* Mobile workspace full-screen overlay */}
+        {showMobileWorkspace ? (
+          <div className="fixed inset-0 z-40 flex flex-col bg-[#151924] lg:hidden">
+            <div className="flex items-center justify-between border-b border-[#2a2e39] px-3 py-2">
+              <span className="text-sm font-medium text-[#d1d4dc]">Workspace</span>
+              <button
+                type="button"
+                className="rounded-full p-1.5 text-[#868993] transition hover:bg-[#2a2e39] hover:text-white"
+                onClick={() => setShowMobileWorkspace(false)}
+                aria-label="Close workspace"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {renderWorkspaceContent(true)}
+            </div>
+          </div>
+        ) : null}
 
         {saveModal ? (
           <div
