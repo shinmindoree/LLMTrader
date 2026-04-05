@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import type { Job, JobSummary, JobStatus, JobType } from "@/lib/types";
+import type { Job, JobSummary, JobStatus, JobType, Trade } from "@/lib/types";
 
 type AnyJob = Job | JobSummary;
 import { JobStatusBadge } from "@/components/JobStatusBadge";
@@ -91,7 +91,7 @@ function getResult(job: AnyJob): Record<string, unknown> | null {
   return null;
 }
 
-function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
+function buildRow(job: AnyJob, type: JobType, trades?: Trade[]): RunHistoryRow {
   const config = (job.config ?? {}) as Record<string, unknown>;
   const result = getResult(job);
   const isResultRecord = result && isRecord(result);
@@ -110,15 +110,31 @@ function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
     returnPct = asNumber(r.total_return_pct) ?? (initial != null && initial > 0 && final !== null ? ((final - initial) / initial) * 100 : null);
     const pnls = pnlsFromTrades(r.trades);
     winRate = computeWinRate(pnls);
-  } else if (type === "LIVE" && isResultRecord) {
-    const r = result as Record<string, unknown>;
-    const summary = isRecord(r.summary) ? (r.summary as Record<string, unknown>) : r;
-    const initial = asNumber(summary.initial_equity) ?? asNumber(summary.initial_balance);
-    const final_ = asNumber(summary.final_equity) ?? asNumber(summary.final_balance);
-    totalTrades = asNumber(summary.num_trades) ?? asNumber(summary.total_trades);
-    netProfit = asNumber(summary.net_profit) ?? (initial !== null && final_ !== null ? final_ - initial : null);
-    returnPct = asNumber(summary.total_return_pct) ?? (initial != null && initial > 0 && final_ !== null ? ((final_ - initial) / initial) * 100 : null);
-    winRate = asNumber(summary.win_rate);
+  } else if (type === "LIVE") {
+    if (trades && trades.length > 0) {
+      // Compute from actual trade records (matches detail page logic)
+      const pnls = trades
+        .map((t) => t.realized_pnl)
+        .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p));
+      totalTrades = trades.length;
+      netProfit = trades.reduce((s, t) => s + (t.realized_pnl ?? 0), 0);
+      winRate = computeWinRate(pnls);
+      if (isResultRecord) {
+        const r = result as Record<string, unknown>;
+        const summary = isRecord(r.summary) ? (r.summary as Record<string, unknown>) : r;
+        const initial = asNumber(summary.initial_equity) ?? asNumber(summary.initial_balance);
+        returnPct = asNumber(summary.total_return_pct) ?? (initial != null && initial > 0 ? (netProfit / initial) * 100 : null);
+      }
+    } else if (isResultRecord) {
+      const r = result as Record<string, unknown>;
+      const summary = isRecord(r.summary) ? (r.summary as Record<string, unknown>) : r;
+      const initial = asNumber(summary.initial_equity) ?? asNumber(summary.initial_balance);
+      const final_ = asNumber(summary.final_equity) ?? asNumber(summary.final_balance);
+      totalTrades = asNumber(summary.num_trades) ?? asNumber(summary.total_trades);
+      netProfit = asNumber(summary.net_profit) ?? (initial !== null && final_ !== null ? final_ - initial : null);
+      returnPct = asNumber(summary.total_return_pct) ?? (initial != null && initial > 0 && final_ !== null ? ((final_ - initial) / initial) * 100 : null);
+      winRate = asNumber(summary.win_rate);
+    }
   }
 
   const createdAt = job.created_at ? new Date(job.created_at).getTime() : 0;
@@ -158,18 +174,20 @@ export function RunHistoryTable({
   onDeleteJob,
   busy,
   canDeleteJob,
+  tradesMap,
 }: {
   items: AnyJob[];
   type: JobType;
   onDeleteJob: (job: AnyJob) => void;
   busy: boolean;
   canDeleteJob?: (job: AnyJob) => boolean;
+  tradesMap?: Record<string, Trade[]>;
 }) {
   const { t } = useI18n();
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
 
-  const rows = useMemo(() => items.map((j) => buildRow(j, type)), [items, type]);
+  const rows = useMemo(() => items.map((j) => buildRow(j, type, tradesMap?.[j.job_id])), [items, type, tradesMap]);
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {

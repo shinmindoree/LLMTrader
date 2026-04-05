@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
 import useSWR, { useSWRConfig } from "swr";
-import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies, stopAllJobs, stopJob } from "@/lib/api";
+import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies, listTradesBatch, stopAllJobs, stopJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { BillingStatus, BinanceKeysStatus, Job, JobCounts, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
+import type { BillingStatus, BinanceKeysStatus, Job, JobCounts, JobStatus, JobSummary, StrategyInfo, Trade } from "@/lib/types";
 import { ActiveJobCard } from "@/components/ActiveJobCard";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { RunHistoryTableSkeleton } from "@/components/skeletons/RunHistoryTableSkeleton";
@@ -63,6 +63,24 @@ export default function LiveJobsPage() {
   );
 
   const refresh = useCallback(() => refreshItems(), [refreshItems]);
+
+  const finishedItems = useMemo(() => items.filter((j) => FINISHED_STATUSES.has(j.status)), [items]);
+  const finishedJobIds = useMemo(() => finishedItems.map((j) => j.job_id), [finishedItems]);
+
+  const { data: tradesMap = {} } = useSWR<Record<string, Trade[]>>(
+    finishedJobIds.length > 0 ? ["tradesBatch", ...finishedJobIds] : null,
+    async () => {
+      const result: Record<string, Trade[]> = {};
+      // API allows max 20 per batch, chunk if needed
+      for (let i = 0; i < finishedJobIds.length; i += 20) {
+        const chunk = finishedJobIds.slice(i, i + 20);
+        const batch = await listTradesBatch(chunk);
+        Object.assign(result, batch);
+      }
+      return result;
+    },
+    { dedupingInterval: 30_000 },
+  );
 
   const activeJobs = useMemo(() => items.filter((j) => ACTIVE_STATUSES.has(j.status)), [items]);
   const activeCount = activeJobs.length;
@@ -316,6 +334,7 @@ export default function LiveJobsPage() {
             onDeleteJob={onDeleteJob}
             busy={busy}
             canDeleteJob={(j) => FINISHED_STATUSES.has(j.status)}
+            tradesMap={tradesMap}
           />
         )}
       </section>
