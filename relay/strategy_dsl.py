@@ -7,11 +7,12 @@ Complex strategies with custom indicators fall back to the LLM Coder path.
 
 from __future__ import annotations
 
+import ast
 import re
 import textwrap
 from typing import Any
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class IndicatorSpec(BaseModel):
@@ -28,9 +29,57 @@ class IndicatorSpec(BaseModel):
         return name.lower()
 
 
+# AST node types allowed inside condition_expr (whitelist)
+_SAFE_EXPR_NODES = (
+    ast.Expression, ast.BoolOp, ast.BinOp, ast.UnaryOp, ast.Compare,
+    ast.Call, ast.Constant, ast.Name, ast.Attribute, ast.Subscript,
+    ast.Load, ast.And, ast.Or, ast.Not, ast.Add, ast.Sub, ast.Mult,
+    ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.IfExp, ast.Tuple, ast.List, ast.Index, ast.Slice,
+    ast.USub, ast.UAdd,
+)
+
+# Names that must never appear in condition_expr
+_DANGEROUS_NAMES = frozenset({
+    "__import__", "eval", "exec", "compile", "open", "breakpoint",
+    "globals", "locals", "vars", "dir", "__builtins__",
+    "os", "sys", "subprocess", "importlib", "shutil", "pathlib",
+})
+
+
+def validate_condition_expr(expr: str) -> str | None:
+    """Validate that a condition expression is a safe single expression.
+
+    Returns None if valid, or an error message string.
+    """
+    if not expr or not expr.strip():
+        return "Empty condition expression"
+    try:
+        tree = ast.parse(expr.strip(), mode="eval")
+    except SyntaxError as e:
+        return f"Invalid expression syntax: {e.msg}"
+    for node in ast.walk(tree):
+        if not isinstance(node, _SAFE_EXPR_NODES):
+            return f"Disallowed construct in condition_expr: {type(node).__name__}"
+        if isinstance(node, ast.Name) and node.id in _DANGEROUS_NAMES:
+            return f"Disallowed name in condition_expr: {node.id}"
+        if isinstance(node, ast.Attribute) and node.attr in _DANGEROUS_NAMES:
+            return f"Disallowed attribute in condition_expr: {node.attr}"
+    return None
+
+
 class ConditionSpec(BaseModel):
     condition_expr: str  # Python expression, e.g. "crossed_above(prev_rsi, rsi, 30)"
     reason_template: str = ""  # e.g. "RSI crossed above {level}"
+
+    @field_validator("condition_expr")
+    @classmethod
+    def check_condition_expr(cls, v: str) -> str:
+        error = validate_condition_expr(v)
+        if error:
+            raise ValueError(error)
+        return v
 
 
 class RiskSpec(BaseModel):
@@ -70,6 +119,16 @@ class StrategyDSL(BaseModel):
         if not re.match(r"^[A-Z][A-Za-z0-9]+Strategy$", v):
             raise ValueError(f"Invalid strategy name: {v}")
         return v
+
+    @model_validator(mode="after")
+    def validate_unique_aliases(self) -> "StrategyDSL":
+        aliases = [ind.alias for ind in self.indicators]
+        seen: set[str] = set()
+        for alias in aliases:
+            if alias in seen:
+                raise ValueError(f"Duplicate indicator alias: {alias!r}")
+            seen.add(alias)
+        return self
 
     def needs_llm_fallback(self) -> bool:
         return bool(self.custom_indicator)
@@ -199,6 +258,16 @@ def generate_strategy_code(dsl: StrategyDSL) -> str:
 
     lines.append("")
 
+    # OHLCV price variables (available in condition_expr)
+    lines.append("        # Price variables")
+    lines.append("        close = ctx.current_price")
+    lines.append("        price = ctx.current_price")
+    lines.append('        open_ = float(bar.get("open", close))')
+    lines.append('        high = float(bar.get("high", close))')
+    lines.append('        low = float(bar.get("low", close))')
+    lines.append('        volume = float(bar.get("volume", 0))')
+    lines.append("")
+
     # Read indicators
     lines.append("        # Read indicators")
     for ind in dsl.indicators:
@@ -214,24 +283,46 @@ def generate_strategy_code(dsl: StrategyDSL) -> str:
             lines.append("            return")
     lines.append("")
 
-    # Check prev values initialized
+    # Build mapping from state_var → current expression
     prev_checks = [sv for sv in dsl.state_vars if sv.startswith("prev_")]
+    multi_output_key_map = _build_multi_output_key_map(dsl.indicators, multi_output_indicators)
     if prev_checks:
         lines.append("        # Initialize prev values")
         cond = " or ".join(f"self.{sv} is None" for sv in prev_checks)
         lines.append(f"        if {cond}:")
         for sv in prev_checks:
-            # Derive current value from the state var name
-            current = sv.replace("prev_", "")
-            lines.append(f"            self.{sv} = {current}")
+            current_expr = _resolve_prev_var(sv, multi_output_key_map)
+            lines.append(f"            self.{sv} = {current_expr}")
         lines.append("            return")
+        lines.append("")
+
+    # Risk management: stop-loss / take-profit
+    has_risk = dsl.risk.stop_loss_pct is not None or dsl.risk.take_profit_pct is not None
+    if has_risk:
+        lines.append("        # Risk management: stop-loss / take-profit")
+        lines.append("        if ctx.position_size != 0:")
+        lines.append("            _entry = ctx.position_entry_price")
+        lines.append("            if _entry and _entry > 0:")
+        lines.append("                _pnl_pct = ((close - _entry) / _entry * 100) if ctx.position_size > 0 else ((_entry - close) / _entry * 100)")
+        if dsl.risk.stop_loss_pct is not None:
+            lines.append(f"                if _pnl_pct <= -{abs(dsl.risk.stop_loss_pct)!r}:")
+            lines.append("                    self.is_closing = True")
+            lines.append(f'                    ctx.close_position(exit_reason="Stop-loss {abs(dsl.risk.stop_loss_pct)}% hit")')
+            lines.append("                    self.prev_value = None  # type: ignore[assignment]")
+            lines.append("                    return")
+        if dsl.risk.take_profit_pct is not None:
+            lines.append(f"                if _pnl_pct >= {abs(dsl.risk.take_profit_pct)!r}:")
+            lines.append("                    self.is_closing = True")
+            lines.append(f'                    ctx.close_position(exit_reason="Take-profit {abs(dsl.risk.take_profit_pct)}% hit")')
+            lines.append("                    self.prev_value = None  # type: ignore[assignment]")
+            lines.append("                    return")
         lines.append("")
 
     # Exit logic (before entry to allow same-bar reversal)
     if dsl.exit_long and dsl.direction in ("long_only", "long_short"):
         lines.append("        # Long exit")
         lines.append("        if ctx.position_size > 0 and not self.is_closing:")
-        reason = dsl.exit_long.reason_template or "Long exit signal"
+        reason = _escape_reason(dsl.exit_long.reason_template or "Long exit signal")
         lines.append(f"            if {dsl.exit_long.condition_expr}:")
         lines.append("                self.is_closing = True")
         lines.append(f'                ctx.close_position(exit_reason="{reason}")')
@@ -240,7 +331,7 @@ def generate_strategy_code(dsl: StrategyDSL) -> str:
     if dsl.exit_short and dsl.direction in ("short_only", "long_short"):
         lines.append("        # Short exit")
         lines.append("        if ctx.position_size < 0 and not self.is_closing:")
-        reason = dsl.exit_short.reason_template or "Short exit signal"
+        reason = _escape_reason(dsl.exit_short.reason_template or "Short exit signal")
         lines.append(f"            if {dsl.exit_short.condition_expr}:")
         lines.append("                self.is_closing = True")
         lines.append(f'                ctx.close_position(exit_reason="{reason}")')
@@ -250,7 +341,7 @@ def generate_strategy_code(dsl: StrategyDSL) -> str:
     if dsl.entry_long and dsl.direction in ("long_only", "long_short"):
         lines.append("        # Long entry")
         lines.append("        if ctx.position_size == 0:")
-        reason = dsl.entry_long.reason_template or "Long entry signal"
+        reason = _escape_reason(dsl.entry_long.reason_template or "Long entry signal")
         lines.append(f"            if {dsl.entry_long.condition_expr}:")
         lines.append(f'                ctx.enter_long(reason="{reason}")')
         lines.append("")
@@ -258,7 +349,7 @@ def generate_strategy_code(dsl: StrategyDSL) -> str:
     if dsl.entry_short and dsl.direction in ("short_only", "long_short"):
         lines.append("        # Short entry")
         lines.append("        if ctx.position_size == 0:")
-        reason = dsl.entry_short.reason_template or "Short entry signal"
+        reason = _escape_reason(dsl.entry_short.reason_template or "Short entry signal")
         lines.append(f"            if {dsl.entry_short.condition_expr}:")
         lines.append(f'                ctx.enter_short(reason="{reason}")')
         lines.append("")
@@ -267,8 +358,8 @@ def generate_strategy_code(dsl: StrategyDSL) -> str:
     if prev_checks:
         lines.append("        # Update prev values")
         for sv in prev_checks:
-            current = sv.replace("prev_", "")
-            lines.append(f"        self.{sv} = {current}")
+            current_expr = _resolve_prev_var(sv, multi_output_key_map)
+            lines.append(f"        self.{sv} = {current_expr}")
 
     return "\n".join(lines) + "\n"
 
@@ -281,6 +372,55 @@ def _param_to_attr(alias: str, key: str) -> str:
 def _find_param(tunable: dict[str, ParamSpec], alias: str, key: str) -> bool:
     """Check if a tunable param exists for this indicator param."""
     return _param_to_attr(alias, key) in tunable
+
+
+def _escape_reason(reason: str) -> str:
+    """Escape quotes in reason strings for safe embedding in generated code."""
+    return reason.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# Known sub-key names for multi-output TA-Lib indicators
+_MULTI_OUTPUT_KEYS: dict[str, list[str]] = {
+    "MACD": ["macd", "macdsignal", "macdhist"],
+    "STOCH": ["slowk", "slowd"],
+    "STOCHF": ["fastk", "fastd"],
+    "STOCHRSI": ["fastk", "fastd"],
+    "BBANDS": ["upperband", "middleband", "lowerband"],
+    "AROON": ["aroondown", "aroonup"],
+}
+
+
+def _build_multi_output_key_map(
+    indicators: list[IndicatorSpec],
+    multi_output_indicators: set[str],
+) -> dict[str, str]:
+    """Build mapping: flattened_name → expr for multi-output indicator sub-keys.
+
+    E.g. for alias='bbands', name='BBANDS':
+      'bbands_upperband' → 'bbands_data["upperband"]'
+      'bbands_middleband' → 'bbands_data["middleband"]'
+    """
+    result: dict[str, str] = {}
+    for ind in indicators:
+        upper = ind.name.upper()
+        if upper in multi_output_indicators and upper in _MULTI_OUTPUT_KEYS:
+            for key in _MULTI_OUTPUT_KEYS[upper]:
+                flat_name = f"{ind.alias}_{key}"
+                result[flat_name] = f'{ind.alias}_data["{key}"]'
+    return result
+
+
+def _resolve_prev_var(state_var: str, multi_key_map: dict[str, str]) -> str:
+    """Resolve a prev_ state variable to its current-value expression.
+
+    For single-output indicators: prev_rsi → rsi
+    For multi-output: prev_bbands_upperband → bbands_data["upperband"]
+    For OHLCV: prev_close → close
+    """
+    current = state_var.removeprefix("prev_")
+    if current in multi_key_map:
+        return multi_key_map[current]
+    return current
 
 
 def parse_planner_dsl(planner_json: dict[str, Any]) -> StrategyDSL | None:

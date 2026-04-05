@@ -514,6 +514,76 @@ def _verify_strategy_code(code: str) -> str | None:
     if "is_new_bar" not in code:
         return "Missing bar-confirmation guard (is_new_bar check)."
 
+    # Compile check: catches NameError-prone patterns the AST parse misses
+    try:
+        compile(code, "<strategy>", "exec")
+    except Exception as e:
+        return f"Compilation error: {e}"
+
+    # Variable reference check: find on_bar and verify local names are reachable
+    on_bar_error = _check_on_bar_variable_refs(tree)
+    if on_bar_error:
+        return on_bar_error
+
+    return None
+
+
+def _check_on_bar_variable_refs(tree: ast.Module) -> str | None:
+    """Best-effort check that variables used in on_bar are defined."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or not node.name.endswith("Strategy"):
+            continue
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "on_bar":
+                return _verify_on_bar_names(item, tree)
+    return None
+
+
+def _verify_on_bar_names(on_bar: ast.FunctionDef, tree: ast.Module) -> str | None:
+    """Check that variable names read in on_bar are plausibly defined."""
+    # Collect all names assigned in on_bar (targets of assignments)
+    assigned: set[str] = set()
+    for node in ast.walk(on_bar):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            assigned.add(node.id)
+        elif isinstance(node, ast.arg):
+            assigned.add(node.arg)
+        # For loop targets
+        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            assigned.add(node.target.id)
+
+    # Collect module-level names (imports, function defs, class defs, assignments)
+    module_names: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.FunctionDef):
+            module_names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            module_names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    module_names.add(t.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                module_names.add(alias.asname or alias.name.split(".")[-1])
+
+    # Built-in names we expect to be available
+    builtins_available = {
+        "True", "False", "None", "int", "float", "str", "bool", "list", "dict",
+        "set", "tuple", "len", "range", "abs", "min", "max", "sum", "round",
+        "isinstance", "print", "type", "getattr", "hasattr", "setattr",
+        "ValueError", "TypeError", "KeyError", "IndexError", "Exception",
+        "math", "Any",
+    }
+    all_known = assigned | module_names | builtins_available
+
+    # Find Name nodes in Load context that aren't in known set
+    for node in ast.walk(on_bar):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id == "self":
+                continue
+            if node.id not in all_known:
+                return f"name '{node.id}' is not defined"
     return None
 
 

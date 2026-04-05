@@ -115,6 +115,12 @@ For STOCH: returns dict {"slowk", "slowd"}.
 Condition helpers available: crossed_above(prev, current, level), crossed_below(prev, current, level).
 References to params: use self.param_name (e.g. self.rsi_period).
 References to indicators: use the alias directly (e.g. rsi, ema, macd_data["macd"]).
+References to price: use `close` for current close price. Also available: `high`, `low`, `open_` (note underscore), `volume`, `price` (same as close).
+  These are pre-bound local variables in on_bar. Do NOT use ctx.current_price or bar["close"] in condition_expr.
+For multi-output indicators in condition_expr, use `{alias}_data["{key}"]` (e.g. bbands_data["upperband"], macd_data["macdhist"]).
+For state_vars tracking multi-output sub-keys, use `prev_{alias}_{key}` format (e.g. prev_bbands_upperband, prev_macd_macdhist).
+
+IMPORTANT for indicators: When using the same indicator type multiple times (e.g. two EMAs), you MUST provide unique aliases (e.g. "ema_fast", "ema_slow"). Never leave alias empty when duplicates exist.
 
 Guard requirements: get_open_orders check and is_new_bar check are automatically generated — do NOT include them in conditions.
 """
