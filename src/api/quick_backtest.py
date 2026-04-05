@@ -389,6 +389,14 @@ async def _execute_backtest(req: QuickBacktestRequest) -> dict[str, Any]:
             "message": f"전략 코드에 문제가 있습니다: 라인 {exc.lineno} - {exc.msg}. 코드를 수정한 후 다시 시도해주세요.",
         }
 
+    # Post-process: inject OHLCV bindings if needed (safety net for LLM-generated code)
+    try:
+        from relay.strategy_postprocess import ensure_ohlcv_bindings
+
+        code = ensure_ohlcv_bindings(code)
+    except Exception:
+        pass  # non-critical; proceed with original code
+
     symbol = req.symbol.strip().upper()
     now = datetime.now(timezone.utc)
     end_dt = now - timedelta(minutes=1)

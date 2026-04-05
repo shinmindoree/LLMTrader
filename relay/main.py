@@ -976,6 +976,11 @@ async def generate(
             logger.exception("Repair attempt %d failed", attempt + 1)
             break
 
+    # Post-process: inject OHLCV bindings if needed
+    from relay.strategy_postprocess import ensure_ohlcv_bindings
+
+    code = ensure_ohlcv_bindings(code)
+
     return StrategyResponse(code=code, model_used=model_used)
 
 
@@ -1048,6 +1053,11 @@ async def _generate_stream_body(body: StrategyRequest):
             dsl_code = None
 
     if dsl_code:
+        # Post-process: inject OHLCV bindings if needed
+        from relay.strategy_postprocess import ensure_ohlcv_bindings
+
+        dsl_code = ensure_ohlcv_bindings(dsl_code)
+
         # Stream the DSL-generated code to the frontend
         yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
         # Emit tokens in chunks to maintain streaming UX
@@ -1160,6 +1170,11 @@ async def _generate_stream_body(body: StrategyRequest):
                 logger.exception("Stream repair attempt %d failed", repair_attempts)
                 break
             verification_error = _verify_strategy_code(code)
+
+        # Post-process: inject OHLCV bindings if needed
+        from relay.strategy_postprocess import ensure_ohlcv_bindings
+
+        code = ensure_ohlcv_bindings(code)
 
         yield f"data: {json.dumps({'done': True, 'code': code, 'repaired': repaired, 'repair_attempts': repair_attempts})}\n\n"
     except Exception as e:

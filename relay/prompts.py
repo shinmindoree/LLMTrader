@@ -411,7 +411,14 @@ class MyStrategy(Strategy):
         # 3. Guard: new bar only (skip ticks)
         if not bool(bar.get("is_new_bar", True)):
             return
-        # 4. Read indicators
+        # 4. OHLCV price variables (always define before use)
+        close = ctx.current_price
+        price = ctx.current_price
+        open_ = float(bar.get("open", close))
+        high = float(bar.get("high", close))
+        low = float(bar.get("low", close))
+        volume = float(bar.get("volume", 0))
+        # 5. Read indicators
         value = float(ctx.get_indicator("RSI", period=14))
         if not math.isfinite(value):
             return
@@ -422,6 +429,18 @@ class MyStrategy(Strategy):
         # 6. Update prev on new bar
         self.prev_value = value
 ```
+
+### CRITICAL: OHLCV price variables
+Always define `close`, `high`, `low`, `open_`, `volume`, `price` at the top of `on_bar` BEFORE using them in conditions:
+```python
+close = ctx.current_price
+price = ctx.current_price
+open_ = float(bar.get("open", close))
+high = float(bar.get("high", close))
+low = float(bar.get("low", close))
+volume = float(bar.get("volume", 0))
+```
+Do NOT reference `close`, `high`, `low` etc. without these assignments — it causes NameError at runtime.
 
 ### Helper: register_talib_indicator_all_outputs(ctx, name)
 Import from `indicator_strategy_template` for multi-output TA-Lib indicators (MACD, Stochastic, etc.).
@@ -444,6 +463,12 @@ def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
         return
     if not bool(bar.get("is_new_bar", True)):
         return
+    # OHLCV price variables
+    close = ctx.current_price
+    price = ctx.current_price
+    high = float(bar.get("high", close))
+    low = float(bar.get("low", close))
+    # Read indicators
     rsi = float(ctx.get_indicator("RSI", period=self.rsi_period))
     if not math.isfinite(rsi):
         return
