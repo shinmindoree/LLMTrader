@@ -11,6 +11,7 @@ import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
 import { isRecord } from "@/components/JobResultSummary";
+import { buildPositions, normalizeLiveTrades } from "@/components/TradeAnalysis";
 
 const asNumber = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -108,22 +109,35 @@ function buildRow(job: AnyJob, type: JobType, trades?: Trade[]): RunHistoryRow {
     totalTrades = asNumber(r.total_trades) ?? (Array.isArray(r.trades) ? r.trades.filter((t: unknown) => isRecord(t) && (t as Record<string, unknown>).side === "SELL").length : null);
     netProfit = asNumber(r.net_profit) ?? (initial !== null && final !== null ? final - initial : null);
     returnPct = asNumber(r.total_return_pct) ?? (initial != null && initial > 0 && final !== null ? ((final - initial) / initial) * 100 : null);
-    const pnls = pnlsFromTrades(r.trades);
-    winRate = computeWinRate(pnls);
+    // Prefer backend-computed win_rate; fallback to local computation from trades
+    winRate = asNumber(r.win_rate);
+    if (winRate === null && Array.isArray(r.trades)) {
+      const sellPnls = r.trades
+        .filter((t: unknown) => isRecord(t) && (t as Record<string, unknown>).side === "SELL")
+        .map((t: unknown) => asNumber((t as Record<string, unknown>).pnl))
+        .filter((p): p is number => p !== null);
+      winRate = computeWinRate(sellPnls);
+    }
   } else if (type === "LIVE") {
     if (trades && trades.length > 0) {
-      // Compute from actual trade records (matches detail page logic)
-      const pnls = trades
-        .map((t) => t.realized_pnl)
-        .filter((p): p is number => p !== null && p !== undefined && Number.isFinite(p));
-      totalTrades = trades.length;
-      netProfit = trades.reduce((s, t) => s + (t.realized_pnl ?? 0), 0);
-      winRate = computeWinRate(pnls);
+      // Build round-trip positions for accurate trade count and win rate (matches detail page)
+      const normalized = normalizeLiveTrades(trades);
+      const sorted = [...normalized].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+      const positions = buildPositions(sorted, 1);
+      const closedPositions = positions.filter((p) => p.status === "Closed");
+      const positionPnls = closedPositions.map((p) => p.realizedPnl);
+
+      totalTrades = closedPositions.length;
+      // Net profit = sum(realized_pnl) - sum(commission), matching detail page
+      netProfit = trades.reduce((s, t) => s + (t.realized_pnl ?? 0), 0)
+               - trades.reduce((s, t) => s + (t.commission ?? 0), 0);
+      winRate = computeWinRate(positionPnls);
+
       if (isResultRecord) {
         const r = result as Record<string, unknown>;
         const summary = isRecord(r.summary) ? (r.summary as Record<string, unknown>) : r;
         const initial = asNumber(summary.initial_equity) ?? asNumber(summary.initial_balance);
-        returnPct = asNumber(summary.total_return_pct) ?? (initial != null && initial > 0 ? (netProfit / initial) * 100 : null);
+        returnPct = initial != null && initial > 0 ? (netProfit / initial) * 100 : null;
       }
     } else if (isResultRecord) {
       const r = result as Record<string, unknown>;

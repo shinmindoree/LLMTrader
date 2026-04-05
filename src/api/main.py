@@ -175,7 +175,26 @@ def _job_to_summary(job: Any) -> JobSummary:
     """Lightweight conversion — strips heavy data (trades, chart) from result to reduce payload."""
     raw = job.result_json
     if raw and isinstance(raw, dict):
+        # Compute win_rate from trades before stripping heavy keys (backtest)
+        win_rate_computed = None
+        trades = raw.get("trades")
+        if isinstance(trades, list) and trades:
+            sell_pnls = [
+                t["pnl"]
+                for t in trades
+                if isinstance(t, dict)
+                and str(t.get("side", "")).upper() == "SELL"
+                and isinstance(t.get("pnl"), (int, float))
+            ]
+            if sell_pnls:
+                wins = sum(1 for p in sell_pnls if p > 0)
+                losses = sum(1 for p in sell_pnls if p < 0)
+                total = wins + losses
+                if total > 0:
+                    win_rate_computed = round((wins / total) * 100, 1)
         summary = {k: v for k, v in raw.items() if k not in _HEAVY_RESULT_KEYS}
+        if win_rate_computed is not None and "win_rate" not in summary:
+            summary["win_rate"] = win_rate_computed
     else:
         summary = raw
     return JobSummary(
