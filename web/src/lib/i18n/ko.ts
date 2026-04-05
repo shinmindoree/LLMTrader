@@ -235,6 +235,7 @@ const ko: TranslationKeys = {
   },
   runHistory: {
     date: "날짜",
+    testedAt: "테스트 일시",
     startedAt: "시작 시간",
     endedAt: "종료 시간",
     strategy: "전략",

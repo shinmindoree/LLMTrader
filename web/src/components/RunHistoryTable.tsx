@@ -127,7 +127,7 @@ function buildRow(job: AnyJob, type: JobType): RunHistoryRow {
     job,
     date: job.created_at ? new Date(job.created_at).toLocaleString() : "-",
     dateMs: createdAt,
-    startedAt: job.started_at ? new Date(job.started_at).toLocaleString() : "-",
+    startedAt: job.created_at ? new Date(job.created_at).toLocaleString() : "-",
     endedAt: job.ended_at ? new Date(job.ended_at).toLocaleString() : "-",
     endedAtMs: job.ended_at ? new Date(job.ended_at).getTime() : 0,
     strategy: strategyNameFromPath(job.strategy_path),
@@ -242,14 +242,23 @@ export function RunHistoryTable({
       <table className="w-full min-w-[900px]">
         <thead>
           <tr className="border-b border-[#2a2e39] bg-[#131722]">
-            <th className={thClass} onClick={() => handleSort("date")}>
-              {t.runHistory.startedAt}
-              <SortIcon active={sortKey === "date"} order={sortOrder} />
-            </th>
-            <th className={thClass} onClick={() => handleSort("endedAt")}>
-              {t.runHistory.endedAt}
-              <SortIcon active={sortKey === "endedAt"} order={sortOrder} />
-            </th>
+            {type === "BACKTEST" ? (
+              <th className={thClass} onClick={() => handleSort("date")}>
+                {t.runHistory.testedAt}
+                <SortIcon active={sortKey === "date"} order={sortOrder} />
+              </th>
+            ) : (
+              <>
+                <th className={thClass} onClick={() => handleSort("date")}>
+                  {t.runHistory.startedAt}
+                  <SortIcon active={sortKey === "date"} order={sortOrder} />
+                </th>
+                <th className={thClass} onClick={() => handleSort("endedAt")}>
+                  {t.runHistory.endedAt}
+                  <SortIcon active={sortKey === "endedAt"} order={sortOrder} />
+                </th>
+              </>
+            )}
             <th className={thClass} onClick={() => handleSort("strategy")}>
               {t.runHistory.strategy}
               <SortIcon active={sortKey === "strategy"} order={sortOrder} />
@@ -297,7 +306,9 @@ export function RunHistoryTable({
               className="border-b border-[#2a2e39] hover:bg-[#252a37] transition-colors"
             >
               <td className={tdClass}>{row.startedAt}</td>
-              <td className={`${tdClass} text-[#868993]`}>{row.endedAt}</td>
+              {type === "LIVE" && (
+                <td className={`${tdClass} text-[#868993]`}>{row.endedAt}</td>
+              )}
               <td className={tdClass}>
                 <Link
                   className="font-medium text-[#2962ff] hover:underline"

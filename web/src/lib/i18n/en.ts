@@ -232,6 +232,7 @@ const en = {
   },
   runHistory: {
     date: "Date",
+    testedAt: "Tested At",
     startedAt: "Started",
     endedAt: "Ended",
     strategy: "Strategy",
