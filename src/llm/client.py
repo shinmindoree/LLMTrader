@@ -138,6 +138,7 @@ class LLMClient:
                 self._config,
                 system_content=system_content,
                 messages=messages,
+                enable_web_search=self._config.enable_web_search,
             )
             if not content or not content.strip():
                 return None
@@ -164,6 +165,7 @@ class LLMClient:
                 self._config,
                 system_content=system_content,
                 messages=messages,
+                enable_web_search=self._config.enable_web_search,
             ):
                 acc.append(token)
                 yield {"token": token}

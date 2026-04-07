@@ -149,6 +149,7 @@ def _build_response_kwargs(
     stream: bool = False,
     model: str | None = None,
     text_format: dict[str, object] | None = None,
+    enable_web_search: bool = False,
 ) -> dict[str, object]:
     resolved_model = model or config.resolved_openai_model
     max_output_tokens = 16384
@@ -172,6 +173,10 @@ def _build_response_kwargs(
         kwargs["stream"] = True
     if text_format:
         kwargs["text"] = {"format": text_format}
+    if enable_web_search:
+        tools = list(kwargs.get("tools") or [])  # type: ignore[arg-type]
+        tools.append({"type": "web_search_preview"})
+        kwargs["tools"] = tools
     return kwargs
 
 
@@ -261,6 +266,7 @@ async def chat_completion_stream(
     *,
     model: str | None = None,
     enable_continuation: bool = False,
+    enable_web_search: bool = False,
 ) -> AsyncIterator[str]:
     """Stream OpenAI Responses API text deltas with pre-first-token retry.
 
@@ -274,6 +280,7 @@ async def chat_completion_stream(
         messages=messages,
         stream=True,
         model=model,
+        enable_web_search=enable_web_search,
     )
 
     accumulated: list[str] = []
@@ -344,6 +351,7 @@ def chat_completion(
     *,
     model: str | None = None,
     text_format: dict[str, object] | None = None,
+    enable_web_search: bool = False,
 ) -> tuple[str, str]:
     """Call Responses API for a single user turn. Returns (content, model_used)."""
     request_kwargs = _build_response_kwargs(
@@ -352,6 +360,7 @@ def chat_completion(
         user_content=user_content,
         model=model,
         text_format=text_format,
+        enable_web_search=enable_web_search,
     )
 
     client = _create_client(config)
@@ -370,6 +379,7 @@ def chat_completion_messages(
     messages: list[dict[str, str]],
     *,
     model: str | None = None,
+    enable_web_search: bool = False,
 ) -> tuple[str, str]:
     """Call Responses API with multi-turn messages. Returns (content, model_used)."""
     request_kwargs = _build_response_kwargs(
@@ -377,6 +387,7 @@ def chat_completion_messages(
         system_content=system_content,
         messages=messages,
         model=model,
+        enable_web_search=enable_web_search,
     )
 
     client = _create_client(config)

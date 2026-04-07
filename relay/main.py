@@ -654,6 +654,7 @@ async def strategy_chat(
             config,
             system_content=system_content,
             messages=openai_messages,
+            enable_web_search=config.enable_web_search,
         )
     except Exception as e:
         _raise_llm_http_error("/strategy/chat", e)
@@ -689,6 +690,7 @@ async def _strategy_chat_stream_body(body: StrategyChatRequest):
             config,
             system_content=system_content,
             messages=openai_messages,
+            enable_web_search=config.enable_web_search,
         ):
             acc.append(token)
             yield f"data: {json.dumps({'token': token})}\n\n"
@@ -1015,6 +1017,7 @@ async def _generate_stream_body(body: StrategyRequest):
             user_content=planner_input,
             model=config.resolved_planner_model,
             text_format={"type": "json_object"},
+            enable_web_search=config.enable_web_search,
         )
         plan_spec = _extract_json_object(plan_content)
         if plan_spec:

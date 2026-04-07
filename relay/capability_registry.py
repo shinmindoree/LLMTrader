@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 SUPPORTED_DATA_SOURCES: tuple[str, ...] = (
     "Binance OHLCV (candlestick) price/volume data",
+    "Web search grounding via Azure OpenAI (real-time market news, macro events — when enabled)",
 )
 
 SUPPORTED_INDICATOR_SCOPES: tuple[str, ...] = (
@@ -50,7 +51,7 @@ UNSUPPORTED_CAPABILITY_RULES: tuple[CapabilityRule, ...] = (
     CapabilityRule(
         name="news_feed",
         keywords=("news", "headline", "뉴스", "기사"),
-        user_message="외부 뉴스 데이터 수집/연동 파이프라인이 필요합니다.",
+        user_message="실시간 뉴스 데이터를 전략 코드에서 직접 참조하는 파이프라인은 아직 없지만, 전략 채팅에서 웹 검색을 통해 최신 뉴스를 참고한 분석이 가능합니다.",
     ),
     CapabilityRule(
         name="sentiment_engine",
@@ -65,7 +66,7 @@ UNSUPPORTED_CAPABILITY_RULES: tuple[CapabilityRule, ...] = (
     CapabilityRule(
         name="macro_feed",
         keywords=("fomc", "cpi", "금리", "거시", "macro"),
-        user_message="거시경제 데이터 수집/연동 파이프라인이 필요합니다.",
+        user_message="거시경제 데이터를 전략 코드에서 직접 참조하는 파이프라인은 아직 없지만, 전략 채팅에서 웹 검색을 통해 최신 거시경제 정보를 참고한 분석이 가능합니다.",
     ),
 )
 

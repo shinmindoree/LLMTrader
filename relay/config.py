@@ -41,6 +41,10 @@ class RelayConfig(BaseSettings):
         default="",
         validation_alias=AliasChoices("SUMMARIZER_MODEL", "AZURE_OPENAI_SUMMARIZER_MODEL"),
     )
+    enable_web_search: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_WEB_SEARCH", "RELAY_ENABLE_WEB_SEARCH"),
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

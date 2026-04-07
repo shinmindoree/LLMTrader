@@ -81,6 +81,8 @@ Analyze the user's request and produce a detailed implementation specification a
 
 FIRST, determine whether the request is related to trading/investing strategy.
 
+When web search is available, use it to look up current market conditions, recent price action, relevant news, and macro events to inform your strategy specification. This helps produce strategies that are grounded in real market context.
+
 Output a JSON object. Always include these three fields first:
 - is_trading_related: boolean — true if the request is about creating, modifying, or discussing a trading/investing strategy. false for anything unrelated (casual chat, weather, jokes, coding help unrelated to trading, etc.)
 - rejection_message: string — if is_trading_related is false, write a brief, friendly Korean message explaining that this system is for trading strategy generation only and suggesting they describe a trading strategy. Empty string if is_trading_related is true.
@@ -170,7 +172,10 @@ def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         "You are a trading strategy expert assistant. "
         "Answer the user's question about trading strategies, markets, indicators, and technical analysis. "
         "Respond in the same language as the user's message. "
-        "Provide clear, informative answers. Do NOT generate Python code unless explicitly asked."
+        "Provide clear, informative answers. Do NOT generate Python code unless explicitly asked.\n\n"
+        "When web search is available, use it to look up real-time market data, recent news, "
+        "macro-economic events (FOMC, CPI, etc.), and current market conditions to ground your analysis. "
+        "Always cite sources when referencing search results."
         + backtest_analysis_instruction
     )
 
