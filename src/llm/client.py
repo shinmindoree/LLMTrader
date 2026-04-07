@@ -29,6 +29,7 @@ from relay.prompts import (
     build_repair_system_prompt,
     build_strategy_chat_system_prompt,
 )
+from relay.url_fetcher import enrich_messages_with_url_content
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +134,12 @@ class LLMClient:
         if not messages:
             return None
         try:
+            enriched = await enrich_messages_with_url_content(messages)
             system_content = build_strategy_chat_system_prompt(code or "", summary)
             content, _ = chat_completion_messages(
                 self._config,
                 system_content=system_content,
-                messages=messages,
+                messages=enriched,
                 enable_web_search=self._config.enable_web_search,
             )
             if not content or not content.strip():
@@ -159,12 +161,13 @@ class LLMClient:
             return
 
         try:
+            enriched = await enrich_messages_with_url_content(messages)
             system_content = build_strategy_chat_system_prompt(code or "", summary)
             acc: list[str] = []
             async for token in chat_completion_stream(
                 self._config,
                 system_content=system_content,
-                messages=messages,
+                messages=enriched,
                 enable_web_search=self._config.enable_web_search,
             ):
                 acc.append(token)

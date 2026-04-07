@@ -34,6 +34,7 @@ from relay.prompts import (
     build_strategy_chat_system_prompt,
     build_system_prompt,
 )
+from relay.url_fetcher import enrich_messages_with_url_content
 
 
 app = FastAPI(title="LLMTrader Relay", version="0.1.0")
@@ -650,6 +651,7 @@ async def strategy_chat(
     try:
         system_content = build_strategy_chat_system_prompt(code, body.summary)
         openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+        openai_messages = await enrich_messages_with_url_content(openai_messages)
         content, _ = chat_completion_messages(
             config,
             system_content=system_content,
@@ -685,6 +687,7 @@ async def _strategy_chat_stream_body(body: StrategyChatRequest):
     try:
         system_content = build_strategy_chat_system_prompt(code, body.summary)
         openai_messages = [{"role": m.role, "content": m.content} for m in messages]
+        openai_messages = await enrich_messages_with_url_content(openai_messages)
         acc: list[str] = []
         async for token in chat_completion_stream(
             config,
@@ -998,6 +1001,20 @@ async def _generate_stream_body(body: StrategyRequest):
         return
 
     prompt_text = _user_prompt_text(prompt, messages)
+
+    # Enrich prompt with URL content if URLs are present
+    from relay.url_fetcher import fetch_urls_from_text
+
+    url_results = await fetch_urls_from_text(prompt_text)
+    if url_results:
+        url_sections = []
+        for url, content in url_results:
+            url_sections.append(f"---\n[{url}] 페이지 내용:\n\n{content}\n---")
+        prompt_text = (
+            f"{prompt_text}\n\n"
+            "아래는 위 URL에서 추출한 페이지 내용입니다:\n\n"
+            + "\n\n".join(url_sections)
+        )
 
     # Phase 1: Planning — Planner agent analyzes requirements and produces a structured spec
     yield f"data: {json.dumps({'phase': 'planning'})}\n\n"
