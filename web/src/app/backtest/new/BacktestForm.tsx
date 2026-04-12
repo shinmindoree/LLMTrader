@@ -79,11 +79,11 @@ export function BacktestForm({
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
   const [symbol, setSymbol] = useState(defaults.symbol);
   const [interval, setInterval] = useState(defaults.interval);
-  const [leverage, setLeverage] = useState(1);
-  const [initialBalance, setInitialBalance] = useState(1000);
-  const [commission, setCommission] = useState(0.0004);
-  const [stopLossPct, setStopLossPct] = useState(0.05);
-  const [maxPyramidEntries, setMaxPyramidEntries] = useState(0);
+  const [leverage, setLeverage] = useState<number | string>(1);
+  const [initialBalance, setInitialBalance] = useState<number | string>(1000);
+  const [commission, setCommission] = useState<number | string>(0.0004);
+  const [stopLossPct, setStopLossPct] = useState<number | string>(0.05);
+  const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(0);
   const now = new Date();
   const [startDate, setStartDate] = useState(() => formatDateInputValue(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
   const [endDate, setEndDate] = useState(() => formatDateInputValue(now));
@@ -290,7 +290,8 @@ export function BacktestForm({
             value={leverage}
             min={1}
             max={20}
-            onChange={(e) => setLeverage(Number(e.target.value))}
+            onChange={(e) => setLeverage(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (leverage === "" || isNaN(Number(leverage))) setLeverage(1); else setLeverage(Math.min(20, Math.max(1, Number(leverage)))); }}
           />
         </label>
         <label className="text-sm">
@@ -302,7 +303,8 @@ export function BacktestForm({
             type="number"
             value={initialBalance}
             min={100}
-            onChange={(e) => setInitialBalance(Number(e.target.value))}
+            onChange={(e) => setInitialBalance(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (initialBalance === "" || isNaN(Number(initialBalance))) setInitialBalance(1000); }}
           />
         </label>
         <label className="text-sm">
@@ -314,7 +316,8 @@ export function BacktestForm({
             type="number"
             step="0.0001"
             value={commission}
-            onChange={(e) => setCommission(Number(e.target.value))}
+            onChange={(e) => setCommission(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (commission === "" || isNaN(Number(commission))) setCommission(0.0004); }}
           />
         </label>
         <label className="text-sm">
@@ -325,8 +328,9 @@ export function BacktestForm({
             className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
             type="number"
             step="0.1"
-            value={stopLossPct * 100}
-            onChange={(e) => setStopLossPct(Number(e.target.value) / 100)}
+            value={stopLossPct === "" ? "" : Number(stopLossPct) * 100}
+            onChange={(e) => setStopLossPct(e.target.value === "" ? "" : Number(e.target.value) / 100)}
+            onBlur={() => { if (stopLossPct === "" || isNaN(Number(stopLossPct))) setStopLossPct(0.05); }}
           />
         </label>
         <label className="text-sm">
@@ -339,7 +343,8 @@ export function BacktestForm({
             value={maxPyramidEntries}
             min={0}
             max={10}
-            onChange={(e) => setMaxPyramidEntries(Number(e.target.value))}
+            onChange={(e) => setMaxPyramidEntries(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (maxPyramidEntries === "" || isNaN(Number(maxPyramidEntries))) setMaxPyramidEntries(0); }}
           />
         </label>
       </div>

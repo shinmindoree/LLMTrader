@@ -67,13 +67,13 @@ export function LiveForm({
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
   const [symbol, setSymbol] = useState(defaults.symbol);
   const [interval, setInterval] = useState(defaults.interval);
-  const [leverage, setLeverage] = useState(1);
-  const [maxPositionPct, setMaxPositionPct] = useState(50);
-  const maxPosition = maxPositionPct / 100;
-  const [dailyLossLimit, setDailyLossLimit] = useState(500);
-  const [stopLossPct, setStopLossPct] = useState(0.05);
-  const [stoplossCooldownCandles, setStoplossCooldownCandles] = useState(0);
-  const [maxPyramidEntries, setMaxPyramidEntries] = useState(0);
+  const [leverage, setLeverage] = useState<number | string>(1);
+  const [maxPositionPct, setMaxPositionPct] = useState<number | string>(50);
+  const maxPosition = (Number(maxPositionPct) || 0) / 100;
+  const [dailyLossLimit, setDailyLossLimit] = useState<number | string>(500);
+  const [stopLossPct, setStopLossPct] = useState<number | string>(0.05);
+  const [stoplossCooldownCandles, setStoplossCooldownCandles] = useState<number | string>(0);
+  const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(0);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
@@ -276,7 +276,8 @@ export function LiveForm({
             value={leverage}
             min={1}
             max={125}
-            onChange={(e) => setLeverage(Math.min(125, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
+            onChange={(e) => setLeverage(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (leverage === "" || isNaN(Number(leverage))) setLeverage(1); else setLeverage(Math.min(125, Math.max(1, Math.floor(Number(leverage))))); }}
           />
         </label>
         <label className="text-sm">
@@ -289,7 +290,8 @@ export function LiveForm({
               value={maxPositionPct}
               min={1}
               max={100}
-              onChange={(e) => setMaxPositionPct(Math.min(100, Math.max(1, Math.round(Number(e.target.value) || 1))))}
+              onChange={(e) => setMaxPositionPct(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (maxPositionPct === "" || isNaN(Number(maxPositionPct))) setMaxPositionPct(50); else setMaxPositionPct(Math.min(100, Math.max(1, Math.round(Number(maxPositionPct))))); }}
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#868993]">%</span>
           </div>
@@ -301,7 +303,8 @@ export function LiveForm({
             type="number"
             value={dailyLossLimit}
             min={0}
-            onChange={(e) => setDailyLossLimit(Number(e.target.value))}
+            onChange={(e) => setDailyLossLimit(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (dailyLossLimit === "" || isNaN(Number(dailyLossLimit))) setDailyLossLimit(500); }}
           />
         </label>
         <label className="text-sm">
@@ -311,10 +314,11 @@ export function LiveForm({
               className={`${inputCls} pr-8`}
               type="number"
               step="0.1"
-              value={stopLossPct * 100}
+              value={stopLossPct === "" ? "" : Number(stopLossPct) * 100}
               min={0.1}
               max={50}
-              onChange={(e) => setStopLossPct(Math.min(0.5, Math.max(0.001, Number(e.target.value) / 100)))}
+              onChange={(e) => setStopLossPct(e.target.value === "" ? "" : Number(e.target.value) / 100)}
+              onBlur={() => { if (stopLossPct === "" || isNaN(Number(stopLossPct))) setStopLossPct(0.05); else setStopLossPct(Math.min(0.5, Math.max(0.001, Number(stopLossPct)))); }}
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#868993]">%</span>
           </div>
@@ -327,7 +331,8 @@ export function LiveForm({
             value={stoplossCooldownCandles}
             min={0}
             max={1000}
-            onChange={(e) => setStoplossCooldownCandles(Number(e.target.value))}
+            onChange={(e) => setStoplossCooldownCandles(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (stoplossCooldownCandles === "" || isNaN(Number(stoplossCooldownCandles))) setStoplossCooldownCandles(0); }}
           />
         </label>
         <label className="text-sm">
@@ -338,7 +343,8 @@ export function LiveForm({
             value={maxPyramidEntries}
             min={0}
             max={10}
-            onChange={(e) => setMaxPyramidEntries(Number(e.target.value))}
+            onChange={(e) => setMaxPyramidEntries(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (maxPyramidEntries === "" || isNaN(Number(maxPyramidEntries))) setMaxPyramidEntries(0); }}
           />
         </label>
       </div>

@@ -23,11 +23,11 @@ type Props = {
 export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWithAI }: Props) {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [interval, setInterval] = useState("1h");
-  const [days, setDays] = useState(30);
-  const [initialBalance, setInitialBalance] = useState(10000);
-  const [leverage, setLeverage] = useState(1);
-  const [commission, setCommission] = useState(0.04);
-  const [stopLossPct, setStopLossPct] = useState(5);
+  const [days, setDays] = useState<number | string>(30);
+  const [initialBalance, setInitialBalance] = useState<number | string>(10000);
+  const [leverage, setLeverage] = useState<number | string>(1);
+  const [commission, setCommission] = useState<number | string>(0.04);
+  const [stopLossPct, setStopLossPct] = useState<number | string>(5);
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<QuickBacktestResponse | null>(null);
@@ -38,7 +38,7 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
   const handleIntervalChange = (newInterval: string) => {
     setInterval(newInterval);
     const newMax = INTERVAL_MAX_DAYS[newInterval] ?? 90;
-    if (days > newMax) setDays(newMax);
+    if (Number(days) > newMax) setDays(newMax);
   };
 
   const handleRun = async () => {
@@ -51,11 +51,11 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
         code,
         symbol: symbol.trim().toUpperCase(),
         interval,
-        days,
-        initial_balance: initialBalance,
-        leverage,
-        commission: commission / 100,
-        stop_loss_pct: stopLossPct / 100,
+        days: Number(days),
+        initial_balance: Number(initialBalance),
+        leverage: Number(leverage),
+        commission: Number(commission) / 100,
+        stop_loss_pct: Number(stopLossPct) / 100,
         strategy_params: strategyParams,
       });
       if (res.success) {
@@ -108,7 +108,8 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
               min={1}
               max={maxDays}
               value={days}
-              onChange={(e) => setDays(Math.min(maxDays, Math.max(1, Number(e.target.value) || 1)))}
+              onChange={(e) => setDays(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (days === "" || isNaN(Number(days))) setDays(30); else setDays(Math.min(maxDays, Math.max(1, Number(days)))); }}
             />
           </label>
           <label className="flex flex-col gap-0.5">
@@ -118,7 +119,8 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
               className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 font-mono text-xs text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
               min={100}
               value={initialBalance}
-              onChange={(e) => setInitialBalance(Number(e.target.value) || 10000)}
+              onChange={(e) => setInitialBalance(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (initialBalance === "" || isNaN(Number(initialBalance))) setInitialBalance(10000); }}
             />
           </label>
           <label className="flex flex-col gap-0.5">
@@ -129,7 +131,8 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
               min={1}
               max={20}
               value={leverage}
-              onChange={(e) => setLeverage(Math.min(20, Math.max(1, Number(e.target.value) || 1)))}
+              onChange={(e) => setLeverage(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (leverage === "" || isNaN(Number(leverage))) setLeverage(1); else setLeverage(Math.min(20, Math.max(1, Number(leverage)))); }}
             />
           </label>
           <label className="flex flex-col gap-0.5">
@@ -141,7 +144,8 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
               max={1}
               step={0.01}
               value={commission}
-              onChange={(e) => setCommission(Number(e.target.value) || 0)}
+              onChange={(e) => setCommission(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (commission === "" || isNaN(Number(commission))) setCommission(0.04); }}
             />
           </label>
           <label className="col-span-2 flex flex-col gap-0.5">
@@ -153,7 +157,8 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
               max={50}
               step={0.1}
               value={stopLossPct}
-              onChange={(e) => setStopLossPct(Number(e.target.value) || 5)}
+              onChange={(e) => setStopLossPct(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (stopLossPct === "" || isNaN(Number(stopLossPct))) setStopLossPct(5); }}
             />
           </label>
         </div>
@@ -249,7 +254,7 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
             <button
               type="button"
               className="w-full rounded border border-[#2962ff]/50 px-3 py-2 text-sm font-medium text-[#8fa8ff] transition hover:bg-[#2962ff]/10"
-              onClick={() => onAnalyzeWithAI?.(result, { symbol, interval, days })}
+              onClick={() => onAnalyzeWithAI?.(result, { symbol, interval, days: Number(days) })}
             >
               🤖 AI에게 분석 요청
             </button>
