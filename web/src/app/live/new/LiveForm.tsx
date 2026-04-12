@@ -91,7 +91,7 @@ export function LiveForm({
   const totalWallet = accountSnapshot?.total_wallet_balance ?? null;
   const availableBalance = accountSnapshot?.available_balance ?? null;
   const estimatedPosition =
-    availableBalance !== null ? availableBalance * maxPosition * leverage : null;
+    availableBalance !== null ? availableBalance * maxPosition * Number(leverage) : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -179,7 +179,7 @@ export function LiveForm({
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">Pos {maxPositionPct}%</span>
-        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">SL {(stopLossPct * 100).toFixed(1)}%</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">SL {(Number(stopLossPct) * 100).toFixed(1)}%</span>
       </div>
 
       {defaults.applied ? (
