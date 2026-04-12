@@ -1028,14 +1028,25 @@ async def _generate_stream_body(body: StrategyRequest):
         # Responses API requires the word "json" in user input for json_object format
         planner_input = f"Analyze the following trading strategy request and respond in JSON format.\n\n{planner_input}"
 
-        plan_content, _ = chat_completion(
-            config,
-            system_content=build_planner_system_prompt(),
-            user_content=planner_input,
-            model=config.resolved_planner_model,
-            text_format={"type": "json_object"},
-            enable_web_search=config.enable_web_search,
-        )
+        # Run planner with heartbeat to keep SSE connection alive
+        import asyncio as _asyncio
+
+        async def _planner_task():
+            return chat_completion(
+                config,
+                system_content=build_planner_system_prompt(),
+                user_content=planner_input,
+                model=config.resolved_planner_model,
+                text_format={"type": "json_object"},
+                enable_web_search=config.enable_web_search,
+            )
+
+        planner_future = _asyncio.ensure_future(_planner_task())
+        while not planner_future.done():
+            await _asyncio.sleep(10)
+            if not planner_future.done():
+                yield f"data: {json.dumps({'heartbeat': True})}\n\n"
+        plan_content, _ = planner_future.result()
         plan_spec = _extract_json_object(plan_content)
         if plan_spec:
             logger.info("Planner produced spec: strategy_name=%s", plan_spec.get("strategy_name", "?"))
@@ -1171,12 +1182,23 @@ async def _generate_stream_body(body: StrategyRequest):
                 repair_parts.extend(["", f"Original user request:\n{prompt_text}"])
             repair_parts.extend(["", "Current code:", code])
             try:
-                repaired_content, _ = chat_completion(
-                    config,
-                    system_content=build_repair_system_prompt(),
-                    user_content="\n".join(repair_parts),
-                    model=reviewer_model,
-                )
+                # Run repair with heartbeat to keep SSE connection alive
+                import asyncio as _asyncio
+
+                async def _repair_task():
+                    return chat_completion(
+                        config,
+                        system_content=build_repair_system_prompt(),
+                        user_content="\n".join(repair_parts),
+                        model=reviewer_model,
+                    )
+
+                repair_future = _asyncio.ensure_future(_repair_task())
+                while not repair_future.done():
+                    await _asyncio.sleep(10)
+                    if not repair_future.done():
+                        yield f"data: {json.dumps({'heartbeat': True})}\n\n"
+                repaired_content, _ = repair_future.result()
                 if repaired_content and repaired_content.strip():
                     candidate = _sanitize_code_quotes(_extract_python_code(repaired_content))
                     # Only accept repair if it looks like Python code (has class/def)
