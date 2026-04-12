@@ -97,8 +97,8 @@ def _check_backtest(config: dict[str, Any], result: JobPolicyCheckResult) -> Non
         result.warnings.append("commission 값이 높습니다. 백테스트 성과 왜곡 가능성이 있습니다.")
 
     stop_loss_pct = _to_float(config.get("stop_loss_pct"))
-    if stop_loss_pct is None or stop_loss_pct <= 0:
-        result.blockers.append("config.stop_loss_pct: 0보다 커야 합니다.")
+    if stop_loss_pct is None or stop_loss_pct < 0:
+        result.blockers.append("config.stop_loss_pct: 0 이상 숫자여야 합니다.")
     elif stop_loss_pct > 0.5:
         result.blockers.append("config.stop_loss_pct: 0.5 이하(50% 이하)여야 합니다.")
     elif stop_loss_pct > 0.2:
@@ -202,10 +202,8 @@ def _check_live(config: dict[str, Any], result: JobPolicyCheckResult) -> None:
             )
 
         stop_loss_pct = _to_float(stream.get("stop_loss_pct"))
-        if stop_loss_pct is None:
-            result.blockers.append(f"{field_prefix}.stop_loss_pct: 숫자여야 합니다.")
-        elif stop_loss_pct <= 0:
-            result.blockers.append(f"{field_prefix}.stop_loss_pct: 0보다 커야 합니다.")
+        if stop_loss_pct is None or stop_loss_pct < 0:
+            result.blockers.append(f"{field_prefix}.stop_loss_pct: 0 이상 숫자여야 합니다.")
         elif stop_loss_pct > 0.2:
             result.blockers.append(f"{field_prefix}.stop_loss_pct: 0.2 이하(20% 이하)여야 합니다.")
         elif stop_loss_pct > 0.1:

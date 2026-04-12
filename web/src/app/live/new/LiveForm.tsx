@@ -72,6 +72,7 @@ export function LiveForm({
   const maxPosition = (Number(maxPositionPct) || 0) / 100;
   const [dailyLossLimit, setDailyLossLimit] = useState<number | string>(500);
   const [stopLossPct, setStopLossPct] = useState<number | string>(0.05);
+  const [stopLossEnabled, setStopLossEnabled] = useState(true);
   const [stoplossCooldownCandles, setStoplossCooldownCandles] = useState<number | string>(0);
   const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(0);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +120,7 @@ export function LiveForm({
             leverage,
             max_position: maxPosition,
             daily_loss_limit: dailyLossLimit,
-            stop_loss_pct: stopLossPct,
+            stop_loss_pct: stopLossEnabled ? stopLossPct : 0,
             max_consecutive_losses: 0,
             stoploss_cooldown_candles: stoplossCooldownCandles,
             max_pyramid_entries: maxPyramidEntries,
@@ -179,7 +180,7 @@ export function LiveForm({
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">Pos {maxPositionPct}%</span>
-        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">SL {(Number(stopLossPct) * 100).toFixed(1)}%</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{stopLossEnabled ? `SL ${(Number(stopLossPct) * 100).toFixed(1)}%` : "SL: 전략"}</span>
       </div>
 
       {defaults.applied ? (
@@ -308,7 +309,24 @@ export function LiveForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></div>
+          <div className="mb-1 flex items-center gap-2 text-xs text-[#868993]">
+            <span><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></span>
+            <button
+              type="button"
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+                stopLossEnabled ? "bg-[#2962ff]" : "bg-[#363a45]"
+              }`}
+              onClick={() => setStopLossEnabled(!stopLossEnabled)}
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                  stopLossEnabled ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </button>
+            <span className="text-[10px] text-[#868993]">{stopLossEnabled ? "거래설정" : "전략코드"}</span>
+          </div>
+          {stopLossEnabled && (
           <div className="relative">
             <input
               className={`${inputCls} pr-8`}
@@ -322,6 +340,7 @@ export function LiveForm({
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#868993]">%</span>
           </div>
+          )}
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLossCooldown}<InfoTooltip text={t.form.tooltipCooldown} /></></div>

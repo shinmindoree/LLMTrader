@@ -28,6 +28,7 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
   const [leverage, setLeverage] = useState<number | string>(1);
   const [commission, setCommission] = useState<number | string>(0.04);
   const [stopLossPct, setStopLossPct] = useState<number | string>(5);
+  const [stopLossEnabled, setStopLossEnabled] = useState(true);
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<QuickBacktestResponse | null>(null);
@@ -55,7 +56,7 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
         initial_balance: Number(initialBalance),
         leverage: Number(leverage),
         commission: Number(commission) / 100,
-        stop_loss_pct: Number(stopLossPct) / 100,
+        stop_loss_pct: stopLossEnabled ? Number(stopLossPct) / 100 : 0,
         strategy_params: strategyParams,
       });
       if (res.success) {
@@ -149,7 +150,24 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
             />
           </label>
           <label className="col-span-2 flex flex-col gap-0.5">
-            <span className="text-[11px] text-[#9aa0ad]">손절 (%)</span>
+            <span className="flex items-center gap-2 text-[11px] text-[#9aa0ad]">
+              손절 (%)
+              <button
+                type="button"
+                className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+                  stopLossEnabled ? "bg-[#2962ff]" : "bg-[#363a45]"
+                }`}
+                onClick={() => setStopLossEnabled(!stopLossEnabled)}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                    stopLossEnabled ? "translate-x-3" : "translate-x-0"
+                  }`}
+                />
+              </button>
+              <span className="text-[10px] text-[#868993]">{stopLossEnabled ? "거래설정" : "전략코드"}</span>
+            </span>
+            {stopLossEnabled && (
             <input
               type="number"
               className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 font-mono text-xs text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
@@ -160,6 +178,7 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
               onChange={(e) => setStopLossPct(e.target.value === "" ? "" : Number(e.target.value))}
               onBlur={() => { if (stopLossPct === "" || isNaN(Number(stopLossPct))) setStopLossPct(5); }}
             />
+            )}
           </label>
         </div>
 

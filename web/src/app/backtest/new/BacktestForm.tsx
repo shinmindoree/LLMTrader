@@ -83,6 +83,7 @@ export function BacktestForm({
   const [initialBalance, setInitialBalance] = useState<number | string>(1000);
   const [commission, setCommission] = useState<number | string>(0.0004);
   const [stopLossPct, setStopLossPct] = useState<number | string>(0.05);
+  const [stopLossEnabled, setStopLossEnabled] = useState(true);
   const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(0);
   const now = new Date();
   const [startDate, setStartDate] = useState(() => formatDateInputValue(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
@@ -136,7 +137,7 @@ export function BacktestForm({
         leverage,
         initial_balance: initialBalance,
         commission,
-        stop_loss_pct: stopLossPct,
+        stop_loss_pct: stopLossEnabled ? stopLossPct : 0,
         max_pyramid_entries: maxPyramidEntries,
         start_ts: startTs,
         end_ts: endTs,
@@ -321,7 +322,24 @@ export function BacktestForm({
           />
         </label>
         <label className="text-sm">
-          <div className="mb-1 text-xs text-[#868993]"><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></div>
+          <div className="mb-1 flex items-center gap-2 text-xs text-[#868993]">
+            <span><>{t.form.stopLoss}<InfoTooltip text={t.form.tooltipStopLoss} /></></span>
+            <button
+              type="button"
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+                stopLossEnabled ? "bg-[#2962ff]" : "bg-[#363a45]"
+              }`}
+              onClick={() => setStopLossEnabled(!stopLossEnabled)}
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                  stopLossEnabled ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </button>
+            <span className="text-[10px] text-[#868993]">{stopLossEnabled ? "거래설정" : "전략코드"}</span>
+          </div>
+          {stopLossEnabled && (
           <input
             id="stop-loss"
             name="stop-loss"
@@ -332,6 +350,7 @@ export function BacktestForm({
             onChange={(e) => setStopLossPct(e.target.value === "" ? "" : Number(e.target.value) / 100)}
             onBlur={() => { if (stopLossPct === "" || isNaN(Number(stopLossPct))) setStopLossPct(0.05); }}
           />
+          )}
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]"><>{t.form.maxPyramid}<InfoTooltip text={t.form.tooltipPyramid} /></></div>
