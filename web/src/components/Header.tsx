@@ -48,7 +48,7 @@ export function Header() {
             className="flex min-w-0 shrink items-center gap-2 rounded px-2 py-1 hover:bg-[#2a2e39] transition-colors"
             href="/"
           >
-            <Image alt="AlphaWeaver" height={24} priority src="/alphaweaver-logo.svg" width={24} />
+            <Image alt="AlphaWeaver" height={24} priority src="/alphaweaver-logo.svg" width={52} />
             <span className="truncate text-sm font-semibold text-[#d1d4dc]">AlphaWeaver</span>
             <span className="hidden rounded bg-[#F0B90B]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[#F0B90B] sm:inline-block">
               for Binance Futures

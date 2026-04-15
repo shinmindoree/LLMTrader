@@ -1,15 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="AlphaWeaver logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 110" role="img" aria-label="AlphaWeaver logo">
   <defs>
-    <linearGradient id="aw-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2563eb"/>
-      <stop offset="0.5" stop-color="#7c3aed"/>
-      <stop offset="1" stop-color="#06b6d4"/>
+    <linearGradient id="aw" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2050d0"/>
+      <stop offset="50%" stop-color="#0896d8"/>
+      <stop offset="100%" stop-color="#06d4d4"/>
     </linearGradient>
+    <mask id="wv">
+      <rect width="240" height="110" fill="white"/>
+      <line x1="96" y1="70" x2="120" y2="40" stroke="black" stroke-width="20" stroke-linecap="round"/>
+    </mask>
   </defs>
-  <rect x="2" y="2" width="44" height="44" rx="12" fill="url(#aw-bg)"/>
-  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="2.8">
-    <path d="M11 14c4.8 0 4.8 6 9.6 6s4.8-6 9.6-6 4.8 6 9.6 6"/>
-    <path d="M11 24c4.8 0 4.8 6 9.6 6s4.8-6 9.6-6 4.8 6 9.6 6"/>
-    <path d="M11 34c4.8 0 4.8-6 9.6-6s4.8 6 9.6 6 4.8-6 9.6-6"/>
-  </g>
+  <!-- Right loop with chart-wave pattern (underneath at crossing) -->
+  <path d="M 108,55 C 118,28 132,18 144,28 C 150,34 154,14 168,16 C 192,20 210,44 210,58 C 210,88 148,96 108,55"
+        stroke="url(#aw)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"
+        mask="url(#wv)"/>
+  <!-- Left loop (on top at crossing) -->
+  <path d="M 108,55 C 90,12 22,12 22,55 C 22,98 90,98 108,55"
+        stroke="url(#aw)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
