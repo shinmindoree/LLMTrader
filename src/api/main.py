@@ -632,6 +632,7 @@ def create_app() -> FastAPI:
     set_session_maker(session_maker)
 
     _keepalive_task: asyncio.Task[None] | None = None
+    _runner_task: asyncio.Task[None] | None = None
 
     async def _db_keepalive(interval: int = 60) -> None:
         """Periodically send SELECT 1 to prevent idle DB connection termination."""
@@ -645,7 +646,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup() -> None:
-        nonlocal _keepalive_task
+        nonlocal _keepalive_task, _runner_task
         if settings.auto_alembic_upgrade:
             _logger.info("Applying database migrations (alembic upgrade head)...")
             await asyncio.to_thread(run_alembic_upgrade_head)
@@ -653,12 +654,38 @@ def create_app() -> FastAPI:
         _keepalive_task = asyncio.create_task(_db_keepalive())
         _logger.info("DB keep-alive task started (interval=60s)")
 
+        if settings.runner_embedded:
+            # Lazy import to avoid circular deps; only loaded when runner is enabled.
+            from runner.worker import RunnerWorker as _RunnerWorker
+
+            # src/api/main.py → src/ → repo root (two levels up)
+            _repo_root = Path(__file__).resolve().parents[2]
+            _worker = _RunnerWorker(
+                repo_root=_repo_root,
+                session_maker=session_maker,
+                poll_interval_ms=settings.runner_poll_interval_ms,
+                live_concurrency=settings.runner_live_concurrency,
+            )
+            _runner_task = asyncio.create_task(_worker.run_forever(), name="embedded-runner")
+            _logger.info(
+                "Embedded runner started (poll_interval_ms=%d, live_concurrency=%d)",
+                settings.runner_poll_interval_ms,
+                settings.runner_live_concurrency,
+            )
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        nonlocal _keepalive_task
+        nonlocal _keepalive_task, _runner_task
         if _keepalive_task:
             _keepalive_task.cancel()
             _logger.info("DB keep-alive task stopped")
+        if _runner_task:
+            _runner_task.cancel()
+            try:
+                await _runner_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            _logger.info("Embedded runner task stopped")
 
     async def _db_session() -> AsyncIterator[AsyncSession]:
         from sqlalchemy.exc import OperationalError, InterfaceError
