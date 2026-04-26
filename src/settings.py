@@ -148,6 +148,7 @@ class Settings(BaseSettings):
     admin_token: str = Field(default="dev-admin-token", alias="ADMIN_TOKEN")
     admin_email: str = Field(default="elgd00@gmail.com", alias="ADMIN_EMAIL")
     strategy_dirs: str = Field(default="scripts/strategies", alias="STRATEGY_DIRS")
+    runner_embedded: bool = Field(default=True, alias="RUNNER_EMBEDDED")
     runner_poll_interval_ms: int = Field(default=500, alias="RUNNER_POLL_INTERVAL_MS")
     runner_live_concurrency: int = Field(default=5, alias="RUNNER_LIVE_CONCURRENCY")
     runner_live_heartbeat_interval_sec: int = Field(default=30, alias="RUNNER_LIVE_HEARTBEAT_INTERVAL_SEC")
