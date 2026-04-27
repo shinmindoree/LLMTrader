@@ -8,10 +8,12 @@ on:
       - main
     paths:
       - src/**
+      - relay/**
       - scripts/**
       - pyproject.toml
       - uv.lock
       - infra/Dockerfile.api
+      - .github/workflows/deploy-api-test.yml
       - .github/workflows/llmtrader-api-AutoDeployTrigger-51b80701-055a-457e-a751-7ca8a724937c.yml
 
   # Allow manual trigger 
