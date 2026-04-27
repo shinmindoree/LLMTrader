@@ -802,7 +802,7 @@ export default function StrategiesPage() {
       repair_attempts: 0,
       textOnly: true,
       status: "thinking",
-      statusText: t.strategy.codeGenerating,
+      statusText: t.strategy.phaseAnalyzing,
     };
 
     if (options?.forceChat && activeCode) {
@@ -1910,7 +1910,12 @@ export default function StrategiesPage() {
                                   ) : null}
                                 </>
                               ) : shouldShowPending ? (
-                                <PendingReply />
+                                <div className="flex items-center gap-3">
+                                  <PendingReply />
+                                  {message.statusText ? (
+                                    <span className="text-xs text-[#8f96a3] animate-pulse">{message.statusText}</span>
+                                  ) : null}
+                                </div>
                               ) : null
                             ) : (
                               <>

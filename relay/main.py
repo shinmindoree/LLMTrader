@@ -1118,16 +1118,28 @@ async def _generate_stream_body(body: StrategyRequest):
         yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': _NON_TRADING_REJECTION_MSG, 'repaired': False, 'repair_attempts': 0})}\n\n"
         return
 
-    # Intent routing: if planner classifies as "question" or "analyze", signal frontend to use chat instead
-    if plan_spec and plan_spec.get("intent") in ("question", "analyze"):
-        intent = plan_spec["intent"]
-        logger.info("Planner classified request as %s — routing to chat", intent)
-        yield f"data: {json.dumps({'intent': intent})}\n\n"
+    # Determine intent — default to "question" when planner failed or didn't provide intent
+    intent = plan_spec.get("intent") if plan_spec else None
+
+    # Route non-modify intents (and planner failures) to chat
+    if intent in ("question", "analyze") or intent is None:
+        effective_intent = intent or "question"
+        if intent is None:
+            logger.info("Planner failed or returned no spec — routing to chat as fallback")
+        else:
+            logger.info("Planner classified request as %s — routing to chat", effective_intent)
+        yield f"data: {json.dumps({'intent': effective_intent})}\n\n"
+        return
+
+    # Unknown intent safety net — route to chat rather than generating code
+    if intent != "modify":
+        logger.warning("Unknown planner intent %r — routing to chat", intent)
+        yield f"data: {json.dumps({'intent': 'question'})}\n\n"
         return
 
     # Plan preview: if planner produced a "modify" plan and user hasn't confirmed yet,
     # emit a preview and stop — frontend will re-invoke with confirmed_plan to proceed.
-    if plan_spec and plan_spec.get("intent") == "modify" and not plan_confirmed:
+    if not plan_confirmed:
         preview_text = _build_plan_preview_text(plan_spec)
         logger.info("Emitting plan preview for user confirmation: %s", plan_spec.get("strategy_name", "?"))
         yield f"data: {json.dumps({'plan_preview': preview_text, 'plan_spec': plan_spec})}\n\n"
