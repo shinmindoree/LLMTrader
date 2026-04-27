@@ -629,6 +629,7 @@ export default function StrategiesPage() {
                   content: preview,
                   textOnly: true,
                   planSpec,
+                  planPrompt: trimmed,
                   status: null as ChatMessage["status"],
                   statusText: null as ChatMessage["statusText"],
                 },
@@ -862,7 +863,7 @@ export default function StrategiesPage() {
   };
 
   const handleConfirmPlan = useCallback(
-    async (messageId: string, planSpec: Record<string, unknown>) => {
+    async (messageId: string, planSpec: Record<string, unknown>, planPrompt?: string | null) => {
       if (isSending) return;
       setChatError(null);
       setIsSending(true);
@@ -900,18 +901,23 @@ export default function StrategiesPage() {
       };
       updateStreamingSession(addMsg);
 
-      // Build the messages from the current chat for context
-      const messagesToSend = buildMessagesForGeneration(
-        chatMessages,
-        workspaceCode.trim() || null,
-        t.strategy.previousCodeContext,
-      );
-
       try {
-        const userPromptText = chatMessages
-          .filter((m) => m.role === "user")
-          .map((m) => m.content)
-          .join("\n");
+        const previewIndex = chatMessages.findIndex((m) => m.id === messageId);
+        const previousUserPrompt = [...chatMessages.slice(0, previewIndex >= 0 ? previewIndex : chatMessages.length)]
+          .reverse()
+          .find((m) => m.role === "user")
+          ?.content;
+        const userPromptText = (planPrompt || previousUserPrompt || "").trim();
+        const latestCode = workspaceCode.trim() || getLastCodeAndSummary(chatMessages)?.code || "";
+        const messagesToSend = latestCode
+          ? [
+              {
+                role: "assistant",
+                content: t.strategy.previousCodeContext + latestCode,
+              },
+              { role: "user", content: userPromptText },
+            ]
+          : undefined;
 
         await generateStrategyStream(
           userPromptText,
@@ -1903,7 +1909,7 @@ export default function StrategiesPage() {
                                       type="button"
                                       className="mt-3 rounded-full border border-[#2962ff]/40 bg-[#1b2330] px-5 py-2.5 text-sm font-medium text-[#8fa8ff] transition hover:border-[#2962ff] hover:bg-[#1f2a3d] hover:text-[#afc4ff] disabled:cursor-not-allowed disabled:opacity-50"
                                       disabled={isSending}
-                                      onClick={() => handleConfirmPlan(message.id, message.planSpec!)}
+                                      onClick={() => handleConfirmPlan(message.id, message.planSpec!, message.planPrompt)}
                                     >
                                       {t.strategy.confirmPlanGenerate}
                                     </button>

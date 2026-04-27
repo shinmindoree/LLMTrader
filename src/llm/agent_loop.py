@@ -95,7 +95,10 @@ async def agent_generate_stream(
             plan_json = json.dumps(confirmed_plan, indent=2, ensure_ascii=False)
             plan_context = (
                 f"The following implementation plan has been approved by the user. "
-                f"Use it as a guide for the strategy structure:\n\n```json\n{plan_json}\n```\n\n"
+                f"Use it as a guide for the strategy structure. "
+                f"The original user request below is the authoritative request; ignore unrelated earlier chat turns.\n\n"
+                f"Original user request:\n{user_prompt}\n\n"
+                f"Approved plan:\n```json\n{plan_json}\n```\n\n"
             )
             if messages:
                 # Prepend plan to the first user message

@@ -21,6 +21,7 @@ export type ChatMessage = {
   status?: "thinking" | "typing" | "streaming" | null;
   statusText?: string | null;
   planSpec?: Record<string, unknown> | null;
+  planPrompt?: string | null;
 };
 
 export type ChatSessionRecord = {
