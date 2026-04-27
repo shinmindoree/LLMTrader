@@ -8,6 +8,7 @@ on:
       - main
     paths:
       - src/**
+      - relay/**
       - scripts/**
       - pyproject.toml
       - uv.lock
