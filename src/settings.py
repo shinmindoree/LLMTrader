@@ -158,6 +158,7 @@ class Settings(BaseSettings):
     runner_periodic_reconcile_interval_sec: int = Field(
         default=45, alias="RUNNER_PERIODIC_RECONCILE_INTERVAL_SEC"
     )
+    embedded_runner: bool = Field(default=True, alias="EMBEDDED_RUNNER")
     auto_alembic_upgrade: bool = Field(default=True, alias="AUTO_ALEMBIC_UPGRADE")
     frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")
     crypto_backend: str = Field(default="fernet", alias="CRYPTO_BACKEND")

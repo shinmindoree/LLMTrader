@@ -632,6 +632,8 @@ def create_app() -> FastAPI:
     set_session_maker(session_maker)
 
     _keepalive_task: asyncio.Task[None] | None = None
+    _runner_task: asyncio.Task[None] | None = None
+    _runner_worker: Any = None
 
     async def _db_keepalive(interval: int = 60) -> None:
         """Periodically send SELECT 1 to prevent idle DB connection termination."""
@@ -645,7 +647,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup() -> None:
-        nonlocal _keepalive_task
+        nonlocal _keepalive_task, _runner_task, _runner_worker
         if settings.auto_alembic_upgrade:
             _logger.info("Applying database migrations (alembic upgrade head)...")
             await asyncio.to_thread(run_alembic_upgrade_head)
@@ -653,9 +655,30 @@ def create_app() -> FastAPI:
         _keepalive_task = asyncio.create_task(_db_keepalive())
         _logger.info("DB keep-alive task started (interval=60s)")
 
+        if settings.embedded_runner:
+            from runner.worker import RunnerWorker
+
+            _runner_worker = RunnerWorker(
+                repo_root=Path(__file__).resolve().parents[2],
+                session_maker=session_maker,
+                poll_interval_ms=settings.runner_poll_interval_ms,
+                live_concurrency=settings.runner_live_concurrency,
+            )
+            _runner_task = asyncio.create_task(_runner_worker.run_forever())
+            _logger.info(
+                "Embedded runner started (live_concurrency=%d)",
+                settings.runner_live_concurrency,
+            )
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        nonlocal _keepalive_task
+        nonlocal _keepalive_task, _runner_task, _runner_worker
+        if _runner_worker is not None:
+            _runner_worker._shutting_down.set()
+            _logger.info("Embedded runner shutdown requested")
+        if _runner_task is not None:
+            _runner_task.cancel()
+            _logger.info("Embedded runner task cancelled")
         if _keepalive_task:
             _keepalive_task.cancel()
             _logger.info("DB keep-alive task stopped")
