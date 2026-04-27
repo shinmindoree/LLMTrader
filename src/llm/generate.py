@@ -645,6 +645,38 @@ async def _generate_stream_body(body: StrategyRequest):
         yield f"data: {json.dumps({'plan_preview': preview_text, 'plan_spec': plan_spec})}\n\n"
         return
 
+    # -----------------------------------------------------------------------
+    # Agent-based generation (replaces DSL + Coder + repair pipeline)
+    # -----------------------------------------------------------------------
+    from llm.agent_loop import agent_generate_stream
+    from llm.prompts import build_agent_system_prompt
+
+    agent_system = build_agent_system_prompt()
+    agent_messages = (
+        [{"role": m.role, "content": m.content} for m in messages]
+        if messages
+        else None
+    )
+
+    try:
+        async for event in agent_generate_stream(
+            config,
+            system_prompt=agent_system,
+            user_prompt=prompt_text,
+            messages=agent_messages,
+            confirmed_plan=plan_spec,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("done") or event.get("error"):
+                return
+    except Exception as e:
+        logger.exception("Agent generation failed, falling back to legacy pipeline: %s", e)
+        # Fall through to legacy pipeline below
+
+    # -----------------------------------------------------------------------
+    # Legacy fallback: DSL fast path + LLM Coder + repair loop
+    # -----------------------------------------------------------------------
+
     # DSL fast path: if plan_spec is DSL-compatible, generate code deterministically
     dsl_code: str | None = None
     if plan_spec and plan_spec.get("intent") == "modify":
