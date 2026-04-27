@@ -302,6 +302,7 @@ const en = {
     onlyFinishedDelete: "Only completed runs can be deleted.",
     runDeleted: "Run deleted.",
     startBacktest: "Run Backtest",
+    reRunBacktest: "Re-run with Changes",
   },
   live: {
     runStarted: "Live run started.",

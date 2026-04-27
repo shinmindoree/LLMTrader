@@ -41,6 +41,25 @@ function extractLiveStreams(config: Record<string, unknown>): LiveStreamInfo[] {
   return result;
 }
 
+const INTERVAL_MS: Record<string, number> = {
+  "1m": 60_000,
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+  "1d": 24 * 60 * 60_000,
+};
+
+function estimateCandleCount(config: Record<string, unknown>): number | null {
+  const startTs = config.start_ts;
+  const endTs = config.end_ts;
+  const interval = String(config.interval ?? "");
+  if (typeof startTs !== "number" || typeof endTs !== "number") return null;
+  const ms = INTERVAL_MS[interval];
+  if (!ms || endTs <= startTs) return null;
+  return Math.floor((endTs - startTs) / ms);
+}
+
 function extractBacktestConfig(config: Record<string, unknown>) {
   return {
     symbol: String(config.symbol ?? "-"),
@@ -138,6 +157,11 @@ export function JobConfigSummary({
           <ConfigEntry label={t.jobConfig.pyramid} value={`${t.jobConfig.max} ${c.maxPyramidEntries}`} />
         ) : null}
         <ConfigEntry label={t.jobConfig.period} value={`${c.startDate} ~ ${c.endDate}`} />
+        {(() => {
+          const count = estimateCandleCount(config);
+          if (count == null || count <= 0) return null;
+          return <ConfigEntry label={t.jobConfig.candles} value={`~${count.toLocaleString()}`} />;
+        })()}
       </div>
     </div>
   );

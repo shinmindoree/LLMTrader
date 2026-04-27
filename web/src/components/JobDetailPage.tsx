@@ -1,20 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
-import { getJob, listTrades, stopJob } from "@/lib/api";
+import { getJob, listStrategies, listTrades, stopJob } from "@/lib/api";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { Job, JobStatus, JobType, Trade } from "@/lib/types";
+import type { Job, JobStatus, JobType, StrategyInfo, Trade } from "@/lib/types";
 import { jobDetailPath } from "@/lib/routes";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { TradeAnalysis } from "@/components/TradeAnalysis";
 import { JobProgressGauge } from "@/components/JobProgressGauge";
 import { JobConfigSummary } from "@/components/JobConfigSummary";
+import { FormModal } from "@/components/FormModal";
+import { BacktestForm, type BacktestInitialConfig } from "@/app/backtest/new/BacktestForm";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -43,14 +45,50 @@ function strategyNameFromPath(path: string): string {
   return base.replace(/\.[^.]+$/, "");
 }
 
+function formatDateFromTs(ms: number): string {
+  const d = new Date(ms);
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function buildInitialConfig(job: Job): BacktestInitialConfig {
+  const c = job.config;
+  const slPct = Number(c.stop_loss_pct ?? 0);
+  return {
+    strategyPath: job.strategy_path,
+    symbol: String(c.symbol ?? "BTCUSDT"),
+    interval: String(c.interval ?? "1h"),
+    leverage: Number(c.leverage ?? 1),
+    initialBalance: Number(c.initial_balance ?? 1000),
+    commission: Number(c.commission ?? 0.0004),
+    stopLossPct: slPct > 0 ? slPct : 0.05,
+    stopLossEnabled: slPct > 0,
+    maxPyramidEntries: Number(c.max_pyramid_entries ?? 0),
+    startDate: typeof c.start_ts === "number" ? formatDateFromTs(c.start_ts) : undefined,
+    endDate: typeof c.end_ts === "number" ? formatDateFromTs(c.end_ts) : undefined,
+    strategyParams: typeof c.strategy_params === "object" && c.strategy_params != null
+      ? (c.strategy_params as Record<string, unknown>)
+      : undefined,
+  };
+}
+
 export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
   const { t } = useI18n();
+  const router = useRouter();
   const isVisible = usePageVisibility();
   const params = useParams<{ jobId?: string | string[] }>();
   const raw = params?.jobId;
   const jobId = Array.isArray(raw) ? raw[0] : raw;
   const validJobId = typeof jobId === "string" && isUuid(jobId);
   const [error, setError] = useState<string | null>(null);
+  const [rerunOpen, setRerunOpen] = useState(false);
+
+  const { data: strategies = [] } = useSWR<StrategyInfo[]>(
+    "strategies",
+    () => listStrategies(),
+  );
 
   const jobFinished = (j: Job | null | undefined) =>
     j != null && FINISHED_STATUSES.has(j.status);
@@ -159,13 +197,23 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
           ) : null}
           {job ? <JobConfigSummary type={job.type} config={job.config} /> : null}
         </div>
-        <button
-          className="rounded border border-[#ef5350] bg-[#ef5350] px-4 py-2 text-sm text-white hover:bg-[#d32f2f] hover:border-[#d32f2f] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          onClick={onStop}
-          disabled={!validJobId || !job || (job.status !== "RUNNING" && job.status !== "PENDING")}
-        >
-          {t.common.stop}
-        </button>
+        <div className="flex gap-2">
+          {job?.type === "BACKTEST" && finished ? (
+            <button
+              className="rounded border border-[#2962ff] bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] hover:border-[#1e53d5] transition-colors"
+              onClick={() => setRerunOpen(true)}
+            >
+              {t.backtest.reRunBacktest}
+            </button>
+          ) : null}
+          <button
+            className="rounded border border-[#ef5350] bg-[#ef5350] px-4 py-2 text-sm text-white hover:bg-[#d32f2f] hover:border-[#d32f2f] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            onClick={onStop}
+            disabled={!validJobId || !job || (job.status !== "RUNNING" && job.status !== "PENDING")}
+          >
+            {t.common.stop}
+          </button>
+        </div>
       </div>
 
       {job && !finished ? (
@@ -203,6 +251,24 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       ) : null}
 
       {job ? <TradeAnalysis job={job} liveTrades={trades} /> : null}
+
+      {job?.type === "BACKTEST" && finished ? (
+        <FormModal
+          open={rerunOpen}
+          onClose={() => setRerunOpen(false)}
+          title={t.backtest.reRunBacktest}
+        >
+          <BacktestForm
+            strategies={strategies}
+            initialConfig={buildInitialConfig(job)}
+            onCreated={(newJob) => {
+              setRerunOpen(false);
+              router.push(`/backtest/jobs/${newJob.job_id}`);
+            }}
+            onClose={() => setRerunOpen(false)}
+          />
+        </FormModal>
+      ) : null}
     </main>
   );
 }

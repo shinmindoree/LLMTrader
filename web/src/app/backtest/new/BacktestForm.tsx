@@ -58,40 +58,78 @@ function parseDateInputValue(value: string): { year: number; month: number; day:
   return { year, month, day };
 }
 
+const INTERVAL_MS: Record<string, number> = {
+  "1m": 60_000,
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+  "1d": 24 * 60 * 60_000,
+};
+
+function estimateCandleCount(startDate: string, endDate: string, interval: string): number | null {
+  const startParts = parseDateInputValue(startDate);
+  const endParts = parseDateInputValue(endDate);
+  if (!startParts || !endParts) return null;
+  const startMs = new Date(startParts.year, startParts.month - 1, startParts.day, 0, 0, 0, 0).getTime();
+  const endMs = new Date(endParts.year, endParts.month - 1, endParts.day, 23, 59, 59, 999).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || startMs > endMs) return null;
+  const intervalMs = INTERVAL_MS[interval];
+  if (!intervalMs) return null;
+  return Math.floor((endMs - startMs + 1) / intervalMs);
+}
+
 function formatPolicyMessages(title: string, items: string[]): string {
   if (items.length === 0) return title;
   return `${title}\n${items.map((item, idx) => `${idx + 1}. ${item}`).join("\n")}`;
 }
+
+export type BacktestInitialConfig = {
+  strategyPath?: string;
+  symbol?: string;
+  interval?: string;
+  leverage?: number;
+  initialBalance?: number;
+  commission?: number;
+  stopLossPct?: number;
+  stopLossEnabled?: boolean;
+  maxPyramidEntries?: number;
+  startDate?: string;
+  endDate?: string;
+  strategyParams?: Record<string, unknown>;
+};
 
 export function BacktestForm({
   strategies,
   onCreated,
   onSubmittingChange,
   onClose,
+  initialConfig,
 }: {
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
   onSubmittingChange?: (submitting: boolean) => void;
   onClose?: () => void;
+  initialConfig?: BacktestInitialConfig;
 }) {
   const defaults = loadExecutionDefaults();
   const { t } = useI18n();
-  const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
-  const [symbol, setSymbol] = useState(defaults.symbol);
-  const [interval, setInterval] = useState(defaults.interval);
-  const [leverage, setLeverage] = useState<number | string>(1);
-  const [initialBalance, setInitialBalance] = useState<number | string>(1000);
-  const [commission, setCommission] = useState<number | string>(0.0004);
-  const [stopLossPct, setStopLossPct] = useState<number | string>(0.05);
-  const [stopLossEnabled, setStopLossEnabled] = useState(true);
-  const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(0);
+  const [strategyPath, setStrategyPath] = useState(initialConfig?.strategyPath ?? strategies[0]?.path ?? "");
+  const [symbol, setSymbol] = useState(initialConfig?.symbol ?? defaults.symbol);
+  const [interval, setInterval] = useState(initialConfig?.interval ?? defaults.interval);
+  const [leverage, setLeverage] = useState<number | string>(initialConfig?.leverage ?? 1);
+  const [initialBalance, setInitialBalance] = useState<number | string>(initialConfig?.initialBalance ?? 1000);
+  const [commission, setCommission] = useState<number | string>(initialConfig?.commission ?? 0.0004);
+  const [stopLossPct, setStopLossPct] = useState<number | string>(initialConfig?.stopLossPct ?? 0.05);
+  const [stopLossEnabled, setStopLossEnabled] = useState(initialConfig?.stopLossEnabled ?? true);
+  const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(initialConfig?.maxPyramidEntries ?? 0);
   const now = new Date();
-  const [startDate, setStartDate] = useState(() => formatDateInputValue(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
-  const [endDate, setEndDate] = useState(() => formatDateInputValue(now));
+  const [startDate, setStartDate] = useState(() => initialConfig?.startDate ?? formatDateInputValue(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
+  const [endDate, setEndDate] = useState(() => initialConfig?.endDate ?? formatDateInputValue(now));
+  const [strategyParams, setStrategyParams] = useState<Record<string, unknown>>(initialConfig?.strategyParams ?? {});
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
-  const [strategyParams, setStrategyParams] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -188,11 +226,20 @@ export function BacktestForm({
           {error}
         </p>
       ) : null}
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{startDate} → {endDate}</span>
+        {(() => {
+          const count = estimateCandleCount(startDate, endDate, interval);
+          if (count == null || count <= 0) return null;
+          return (
+            <span className="rounded bg-[#2962ff]/15 px-2 py-1 text-xs font-medium text-[#2962ff]">
+              ~{count.toLocaleString()} {t.jobConfig.candles}
+            </span>
+          );
+        })()}
       </div>
       <p className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-xs text-[#868993]">
         {t.form.formNotice}

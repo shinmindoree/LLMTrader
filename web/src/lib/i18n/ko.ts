@@ -305,6 +305,7 @@ const ko: TranslationKeys = {
     onlyFinishedDelete: "완료된 실행만 삭제할 수 있습니다.",
     runDeleted: "실행이 삭제되었습니다.",
     startBacktest: "백테스트 시작",
+    reRunBacktest: "설정 변경 후 재실행",
   },
   live: {
     runStarted: "라이브 트레이딩이 시작되었습니다.",
