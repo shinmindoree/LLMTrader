@@ -622,6 +622,7 @@ const ko: TranslationKeys = {
     phaseGenerating: "코드 생성 중...",
     phaseVerifying: "코드 검증 중...",
     phaseRepairing: "코드 자동 수정 중 ({attempt}/{max})...",
+    confirmPlanGenerate: "이 설계로 코드 생성 진행",
     summaryGenerating: "전략 요약 작성 중...",
     modificationSummaryGenerating: "변경 사항 요약 중...",
     workspaceTabParams: "파라미터",

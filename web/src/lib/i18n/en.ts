@@ -619,6 +619,7 @@ const en = {
     phaseGenerating: "Generating code...",
     phaseVerifying: "Verifying code...",
     phaseRepairing: "Auto-fixing code ({attempt}/{max})...",
+    confirmPlanGenerate: "Generate code with this plan",
     summaryGenerating: "Writing strategy summary...",
     modificationSummaryGenerating: "Summarizing changes...",
     workspaceTabParams: "Parameters",

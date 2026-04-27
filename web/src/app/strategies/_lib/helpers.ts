@@ -20,6 +20,7 @@ export type ChatMessage = {
   textOnly?: boolean;
   status?: "thinking" | "typing" | "streaming" | null;
   statusText?: string | null;
+  planSpec?: Record<string, unknown> | null;
 };
 
 export type ChatSessionRecord = {

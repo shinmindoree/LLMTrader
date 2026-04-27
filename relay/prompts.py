@@ -86,7 +86,12 @@ When web search is available, use it to look up current market conditions, recen
 Output a JSON object. Always include these three fields first:
 - is_trading_related: boolean — true if the request is about creating, modifying, or discussing a trading/investing strategy. false for anything unrelated (casual chat, weather, jokes, coding help unrelated to trading, etc.)
 - rejection_message: string — if is_trading_related is false, write a brief, friendly Korean message explaining that this system is for trading strategy generation only and suggesting they describe a trading strategy. Empty string if is_trading_related is true.
-- intent: string — one of "modify" or "question". "modify" if the user wants to create a new strategy or change/improve an existing one and code generation is needed. "question" if the user is asking about the strategy, requesting explanation, or discussing without needing code changes.
+- intent: string — one of "modify", "analyze", or "question".
+  "modify" if the user EXPLICITLY asks to create a new strategy, generate code, or apply specific changes to existing code (e.g., '생성해줘', '만들어줘', '코드 수정해줘', '적용해줘', 'generate', 'create', 'apply changes').
+  "analyze" if the user asks about improvements, weaknesses, strengths, analysis, evaluation, or suggestions for an existing strategy WITHOUT explicitly requesting code generation (e.g., '개선점 찾아줘', '분석해줘', '약점이 뭐야', '어떻게 개선할 수 있을까', '지지/저항 추가하면 어떨까').
+  "question" if the user is asking a general question about trading, indicators, or concepts without referencing a specific strategy modification.
+
+If is_trading_related is true AND intent is "analyze", output ONLY the three base fields (is_trading_related, rejection_message, intent). Do NOT produce a DSL spec — the system will route this to the chat/analysis path.
 
 If is_trading_related is true AND intent is "modify", produce a DSL-compatible spec:
 - strategy_name: PascalCase class name ending in "Strategy" (e.g. "RSIOversoldBounceStrategy")
@@ -150,9 +155,13 @@ def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         "1. Analyze the key metrics and identify strengths and weaknesses\n"
         "2. Explain why the strategy may be underperforming (if applicable)\n"
         "3. Suggest specific parameter changes or logic improvements with rationale\n"
-        "4. If the user asks for improvement, generate the full improved strategy code\n"
-        "5. Focus on actionable advice: concrete numbers for parameter changes, specific conditions to add/modify\n"
-        "Respond in the same language as the user's message."
+        "4. Focus on actionable advice: concrete numbers for parameter changes, specific conditions to add/modify\n"
+        "Respond in the same language as the user's message.\n\n"
+        "IMPORTANT: Do NOT generate full strategy code unless the user EXPLICITLY asks for it "
+        "(e.g., '코드 생성해줘', '수정해줘', '적용해줘', 'generate code', 'apply changes'). "
+        "Instead, provide analysis, explanations, and suggestions as text only. "
+        "When suggesting improvements, describe the changes in natural language with concrete parameter values "
+        "and logic descriptions, but do NOT produce a full Python code block unless directly requested."
     )
     if code and code.strip():
         # Extract on_bar method body for compactness; fall back to full code

@@ -433,6 +433,7 @@ export type GenerateStreamCallbacks = {
   onToken: (token: string) => void;
   onPhase?: (phase: string, detail?: { progress?: number; attempt?: number; max_attempts?: number }) => void;
   onIntent?: (intent: string) => void;
+  onPlanPreview?: (preview: string, planSpec: Record<string, unknown>) => void;
   onDone: (payload: {
     code?: string;
     summary?: string | null;
@@ -449,6 +450,7 @@ export async function generateStrategyStream(
   callbacks: GenerateStreamCallbacks,
   strategyName?: string,
   messages?: { role: string; content: string }[],
+  confirmedPlan?: Record<string, unknown>,
 ): Promise<void> {
   const FIRST_EVENT_TIMEOUT_MS = 180_000;
   const EVENT_GAP_TIMEOUT_MS = 300_000;
@@ -459,6 +461,9 @@ export async function generateStrategyStream(
   };
   if (messages && messages.length > 0) {
     body.messages = messages;
+  }
+  if (confirmedPlan) {
+    body.confirmed_plan = confirmedPlan;
   }
   const chatUserId = getChatUserId();
   const headers = new Headers();
@@ -574,6 +579,11 @@ export async function generateStrategyStream(
           }
           if (typeof data.intent === "string" && callbacks.onIntent) {
             callbacks.onIntent(data.intent);
+            return;
+          }
+          if (typeof data.plan_preview === "string" && callbacks.onPlanPreview) {
+            const planSpec = (data.plan_spec as Record<string, unknown>) ?? {};
+            callbacks.onPlanPreview(data.plan_preview, planSpec);
             return;
           }
           if (typeof data.token === "string") {

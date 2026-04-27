@@ -571,9 +571,9 @@ export default function StrategiesPage() {
             updateStreamingSession(phaseUpdate);
           },
           onIntent(intent) {
-            if (intent === "question") {
+            if (intent === "question" || intent === "analyze") {
               intentRouted = true;
-              // Fall back to chat stream for question-type messages
+              // Fall back to chat stream for question/analyze-type messages
               const chatMessagesForApi = toApiMessages(nextMessages);
               void strategyChatStream(
                 activeCode || "",
@@ -616,6 +616,28 @@ export default function StrategiesPage() {
                 },
               );
             }
+          },
+          onPlanPreview(preview, planSpec) {
+            intentRouted = true;
+            const planPreviewUpdate = (prev: ChatMessage[]) => {
+              const last = prev[prev.length - 1];
+              if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+              return [
+                ...prev.slice(0, -1),
+                {
+                  ...last,
+                  content: preview,
+                  textOnly: true,
+                  planSpec,
+                  status: null as ChatMessage["status"],
+                  statusText: null as ChatMessage["statusText"],
+                },
+              ];
+            };
+            setChatMessages(planPreviewUpdate);
+            updateStreamingSession(planPreviewUpdate);
+            setIsSending(false);
+            streamingSessionIdRef.current = null;
           },
           onToken(token) {
             const tokenUpdate = (prev: ChatMessage[]) => {
@@ -838,6 +860,157 @@ export default function StrategiesPage() {
     setPrompt("");
     await submitPrompt(trimmed);
   };
+
+  const handleConfirmPlan = useCallback(
+    async (messageId: string, planSpec: Record<string, unknown>) => {
+      if (isSending) return;
+      setChatError(null);
+      setIsSending(true);
+      streamingSessionIdRef.current = activeSessionId;
+
+      // Clear planSpec from the preview message (disables the button)
+      const clearPlan = (prev: ChatMessage[]) =>
+        prev.map((m) =>
+          m.id === messageId ? { ...m, planSpec: null } : m,
+        );
+      setChatMessages(clearPlan);
+
+      const assistantId = createId();
+      const assistantMessage: ChatMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        textOnly: false,
+        status: "streaming",
+        statusText: t.strategy.phaseGenerating,
+      };
+
+      const addMsg = (prev: ChatMessage[]) => [...prev, assistantMessage];
+      setChatMessages(addMsg);
+
+      const updateStreamingSession = (updater: (msgs: ChatMessage[]) => ChatMessage[]) => {
+        const targetId = streamingSessionIdRef.current;
+        if (!targetId) return;
+        setChatSessions((prev) =>
+          prev.map((s) => {
+            if (s.id !== targetId) return s;
+            return { ...s, messages: updater(s.messages) };
+          }),
+        );
+      };
+      updateStreamingSession(addMsg);
+
+      // Build the messages from the current chat for context
+      const messagesToSend = buildMessagesForGeneration(
+        chatMessages,
+        workspaceCode.trim() || null,
+        t.strategy.previousCodeContext,
+      );
+
+      try {
+        const userPromptText = chatMessages
+          .filter((m) => m.role === "user")
+          .map((m) => m.content)
+          .join("\n");
+
+        await generateStrategyStream(
+          userPromptText,
+          {
+            onPhase(phase, detail) {
+              const phaseText =
+                phase === "generating" && detail?.progress
+                  ? `${t.strategy.phaseGenerating.replace("...", "")} (${detail.progress}%)...`
+                  : phase === "verifying"
+                    ? t.strategy.phaseVerifying
+                    : phase === "repairing"
+                      ? t.strategy.phaseRepairing
+                          .replace("{attempt}", String(detail?.attempt ?? 1))
+                          .replace("{max}", String(detail?.max_attempts ?? 3))
+                      : t.strategy.phaseGenerating;
+              const phaseUpdate = (prev: ChatMessage[]) => {
+                const last = prev[prev.length - 1];
+                if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+                const updates: Partial<ChatMessage> = { status: "streaming" as const, statusText: phaseText };
+                if (phase === "generating") updates.textOnly = false;
+                return [...prev.slice(0, -1), { ...last, ...updates }];
+              };
+              setChatMessages(phaseUpdate);
+              updateStreamingSession(phaseUpdate);
+            },
+            onToken(token) {
+              const tokenUpdate = (prev: ChatMessage[]) => {
+                const last = prev[prev.length - 1];
+                if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+                return [
+                  ...prev.slice(0, -1),
+                  { ...last, content: last.content + token, status: "streaming" as const },
+                ];
+              };
+              setChatMessages(tokenUpdate);
+              updateStreamingSession(tokenUpdate);
+            },
+            onDone(payload) {
+              if (payload.error) {
+                setChatError(payload.error);
+                const errorUpdate = (prev: ChatMessage[]) =>
+                  prev.filter((m) => m.id !== assistantId);
+                setChatMessages(errorUpdate);
+                updateStreamingSession(errorUpdate);
+              } else {
+                const resolvedCode = payload.code ?? "";
+                const resolvedSummary = payload.summary ?? null;
+                const resolvedIsPythonCode = looksLikePythonCode(resolvedCode);
+                const doneUpdate = (prev: ChatMessage[]) => {
+                  const last = prev[prev.length - 1];
+                  if (last?.role !== "assistant" || last.id !== assistantId) return prev;
+                  return [
+                    ...prev.slice(0, -1),
+                    {
+                      ...last,
+                      content: resolvedCode || last.content,
+                      summary: resolvedSummary,
+                      backtest_ok: payload.backtest_ok ?? false,
+                      repaired: payload.repaired ?? false,
+                      repair_attempts: payload.repair_attempts ?? 0,
+                      textOnly: !resolvedIsPythonCode,
+                      status: null as ChatMessage["status"],
+                      statusText: null as ChatMessage["statusText"],
+                    },
+                  ];
+                };
+                setChatMessages(doneUpdate);
+                updateStreamingSession(doneUpdate);
+                if (resolvedCode && resolvedIsPythonCode) {
+                  setWorkspaceCode(resolvedCode);
+                  setWorkspaceSourceMessageId(assistantId);
+                  setWorkspaceSummary(resolvedSummary);
+                  setWorkspaceDirty(false);
+                  setInitialGeneratedCode((prev) => prev ?? resolvedCode ?? null);
+                }
+                listStrategies()
+                  .then(setItems)
+                  .catch((e) => setError(String(e)));
+              }
+              setIsSending(false);
+              streamingSessionIdRef.current = null;
+            },
+          },
+          undefined,
+          messagesToSend,
+          planSpec,
+        );
+      } catch (e) {
+        setChatError(String(e));
+        const removeMsg = (prev: ChatMessage[]) => prev.filter((m) => m.id !== assistantId);
+        setChatMessages(removeMsg);
+        updateStreamingSession(removeMsg);
+        setIsSending(false);
+        streamingSessionIdRef.current = null;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chatMessages, workspaceCode, workspaceSummary, isSending, activeSessionId, t],
+  );
 
   const handleWorkspaceChange = (nextCode: string) => {
     setWorkspaceCode(nextCode);
@@ -1723,7 +1896,19 @@ export default function StrategiesPage() {
                           <div className="min-w-0 flex-1 space-y-4">
                             {message.textOnly ? (
                               message.content ? (
-                                <RichTextContent content={message.content} />
+                                <>
+                                  <RichTextContent content={message.content} />
+                                  {message.planSpec ? (
+                                    <button
+                                      type="button"
+                                      className="mt-3 rounded-full border border-[#2962ff]/40 bg-[#1b2330] px-5 py-2.5 text-sm font-medium text-[#8fa8ff] transition hover:border-[#2962ff] hover:bg-[#1f2a3d] hover:text-[#afc4ff] disabled:cursor-not-allowed disabled:opacity-50"
+                                      disabled={isSending}
+                                      onClick={() => handleConfirmPlan(message.id, message.planSpec!)}
+                                    >
+                                      {t.strategy.confirmPlanGenerate}
+                                    </button>
+                                  ) : null}
+                                </>
                               ) : shouldShowPending ? (
                                 <PendingReply />
                               ) : null

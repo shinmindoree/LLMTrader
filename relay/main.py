@@ -49,6 +49,7 @@ class ChatMessage(BaseModel):
 class StrategyRequest(BaseModel):
     user_prompt: str
     messages: list[ChatMessage] | None = None
+    confirmed_plan: dict[str, Any] | None = None  # Pre-confirmed plan spec to skip planner
 
 
 class StrategyResponse(BaseModel):
@@ -457,6 +458,61 @@ def _raise_llm_http_error(endpoint: str, exc: Exception) -> None:
 
 
 _MAX_REPAIR_ATTEMPTS = 3
+
+
+def _build_plan_preview_text(plan_spec: dict[str, Any]) -> str:
+    """Build a human-readable Korean summary from a planner spec."""
+    lines: list[str] = []
+    name = plan_spec.get("strategy_name", "")
+    desc = plan_spec.get("description", "")
+    if name:
+        lines.append(f"**전략명**: {name}")
+    if desc:
+        lines.append(f"**설명**: {desc}")
+    direction = plan_spec.get("direction", "")
+    if direction:
+        direction_map = {"long_only": "롱 전용", "short_only": "숏 전용", "long_short": "양방향"}
+        lines.append(f"**방향**: {direction_map.get(direction, direction)}")
+    symbol = plan_spec.get("symbol", "")
+    tf = plan_spec.get("timeframe", "")
+    if symbol or tf:
+        lines.append(f"**심볼/타임프레임**: {symbol or '?'} / {tf or '?'}")
+    indicators = plan_spec.get("indicators", [])
+    if indicators:
+        ind_strs = []
+        for ind in indicators:
+            ind_name = ind.get("name", "?")
+            params = ind.get("params", {})
+            param_str = ", ".join(f"{k}={v}" for k, v in params.items()) if params else ""
+            ind_strs.append(f"{ind_name}({param_str})" if param_str else ind_name)
+        lines.append(f"**지표**: {', '.join(ind_strs)}")
+    entry_long = plan_spec.get("entry_long")
+    if entry_long and isinstance(entry_long, dict):
+        lines.append(f"**롱 진입**: {entry_long.get('reason_template', entry_long.get('condition_expr', ''))}")
+    exit_long = plan_spec.get("exit_long")
+    if exit_long and isinstance(exit_long, dict):
+        lines.append(f"**롱 청산**: {exit_long.get('reason_template', exit_long.get('condition_expr', ''))}")
+    entry_short = plan_spec.get("entry_short")
+    if entry_short and isinstance(entry_short, dict):
+        lines.append(f"**숏 진입**: {entry_short.get('reason_template', entry_short.get('condition_expr', ''))}")
+    exit_short = plan_spec.get("exit_short")
+    if exit_short and isinstance(exit_short, dict):
+        lines.append(f"**숏 청산**: {exit_short.get('reason_template', exit_short.get('condition_expr', ''))}")
+    risk = plan_spec.get("risk", {})
+    if isinstance(risk, dict):
+        sl = risk.get("stop_loss_pct")
+        tp = risk.get("take_profit_pct")
+        risk_parts = []
+        if sl is not None:
+            risk_parts.append(f"손절 {sl}%")
+        if tp is not None:
+            risk_parts.append(f"익절 {tp}%")
+        if risk_parts:
+            lines.append(f"**리스크**: {', '.join(risk_parts)}")
+    custom = plan_spec.get("custom_indicator")
+    if custom:
+        lines.append(f"**커스텀 지표**: {custom}")
+    return "\n".join(lines) if lines else "전략 스펙이 생성되었습니다."
 
 
 def _extract_python_code(content: str) -> str:
@@ -1019,39 +1075,42 @@ async def _generate_stream_body(body: StrategyRequest):
     # Phase 1: Planning — Planner agent analyzes requirements and produces a structured spec
     yield f"data: {json.dumps({'phase': 'planning'})}\n\n"
 
-    plan_spec: dict[str, Any] | None = None
-    try:
-        planner_input = prompt_text
-        if messages:
-            planner_parts = [f"[{m.role}]: {m.content}" for m in messages if m.content]
-            planner_input = "\n".join(planner_parts)
-        # Responses API requires the word "json" in user input for json_object format
-        planner_input = f"Analyze the following trading strategy request and respond in JSON format.\n\n{planner_input}"
+    plan_spec: dict[str, Any] | None = body.confirmed_plan
+    plan_confirmed = plan_spec is not None
 
-        # Run planner with heartbeat to keep SSE connection alive
-        import asyncio as _asyncio
+    if not plan_confirmed:
+        try:
+            planner_input = prompt_text
+            if messages:
+                planner_parts = [f"[{m.role}]: {m.content}" for m in messages if m.content]
+                planner_input = "\n".join(planner_parts)
+            # Responses API requires the word "json" in user input for json_object format
+            planner_input = f"Analyze the following trading strategy request and respond in JSON format.\n\n{planner_input}"
 
-        async def _planner_task():
-            return chat_completion(
-                config,
-                system_content=build_planner_system_prompt(),
-                user_content=planner_input,
-                model=config.resolved_planner_model,
-                text_format={"type": "json_object"},
-                enable_web_search=config.enable_web_search,
-            )
+            # Run planner with heartbeat to keep SSE connection alive
+            import asyncio as _asyncio
 
-        planner_future = _asyncio.ensure_future(_planner_task())
-        while not planner_future.done():
-            await _asyncio.sleep(10)
-            if not planner_future.done():
-                yield f"data: {json.dumps({'heartbeat': True})}\n\n"
-        plan_content, _ = planner_future.result()
-        plan_spec = _extract_json_object(plan_content)
-        if plan_spec:
-            logger.info("Planner produced spec: strategy_name=%s", plan_spec.get("strategy_name", "?"))
-    except Exception:
-        logger.warning("Planner agent failed, proceeding with direct generation", exc_info=True)
+            async def _planner_task():
+                return chat_completion(
+                    config,
+                    system_content=build_planner_system_prompt(),
+                    user_content=planner_input,
+                    model=config.resolved_planner_model,
+                    text_format={"type": "json_object"},
+                    enable_web_search=config.enable_web_search,
+                )
+
+            planner_future = _asyncio.ensure_future(_planner_task())
+            while not planner_future.done():
+                await _asyncio.sleep(10)
+                if not planner_future.done():
+                    yield f"data: {json.dumps({'heartbeat': True})}\n\n"
+            plan_content, _ = planner_future.result()
+            plan_spec = _extract_json_object(plan_content)
+            if plan_spec:
+                logger.info("Planner produced spec: strategy_name=%s", plan_spec.get("strategy_name", "?"))
+        except Exception:
+            logger.warning("Planner agent failed, proceeding with direct generation", exc_info=True)
 
     # Gatekeeping: if planner says request is NOT trading-related, reject early
     if plan_spec and plan_spec.get("is_trading_related") is False:
@@ -1059,10 +1118,19 @@ async def _generate_stream_body(body: StrategyRequest):
         yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': _NON_TRADING_REJECTION_MSG, 'repaired': False, 'repair_attempts': 0})}\n\n"
         return
 
-    # Intent routing: if planner classifies as "question", signal frontend to use chat instead
-    if plan_spec and plan_spec.get("intent") == "question":
-        logger.info("Planner classified request as question — routing to chat")
-        yield f"data: {json.dumps({'intent': 'question'})}\n\n"
+    # Intent routing: if planner classifies as "question" or "analyze", signal frontend to use chat instead
+    if plan_spec and plan_spec.get("intent") in ("question", "analyze"):
+        intent = plan_spec["intent"]
+        logger.info("Planner classified request as %s — routing to chat", intent)
+        yield f"data: {json.dumps({'intent': intent})}\n\n"
+        return
+
+    # Plan preview: if planner produced a "modify" plan and user hasn't confirmed yet,
+    # emit a preview and stop — frontend will re-invoke with confirmed_plan to proceed.
+    if plan_spec and plan_spec.get("intent") == "modify" and not plan_confirmed:
+        preview_text = _build_plan_preview_text(plan_spec)
+        logger.info("Emitting plan preview for user confirmation: %s", plan_spec.get("strategy_name", "?"))
+        yield f"data: {json.dumps({'plan_preview': preview_text, 'plan_spec': plan_spec})}\n\n"
         return
 
     # DSL fast path: if plan_spec is DSL-compatible, generate code deterministically
