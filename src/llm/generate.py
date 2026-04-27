@@ -1,4 +1,8 @@
-"""FastAPI app for LLM relay (Azure OpenAI proxy)."""
+"""Strategy code generation logic (planning, coding, verification, repair).
+
+Extracted from the former standalone relay server. Contains the core
+streaming generation pipeline and supporting helpers used by LLMClient.
+"""
 
 from __future__ import annotations
 
@@ -8,38 +12,27 @@ import logging
 import re
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from relay.auth import require_api_key
-from relay.azure_openai import chat_completion, chat_completion_messages, chat_completion_stream
-from relay.capability_registry import (
-    SUPPORTED_CONTEXT_METHODS,
-    SUPPORTED_DATA_SOURCES,
-    SUPPORTED_INDICATOR_SCOPES,
-    UNSUPPORTED_CAPABILITY_RULES,
+from llm.azure_openai import chat_completion, chat_completion_stream
+from llm.capability_registry import (
     build_development_requirements,
     capability_summary_lines,
     detect_unsupported_requirements,
 )
-from relay.config import get_config
-from relay.prompts import (
-    SUMMARY_SYSTEM_PROMPT,
-    TEST_SYSTEM_PROMPT,
-    build_analyst_system_prompt,
-    build_intake_system_prompt,
+from llm.config import get_config
+from llm.prompts import (
     build_planner_system_prompt,
     build_repair_system_prompt,
-    build_strategy_chat_system_prompt,
     build_system_prompt,
 )
-from relay.url_fetcher import enrich_messages_with_url_content
 
-
-app = FastAPI(title="LLMTrader Relay", version="0.1.0")
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Pydantic models shared with LLMClient
+# ---------------------------------------------------------------------------
 
 class ChatMessage(BaseModel):
     role: str
@@ -50,11 +43,6 @@ class StrategyRequest(BaseModel):
     user_prompt: str
     messages: list[ChatMessage] | None = None
     confirmed_plan: dict[str, Any] | None = None  # Pre-confirmed plan spec to skip planner
-
-
-class StrategyResponse(BaseModel):
-    code: str
-    model_used: str | None = None
 
 
 class IntakeResponse(BaseModel):
@@ -69,61 +57,9 @@ class IntakeResponse(BaseModel):
     development_requirements: list[str]
 
 
-class RepairRequest(BaseModel):
-    code: str
-    verification_error: str
-    user_prompt: str | None = None
-    messages: list[ChatMessage] | None = None
-
-
-class RepairResponse(BaseModel):
-    code: str
-    model_used: str | None = None
-
-
-class TestRequest(BaseModel):
-    input: str = "Hello"
-
-
-class TestResponse(BaseModel):
-    output: str
-
-
-class CapabilityResponse(BaseModel):
-    supported_data_sources: list[str]
-    supported_indicator_scopes: list[str]
-    supported_context_methods: list[str]
-    unsupported_categories: list[str]
-    summary_lines: list[str]
-
-
-class SummarizeRequest(BaseModel):
-    code: str
-
-
-class SummarizeResponse(BaseModel):
-    summary: str
-
-
-class AnalyzeRequest(BaseModel):
-    code: str
-    backtest_results: str
-    summary: str | None = None
-
-
-class AnalyzeResponse(BaseModel):
-    analysis: dict[str, Any]
-
-
-class StrategyChatRequest(BaseModel):
-    code: str
-    summary: str | None = None
-    messages: list[ChatMessage]
-
-
-class StrategyChatResponse(BaseModel):
-    content: str
-
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 _ALLOWED_INTENTS = {
     "OUT_OF_SCOPE",
@@ -160,13 +96,8 @@ _MODEL_REFUSAL_PATTERNS = [
     re.compile(r"as an AI,?\s*I (cannot|can't|am unable)", re.IGNORECASE),
 ]
 
+_MAX_REPAIR_ATTEMPTS = 3
 
-def _is_model_refusal(text: str) -> bool:
-    """Detect model-level safety refusal messages."""
-    stripped = text.strip()
-    if not stripped:
-        return False
-    return any(p.search(stripped) for p in _MODEL_REFUSAL_PATTERNS)
 _MISSING_FIELD_ORDER = ("symbol", "timeframe", "entry_logic", "exit_logic", "risk")
 _MISSING_FIELD_QUESTIONS = {
     "symbol": "어떤 심볼로 거래할까요? (예: BTCUSDT)",
@@ -184,60 +115,38 @@ _FIELD_TO_QUESTION_CATEGORY = {
 }
 _QUESTION_CATEGORY_KEYWORDS = {
     "symbol": (
-        "symbol",
-        "ticker",
-        "market",
-        "pair",
-        "심볼",
-        "종목",
-        "티커",
-        "거래쌍",
-        "자산",
+        "symbol", "ticker", "market", "pair",
+        "심볼", "종목", "티커", "거래쌍", "자산",
     ),
     "timeframe": (
-        "timeframe",
-        "interval",
-        "candle",
-        "timescale",
-        "타임프레임",
-        "캔들",
-        "캔들간격",
-        "봉",
-        "시간간격",
+        "timeframe", "interval", "candle", "timescale",
+        "타임프레임", "캔들", "캔들간격", "봉", "시간간격",
     ),
     "entry": (
-        "entry",
-        "enter",
-        "buycondition",
-        "진입",
-        "매수조건",
-        "롱조건",
-        "숏조건",
+        "entry", "enter", "buycondition",
+        "진입", "매수조건", "롱조건", "숏조건",
     ),
     "risk": (
-        "risk",
-        "position",
-        "size",
-        "leverage",
-        "drawdown",
-        "리스크",
-        "위험관리",
-        "수량",
-        "비중",
-        "레버리지",
-        "손실한도",
+        "risk", "position", "size", "leverage", "drawdown",
+        "리스크", "위험관리", "수량", "비중", "레버리지", "손실한도",
     ),
     "exit": (
-        "exit",
-        "close",
-        "takeprofit",
-        "stoploss",
-        "청산",
-        "익절",
-        "손절",
-        "종료",
+        "exit", "close", "takeprofit", "stoploss",
+        "청산", "익절", "손절", "종료",
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+def _is_model_refusal(text: str) -> bool:
+    """Detect model-level safety refusal messages."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return any(p.search(stripped) for p in _MODEL_REFUSAL_PATTERNS)
 
 
 def _extract_json_object(content: str) -> dict[str, Any] | None:
@@ -449,17 +358,6 @@ def _sanitize_intake_response(
     )
 
 
-def _raise_llm_http_error(endpoint: str, exc: Exception) -> None:
-    logger.exception("LLM call failed at %s: %s", endpoint, exc)
-    raise HTTPException(
-        status_code=502,
-        detail=f"Azure OpenAI call failed: {exc!s}",
-    ) from exc
-
-
-_MAX_REPAIR_ATTEMPTS = 3
-
-
 def _build_plan_preview_text(plan_spec: dict[str, Any]) -> str:
     """Build a human-readable Korean summary from a planner spec."""
     lines: list[str] = []
@@ -571,13 +469,11 @@ def _verify_strategy_code(code: str) -> str | None:
     if "is_new_bar" not in code:
         return "Missing bar-confirmation guard (is_new_bar check)."
 
-    # Compile check: catches NameError-prone patterns the AST parse misses
     try:
         compile(code, "<strategy>", "exec")
     except Exception as e:
         return f"Compilation error: {e}"
 
-    # Variable reference check: find on_bar and verify local names are reachable
     on_bar_error = _check_on_bar_variable_refs(tree)
     if on_bar_error:
         return on_bar_error
@@ -598,18 +494,15 @@ def _check_on_bar_variable_refs(tree: ast.Module) -> str | None:
 
 def _verify_on_bar_names(on_bar: ast.FunctionDef, tree: ast.Module) -> str | None:
     """Check that variable names read in on_bar are plausibly defined."""
-    # Collect all names assigned in on_bar (targets of assignments)
     assigned: set[str] = set()
     for node in ast.walk(on_bar):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             assigned.add(node.id)
         elif isinstance(node, ast.arg):
             assigned.add(node.arg)
-        # For loop targets
         elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
             assigned.add(node.target.id)
 
-    # Collect module-level names (imports, function defs, class defs, assignments)
     module_names: set[str] = set()
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.FunctionDef):
@@ -624,7 +517,6 @@ def _verify_on_bar_names(on_bar: ast.FunctionDef, tree: ast.Module) -> str | Non
             for alias in node.names:
                 module_names.add(alias.asname or alias.name.split(".")[-1])
 
-    # Built-in names we expect to be available
     builtins_available = {
         "True", "False", "None", "int", "float", "str", "bool", "list", "dict",
         "set", "tuple", "len", "range", "abs", "min", "max", "sum", "round",
@@ -634,7 +526,6 @@ def _verify_on_bar_names(on_bar: ast.FunctionDef, tree: ast.Module) -> str | Non
     }
     all_known = assigned | module_names | builtins_available
 
-    # Find Name nodes in Load context that aren't in known set
     for node in ast.walk(on_bar):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if node.id == "self":
@@ -652,398 +543,9 @@ def _user_prompt_text(prompt: str, messages: list[ChatMessage]) -> str:
     return ""
 
 
-@app.post("/test", response_model=TestResponse)
-async def test_llm(
-    body: TestRequest,
-    _: None = Depends(require_api_key),
-) -> TestResponse:
-    config = get_config()
-    if not config.is_azure_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Azure OpenAI not configured (missing env vars)",
-        )
-    try:
-        content, _ = chat_completion(
-            config,
-            system_content=TEST_SYSTEM_PROMPT,
-            user_content=(body.input or "").strip() or "Hello",
-        )
-    except Exception as e:
-        _raise_llm_http_error("/test", e)
-    return TestResponse(output=(content or "").strip())
-
-
-@app.get("/capabilities", response_model=CapabilityResponse)
-async def capabilities(
-    _: None = Depends(require_api_key),
-) -> CapabilityResponse:
-    return CapabilityResponse(
-        supported_data_sources=list(SUPPORTED_DATA_SOURCES),
-        supported_indicator_scopes=list(SUPPORTED_INDICATOR_SCOPES),
-        supported_context_methods=list(SUPPORTED_CONTEXT_METHODS),
-        unsupported_categories=[r.name for r in UNSUPPORTED_CAPABILITY_RULES],
-        summary_lines=capability_summary_lines(),
-    )
-
-
-@app.post("/strategy/chat", response_model=StrategyChatResponse)
-async def strategy_chat(
-    body: StrategyChatRequest,
-    _: None = Depends(require_api_key),
-) -> StrategyChatResponse:
-    code = (body.code or "").strip()
-    messages = body.messages or []
-    if not messages:
-        raise HTTPException(status_code=422, detail="messages must be non-empty")
-
-    config = get_config()
-    if not config.is_azure_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Azure OpenAI not configured (missing env vars)",
-        )
-
-    try:
-        system_content = build_strategy_chat_system_prompt(code, body.summary)
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
-        openai_messages = await enrich_messages_with_url_content(openai_messages)
-        content, _ = chat_completion_messages(
-            config,
-            system_content=system_content,
-            messages=openai_messages,
-            enable_web_search=config.enable_web_search,
-        )
-    except Exception as e:
-        _raise_llm_http_error("/strategy/chat", e)
-
-    if not content or not content.strip():
-        logger.warning("LLM returned blank content at /strategy/chat")
-        raise HTTPException(status_code=502, detail="Empty completion from model")
-
-    if _is_model_refusal(content):
-        logger.info("Model self-refusal detected in /strategy/chat")
-        return StrategyChatResponse(content=_NON_TRADING_REJECTION_MSG)
-
-    return StrategyChatResponse(content=content.strip())
-
-
-async def _strategy_chat_stream_body(body: StrategyChatRequest):
-    code = (body.code or "").strip()
-    messages = body.messages or []
-    if not messages:
-        yield f"data: {json.dumps({'error': 'messages must be non-empty'})}\n\n"
-        return
-
-    config = get_config()
-    if not config.is_azure_configured():
-        yield f"data: {json.dumps({'error': 'Azure OpenAI not configured'})}\n\n"
-        return
-
-    try:
-        system_content = build_strategy_chat_system_prompt(code, body.summary)
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
-        openai_messages = await enrich_messages_with_url_content(openai_messages)
-        acc: list[str] = []
-        async for token in chat_completion_stream(
-            config,
-            system_content=system_content,
-            messages=openai_messages,
-            enable_web_search=config.enable_web_search,
-        ):
-            acc.append(token)
-            yield f"data: {json.dumps({'token': token})}\n\n"
-        full_text = "".join(acc)
-        if _is_model_refusal(full_text):
-            logger.info("Model self-refusal detected in /strategy/chat/stream")
-            yield f"data: {json.dumps({'refusal_replace': _NON_TRADING_REJECTION_MSG})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
-    except Exception as e:
-        logger.exception("LLM stream failed at /strategy/chat/stream: %s", e)
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-
-@app.post("/strategy/chat/stream")
-async def strategy_chat_stream(
-    body: StrategyChatRequest,
-    _: None = Depends(require_api_key),
-):
-    return StreamingResponse(
-        _strategy_chat_stream_body(body),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/intake", response_model=IntakeResponse)
-async def intake(
-    body: StrategyRequest,
-    _: None = Depends(require_api_key),
-) -> IntakeResponse:
-    prompt = (body.user_prompt or "").strip()
-    messages = body.messages or []
-    if not messages and not prompt:
-        raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
-
-    config = get_config()
-    if not config.is_azure_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Azure OpenAI not configured (missing env vars)",
-        )
-
-    try:
-        system_content = build_intake_system_prompt()
-        if messages:
-            openai_messages = [{"role": m.role, "content": m.content} for m in messages]
-            content, _ = chat_completion_messages(
-                config,
-                system_content=system_content,
-                messages=openai_messages,
-            )
-        else:
-            content, _ = chat_completion(
-                config,
-                system_content=system_content,
-                user_content=prompt,
-            )
-    except Exception as e:
-        _raise_llm_http_error("/intake", e)
-
-    if not content or not content.strip():
-        logger.warning("LLM returned blank content at /intake")
-        raise HTTPException(status_code=502, detail="Empty completion from model")
-
-    payload = _extract_json_object(content) or {}
-    return _sanitize_intake_response(payload, prompt=prompt, messages=messages)
-
-
-@app.post("/repair", response_model=RepairResponse)
-async def repair(
-    body: RepairRequest,
-    _: None = Depends(require_api_key),
-) -> RepairResponse:
-    code = (body.code or "").strip()
-    verification_error = (body.verification_error or "").strip()
-    if not code:
-        raise HTTPException(status_code=422, detail="code must be non-empty")
-    if not verification_error:
-        raise HTTPException(status_code=422, detail="verification_error must be non-empty")
-
-    config = get_config()
-    if not config.is_azure_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Azure OpenAI not configured (missing env vars)",
-        )
-
-    prompt_parts = [
-        "Fix the strategy code based on the verification failure below.",
-        "",
-        f"Verification error:\n{verification_error}",
-    ]
-    if body.user_prompt and body.user_prompt.strip():
-        prompt_parts.extend(["", f"Original user request:\n{body.user_prompt.strip()}"])
-    if body.messages:
-        compact_msgs = [
-            {"role": m.role, "content": m.content}
-            for m in body.messages
-            if str(m.content or "").strip()
-        ]
-        if compact_msgs:
-            prompt_parts.extend(
-                [
-                    "",
-                    "Conversation context (JSON):",
-                    json.dumps(compact_msgs, ensure_ascii=False),
-                ]
-            )
-    prompt_parts.extend(["", "Current code:", code])
-    repair_user_content = "\n".join(prompt_parts)
-
-    try:
-        content, model_used = chat_completion(
-            config,
-            system_content=build_repair_system_prompt(),
-            user_content=repair_user_content,
-            model=config.resolved_reviewer_model,
-        )
-    except Exception as e:
-        _raise_llm_http_error("/repair", e)
-
-    if not content or not content.strip():
-        logger.warning("LLM returned blank content at /repair")
-        raise HTTPException(status_code=502, detail="Empty completion from model")
-
-    return RepairResponse(code=content.strip(), model_used=model_used)
-
-
-@app.post("/summarize", response_model=SummarizeResponse)
-async def summarize(
-    body: SummarizeRequest,
-    _: None = Depends(require_api_key),
-) -> SummarizeResponse:
-    code = (body.code or "").strip()
-    if not code:
-        raise HTTPException(status_code=422, detail="code must be non-empty")
-
-    config = get_config()
-    if not config.is_azure_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Azure OpenAI not configured (missing env vars)",
-        )
-
-    try:
-        content, _ = chat_completion(
-            config,
-            system_content=SUMMARY_SYSTEM_PROMPT,
-            user_content=code,
-        )
-    except Exception as e:
-        _raise_llm_http_error("/summarize", e)
-
-    if not content or not content.strip():
-        logger.warning("LLM returned blank content at /summarize")
-        raise HTTPException(status_code=502, detail="Empty completion from model")
-
-    return SummarizeResponse(summary=content.strip())
-
-
-@app.post("/strategy/analyze", response_model=AnalyzeResponse)
-async def analyze_strategy(
-    body: AnalyzeRequest,
-    _: None = Depends(require_api_key),
-) -> AnalyzeResponse:
-    """Analyze backtest results with a lightweight analyst model."""
-    code = (body.code or "").strip()
-    backtest_results = (body.backtest_results or "").strip()
-    if not code or not backtest_results:
-        raise HTTPException(status_code=422, detail="code and backtest_results must be non-empty")
-
-    config = get_config()
-    if not config.is_azure_configured():
-        raise HTTPException(status_code=503, detail="Azure OpenAI not configured")
-
-    user_content = (
-        f"Strategy code:\n```python\n{code}\n```\n\n"
-        f"Backtest results:\n{backtest_results}"
-    )
-    if body.summary:
-        user_content += f"\n\nStrategy summary:\n{body.summary}"
-
-    try:
-        content, _ = chat_completion(
-            config,
-            system_content=build_analyst_system_prompt(),
-            user_content=user_content,
-            model=config.resolved_analyst_model,
-            text_format={"type": "json_object"},
-        )
-    except Exception as e:
-        _raise_llm_http_error("/strategy/analyze", e)
-
-    if not content or not content.strip():
-        raise HTTPException(status_code=502, detail="Empty completion from model")
-
-    try:
-        analysis = json.loads(content.strip())
-    except json.JSONDecodeError:
-        analysis = {"raw_analysis": content.strip()}
-
-    return AnalyzeResponse(analysis=analysis)
-
-
-@app.post("/generate", response_model=StrategyResponse)
-async def generate(
-    body: StrategyRequest,
-    _: None = Depends(require_api_key),
-) -> StrategyResponse:
-    prompt = (body.user_prompt or "").strip()
-    messages = body.messages or []
-    if not messages and not prompt:
-        raise HTTPException(status_code=422, detail="user_prompt must be non-empty")
-
-    config = get_config()
-    if not config.is_azure_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Azure OpenAI not configured (missing env vars)",
-        )
-
-    prompt_text = _user_prompt_text(prompt, messages)
-
-    try:
-        system_content = build_system_prompt(user_prompt=prompt_text)
-        coder_model = config.resolved_coder_model
-        if messages:
-            openai_messages = [{"role": m.role, "content": m.content} for m in messages]
-            content, model_used = chat_completion_messages(
-                config,
-                system_content=system_content,
-                messages=openai_messages,
-                model=coder_model,
-            )
-        else:
-            content, model_used = chat_completion(
-                config,
-                system_content=system_content,
-                user_content=prompt,
-                model=coder_model,
-            )
-    except Exception as e:
-        _raise_llm_http_error("/generate", e)
-
-    if not content or not content.strip():
-        logger.warning("LLM returned blank content at /generate")
-        raise HTTPException(status_code=502, detail="Empty completion from model")
-
-    code = _sanitize_code_quotes(_extract_python_code(content))
-
-    reviewer_model = config.resolved_reviewer_model
-    for attempt in range(_MAX_REPAIR_ATTEMPTS):
-        error = _verify_strategy_code(code)
-        if not error:
-            break
-        logger.info(
-            "Strategy verification failed (attempt %d/%d): %s",
-            attempt + 1,
-            _MAX_REPAIR_ATTEMPTS,
-            error,
-        )
-        repair_parts = [
-            "Fix the strategy code based on the verification failure below.",
-            "",
-            f"Verification error:\n{error}",
-        ]
-        if prompt_text:
-            repair_parts.extend(["", f"Original user request:\n{prompt_text}"])
-        repair_parts.extend(["", "Current code:", code])
-        try:
-            repaired, model_used = chat_completion(
-                config,
-                system_content=build_repair_system_prompt(),
-                user_content="\n".join(repair_parts),
-                model=reviewer_model,
-            )
-            if repaired and repaired.strip():
-                candidate = _sanitize_code_quotes(_extract_python_code(repaired))
-                if candidate and ("class " in candidate or "def " in candidate):
-                    code = candidate
-                else:
-                    logger.warning("Repair attempt %d returned non-code output", attempt + 1)
-                    break
-        except Exception:
-            logger.exception("Repair attempt %d failed", attempt + 1)
-            break
-
-    # Post-process: inject OHLCV bindings if needed
-    from relay.strategy_postprocess import ensure_ohlcv_bindings
-
-    code = ensure_ohlcv_bindings(code)
-
-    return StrategyResponse(code=code, model_used=model_used)
-
+# ---------------------------------------------------------------------------
+# Main streaming generation pipeline
+# ---------------------------------------------------------------------------
 
 async def _generate_stream_body(body: StrategyRequest):
     prompt = (body.user_prompt or "").strip()
@@ -1059,7 +561,7 @@ async def _generate_stream_body(body: StrategyRequest):
     prompt_text = _user_prompt_text(prompt, messages)
 
     # Enrich prompt with URL content if URLs are present
-    from relay.url_fetcher import fetch_urls_from_text
+    from llm.url_fetcher import fetch_urls_from_text
 
     url_results = await fetch_urls_from_text(prompt_text)
     if url_results:
@@ -1084,10 +586,8 @@ async def _generate_stream_body(body: StrategyRequest):
             if messages:
                 planner_parts = [f"[{m.role}]: {m.content}" for m in messages if m.content]
                 planner_input = "\n".join(planner_parts)
-            # Responses API requires the word "json" in user input for json_object format
             planner_input = f"Analyze the following trading strategy request and respond in JSON format.\n\n{planner_input}"
 
-            # Run planner with heartbeat to keep SSE connection alive
             import asyncio as _asyncio
 
             async def _planner_task():
@@ -1149,7 +649,7 @@ async def _generate_stream_body(body: StrategyRequest):
     dsl_code: str | None = None
     if plan_spec and plan_spec.get("intent") == "modify":
         try:
-            from relay.strategy_dsl import generate_strategy_code, parse_planner_dsl
+            from llm.strategy_dsl import generate_strategy_code, parse_planner_dsl
 
             dsl = parse_planner_dsl(plan_spec)
             if dsl and not dsl.needs_llm_fallback():
@@ -1164,14 +664,11 @@ async def _generate_stream_body(body: StrategyRequest):
             dsl_code = None
 
     if dsl_code:
-        # Post-process: inject OHLCV bindings if needed
-        from relay.strategy_postprocess import ensure_ohlcv_bindings
+        from llm.strategy_postprocess import ensure_ohlcv_bindings
 
         dsl_code = ensure_ohlcv_bindings(dsl_code)
 
-        # Stream the DSL-generated code to the frontend
         yield f"data: {json.dumps({'phase': 'generating', 'progress': 0})}\n\n"
-        # Emit tokens in chunks to maintain streaming UX
         chunk_size = 80
         for i in range(0, len(dsl_code), chunk_size):
             chunk = dsl_code[i : i + chunk_size]
@@ -1222,7 +719,6 @@ async def _generate_stream_body(body: StrategyRequest):
 
         raw_code = "".join(code_acc)
 
-        # Detect model-level safety refusal (not a content filter, but built-in model safety)
         if _is_model_refusal(raw_code):
             logger.info("Model self-refusal detected in code generation stream")
             yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': _NON_TRADING_REJECTION_MSG, 'repaired': False, 'repair_attempts': 0})}\n\n"
@@ -1233,7 +729,7 @@ async def _generate_stream_body(body: StrategyRequest):
             yield f"data: {json.dumps({'error': 'Empty code from stream'})}\n\n"
             return
 
-        # Phase 3: Verifying — Reviewer agent checks the code
+        # Phase 3: Verifying
         yield f"data: {json.dumps({'phase': 'verifying'})}\n\n"
         verification_error = _verify_strategy_code(code)
 
@@ -1243,7 +739,6 @@ async def _generate_stream_body(body: StrategyRequest):
         for attempt in range(_MAX_REPAIR_ATTEMPTS):
             if verification_error is None:
                 break
-            # Phase 4: Repairing — Reviewer agent fixes the code
             repair_attempts = attempt + 1
             yield f"data: {json.dumps({'phase': 'repairing', 'attempt': repair_attempts, 'max_attempts': _MAX_REPAIR_ATTEMPTS})}\n\n"
 
@@ -1262,7 +757,6 @@ async def _generate_stream_body(body: StrategyRequest):
                 repair_parts.extend(["", f"Original user request:\n{prompt_text}"])
             repair_parts.extend(["", "Current code:", code])
             try:
-                # Run repair with heartbeat to keep SSE connection alive
                 import asyncio as _asyncio
 
                 async def _repair_task():
@@ -1281,7 +775,6 @@ async def _generate_stream_body(body: StrategyRequest):
                 repaired_content, _ = repair_future.result()
                 if repaired_content and repaired_content.strip():
                     candidate = _sanitize_code_quotes(_extract_python_code(repaired_content))
-                    # Only accept repair if it looks like Python code (has class/def)
                     if candidate and ("class " in candidate or "def " in candidate):
                         code = candidate
                         repaired = True
@@ -1293,24 +786,11 @@ async def _generate_stream_body(body: StrategyRequest):
                 break
             verification_error = _verify_strategy_code(code)
 
-        # Post-process: inject OHLCV bindings if needed
-        from relay.strategy_postprocess import ensure_ohlcv_bindings
+        from llm.strategy_postprocess import ensure_ohlcv_bindings
 
         code = ensure_ohlcv_bindings(code)
 
         yield f"data: {json.dumps({'done': True, 'code': code, 'repaired': repaired, 'repair_attempts': repair_attempts})}\n\n"
     except Exception as e:
-        logger.exception("LLM stream failed at /generate/stream: %s", e)
+        logger.exception("LLM stream failed at generate/stream: %s", e)
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-
-@app.post("/generate/stream")
-async def generate_stream(
-    body: StrategyRequest,
-    _: None = Depends(require_api_key),
-):
-    return StreamingResponse(
-        _generate_stream_body(body),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )

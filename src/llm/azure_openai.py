@@ -22,8 +22,8 @@ from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCreden
 from azure.identity.aio import get_bearer_token_provider as get_async_bearer_token_provider
 from openai import AsyncOpenAI, OpenAI
 
-from relay.config import RelayConfig
-from relay.token_budget import fit_messages
+from llm.config import RelayConfig
+from llm.token_budget import fit_messages
 
 logger = logging.getLogger(__name__)
 

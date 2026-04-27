@@ -59,7 +59,7 @@ from common.strategy_storage import get_strategy_storage
 from settings import get_settings
 from llm.client import LLMClient
 try:
-    from relay.capability_registry import (
+    from llm.capability_registry import (
         SUPPORTED_DATA_SOURCES as LOCAL_SUPPORTED_DATA_SOURCES,
         SUPPORTED_INDICATOR_SCOPES as LOCAL_SUPPORTED_INDICATOR_SCOPES,
         SUPPORTED_CONTEXT_METHODS as LOCAL_SUPPORTED_CONTEXT_METHODS,
@@ -1323,7 +1323,7 @@ def create_app() -> FastAPI:
                     )
                     yield f"data: {json.dumps(event)}\n\n"
                     return
-                # Forward phase events from relay to frontend
+                # Forward phase events from llm to frontend
                 if "phase" in event:
                     yield f"data: {json.dumps(event)}\n\n"
                 # Forward intent routing events (e.g. question) to frontend

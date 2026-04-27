@@ -1,7 +1,7 @@
-"""LLM 클라이언트 — relay 모듈 직접 호출 (HTTP hop 제거).
+"""LLM 클라이언트 — llm 모듈 직접 호출 (HTTP hop 제거).
 
 이전: API → httpx → Relay HTTP → Azure OpenAI (4-hop SSE)
-현재: API → relay 모듈 직접 호출 → Azure OpenAI (직접 호출)
+현재: API → llm 모듈 직접 호출 → Azure OpenAI (직접 호출)
 """
 
 from __future__ import annotations
@@ -12,16 +12,16 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
-from relay.azure_openai import chat_completion, chat_completion_messages, chat_completion_stream
-from relay.capability_registry import (
+from llm.azure_openai import chat_completion, chat_completion_messages, chat_completion_stream
+from llm.capability_registry import (
     SUPPORTED_CONTEXT_METHODS,
     SUPPORTED_DATA_SOURCES,
     SUPPORTED_INDICATOR_SCOPES,
     UNSUPPORTED_CAPABILITY_RULES,
     capability_summary_lines,
 )
-from relay.config import RelayConfig, get_config
-from relay.prompts import (
+from llm.config import RelayConfig, get_config
+from llm.prompts import (
     SUMMARY_SYSTEM_PROMPT,
     TEST_SYSTEM_PROMPT,
     build_analyst_system_prompt,
@@ -29,7 +29,7 @@ from relay.prompts import (
     build_repair_system_prompt,
     build_strategy_chat_system_prompt,
 )
-from relay.url_fetcher import enrich_messages_with_url_content
+from llm.url_fetcher import enrich_messages_with_url_content
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ class LLMClient:
 
             full_text = "".join(acc)
             # Check for model refusal
-            from relay.main import _is_model_refusal, _NON_TRADING_REJECTION_MSG
+            from llm.generate import _is_model_refusal, _NON_TRADING_REJECTION_MSG
 
             if _is_model_refusal(full_text):
                 yield {"refusal_replace": _NON_TRADING_REJECTION_MSG}
@@ -245,7 +245,7 @@ class LLMClient:
             if not content or not content.strip():
                 return None
 
-            from relay.main import _extract_json_object, _sanitize_intake_response, ChatMessage
+            from llm.generate import _extract_json_object, _sanitize_intake_response, ChatMessage
 
             payload = _extract_json_object(content) or {}
             chat_messages = (
@@ -325,7 +325,7 @@ class LLMClient:
         messages: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """전략 코드 생성 스트리밍 — relay _generate_stream_body 직접 호출."""
-        from relay.main import StrategyRequest, ChatMessage as RelayChatMessage, _generate_stream_body
+        from llm.generate import StrategyRequest, ChatMessage as RelayChatMessage, _generate_stream_body
 
         relay_messages = (
             [RelayChatMessage(role=m["role"], content=m["content"]) for m in messages]

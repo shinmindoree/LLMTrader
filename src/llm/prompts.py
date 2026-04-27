@@ -4,7 +4,7 @@ import ast
 import textwrap
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _TEMPLATE_PATH = _REPO_ROOT / "indicator_strategy_template.py"
 _SKILL_PATH = _REPO_ROOT / ".cursor" / "skills" / "indicator-strategy" / "SKILL.md"
 _VERIFY_SKILL_PATH = _REPO_ROOT / ".cursor" / "skills" / "strategy-verify" / "SKILL.md"

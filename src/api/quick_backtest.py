@@ -391,7 +391,7 @@ async def _execute_backtest(req: QuickBacktestRequest) -> dict[str, Any]:
 
     # Post-process: inject OHLCV bindings if needed (safety net for LLM-generated code)
     try:
-        from relay.strategy_postprocess import ensure_ohlcv_bindings
+        from llm.strategy_postprocess import ensure_ohlcv_bindings
 
         code = ensure_ohlcv_bindings(code)
     except Exception:

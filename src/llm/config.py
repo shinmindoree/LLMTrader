@@ -1,4 +1,4 @@
-"""Relay server configuration from environment."""
+"""LLM module configuration from environment."""
 
 import os
 
@@ -20,7 +20,6 @@ class RelayConfig(BaseSettings):
         default="",
         validation_alias=AliasChoices("OPENAI_MODEL", "AZURE_OPENAI_MODEL"),
     )
-    relay_api_key: str = Field(default="", alias="RELAY_API_KEY")
     planner_model: str = Field(
         default="",
         validation_alias=AliasChoices("PLANNER_MODEL", "AZURE_OPENAI_PLANNER_MODEL"),
@@ -112,9 +111,6 @@ class RelayConfig(BaseSettings):
         if not self.resolved_openai_model:
             return False
         return bool(self.resolved_openai_base_url)
-
-    def is_api_key_required(self) -> bool:
-        return bool(self.relay_api_key)
 
 
 _config: RelayConfig | None = None
