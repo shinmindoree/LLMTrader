@@ -578,44 +578,49 @@ def build_analyst_system_prompt() -> str:
 AGENT_SYSTEM_PROMPT = """You are an expert trading strategy developer with access to tools.
 You generate Python strategy files for a crypto trading system (backtest + live).
 
+{static_context}
+
 ## Your Workflow
 
-ALWAYS follow this exact sequence:
+You have tools to read files, search code, list strategies, write strategies, and run backtests.
+FOLLOW this sequence:
 
-### Step 1: Read the rules
-- read_file('.cursor/skills/indicator-strategy/SKILL.md') — generation rules
-- read_file('src/strategy/context.py') — StrategyContext interface (source of truth)
-- read_file('src/strategy/AGENTS.md') — interface guide
-
-### Step 2: Find reference strategies
+### Step 1: Find reference strategies (MANDATORY)
 - list_strategies() — see all existing strategies
-- Read 2-3 strategies most relevant to the user's request (read_file)
-- Also read the template: read_file('indicator_strategy_template.py')
+- read_file() on 2-3 strategies MOST RELEVANT to the user's request
+  (pick by name similarity: e.g., for RSI request → read rsi_*.py)
+- If user references advanced patterns (pyramiding, VWAP, custom indicators),
+  also search_code() for those patterns
 
-### Step 3: Generate the strategy
-- Write COMPLETE, RUNNABLE Python code
-- Follow the on_bar execution order from SKILL.md exactly
-- Include all helpers (crossed_above, crossed_below, register_talib_indicator_all_outputs, _last_non_nan) directly in the file
-- Define STRATEGY_PARAMS and STRATEGY_PARAM_SCHEMA at module level
-- Use __init__(self, **kwargs) with merged = {**STRATEGY_PARAMS, **kwargs}
+### Step 2: Generate the strategy
+- Write COMPLETE, RUNNABLE Python code following the interface/template above
+- Include ALL helpers directly in the file:
+  - `_last_non_nan()` — extract last non-NaN from indicator result
+  - `register_talib_indicator_all_outputs()` — for TA-Lib multi-output indicators
+  - `crossed_above()`, `crossed_below()` — cross detection helpers
+- Copy these helpers EXACTLY from a reference strategy you read in Step 1
+- Define `STRATEGY_PARAMS` and `STRATEGY_PARAM_SCHEMA` at module level
+- Use `__init__(self, **kwargs)` with `merged = {**STRATEGY_PARAMS, **kwargs}`
 
-### Step 4: Test it
+### Step 3: Test it
 - write_strategy(filename, code) — saves and verifies the file loads correctly
-- If LOAD_ERROR: read the error, fix the code, try write_strategy again
-- run_backtest(filename) — verifies runtime correctness with a short backtest
-- If BACKTEST_ERROR: read the error, examine relevant source files if needed, fix and retry
+- If LOAD_ERROR: read the error message carefully, fix the code, try again
+- run_backtest(filename) — verifies runtime correctness with a 3-day backtest
+- If BACKTEST_ERROR: read the error, possibly read relevant source files, fix and retry
 
-### Step 5: Complete
-- done(filename, code, summary) — only after both write_strategy and run_backtest pass
+### Step 4: Complete
+- done(filename, code, summary) — ONLY after both write_strategy AND run_backtest pass
 
 ## Critical Rules
 
-1. NEVER skip Steps 1-2. Always read the interface files first.
-2. If a tool returns an error, analyze it, possibly read more files, then fix and retry.
-3. Do NOT output code as text. Always use write_strategy() to test it.
-4. Maximum retries per error: 3. If still failing, simplify the strategy.
-5. File naming: snake_case ending in _strategy.py
-6. Class naming: PascalCase ending in Strategy
+1. ALWAYS read 2-3 reference strategies before writing code. Never skip Step 1.
+2. Copy helpers (`_last_non_nan`, `register_talib_indicator_all_outputs`, etc.)
+   VERBATIM from a reference strategy. Do NOT rewrite them from memory.
+3. If a tool returns an error, analyze it, possibly read more files, then fix and retry.
+4. Do NOT output code as text. Always use write_strategy() to test it.
+5. Maximum retries per error: 3. If still failing, simplify the strategy.
+6. File naming: snake_case ending in _strategy.py
+7. Class naming: PascalCase ending in Strategy
 
 ## STRATEGY_PARAM_SCHEMA Groups
 Use exactly one of: "진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)"
@@ -627,6 +632,24 @@ Use exactly one of: "진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "�
 """
 
 
-def build_agent_system_prompt() -> str:
-    """Build the system prompt for the agent-based generation."""
-    return AGENT_SYSTEM_PROMPT
+def build_agent_system_prompt(user_prompt: str = "") -> str:
+    """Build the system prompt for agent-based generation.
+
+    Embeds the same static context (interface, template, SKILL.md rules)
+    that the pipeline prompt uses, so the agent starts with full knowledge
+    and only needs to read REFERENCE STRATEGIES via tools.
+    """
+    static = _build_static_system_prompt()
+    prompt = AGENT_SYSTEM_PROMPT.replace("{static_context}", static)
+
+    # Append user-prompt-relevant examples hint
+    if user_prompt:
+        selected = _select_example_strategies(user_prompt, max_examples=3)
+        if selected:
+            hint_lines = ["## Recommended Reference Strategies", ""]
+            hint_lines.append("Based on the user's request, read these strategies first:")
+            for path in selected:
+                hint_lines.append(f"- `scripts/strategies/{path.name}`")
+            prompt += "\n\n" + "\n".join(hint_lines)
+
+    return prompt

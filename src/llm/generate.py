@@ -651,7 +651,7 @@ async def _generate_stream_body(body: StrategyRequest):
     from llm.agent_loop import agent_generate_stream
     from llm.prompts import build_agent_system_prompt
 
-    agent_system = build_agent_system_prompt()
+    agent_system = build_agent_system_prompt(user_prompt=prompt_text)
     agent_messages = (
         [{"role": m.role, "content": m.content} for m in messages]
         if messages

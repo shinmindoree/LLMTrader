@@ -26,6 +26,7 @@ _SRC_DIR = _REPO_ROOT / "src"
 _ALLOWED_READ_PREFIXES = (
     "src/strategy/",
     "src/backtest/",
+    "src/indicators/",
     "scripts/strategies/",
     "scripts/AGENTS.md",
     "indicator_strategy_template.py",
@@ -34,9 +35,9 @@ _ALLOWED_READ_PREFIXES = (
 )
 
 # Max file content to return (chars) to avoid context explosion
-_MAX_FILE_CONTENT = 15_000
-_MAX_SEARCH_RESULTS = 10
-_MAX_BACKTEST_OUTPUT = 3_000
+_MAX_FILE_CONTENT = 30_000
+_MAX_SEARCH_RESULTS = 30
+_MAX_BACKTEST_OUTPUT = 5_000
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +217,8 @@ def tool_search_code(query: str) -> str:
     search_dirs = [
         _STRATEGIES_DIR,
         _SRC_DIR / "strategy",
+        _SRC_DIR / "backtest",
+        _SRC_DIR / "indicators",
     ]
     search_files = [
         _REPO_ROOT / "indicator_strategy_template.py",

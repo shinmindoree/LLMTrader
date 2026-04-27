@@ -163,6 +163,7 @@ async def agent_generate_stream(
             output = getattr(response, "output", []) or []
             has_tool_calls = False
             text_content = ""
+            tool_outputs: list[dict[str, Any]] = []  # Collect ALL tool results
 
             for item in output:
                 item_type = getattr(item, "type", None)
@@ -216,14 +217,12 @@ async def agent_generate_stream(
                             for i in range(0, len(code), chunk_size):
                                 yield {"token": code[i:i + chunk_size]}
 
-                    # Feed tool result back — use input append for next iteration
-                    # The Responses API uses previous_response_id + function_call_output
-                    input_items = [{
+                    # Collect tool result for feeding back
+                    tool_outputs.append({
                         "type": "function_call_output",
                         "call_id": call_id,
-                        "output": tool_result[:8000],  # Limit result size
-                    }]
-                    response_id = getattr(response, "id", None)
+                        "output": tool_result[:16000],  # Allow generous result size
+                    })
 
                 elif item_type == "message":
                     content_parts = getattr(item, "content", []) or []
@@ -232,6 +231,11 @@ async def agent_generate_stream(
                             text = getattr(part, "text", "")
                             if text:
                                 text_content += text
+
+            # Feed ALL tool results back for next iteration
+            if tool_outputs:
+                input_items = tool_outputs
+                response_id = getattr(response, "id", None)
 
             # If LLM produced text without tool calls, it might be:
             # - A plan/analysis response (route to chat)
