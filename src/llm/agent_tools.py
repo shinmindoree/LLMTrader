@@ -7,10 +7,12 @@ result that gets fed back to the LLM as a tool response.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -38,6 +40,15 @@ _ALLOWED_READ_PREFIXES = (
 _MAX_FILE_CONTENT = 30_000
 _MAX_SEARCH_RESULTS = 30
 _MAX_BACKTEST_OUTPUT = 5_000
+
+_PINE_SCRIPT_PATTERNS = (
+    re.compile(r"(?m)^\s*//@version"),
+    re.compile(r"(?m)^\s*strategy\s*\("),
+    re.compile(r"(?m)^\s*indicator\s*\("),
+    re.compile(r"(?m)^\s*plot\s*\("),
+    re.compile(r"\bta\."),
+    re.compile(r"\brequest\.security\s*\("),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +196,60 @@ def _is_path_allowed(rel_path: str) -> bool:
     return any(normalized.startswith(prefix) for prefix in _ALLOWED_READ_PREFIXES)
 
 
+def _looks_like_pinescript(code: str) -> bool:
+    return any(pattern.search(code or "") for pattern in _PINE_SCRIPT_PATTERNS)
+
+
+def _base_is_strategy(base: ast.expr) -> bool:
+    if isinstance(base, ast.Name):
+        return base.id == "Strategy"
+    if isinstance(base, ast.Attribute):
+        return base.attr == "Strategy"
+    return False
+
+
+def _assigns_name(node: ast.stmt, name: str) -> bool:
+    if isinstance(node, ast.AnnAssign):
+        return isinstance(node.target, ast.Name) and node.target.id == name
+    if isinstance(node, ast.Assign):
+        return any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    return False
+
+
+def _validate_strategy_shape(code: str) -> str | None:
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as exc:
+        return f"Python syntax error at line {exc.lineno}: {exc.msg}"
+
+    imports_strategy = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "strategy.base"
+        and any(alias.name == "Strategy" for alias in node.names)
+        for node in tree.body
+    )
+    if not imports_strategy:
+        return "Code must import `Strategy` with `from strategy.base import Strategy`."
+
+    if not any(_assigns_name(node, "STRATEGY_PARAMS") for node in tree.body):
+        return "Code must define module-level STRATEGY_PARAMS."
+
+    strategy_classes = [
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and any(_base_is_strategy(base) for base in node.bases)
+    ]
+    if not strategy_classes:
+        return "Code must define a class that subclasses Strategy."
+
+    if not any(
+        any(isinstance(item, ast.FunctionDef) and item.name == "on_bar" for item in cls.body)
+        for cls in strategy_classes
+    ):
+        return "Strategy subclass must define on_bar(self, ctx, bar)."
+
+    return None
+
+
 def tool_read_file(path: str) -> str:
     """Read a file from the allowed codebase paths."""
     normalized = path.replace("\\", "/").lstrip("/")
@@ -280,6 +345,12 @@ def tool_write_strategy(filename: str, code: str) -> str:
     if not filename.endswith("_strategy.py"):
         return "ERROR: Filename must end with '_strategy.py'."
 
+    if _looks_like_pinescript(code):
+        return (
+            "SECURITY_ERROR: PineScript/TradingView code is not allowed. "
+            "Generate a Python strategy subclass using strategy.base.Strategy."
+        )
+
     # Security: validate code with AST before writing
     from llm.strategy_validator import SecurityError, validate_strategy_code
 
@@ -287,6 +358,10 @@ def tool_write_strategy(filename: str, code: str) -> str:
         validate_strategy_code(code)
     except (SecurityError, SyntaxError) as e:
         return f"SECURITY_ERROR: {e}"
+
+    shape_error = _validate_strategy_shape(code)
+    if shape_error:
+        return f"LOAD_ERROR: {shape_error}"
 
     # Write to a temp file for load testing (don't overwrite real file yet)
     tmp_path = _STRATEGIES_DIR / f".tmp_{filename}"

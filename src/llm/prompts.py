@@ -157,11 +157,10 @@ def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         "3. Suggest specific parameter changes or logic improvements with rationale\n"
         "4. Focus on actionable advice: concrete numbers for parameter changes, specific conditions to add/modify\n"
         "Respond in the same language as the user's message.\n\n"
-        "IMPORTANT: Do NOT generate full strategy code unless the user EXPLICITLY asks for it "
-        "(e.g., '코드 생성해줘', '수정해줘', '적용해줘', 'generate code', 'apply changes'). "
-        "Instead, provide analysis, explanations, and suggestions as text only. "
+        "IMPORTANT: This chat path must NEVER generate full strategy code, even if the user explicitly asks for code. "
+        "Instead, tell the user that code generation must use the strategy generation workflow. "
         "When suggesting improvements, describe the changes in natural language with concrete parameter values "
-        "and logic descriptions, but do NOT produce a full Python code block unless directly requested."
+        "and logic descriptions, but do NOT produce Python, PineScript, or any full code block."
     )
     if code and code.strip():
         # Extract on_bar method body for compactness; fall back to full code
@@ -181,7 +180,8 @@ def build_strategy_chat_system_prompt(code: str, summary: str | None) -> str:
         "You are a trading strategy expert assistant. "
         "Answer the user's question about trading strategies, markets, indicators, and technical analysis. "
         "Respond in the same language as the user's message. "
-        "Provide clear, informative answers. Do NOT generate Python code unless explicitly asked.\n\n"
+        "Provide clear, informative answers. NEVER generate full strategy code in this chat path; "
+        "tell users to use the strategy generation workflow for code creation.\n\n"
         "When web search is available, use it to look up real-time market data, recent news, "
         "macro-economic events (FOMC, CPI, etc.), and current market conditions to ground your analysis. "
         "Always cite sources when referencing search results."
@@ -621,6 +621,7 @@ FOLLOW this sequence:
 5. Maximum retries per error: 3. If still failing, simplify the strategy.
 6. File naming: snake_case ending in _strategy.py
 7. Class naming: PascalCase ending in Strategy
+8. PineScript/TradingView code is forbidden. Never output `//@version`, `strategy()`, `indicator()`, `ta.*`, or `plot()`.
 
 ## STRATEGY_PARAM_SCHEMA Groups
 Use exactly one of: "진입 (Entry)", "청산 (Exit)", "지표 (Indicator)", "리스크 관리 (Risk)", "일반 (General)"

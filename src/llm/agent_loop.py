@@ -131,6 +131,11 @@ async def agent_generate_stream(
         final_summary: str | None = None
         iteration = 0
         response_id: str | None = None
+        listed_strategies = False
+        reference_strategy_reads: set[str] = set()
+        write_ok_filename: str | None = None
+        backtest_ok_filename: str | None = None
+        verified_code_by_filename: dict[str, str] = {}
 
         while iteration < _MAX_ITERATIONS:
             iteration += 1
@@ -184,9 +189,27 @@ async def agent_generate_stream(
 
                     # Handle terminal tool
                     if func_name in _TERMINAL_TOOLS:
-                        final_code = arguments.get("code", "")
-                        final_filename = arguments.get("filename", "")
+                        final_filename = str(arguments.get("filename", ""))
                         final_summary = arguments.get("summary")
+                        rejection_reasons: list[str] = []
+                        if not listed_strategies:
+                            rejection_reasons.append("list_strategies() has not succeeded")
+                        if len(reference_strategy_reads) < 2:
+                            rejection_reasons.append("read_file() must be called on at least 2 reference strategy files")
+                        if write_ok_filename != final_filename:
+                            rejection_reasons.append("write_strategy() has not succeeded for this filename")
+                        if backtest_ok_filename != final_filename:
+                            rejection_reasons.append("run_backtest() has not succeeded for this filename")
+
+                        if rejection_reasons:
+                            tool_outputs.append({
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": "ERROR: done() rejected. " + "; ".join(rejection_reasons),
+                            })
+                            continue
+
+                        final_code = verified_code_by_filename.get(final_filename) or arguments.get("code", "")
                         yield {
                             "done": True,
                             "code": final_code,
@@ -208,6 +231,23 @@ async def agent_generate_stream(
 
                     # Execute tool
                     tool_result = execute_tool(func_name, arguments)
+
+                    if func_name == "list_strategies" and not tool_result.startswith("ERROR"):
+                        listed_strategies = True
+                    elif func_name == "read_file" and not tool_result.startswith("ERROR"):
+                        read_path = str(arguments.get("path", "")).replace("\\", "/").lstrip("/")
+                        if read_path.startswith("scripts/strategies/") and read_path.endswith("_strategy.py"):
+                            reference_strategy_reads.add(read_path)
+                    elif func_name == "write_strategy":
+                        filename = str(arguments.get("filename", ""))
+                        if tool_result.startswith("OK:"):
+                            write_ok_filename = filename
+                            backtest_ok_filename = None
+                            verified_code_by_filename[filename] = str(arguments.get("code", ""))
+                    elif func_name == "run_backtest":
+                        filename = str(arguments.get("filename", ""))
+                        if tool_result.startswith("BACKTEST_OK") and write_ok_filename == filename:
+                            backtest_ok_filename = filename
 
                     # Stream code tokens if write_strategy succeeded
                     if func_name == "write_strategy" and tool_result.startswith("OK:"):
@@ -242,34 +282,20 @@ async def agent_generate_stream(
             # - A plan/analysis response (route to chat)
             # - Final code in text form (extract and verify)
             if not has_tool_calls:
-                if text_content.strip():
-                    # Check if this looks like code
-                    if "class " in text_content and "Strategy" in text_content:
-                        # LLM produced code directly without using write_strategy
-                        code = _extract_code_from_text(text_content)
-                        if code:
-                            yield {
-                                "done": True,
-                                "code": code,
-                                "repaired": False,
-                                "repair_attempts": 0,
-                                "agent_iterations": iteration,
-                            }
-                            return
-                    # Might be analysis/question response
-                    yield {
-                        "done": True,
-                        "code": text_content,
-                        "repaired": False,
-                        "repair_attempts": 0,
-                        "agent_iterations": iteration,
-                    }
-                    return
-
-                # No output at all — likely an issue
-                logger.warning("Agent iteration %d produced no output", iteration)
-                yield {"error": "Agent produced no output."}
-                return
+                rejected_text = text_content.strip()
+                logger.warning("Agent iteration %d produced no function calls; rejecting direct response", iteration)
+                input_items = [{
+                    "role": "user",
+                    "content": (
+                        "Your previous response was rejected because strategy generation must use tools. "
+                        "Do not answer directly and do not output Markdown, PineScript, or raw code. "
+                        "You must call list_strategies(), read_file() on at least 2 relevant files under scripts/strategies/, "
+                        "then write_strategy(), run_backtest(), and finally done().\n\n"
+                        f"Rejected response excerpt:\n{rejected_text[:1200]}"
+                    ),
+                }]
+                response_id = getattr(response, "id", None)
+                continue
 
         # Max iterations reached
         logger.warning("Agent reached max iterations (%d)", _MAX_ITERATIONS)

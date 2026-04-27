@@ -257,6 +257,40 @@ def _is_generic_strategy_prompt(prompt: str) -> bool:
     return any(re.search(pattern, text) for pattern in _GENERIC_REQUEST_PATTERNS)
 
 
+def _looks_like_code_generation_request(prompt: str) -> bool:
+    text = (prompt or "").strip().lower()
+    if not text:
+        return False
+    negations = (
+        "생성하지", "만들지", "코드 생성하지", "코드 만들지",
+        "don't generate", "do not generate", "no code", "without code",
+    )
+    if any(negation in text for negation in negations):
+        return False
+    keywords = (
+        "전략 생성", "전략 만들어", "전략 만들", "전략 코드", "코드 생성", "코드 만들어",
+        "생성해", "만들어", "작성해", "구현해", "적용해",
+        "generate", "create", "write code", "implement", "strategy code", "apply changes",
+    )
+    return any(keyword in text for keyword in keywords)
+
+
+def _coerce_generation_plan(plan_spec: dict[str, Any] | None, prompt_text: str) -> dict[str, Any]:
+    coerced = dict(plan_spec) if isinstance(plan_spec, dict) else {}
+    coerced["is_trading_related"] = True
+    coerced["rejection_message"] = ""
+    coerced["intent"] = "modify"
+    coerced.setdefault("strategy_name", "GeneratedStrategy")
+    coerced.setdefault("description", (prompt_text or "전략 생성 요청")[:500])
+    coerced.setdefault("symbol", "BTCUSDT")
+    coerced.setdefault("timeframe", "15m")
+    coerced.setdefault("direction", "long_short")
+    coerced.setdefault("indicators", [])
+    coerced.setdefault("tunable_params", {})
+    coerced.setdefault("custom_indicator", None)
+    return coerced
+
+
 def _sanitize_intake_response(
     payload: dict[str, Any],
     *,
@@ -618,8 +652,14 @@ async def _generate_stream_body(body: StrategyRequest):
         yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': _NON_TRADING_REJECTION_MSG, 'repaired': False, 'repair_attempts': 0})}\n\n"
         return
 
-    # Determine intent — default to "question" when planner failed or didn't provide intent
+    # Determine intent — force code-generation-looking requests into the agent path.
     intent = plan_spec.get("intent") if plan_spec else None
+    generation_requested = _looks_like_code_generation_request(prompt_text)
+
+    if (intent in ("question", "analyze") or intent is None) and generation_requested:
+        logger.warning("Planner did not return modify intent for a code generation request; forcing agent generation")
+        plan_spec = _coerce_generation_plan(plan_spec, prompt_text)
+        intent = "modify"
 
     # Route non-modify intents (and planner failures) to chat
     if intent in ("question", "analyze") or intent is None:
@@ -669,9 +709,12 @@ async def _generate_stream_body(body: StrategyRequest):
             yield f"data: {json.dumps(event)}\n\n"
             if event.get("done") or event.get("error"):
                 return
+        yield f"data: {json.dumps({'error': 'Agent generation ended without completion. Legacy fallback is disabled for code generation.'})}\n\n"
+        return
     except Exception as e:
-        logger.exception("Agent generation failed, falling back to legacy pipeline: %s", e)
-        # Fall through to legacy pipeline below
+        logger.exception("Agent generation failed: %s", e)
+        yield f"data: {json.dumps({'error': 'Agent generation failed. Legacy fallback is disabled for code generation.'})}\n\n"
+        return
 
     # -----------------------------------------------------------------------
     # Legacy fallback: DSL fast path + LLM Coder + repair loop
