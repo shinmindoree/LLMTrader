@@ -32,6 +32,8 @@ class BacktestEngine:
         self.strategy.initialize(self.ctx)
         
         prev_bar_timestamp: int | None = None
+        total_klines = len(self.klines)
+        progress_interval = max(1, total_klines // 200)  # ~0.5% steps
         
         for i, kline in enumerate(self.klines):
             open_time = int(kline[0])
@@ -170,12 +172,9 @@ class BacktestEngine:
             
             prev_bar_timestamp = open_time
             
-            progress = (i + 1) / len(self.klines) * 100
-            if self.progress_callback:
+            if self.progress_callback and (i + 1) % progress_interval == 0:
+                progress = (i + 1) / total_klines * 100
                 self.progress_callback(progress)
-            
-            if len(self.klines) > 10 and (i + 1) % (len(self.klines) // 10 + 1) == 0:
-                print(f"   진행 중... {progress:.1f}%")
         
         self.strategy.finalize(self.ctx)
         

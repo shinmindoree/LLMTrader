@@ -50,6 +50,9 @@ class BacktestContext:
         self._indicator_registry: dict[str, Callable[..., Any]] = {}
         self._indicator_error_logged: set[str] = set()
         self._pyramid_count: int = 0
+        self._bar_generation: int = 0
+        self._indicator_cache: dict[tuple[str, tuple[tuple[str, Any], ...], int], Any] = {}
+        self._cached_inputs: tuple[int, dict[str, list[float]]] | None = None
     
     @property
     def current_price(self) -> float:
@@ -215,24 +218,34 @@ class BacktestContext:
             self._closes = self._closes[-max_len:]
             self._volumes = self._volumes[-max_len:]
 
+        self._bar_generation += 1
+        self._indicator_cache.clear()
+        self._cached_inputs = None
+
     def _get_builtin_indicator_inputs(self) -> dict[str, list[float]]:
+        cached = self._cached_inputs
+        if cached is not None and cached[0] == self._bar_generation:
+            return cached[1]
         closes = list(self._closes)
         n = len(closes)
         if len(self._opens) != n or len(self._highs) != n or len(self._lows) != n or len(self._volumes) != n:
-            return {
+            inputs = {
                 "open": closes,
                 "high": closes,
                 "low": closes,
                 "close": closes,
                 "volume": [0.0] * n,
             }
-        return {
-            "open": list(self._opens),
-            "high": list(self._highs),
-            "low": list(self._lows),
-            "close": closes,
-            "volume": list(self._volumes),
-        }
+        else:
+            inputs = {
+                "open": list(self._opens),
+                "high": list(self._highs),
+                "low": list(self._lows),
+                "close": closes,
+                "volume": list(self._volumes),
+            }
+        self._cached_inputs = (self._bar_generation, inputs)
+        return inputs
     
     def buy(
         self,
@@ -507,11 +520,18 @@ class BacktestContext:
             else:
                 raise TypeError("builtin indicator params must be passed as keywords (or single period)")
 
-        return compute_builtin_indicator(
+        cache_key = (normalized, tuple(sorted(kwargs.items())), self._bar_generation)
+        cached = self._indicator_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = compute_builtin_indicator(
             normalized,
             self._get_builtin_indicator_inputs(),
             **kwargs,
         )
+        self._indicator_cache[cache_key] = result
+        return result
 
     def get_open_orders(self) -> list[dict[str, Any]]:
         """미체결 주문 목록."""
