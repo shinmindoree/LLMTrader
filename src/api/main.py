@@ -1309,9 +1309,9 @@ def create_app() -> FastAPI:
         stream_repair_attempts = 0
         try:
             if messages:
-                stream = client.generate_strategy_stream("", messages=openai_messages)
+                stream = client.generate_strategy_stream("", messages=openai_messages, confirmed_plan=body.confirmed_plan)
             else:
-                stream = client.generate_strategy_stream(prompt)
+                stream = client.generate_strategy_stream(prompt, confirmed_plan=body.confirmed_plan)
             async for event in stream:
                 if "error" in event:
                     await _log_once(
@@ -1328,6 +1328,10 @@ def create_app() -> FastAPI:
                     yield f"data: {json.dumps(event)}\n\n"
                 # Forward intent routing events (e.g. question) to frontend
                 if "intent" in event:
+                    yield f"data: {json.dumps(event)}\n\n"
+                    return
+                # Forward plan_preview events to frontend
+                if "plan_preview" in event:
                     yield f"data: {json.dumps(event)}\n\n"
                     return
                 if "token" in event:

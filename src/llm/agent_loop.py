@@ -144,8 +144,9 @@ async def agent_generate_stream(
             }
 
             if response_id:
-                # Continue from previous response
+                # Continue from previous response with tool outputs
                 request_kwargs["previous_response_id"] = response_id
+                request_kwargs["input"] = input_items
             else:
                 request_kwargs["input"] = input_items
 

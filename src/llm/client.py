@@ -323,6 +323,7 @@ class LLMClient:
         self,
         user_prompt: str,
         messages: list[dict[str, str]] | None = None,
+        confirmed_plan: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """전략 코드 생성 스트리밍 — relay _generate_stream_body 직접 호출."""
         from llm.generate import StrategyRequest, ChatMessage as RelayChatMessage, _generate_stream_body
@@ -335,6 +336,7 @@ class LLMClient:
         body = StrategyRequest(
             user_prompt=(user_prompt or "").strip(),
             messages=relay_messages,
+            confirmed_plan=confirmed_plan,
         )
 
         try:

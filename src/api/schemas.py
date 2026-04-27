@@ -48,6 +48,7 @@ class StrategyGenerateRequest(BaseModel):
     user_prompt: str
     strategy_name: str | None = None
     messages: list[ChatMessage] | None = None
+    confirmed_plan: dict[str, Any] | None = None
 
 
 class StrategyIntakeRequest(BaseModel):
