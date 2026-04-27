@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import signal
 import uuid
 from datetime import datetime
@@ -22,6 +23,8 @@ from runner.event_sink import DbEventSink
 from runner.executors.backtest_executor import run_backtest
 from runner.executors.live_executor import run_live
 from settings import get_settings
+
+logger = logging.getLogger("runner")
 
 
 class RunnerWorker:
@@ -51,11 +54,14 @@ class RunnerWorker:
 
         # On runner startup, reconcile jobs left RUNNING/STOP_REQUESTED from a previous crash/restart.
         # LIVE jobs are re-queued so the runner can resume them automatically.
-        async with self._session_maker() as session:
-            counts = await finalize_orphaned_jobs(session, reason="runner_startup")
-            if counts.get("requeued_backtest") or counts.get("requeued_live") or counts.get("finalized_stopped"):
-                print(f"[runner] reconciled orphaned jobs: {counts}")
-            await session.commit()
+        try:
+            async with self._session_maker() as session:
+                counts = await finalize_orphaned_jobs(session, reason="runner_startup")
+                if counts.get("requeued_backtest") or counts.get("requeued_live") or counts.get("finalized_stopped"):
+                    logger.info("reconciled orphaned jobs: %s", counts)
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to reconcile orphaned jobs on startup: %s: %s", type(exc).__name__, exc)
 
         loops: list[asyncio.Task[None]] = [
             asyncio.create_task(self._run_loop(JobType.BACKTEST), name="runner-backtest-0"),
@@ -67,7 +73,7 @@ class RunnerWorker:
 
     def _request_shutdown(self, sig: int | signal.Signals) -> None:
         sig_name = signal.Signals(sig).name if isinstance(sig, int) else sig.name
-        print(f"[runner] received {sig_name}, draining active jobs before shutdown...")
+        logger.info("received %s, draining active jobs before shutdown...", sig_name)
         self._shutting_down.set()
 
     async def _periodic_stale_live_reconcile(self) -> None:
@@ -86,35 +92,47 @@ class RunnerWorker:
                         reason="stale_live_heartbeat",
                     )
                     if n:
-                        print(f"[runner] requeued stale LIVE jobs (heartbeat): {n}")
+                        logger.info("requeued stale LIVE jobs (heartbeat): %d", n)
                     await session.commit()
             except Exception as exc:  # noqa: BLE001
-                print(f"[runner] periodic stale-live reconcile error: {type(exc).__name__}: {exc}")
+                logger.error("periodic stale-live reconcile error: %s: %s", type(exc).__name__, exc)
 
     async def _run_loop(self, job_type: JobType) -> None:
+        backoff = self._poll_interval
+        max_backoff = 30.0  # max 30s between retries on repeated errors
         while True:
             # Graceful shutdown: stop accepting new jobs
             if self._shutting_down.is_set():
-                print(f"[runner] {job_type} loop exiting (graceful shutdown)")
+                logger.info("%s loop exiting (graceful shutdown)", job_type)
                 return
 
-            async with self._session_maker() as session:
-                job = await claim_next_pending_job(session, job_type=job_type)
-                if not job:
+            try:
+                async with self._session_maker() as session:
+                    job = await claim_next_pending_job(session, job_type=job_type)
+                    if not job:
+                        await session.commit()
+                        backoff = self._poll_interval  # reset backoff on success
+                        await asyncio.sleep(self._poll_interval)
+                        continue
+
+                    await append_event(
+                        session,
+                        job_id=job.job_id,
+                        kind=EventKind.STATUS,
+                        message="JOB_RUNNING",
+                        payload_json={"started_at": datetime.now().isoformat()},
+                    )
                     await session.commit()
-                    await asyncio.sleep(self._poll_interval)
-                    continue
 
-                await append_event(
-                    session,
-                    job_id=job.job_id,
-                    kind=EventKind.STATUS,
-                    message="JOB_RUNNING",
-                    payload_json={"started_at": datetime.now().isoformat()},
+                backoff = self._poll_interval  # reset backoff on success
+                await self._run_job(job_id=job.job_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "%s poll loop error (retry in %.1fs): %s: %s",
+                    job_type, backoff, type(exc).__name__, exc,
                 )
-                await session.commit()
-
-            await self._run_job(job_id=job.job_id)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     async def _run_job(self, *, job_id: uuid.UUID) -> None:
         should_stop = asyncio.Event()
@@ -130,7 +148,7 @@ class RunnerWorker:
                 except Exception as exc:  # noqa: BLE001
                     # Never let stop polling silently die.
                     # If the poller crashes, LIVE jobs can get stuck in STOP_REQUESTED forever.
-                    print(f"[runner] stop-poller error job_id={job_id}: {type(exc).__name__}: {exc}")
+                    logger.error("stop-poller error job_id=%s: %s: %s", job_id, type(exc).__name__, exc)
                 await asyncio.sleep(0.5)
 
         stop_task = asyncio.create_task(stop_poller(), name=f"stop-poller:{job_id}")
