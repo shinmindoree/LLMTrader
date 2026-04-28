@@ -37,6 +37,67 @@ function isAdminOnlyPath(path: string): boolean {
 
 const PROXY_TIMEOUT_MS = 120_000;
 
+// Transient upstream errors (Container Apps cold start / pod restart) are surfaced by
+// the Envoy ingress as 502/503/504. Retry idempotent requests a few times with a short
+// backoff before failing the user-visible request.
+const RETRY_STATUSES = new Set([502, 503, 504]);
+const RETRY_BACKOFF_MS = [200, 600, 1200];
+
+function isRetriableMethod(method: string): boolean {
+  return method === "GET" || method === "HEAD";
+}
+
+function isStreamingPath(relPath: string): boolean {
+  return /\/(stream|live\/stream)$/.test(relPath);
+}
+
+async function fetchWithRetry(
+  target: string,
+  init: RequestInit,
+  relPath: string,
+  method: string,
+): Promise<{ res: globalThis.Response | null; error: unknown; aborted: boolean }> {
+  const canRetry = isRetriableMethod(method) && !isStreamingPath(relPath);
+  const maxAttempts = canRetry ? RETRY_BACKOFF_MS.length + 1 : 1;
+  let lastError: unknown = null;
+  let aborted = false;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetch(target, init);
+      if (!RETRY_STATUSES.has(res.status) || attempt === maxAttempts - 1 || !canRetry) {
+        return { res, error: null, aborted: false };
+      }
+      // Drain body so the connection can be reused, then retry
+      try {
+        await res.arrayBuffer();
+      } catch {
+        // ignore
+      }
+      console.warn(
+        `[proxy] Backend ${res.status} for ${relPath} (attempt ${attempt + 1}/${maxAttempts}), retrying...`,
+      );
+    } catch (err) {
+      lastError = err;
+      const signal = (init.signal as AbortSignal | undefined);
+      if (signal?.aborted) {
+        aborted = true;
+        return { res: null, error: err, aborted: true };
+      }
+      if (!canRetry || attempt === maxAttempts - 1) {
+        return { res: null, error: err, aborted: false };
+      }
+      console.warn(
+        `[proxy] Backend fetch failed for ${relPath} (attempt ${attempt + 1}/${maxAttempts}):`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    const delay = RETRY_BACKOFF_MS[attempt] ?? 1200;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+  return { res: null, error: lastError, aborted };
+}
+
 async function proxy(req: NextRequest, params: { path: string[] }): Promise<Response> {
   const url = new URL(req.url);
   const relPath = params.path.join("/");
@@ -85,27 +146,31 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   }
 
   // SSE/streaming endpoints should not have a timeout — they're long-lived connections
-  const isStreamEndpoint = /\/(stream|live\/stream)$/.test(relPath);
+  const isStreamEndpoint = isStreamingPath(relPath);
   const controller = new AbortController();
   const timeout = isStreamEndpoint ? null : setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
 
-  let res: globalThis.Response;
-  try {
-    res = await fetch(target.toString(), {
+  const { res: fetched, error: fetchErr, aborted } = await fetchWithRetry(
+    target.toString(),
+    {
       method: req.method,
       headers,
       body,
       redirect: "manual",
       signal: controller.signal,
-    });
-  } catch (err) {
-    if (timeout) clearTimeout(timeout);
-    const message = err instanceof Error ? err.message : "Backend request failed";
-    const status = controller.signal.aborted ? 504 : 502;
+    },
+    relPath,
+    req.method,
+  );
+  if (timeout) clearTimeout(timeout);
+
+  if (!fetched) {
+    const message = fetchErr instanceof Error ? fetchErr.message : "Backend request failed";
+    const status = aborted ? 504 : 502;
     console.error(`[proxy] fetch to ${target.pathname} failed (${status}):`, message);
     return NextResponse.json({ error: message }, { status });
   }
-  if (timeout) clearTimeout(timeout);
+  const res = fetched;
 
   const resHeaders = new Headers(res.headers);
   resHeaders.delete("content-encoding");
