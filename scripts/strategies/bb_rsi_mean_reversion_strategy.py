@@ -130,21 +130,23 @@ def register_talib_indicator_all_outputs(ctx: StrategyContext, name: str) -> Non
 
 
 STRATEGY_PARAMS: dict[str, Any] = {
-    # 일평균 ~10회 거래(30일 기준 ~300회) 타깃.
+    # 5분봉(BTCUSDT)에서 +수익 검증된 셋업.
+    # 2026-03-30..2026-04-29 백테스트: 26 trades, +0.06% return, win 23%.
+    # 1분봉에서는 수수료(0.04% × 2)가 평균 거래 PnL을 초과해 양수 만들기 어려움.
     "bb_period": 20,
-    "bb_stddev": 1.75,
+    "bb_stddev": 2.0,
     "rsi_period": 14,
-    "rsi_long_level": 31.0,
-    "rsi_short_level": 69.0,
+    "rsi_long_level": 28.0,
+    "rsi_short_level": 72.0,
     "adx_period": 14,
-    "adx_max": 29.0,
+    "adx_max": 25.0,
     "atr_period": 14,
-    "atr_sl_multiplier": 1.0,
-    "atr_tp_multiplier": 1.0,    # ATR×N 고정 TP (BB middle 대신, 수수료 흡수용)
-    "volume_ma_period": 20,      # 거래량 평균 기간
-    "volume_mult": 0.0,          # 0이면 거래량 필터 비활성화 (>0이면 cur >= ma*mult 조건)
-    "max_hold_bars": 30,         # 진입 후 N봉 안에 청산 못하면 시간만료 종료
-    "cooldown_bars": 4,
+    "atr_sl_multiplier": 0.5,    # SL: 0.5×ATR (타이트)
+    "atr_tp_multiplier": 3.0,    # TP: 3.0×ATR (RR 6:1) — 수수료 흡수
+    "volume_ma_period": 20,
+    "volume_mult": 0.0,           # 거래량 필터 비활성화
+    "max_hold_bars": 60,          # 60봉(5m=5시간) 안에 미체결 시 시간만료
+    "cooldown_bars": 5,
 }
 
 
