@@ -91,6 +91,10 @@ Output a JSON object. Always include these three fields first:
   "analyze" if the user asks about improvements, weaknesses, strengths, analysis, evaluation, or suggestions for an existing strategy WITHOUT explicitly requesting code generation (e.g., '개선점 찾아줘', '분석해줘', '약점이 뭐야', '어떻게 개선할 수 있을까', '지지/저항 추가하면 어떨까').
   "question" if the user is asking a general question about trading, indicators, or concepts without referencing a specific strategy modification.
 
+  IMPORTANT — focus on the LATEST user message only. Earlier turns may have asked for code generation, but if the most recent message is a follow-up question (e.g., '설명해줘', '왜 그래?', '이 부분이 뭐야?', 'explain', 'why', 'what does ... mean'), classify as "question" — do NOT inherit "modify" from prior turns.
+
+  When the request is ambiguous or under-specified (no clear symbol/timeframe/logic and no explicit code-generation verb in the latest message), prefer "question" so the system can ask clarifying questions instead of fabricating defaults.
+
 If is_trading_related is true AND intent is "analyze", output ONLY the three base fields (is_trading_related, rejection_message, intent). Do NOT produce a DSL spec — the system will route this to the chat/analysis path.
 
 If is_trading_related is true AND intent is "modify", produce a DSL-compatible spec:

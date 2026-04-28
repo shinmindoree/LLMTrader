@@ -577,6 +577,19 @@ def _user_prompt_text(prompt: str, messages: list[ChatMessage]) -> str:
     return ""
 
 
+def _latest_user_message(prompt: str, messages: list[ChatMessage]) -> str:
+    """Return the most recent user message only (not concatenated history).
+
+    Used for intent heuristics so previous messages' keywords don't bleed into
+    the current turn's classification.
+    """
+    if messages:
+        for m in reversed(messages):
+            if m.role == "user" and (m.content or "").strip():
+                return str(m.content)
+    return prompt or ""
+
+
 # ---------------------------------------------------------------------------
 # Main streaming generation pipeline
 # ---------------------------------------------------------------------------
@@ -652,13 +665,16 @@ async def _generate_stream_body(body: StrategyRequest):
         yield f"data: {json.dumps({'done': True, 'rejected': True, 'code': _NON_TRADING_REJECTION_MSG, 'repaired': False, 'repair_attempts': 0})}\n\n"
         return
 
-    # Determine intent — force code-generation-looking requests into the agent path.
+    # Determine intent — trust the planner's classification.
+    # Only fall back to a heuristic when the planner failed entirely (intent is None).
+    # If the planner explicitly classified the request as question/analyze, honor it
+    # and route to chat — do NOT force-coerce ambiguous prompts into a templated plan.
     intent = plan_spec.get("intent") if plan_spec else None
-    generation_requested = _looks_like_code_generation_request(prompt_text)
+    latest_user_text = _latest_user_message(prompt, messages)
 
-    if (intent in ("question", "analyze") or intent is None) and generation_requested:
-        logger.warning("Planner did not return modify intent for a code generation request; forcing agent generation")
-        plan_spec = _coerce_generation_plan(plan_spec, prompt_text)
+    if intent is None and _looks_like_code_generation_request(latest_user_text):
+        logger.warning("Planner failed; latest user message looks like a generation request — forcing agent path")
+        plan_spec = _coerce_generation_plan(plan_spec, latest_user_text)
         intent = "modify"
 
     # Route non-modify intents (and planner failures) to chat
