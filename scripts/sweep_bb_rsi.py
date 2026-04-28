@@ -33,9 +33,9 @@ spec.loader.exec_module(mod)
 BbRsiMeanReversionStrategy = mod.BbRsiMeanReversionStrategy
 
 SYMBOL = "BTCUSDT"
-INTERVAL = "5m"
-START = "2026-03-30"
-END = "2026-04-29"
+INTERVAL = "3m"
+START = "2026-02-28"
+END = "2026-03-29"
 
 
 async def fetch_data():
@@ -57,7 +57,8 @@ async def fetch_data():
 def run_one(klines, params: dict) -> dict:
     rc = RiskConfig(max_leverage=1.0, max_position_size=0.5, max_order_size=0.5, stop_loss_pct=0.05)
     rm = BacktestRiskManager(rc)
-    ctx = BacktestContext(symbol=SYMBOL, leverage=1, initial_balance=1000.0, risk_manager=rm, commission_rate=0.0004)
+    # 평균회귀(BB extremes)는 limit order로 진입하므로 maker fee(0.02%) 가정.
+    ctx = BacktestContext(symbol=SYMBOL, leverage=1, initial_balance=1000.0, risk_manager=rm, commission_rate=0.0002)
     strat = BbRsiMeanReversionStrategy(**params)
     eng = BacktestEngine(strat, ctx, klines)
     res = eng.run()
@@ -79,17 +80,20 @@ async def main():
 
     # 시도할 파라미터 조합 (TP/SL 비율과 진입 강도)
     grid = [
-        # 5m 양수 베이스: TP=2.5, SL=0.6, bb=2.0, rsi=28/72, adx<25, cd=5, hold=45 → +0.02%
-        (2.5, 0.6, 2.0, 28, 72, 25, 5, 45),
-        (2.5, 0.6, 2.0, 28, 72, 28, 5, 45),    # adx 풀기 (거래수 ↑)
-        (2.5, 0.6, 2.0, 28, 72, 30, 5, 45),
-        (2.5, 0.6, 2.0, 30, 70, 28, 5, 45),    # rsi 풀기
-        (2.5, 0.6, 2.0, 30, 70, 30, 5, 45),
-        (3.0, 0.6, 2.0, 28, 72, 28, 5, 60),
-        (2.5, 0.5, 2.0, 28, 72, 25, 5, 45),
-        (3.0, 0.5, 2.0, 28, 72, 25, 5, 60),
-        (2.5, 0.6, 1.8, 30, 70, 28, 5, 45),    # bb 풀기
-        (2.0, 0.6, 2.0, 28, 72, 25, 5, 30),
+        # 3m: 거래수 100+ 목표. ADX 필터 완화 + RR 조정.
+        # 형식: (atr_tp, atr_sl, bb_std, rsi_long, rsi_short, adx_max, cd, hold)
+        (3.0, 0.5, 2.0, 28, 72, 30, 5, 60),    # 5m winner를 3m로
+        (3.0, 0.5, 2.0, 30, 70, 30, 5, 60),
+        (3.0, 0.5, 1.8, 30, 70, 30, 5, 60),
+        (3.0, 0.5, 2.0, 30, 70, 35, 5, 60),
+        (2.5, 0.5, 1.8, 32, 68, 30, 5, 60),
+        (2.5, 0.5, 1.8, 32, 68, 35, 5, 60),
+        (2.5, 0.5, 2.0, 32, 68, 35, 5, 45),
+        (3.0, 0.5, 1.75, 32, 68, 35, 4, 60),
+        (3.0, 0.4, 2.0, 30, 70, 30, 5, 60),
+        (3.0, 0.4, 1.8, 32, 68, 35, 5, 60),
+        (4.0, 0.5, 2.0, 30, 70, 30, 5, 90),
+        (4.0, 0.5, 2.0, 30, 70, 35, 5, 90),
     ]
 
     rows = []
