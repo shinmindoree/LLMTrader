@@ -140,6 +140,10 @@ STRATEGY_PARAMS: dict[str, Any] = {
     "adx_max": 29.0,
     "atr_period": 14,
     "atr_sl_multiplier": 1.0,
+    "atr_tp_multiplier": 1.0,    # ATR×N 고정 TP (BB middle 대신, 수수료 흡수용)
+    "volume_ma_period": 20,      # 거래량 평균 기간
+    "volume_mult": 0.0,          # 0이면 거래량 필터 비활성화 (>0이면 cur >= ma*mult 조건)
+    "max_hold_bars": 30,         # 진입 후 N봉 안에 청산 못하면 시간만료 종료
     "cooldown_bars": 4,
 }
 
@@ -159,12 +163,18 @@ class BbRsiMeanReversionStrategy(Strategy):
         self.adx_max = float(p["adx_max"])
         self.atr_period = int(p["atr_period"])
         self.atr_sl_multiplier = float(p["atr_sl_multiplier"])
+        self.atr_tp_multiplier = float(p["atr_tp_multiplier"])
+        self.volume_ma_period = int(p["volume_ma_period"])
+        self.volume_mult = float(p["volume_mult"])
+        self.max_hold_bars = int(p["max_hold_bars"])
         self.cooldown_bars = int(p["cooldown_bars"])
 
         self.is_closing: bool = False
-        self.middle_target: float = 0.0  # BB 미들밴드 (TP target, 진입 시 스냅샷)
+        self.middle_target: float = 0.0  # BB 미들밴드 (보조 TP)
+        self.tp_price: float = 0.0        # ATR 기반 주 TP
         self.sl_price: float = 0.0
         self._bars_since_close: int | None = None
+        self._bars_in_position: int = 0
 
         self.params = dict(p)
         self.indicator_config = {
@@ -179,22 +189,34 @@ class BbRsiMeanReversionStrategy(Strategy):
         register_talib_indicator_all_outputs(ctx, "RSI")
         register_talib_indicator_all_outputs(ctx, "ADX")
         register_talib_indicator_all_outputs(ctx, "ATR")
+        register_talib_indicator_all_outputs(ctx, "SMA")
         self.is_closing = False
         self.middle_target = 0.0
+        self.tp_price = 0.0
         self.sl_price = 0.0
         self._bars_since_close = None
+        self._bars_in_position = 0
 
     def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
         if ctx.position_size == 0:
             self.is_closing = False
+            self._bars_in_position = 0
 
         if ctx.get_open_orders():
             return
 
-        # ===== 청산 (BB 미들밴드 회귀 / ATR SL) =====
+        # ===== 청산 (ATR TP / ATR SL / BB middle 보조 / 시간 만료) =====
         if ctx.position_size != 0 and not self.is_closing:
             price = ctx.current_price
             if ctx.position_size > 0:
+                if price >= self.tp_price:
+                    self.is_closing = True
+                    self._bars_since_close = 0
+                    ctx.close_position(
+                        reason=f"TP Long {price:.2f}>={self.tp_price:.2f}",
+                        exit_reason="TAKE_PROFIT",
+                    )
+                    return
                 if price >= self.middle_target:
                     self.is_closing = True
                     self._bars_since_close = 0
@@ -212,6 +234,14 @@ class BbRsiMeanReversionStrategy(Strategy):
                     )
                     return
             else:
+                if price <= self.tp_price:
+                    self.is_closing = True
+                    self._bars_since_close = 0
+                    ctx.close_position(
+                        reason=f"TP Short {price:.2f}<={self.tp_price:.2f}",
+                        exit_reason="TAKE_PROFIT",
+                    )
+                    return
                 if price <= self.middle_target:
                     self.is_closing = True
                     self._bars_since_close = 0
@@ -235,8 +265,18 @@ class BbRsiMeanReversionStrategy(Strategy):
         if self._bars_since_close is not None:
             self._bars_since_close += 1
 
+        # 보유 중이면 시간 청산만 체크
         if ctx.position_size != 0:
+            self._bars_in_position += 1
+            if self.max_hold_bars > 0 and self._bars_in_position >= self.max_hold_bars and not self.is_closing:
+                self.is_closing = True
+                self._bars_since_close = 0
+                ctx.close_position(
+                    reason=f"Time exit after {self._bars_in_position} bars",
+                    exit_reason="TIME_EXIT",
+                )
             return
+
         if self._bars_since_close is not None and self._bars_since_close < self.cooldown_bars:
             return
 
@@ -255,36 +295,48 @@ class BbRsiMeanReversionStrategy(Strategy):
         rsi = float(ctx.get_indicator("RSI", period=self.rsi_period))
         adx = float(ctx.get_indicator("ADX", period=self.adx_period))
         atr = float(ctx.get_indicator("ATR", period=self.atr_period))
+        vol_ma = float(ctx.get_indicator("SMA", period=self.volume_ma_period, price="volume"))
         price = ctx.current_price
+        cur_volume = float(bar.get("volume", 0.0))
 
-        if not all(math.isfinite(v) for v in (upper, middle, lower, rsi, adx, atr, price)) or atr <= 0:
+        if not all(math.isfinite(v) for v in (upper, middle, lower, rsi, adx, atr, price, vol_ma)) or atr <= 0:
             return
 
         # 추세장 회피
         if adx >= self.adx_max:
             return
 
+        # 거래량 필터: volume_mult > 0 일 때만 평균 대비 강한 봉 요구
+        if self.volume_mult > 0 and vol_ma > 0 and cur_volume < vol_ma * self.volume_mult:
+            return
+
         # 롱: 가격이 BB 하단 터치/이탈 + RSI 과매도
         if price <= lower and rsi < self.rsi_long_level:
+            self.tp_price = price + self.atr_tp_multiplier * atr
             self.middle_target = middle
             self.sl_price = price - self.atr_sl_multiplier * atr
             self._bars_since_close = None
+            self._bars_in_position = 0
             ctx.enter_long(
                 reason=(
-                    f"BB+RSI Long (P={price:.2f}<L={lower:.2f}, RSI={rsi:.1f}<{self.rsi_long_level:.0f}, "
-                    f"ADX={adx:.1f}) TP_mid={middle:.2f} SL={self.sl_price:.2f}"
+                    f"BB+RSI Long (P={price:.2f}<=L={lower:.2f}, RSI={rsi:.1f}<{self.rsi_long_level:.0f}, "
+                    f"ADX={adx:.1f}, V={cur_volume:.0f}>{vol_ma:.0f}) TP={self.tp_price:.2f} "
+                    f"mid={middle:.2f} SL={self.sl_price:.2f}"
                 ),
             )
             return
 
         # 숏: 가격이 BB 상단 터치/이탈 + RSI 과매수
         if price >= upper and rsi > self.rsi_short_level:
+            self.tp_price = price - self.atr_tp_multiplier * atr
             self.middle_target = middle
             self.sl_price = price + self.atr_sl_multiplier * atr
             self._bars_since_close = None
+            self._bars_in_position = 0
             ctx.enter_short(
                 reason=(
-                    f"BB+RSI Short (P={price:.2f}>U={upper:.2f}, RSI={rsi:.1f}>{self.rsi_short_level:.0f}, "
-                    f"ADX={adx:.1f}) TP_mid={middle:.2f} SL={self.sl_price:.2f}"
+                    f"BB+RSI Short (P={price:.2f}>=U={upper:.2f}, RSI={rsi:.1f}>{self.rsi_short_level:.0f}, "
+                    f"ADX={adx:.1f}, V={cur_volume:.0f}>{vol_ma:.0f}) TP={self.tp_price:.2f} "
+                    f"mid={middle:.2f} SL={self.sl_price:.2f}"
                 ),
             )

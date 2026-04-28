@@ -65,6 +65,7 @@ jobs:
           az containerapp update \
             --name "${AZURE_CONTAINER_APP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
-            --image "${IMAGE_TAG}"
+            --image "${IMAGE_TAG}" \
+            --cpu 1.0 --memory 2Gi
 
 

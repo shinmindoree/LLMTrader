@@ -181,6 +181,7 @@ az containerapp create \
   --image "mcr.microsoft.com/k8se/quickstart:latest" \
   --target-port 8000 \
   --ingress external \
+  --cpu 1.0 --memory 2Gi \
   --system-assigned
 
 # RUNNER: 워커 프로세스이므로 ingress 비활성화
