@@ -453,6 +453,49 @@ az containerapp update \
   OPENAI_MODEL=secretref:openai-model
 ```
 
+## 13.1) test-api Health Probes (필수)
+
+기본 startup probe(짧은 TCP timeout, ~30s)에서는 alembic + init_db + Redis ping 합산 부팅 시간이 30초를 넘어가
+exit 137 → CrashLoopBackOff → Envoy 503(`upstream connect error / Connection refused`)이 발생한다.
+명시적으로 `/api/health` 기반 probe를 등록한다.
+
+```bash
+cat > /tmp/test-api-probes.yaml <<'EOF'
+properties:
+  template:
+    containers:
+    - name: test-api
+      probes:
+      - type: Startup
+        httpGet:
+          path: /api/health
+          port: 8000
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 30
+      - type: Liveness
+        httpGet:
+          path: /api/health
+          port: 8000
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        timeoutSeconds: 10
+        failureThreshold: 5
+      - type: Readiness
+        httpGet:
+          path: /api/health
+          port: 8000
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+        successThreshold: 1
+EOF
+
+az containerapp update -n "${AZ_CA_API}" -g "${AZ_RG}" --yaml /tmp/test-api-probes.yaml
+```
+
 ## 14) 검증
 
 ```bash
