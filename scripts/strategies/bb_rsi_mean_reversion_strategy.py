@@ -130,16 +130,17 @@ def register_talib_indicator_all_outputs(ctx: StrategyContext, name: str) -> Non
 
 
 STRATEGY_PARAMS: dict[str, Any] = {
+    # 일평균 ~10회 거래(30일 기준 ~300회) 타깃.
     "bb_period": 20,
-    "bb_stddev": 1.5,         # 1분봉은 좋게 뚨는 이탈이 드물어서 1.5σ로 완화
+    "bb_stddev": 1.75,
     "rsi_period": 14,
-    "rsi_long_level": 35.0,
-    "rsi_short_level": 65.0,
+    "rsi_long_level": 31.0,
+    "rsi_short_level": 69.0,
     "adx_period": 14,
-    "adx_max": 40.0,           # 1분봉 ADX 특성을 고려해 더 완화
+    "adx_max": 29.0,
     "atr_period": 14,
     "atr_sl_multiplier": 1.0,
-    "cooldown_bars": 2,
+    "cooldown_bars": 4,
 }
 
 
