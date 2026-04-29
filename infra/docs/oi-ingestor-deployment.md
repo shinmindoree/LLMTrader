@@ -113,6 +113,44 @@ $env:PYTHONIOENCODING = "utf-8"
 
 ## Strategy hand-off
 
+### Backtest data — required for the runner Container App
+
+The backtest backend reads OI history from
+`data/perp_meta/BTCUSDT_oi_5m.parquet`. That file is **not committed** and so
+is **absent from the runner image**. To make web-triggered backtests work on
+Azure, upload the parquet to blob storage once, then point the runner at it.
+
+```powershell
+# 1. (locally) refresh the parquet up to today
+$env:PYTHONIOENCODING="utf-8"
+.\.venv\Scripts\python.exe scripts\ingest_perp_meta.py `
+   --symbol BTCUSDT --start 2020-09-01 --end 2026-04-29 `
+   --metrics oi --period 5m
+
+# 2. upload to blob (uses AZURE_BLOB_CONNECTION_STRING)
+$env:AZURE_BLOB_CONNECTION_STRING = "DefaultEndpointsProtocol=https;..."
+.\.venv\Scripts\python.exe scripts\upload_oi_parquet.py `
+   --symbols BTCUSDT --container market-data --prefix perp_meta
+```
+
+Then on the **runner** Container App, set:
+
+```
+OI_PARQUET_BLOB_CONTAINER=market-data
+OI_PARQUET_BLOB_NAME_BTCUSDT=perp_meta/BTCUSDT_oi_5m.parquet
+# Plus one of:
+AZURE_BLOB_CONNECTION_STRING=<same as web/api>     # easiest
+# or AZURE_BLOB_ACCOUNT_URL=https://<acct>.blob.core.windows.net + managed identity
+```
+
+The provider downloads to `/tmp/oi_parquet/` once and reuses it for the
+container's lifetime.
+
+Re-run `scripts/upload_oi_parquet.py` and restart the runner whenever you
+want fresher OI history.
+
+### Live trading
+
 Once OI data is flowing into Redis, run live trading with:
 
 ```powershell

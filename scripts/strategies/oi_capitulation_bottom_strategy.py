@@ -114,7 +114,17 @@ class OiCapitulationBottomStrategy(Strategy):
                 "Verify src/indicators/oi_provider.py is on PYTHONPATH."
             )
         symbol = getattr(ctx, "symbol", "BTCUSDT")
-        self._oi_provider = get_oi_provider(symbol)
+        # Detect backtest vs live from the context type. The runner worker
+        # always sets REDIS_URL (for its own cache), so env-only auto-detect
+        # would incorrectly pick "live" during a backtest run.
+        ctx_cls = type(ctx).__name__
+        if "Backtest" in ctx_cls:
+            mode = "backtest"
+        elif "Live" in ctx_cls:
+            mode = "live"
+        else:
+            mode = None  # fall through to env-based auto-detect
+        self._oi_provider = get_oi_provider(symbol, mode=mode)
         self._closes = []
         self._entry_bar_index = None
         self._entry_price = None

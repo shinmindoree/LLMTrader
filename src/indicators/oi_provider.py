@@ -25,8 +25,99 @@ logger = logging.getLogger("llmtrader.oi_provider")
 
 REDIS_OI_KEY_FMT = "oi:{symbol}:hist"
 PARQUET_PATH_FMT = "data/perp_meta/{symbol}_oi_5m.parquet"
+PARQUET_URL_ENV_FMT = "OI_PARQUET_URL_{symbol}"  # e.g. OI_PARQUET_URL_BTCUSDT
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOOKBACK_MS = 24 * 3600 * 1000
+
+
+def _resolve_parquet_path(symbol: str) -> Path:
+    """Locate the OI parquet for `symbol`, downloading it if a URL is configured.
+
+    Resolution order:
+      1. `OI_PARQUET_PATH_{SYMBOL}` env var (absolute path)
+      2. `<repo_root>/data/perp_meta/{symbol}_oi_5m.parquet`
+      3. `OI_PARQUET_URL_{SYMBOL}` env var → download to /tmp cache
+    """
+    sym = symbol.upper()
+    explicit = os.environ.get(f"OI_PARQUET_PATH_{sym}", "").strip()
+    if explicit:
+        p = Path(explicit)
+        if p.exists():
+            return p
+        logger.warning("[oi] OI_PARQUET_PATH_%s set but file missing: %s", sym, p)
+
+    local = PROJECT_ROOT / PARQUET_PATH_FMT.format(symbol=sym)
+    if local.exists():
+        return local
+
+    url = os.environ.get(f"OI_PARQUET_URL_{sym}", "").strip()
+    if url:
+        cache_dir = Path(os.environ.get("OI_PARQUET_CACHE_DIR", "/tmp/oi_parquet"))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{sym}_oi_5m.parquet"
+        if not cache_path.exists():
+            logger.info("[oi] downloading parquet for %s from %s", sym, url)
+            import httpx
+            with httpx.stream("GET", url, timeout=60.0, follow_redirects=True) as resp:
+                resp.raise_for_status()
+                with cache_path.open("wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=1 << 16):
+                        f.write(chunk)
+            logger.info("[oi] downloaded %d bytes to %s", cache_path.stat().st_size, cache_path)
+        return cache_path
+
+    # Azure Blob fallback (managed identity / connection string).
+    # Set OI_PARQUET_BLOB_CONTAINER + OI_PARQUET_BLOB_NAME_{SYMBOL}
+    container_name = os.environ.get("OI_PARQUET_BLOB_CONTAINER", "").strip()
+    blob_name = os.environ.get(f"OI_PARQUET_BLOB_NAME_{sym}", "").strip()
+    if container_name and blob_name:
+        cache_dir = Path(os.environ.get("OI_PARQUET_CACHE_DIR", "/tmp/oi_parquet"))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{sym}_oi_5m.parquet"
+        if not cache_path.exists():
+            logger.info("[oi] downloading parquet for %s from blob %s/%s",
+                        sym, container_name, blob_name)
+            data = _download_blob(container_name, blob_name)
+            cache_path.write_bytes(data)
+            logger.info("[oi] downloaded %d bytes to %s", len(data), cache_path)
+        return cache_path
+
+    raise FileNotFoundError(
+        f"OI parquet not found for {sym}. Provide one of: "
+        f"OI_PARQUET_PATH_{sym}, file at {local}, OI_PARQUET_URL_{sym}, "
+        f"or OI_PARQUET_BLOB_CONTAINER + OI_PARQUET_BLOB_NAME_{sym}."
+    )
+
+
+def _download_blob(container_name: str, blob_name: str) -> bytes:
+    """Download a blob using the same auth chain as src/common/blob_storage.py."""
+    from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
+    from azure.storage.blob import ContainerClient
+    conn_str = os.environ.get("AZURE_BLOB_CONNECTION_STRING", "").strip()
+    if conn_str:
+        client = ContainerClient.from_connection_string(conn_str, container_name)
+    else:
+        account_url = os.environ.get("AZURE_BLOB_ACCOUNT_URL", "").strip()
+        if not account_url:
+            raise RuntimeError(
+                "OI_PARQUET_BLOB_* set but no AZURE_BLOB_CONNECTION_STRING / "
+                "AZURE_BLOB_ACCOUNT_URL configured."
+            )
+        client_id = os.environ.get("AZURE_CLIENT_ID", "").strip()
+        if os.environ.get("IDENTITY_ENDPOINT"):
+            kwargs: dict = {}
+            if client_id:
+                kwargs["client_id"] = client_id
+            credential = ManagedIdentityCredential(**kwargs)
+        else:
+            kwargs = {}
+            if client_id:
+                kwargs["managed_identity_client_id"] = client_id
+            credential = DefaultAzureCredential(**kwargs)
+        client = ContainerClient(account_url=account_url,
+                                 container_name=container_name,
+                                 credential=credential)
+    return client.download_blob(blob_name).readall()
 
 
 class _ParquetOiBackend:
@@ -34,17 +125,12 @@ class _ParquetOiBackend:
 
     def __init__(self, symbol: str) -> None:
         import pandas as pd
-        path = PROJECT_ROOT / PARQUET_PATH_FMT.format(symbol=symbol)
-        if not path.exists():
-            raise FileNotFoundError(
-                f"OI parquet not found: {path}. "
-                f"Run scripts/ingest_perp_meta.py to backfill."
-            )
+        path = _resolve_parquet_path(symbol)
         df = pd.read_parquet(path).sort_values("timestamp").reset_index(drop=True)
         self._ts = df["timestamp"].to_numpy(dtype="int64")
         self._oi = df["sum_oi"].to_numpy(dtype="float64")
-        logger.info("[oi] parquet backend %s rows=%d range=%d..%d",
-                    symbol, len(self._ts), int(self._ts[0]), int(self._ts[-1]))
+        logger.info("[oi] parquet backend %s rows=%d range=%d..%d path=%s",
+                    symbol, len(self._ts), int(self._ts[0]), int(self._ts[-1]), path)
 
     def value_at(self, ts_ms: int) -> float:
         idx = int(np.searchsorted(self._ts, int(ts_ms), side="right")) - 1
