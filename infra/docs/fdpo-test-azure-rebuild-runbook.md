@@ -58,6 +58,7 @@ export AZ_LAW="${AZ_PREFIX}-law"
 export AZ_KV="${AZ_PREFIX}-kv"
 export AZ_CAE="${AZ_PREFIX}-cae"
 export AZ_ACR="${AZ_PREFIX//-/}acr"  # ACR 이름은 소문자/숫자만 가능
+export AZ_STORAGE_STRATEGIES="${AZ_PREFIX//-/}strategies"  # OI parquet/strategy blob storage
 
 export AZ_CA_API="${AZ_PREFIX}-api"
 export AZ_CA_RUNNER="${AZ_PREFIX}-runner"
@@ -114,7 +115,7 @@ fi
 if [ -z "${GH_REPO}" ] || [ "${GH_REPO}" = "<github-repo>" ]; then
   echo "ERROR: GH_REPO 값을 실제 GitHub repo로 설정하세요."
   exit 1
-fi
+`EMBEDDED_RUNNER` 기본값은 `true`이므로 `test-api`에서 명시적으로 꺼 두지 않으면 API revision이 백테스트를 잡아
 ```
 
 ## 5) 사고 대상 기존 App/SP 폐기 (메일 기준)
@@ -455,6 +456,29 @@ az containerapp update \
 ```
 
 ## 13.1) test-api Health Probes (필수)
+
+API와 Runner는 같은 코드베이스를 쓰지만 백테스트 job claim은 `test-runner`만 수행해야 한다.
+`EMBEDDED_RUNNER` 기본값은 `true`이므로 `test-api`에서 명시적으로 꺼 두지 않으면 API revision이 백테스트를 잡아
+Runner 전용 OI/market-data 설정 없이 실패할 수 있다.
+
+```bash
+az containerapp update \
+  --name "${AZ_CA_API}" \
+  --resource-group "${AZ_RG}" \
+  --set-env-vars \
+  EMBEDDED_RUNNER=false \
+  AZURE_BLOB_ACCOUNT_URL="https://${AZ_STORAGE_STRATEGIES}.blob.core.windows.net" \
+  OI_PARQUET_BLOB_CONTAINER="market-data" \
+  OI_PARQUET_BLOB_NAME_BTCUSDT="perp_meta/BTCUSDT_oi_5m.parquet"
+
+az containerapp update \
+  --name "${AZ_CA_RUNNER}" \
+  --resource-group "${AZ_RG}" \
+  --set-env-vars \
+  AZURE_BLOB_ACCOUNT_URL="https://${AZ_STORAGE_STRATEGIES}.blob.core.windows.net" \
+  OI_PARQUET_BLOB_CONTAINER="market-data" \
+  OI_PARQUET_BLOB_NAME_BTCUSDT="perp_meta/BTCUSDT_oi_5m.parquet"
+```
 
 기본 startup probe(짧은 TCP timeout, ~30s)에서는 alembic + init_db + Redis ping 합산 부팅 시간이 30초를 넘어가
 exit 137 → CrashLoopBackOff → Envoy 503(`upstream connect error / Connection refused`)이 발생한다.

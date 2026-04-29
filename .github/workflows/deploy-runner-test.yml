@@ -14,7 +14,7 @@ on:
       - infra/Dockerfile.runner
       - .github/workflows/llmtrader-runner-AutoDeployTrigger-fce05b31-a5b9-45c7-af61-c1fa39994159.yml
 
-  # Allow manual trigger 
+  # Allow manual trigger
   workflow_dispatch:
 
 env:
@@ -32,6 +32,9 @@ jobs:
       AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
       AZURE_CONTAINER_APP_NAME: test-runner
       IMAGE_NAME: service-runner
+      OI_BLOB_ACCOUNT_URL: https://teststrategies.blob.core.windows.net
+      OI_BLOB_CONTAINER: market-data
+      OI_BLOB_NAME_BTCUSDT: perp_meta/BTCUSDT_oi_5m.parquet
 
     steps:
       - name: Checkout to the branch
@@ -64,6 +67,10 @@ jobs:
           az containerapp update \
             --name "${AZURE_CONTAINER_APP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
-            --image "${IMAGE_TAG}"
+            --image "${IMAGE_TAG}" \
+            --set-env-vars \
+            AZURE_BLOB_ACCOUNT_URL="${OI_BLOB_ACCOUNT_URL}" \
+            OI_PARQUET_BLOB_CONTAINER="${OI_BLOB_CONTAINER}" \
+            OI_PARQUET_BLOB_NAME_BTCUSDT="${OI_BLOB_NAME_BTCUSDT}"
 
 

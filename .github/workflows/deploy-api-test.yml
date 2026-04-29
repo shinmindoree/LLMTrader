@@ -15,7 +15,7 @@ on:
       - .github/workflows/deploy-api-test.yml
       - .github/workflows/llmtrader-api-AutoDeployTrigger-51b80701-055a-457e-a751-7ca8a724937c.yml
 
-  # Allow manual trigger 
+  # Allow manual trigger
   workflow_dispatch:
 
 env:
@@ -33,6 +33,9 @@ jobs:
       AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
       AZURE_CONTAINER_APP_NAME: test-api
       IMAGE_NAME: service-api
+      OI_BLOB_ACCOUNT_URL: https://teststrategies.blob.core.windows.net
+      OI_BLOB_CONTAINER: market-data
+      OI_BLOB_NAME_BTCUSDT: perp_meta/BTCUSDT_oi_5m.parquet
 
     steps:
       - name: Checkout to the branch
@@ -66,6 +69,11 @@ jobs:
             --name "${AZURE_CONTAINER_APP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
             --image "${IMAGE_TAG}" \
-            --cpu 1.0 --memory 2Gi
+            --cpu 1.0 --memory 2Gi \
+            --set-env-vars \
+            EMBEDDED_RUNNER=false \
+            AZURE_BLOB_ACCOUNT_URL="${OI_BLOB_ACCOUNT_URL}" \
+            OI_PARQUET_BLOB_CONTAINER="${OI_BLOB_CONTAINER}" \
+            OI_PARQUET_BLOB_NAME_BTCUSDT="${OI_BLOB_NAME_BTCUSDT}"
 
 
