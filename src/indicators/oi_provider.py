@@ -153,16 +153,50 @@ class _RedisOiBackend:
     package (not redis.asyncio) so this works inside both sync and async hosts.
     """
 
-    def __init__(self, symbol: str, redis_url: str) -> None:
-        import redis  # type: ignore
+    def __init__(
+        self,
+        symbol: str,
+        *,
+        redis_url: str = "",
+        redis_host: str = "",
+        redis_username: str = "",
+        redis_password: str = "",
+    ) -> None:
+        from common.redis_client import (
+            create_redis_client,
+            create_redis_client_from_parts,
+            create_redis_client_with_aad,
+        )
+
         self._symbol = symbol
         self._key = REDIS_OI_KEY_FMT.format(symbol=symbol)
-        self._client = redis.from_url(
-            redis_url,
-            socket_connect_timeout=3,
-            socket_timeout=3,
-            decode_responses=True,
-        )
+        if redis_host and redis_username:
+            self._client = create_redis_client_with_aad(
+                host=redis_host,
+                username=redis_username,
+                port=int(os.environ.get("REDIS_PORT", "6380")),
+                ssl=os.environ.get("REDIS_SSL", "true").strip().lower() != "false",
+                socket_connect_timeout=3,
+                socket_timeout=3,
+                decode_responses=True,
+            )
+        elif redis_host and redis_password:
+            self._client = create_redis_client_from_parts(
+                host=redis_host,
+                port=int(os.environ.get("REDIS_PORT", "6380")),
+                password=redis_password,
+                ssl=os.environ.get("REDIS_SSL", "true").strip().lower() != "false",
+                socket_connect_timeout=3,
+                socket_timeout=3,
+                decode_responses=True,
+            )
+        else:
+            self._client = create_redis_client(
+                redis_url,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+                decode_responses=True,
+            )
         try:
             self._client.ping()
         except Exception as exc:  # noqa: BLE001
@@ -199,14 +233,17 @@ def get_oi_provider(symbol: str, mode: Optional[str] = None) -> object:
 
     mode: "backtest" or "live". When None, auto-detects from env:
       - if `OI_PROVIDER_MODE` is set, use it.
-      - elif `REDIS_URL` is configured, "live".
+            - elif `REDIS_URL` or `REDIS_HOST` is configured, "live".
       - else "backtest".
     """
     sym = symbol.upper()
     if mode is None:
         mode = os.environ.get("OI_PROVIDER_MODE", "").strip().lower()
         if not mode:
-            mode = "live" if os.environ.get("REDIS_URL", "").strip() else "backtest"
+            mode = "live" if (
+                os.environ.get("REDIS_URL", "").strip()
+                or os.environ.get("REDIS_HOST", "").strip()
+            ) else "backtest"
     key = (sym, mode)
     if key in _PROVIDERS:
         return _PROVIDERS[key]
@@ -214,9 +251,21 @@ def get_oi_provider(symbol: str, mode: Optional[str] = None) -> object:
         prov = _ParquetOiBackend(sym)
     elif mode == "live":
         redis_url = os.environ.get("REDIS_URL", "").strip()
-        if not redis_url:
-            raise RuntimeError("REDIS_URL not configured for live OI provider")
-        prov = _RedisOiBackend(sym, redis_url)
+        redis_host = os.environ.get("REDIS_HOST", "").strip()
+        redis_username = os.environ.get("REDIS_USERNAME", "").strip()
+        redis_password = os.environ.get("REDIS_PASSWORD", "")
+        if not redis_url and not (redis_host and (redis_username or redis_password)):
+            raise RuntimeError(
+                "REDIS_URL, REDIS_HOST+REDIS_USERNAME, or REDIS_HOST+REDIS_PASSWORD "
+                "is required for live OI provider"
+            )
+        prov = _RedisOiBackend(
+            sym,
+            redis_url=redis_url,
+            redis_host=redis_host,
+            redis_username=redis_username,
+            redis_password=redis_password,
+        )
     else:
         raise ValueError(f"unknown OI provider mode: {mode}")
     _PROVIDERS[key] = prov

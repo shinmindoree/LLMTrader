@@ -4,7 +4,10 @@ ENV TZ=UTC
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 WORKDIR /app
-COPY . /app
+
+COPY pyproject.toml uv.lock README.md /app/
+COPY src /app/src
+COPY scripts/oi_ingestor.py /app/scripts/oi_ingestor.py
 
 ENV PYTHONPATH=/app/src
 

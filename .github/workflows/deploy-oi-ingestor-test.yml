@@ -1,0 +1,84 @@
+name: Deploy OI Ingestor (test)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/oi_ingestor.py
+      - src/**
+      - pyproject.toml
+      - uv.lock
+      - infra/Dockerfile.oi_ingestor
+      - .github/workflows/deploy-oi-ingestor-test.yml
+
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_TEST }}
+      AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME_TEST }}
+      AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
+      AZURE_CONTAINER_APP_NAME: test-oi-ingestor
+      AZURE_REDIS_HOST: ${{ vars.AZURE_REDIS_HOST_TEST }}
+      AZURE_REDIS_AAD_USERNAME: ${{ vars.AZURE_REDIS_AAD_USERNAME_TEST }}
+      IMAGE_NAME: oi-ingestor
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v4
+
+      - name: Validate workflow inputs
+        run: |
+          : "${AZURE_RESOURCE_GROUP:?Missing vars.AZURE_RESOURCE_GROUP_TEST}"
+          : "${AZURE_ACR_NAME:?Missing vars.AZURE_ACR_NAME_TEST}"
+          : "${AZURE_ACR_LOGIN_SERVER:?Missing vars.AZURE_ACR_LOGIN_SERVER_TEST}"
+          : "${AZURE_CONTAINER_APP_NAME:?Missing AZURE_CONTAINER_APP_NAME}"
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_TEST }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID_TEST }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_TEST }}
+
+      - name: Build and push container image to registry
+        run: |
+          IMAGE_TAG="${AZURE_ACR_LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}"
+          az acr login --name "${AZURE_ACR_NAME}"
+          docker build -f infra/Dockerfile.oi_ingestor -t "${IMAGE_TAG}" .
+          docker push "${IMAGE_TAG}"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
+
+      - name: Update Container App image
+        run: |
+          REDIS_HOST="${AZURE_REDIS_HOST:-fdpo-test-redis.redis.cache.windows.net}"
+          REDIS_AAD_USERNAME="${AZURE_REDIS_AAD_USERNAME:-}"
+          if [ -z "${REDIS_AAD_USERNAME}" ]; then
+            REDIS_AAD_USERNAME="$(az containerapp show \
+              --name "${AZURE_CONTAINER_APP_NAME}" \
+              --resource-group "${AZURE_RESOURCE_GROUP}" \
+              --query identity.principalId \
+              --output tsv)"
+          fi
+          az containerapp update \
+            --name "${AZURE_CONTAINER_APP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --image "${IMAGE_TAG}" \
+            --remove-env-vars REDIS_URL REDIS_PASSWORD \
+            --set-env-vars \
+              REDIS_HOST="${REDIS_HOST}" \
+              REDIS_PORT=6380 \
+              REDIS_SSL=true \
+              REDIS_USERNAME="${REDIS_AAD_USERNAME}" \
+              OI_SYMBOLS=BTCUSDT \
+              OI_POLL_SECONDS=300 \
+              OI_TRIM_HOURS=30

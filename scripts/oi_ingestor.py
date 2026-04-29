@@ -14,7 +14,10 @@ Redis schema:
 Run as a separate Container Apps Job/long-running container (see infra/Dockerfile.oi_ingestor).
 
 Env:
-  REDIS_URL       (required)
+    REDIS_URL       Redis URL for key-based auth
+    REDIS_HOST      alternative to REDIS_URL, used with REDIS_PASSWORD or REDIS_USERNAME
+    REDIS_PASSWORD  key-based password for REDIS_HOST
+    REDIS_USERNAME  Entra ID Redis username/object id for REDIS_HOST
   OI_SYMBOLS      comma-separated, default BTCUSDT
   OI_POLL_SECONDS default 300 (5 minutes)
   OI_TRIM_HOURS   default 30  (sorted set retention)
@@ -30,13 +33,19 @@ import time
 from typing import Iterable
 
 import httpx
-import redis
+
+from common.redis_client import (
+    create_redis_client,
+    create_redis_client_from_parts,
+    create_redis_client_with_aad,
+)
 
 logger = logging.getLogger("oi_ingestor")
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+logging.getLogger("azure").setLevel(logging.WARNING)
 
 BINANCE_FAPI = os.environ.get("BINANCE_FAPI", "https://fapi.binance.com")
 REDIS_KEY_FMT = "oi:{symbol}:hist"
@@ -80,7 +89,7 @@ def fetch_oi_5m(client: httpx.Client, symbol: str, start_ms: int, end_ms: int) -
     return []
 
 
-def publish(rd: redis.Redis, symbol: str, rows: Iterable[dict],
+def publish(rd, symbol: str, rows: Iterable[dict],
             trim_after_ms: int) -> int:
     key = REDIS_KEY_FMT.format(symbol=symbol)
     pipe = rd.pipeline()
@@ -99,7 +108,7 @@ def publish(rd: redis.Redis, symbol: str, rows: Iterable[dict],
     return n
 
 
-def backfill_initial(rd: redis.Redis, http: httpx.Client, symbol: str,
+def backfill_initial(rd, http: httpx.Client, symbol: str,
                      hours: int = 25) -> int:
     end = int(time.time() * 1000)
     start = end - hours * 3600 * 1000
@@ -113,7 +122,7 @@ def backfill_initial(rd: redis.Redis, http: httpx.Client, symbol: str,
     return n
 
 
-def loop_once(rd: redis.Redis, http: httpx.Client, symbol: str, trim_hours: int) -> int:
+def loop_once(rd, http: httpx.Client, symbol: str, trim_hours: int) -> int:
     end = int(time.time() * 1000)
     # over-fetch the last 30 minutes so we don't miss late-arriving 5m closes
     start = end - 30 * 60 * 1000
@@ -126,8 +135,11 @@ def loop_once(rd: redis.Redis, http: httpx.Client, symbol: str, trim_hours: int)
 
 def main() -> int:
     redis_url = os.environ.get("REDIS_URL", "").strip()
-    if not redis_url:
-        logger.error("REDIS_URL is required")
+    redis_host = os.environ.get("REDIS_HOST", "").strip()
+    redis_password = os.environ.get("REDIS_PASSWORD", "")
+    redis_username = os.environ.get("REDIS_USERNAME", "").strip()
+    if not redis_url and not (redis_host and (redis_password or redis_username)):
+        logger.error("REDIS_URL, REDIS_HOST+REDIS_PASSWORD, or REDIS_HOST+REDIS_USERNAME is required")
         return 2
 
     symbols = [s.strip().upper() for s in os.environ.get("OI_SYMBOLS", "BTCUSDT").split(",") if s.strip()]
@@ -137,8 +149,33 @@ def main() -> int:
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    rd = redis.from_url(redis_url, socket_connect_timeout=5, socket_timeout=5,
-                        decode_responses=True)
+    if redis_host and redis_username:
+        rd = create_redis_client_with_aad(
+            host=redis_host,
+            username=redis_username,
+            port=int(os.environ.get("REDIS_PORT", "6380")),
+            ssl=os.environ.get("REDIS_SSL", "true").strip().lower() != "false",
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            decode_responses=True,
+        )
+    elif redis_host and redis_password:
+        rd = create_redis_client_from_parts(
+            host=redis_host,
+            port=int(os.environ.get("REDIS_PORT", "6380")),
+            password=redis_password,
+            ssl=os.environ.get("REDIS_SSL", "true").strip().lower() != "false",
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            decode_responses=True,
+        )
+    else:
+        rd = create_redis_client(
+            redis_url,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            decode_responses=True,
+        )
     rd.ping()
     logger.info("connected to redis; symbols=%s poll=%ds trim=%dh",
                 symbols, poll_seconds, trim_hours)
