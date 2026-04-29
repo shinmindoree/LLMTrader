@@ -1,0 +1,32 @@
+[load] klines + features
+[done] lsr_top_pos_w96_k2.5_h48_tp1.2_sl2.0
+  full: ret=+16.1% pf=1.05 dd=40.1% trades=615 +M=30/59
+  Q: 13/22 positive (worst=-12.6%)  6m: 6/11 positive (worst=-18.0% DD=20.4%)
+[done] lsr_top_pos_w96_k2.5_h24_tp1.2_sl2.0
+  full: ret=-6.9% pf=1.00 dd=43.7% trades=946 +M=30/59
+  Q: 11/22 positive (worst=-15.1%)  6m: 6/11 positive (worst=-27.1% DD=29.6%)
+[done] lsr_acc_w96_k2.0_h24_tp0.6_sl2.0
+  full: ret=-26.6% pf=0.96 dd=61.7% trades=1433 +M=32/68
+  Q: 13/24 positive (worst=-24.7%)  6m: 5/11 positive (worst=-27.8% DD=27.8%)
+[done] lsr_top_pos_w96_k2.5_h48_tp0.6_sl2.0
+  full: ret=+0.6% pf=1.02 dd=42.7% trades=615 +M=30/59
+  Q: 11/22 positive (worst=-12.3%)  6m: 6/11 positive (worst=-18.9% DD=22.5%)
+[done] oi_up_p_down_long_w4_koi0.5_kp0.5_h8_tp1.2_sl2.0
+  full: ret=+177.4% pf=1.10 dd=76.9% trades=2005 +M=40/68
+  Q: 15/24 positive (worst=-44.7%)  6m: 8/11 positive (worst=-49.6% DD=49.6%)
+[done] oi_down_p_up_short_w4_koi0.5_kp1.0_h48_tp2.0_sl2.0
+  full: ret=+25.5% pf=1.07 dd=60.1% trades=549 +M=36/68
+  Q: 13/23 positive (worst=-18.8%)  6m: 6/11 positive (worst=-31.0% DD=31.0%)
+[done] oi_down_p_up_short_w4_koi0.5_kp1.0_h24_tp2.0_sl2.0
+  full: ret=+63.9% pf=1.09 dd=67.3% trades=807 +M=35/68
+  Q: 13/23 positive (worst=-25.6%)  6m: 7/11 positive (worst=-41.0% DD=41.0%)
+[done] oi_down_p_down_long_w96_koi2.0_kp0.5_h48_tp2.0_sl1.2
+  full: ret=+214.0% pf=1.34 dd=22.4% trades=544 +M=42/68
+  Q: 18/24 positive (worst=-22.4%)  6m: 10/11 positive (worst=-5.6% DD=13.8%)
+[done] oi_up_p_up_short_w4_koi0.5_kp0.5_h48_tp0.6_sl2.0
+  full: ret=-11.9% pf=0.97 dd=55.1% trades=736 +M=37/68
+  Q: 12/24 positive (worst=-19.5%)  6m: 5/11 positive (worst=-24.1% DD=24.1%)
+[done] oi_up_p_down_long_w4_koi0.5_kp1.0_h8_tp1.2_sl2.0
+  full: ret=+247.0% pf=1.20 dd=60.5% trades=1127 +M=42/66
+  Q: 18/23 positive (worst=-39.2%)  6m: 9/11 positive (worst=-44.7% DD=46.3%)
+[summary] -> C:\dev\llmtrader\scripts\_micro_iter4_robust_summary.md
