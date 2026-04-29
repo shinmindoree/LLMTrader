@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+ENV TZ=UTC
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+WORKDIR /app
+COPY . /app
+
+ENV PYTHONPATH=/app/src
+
+RUN pip install --no-cache-dir uv
+RUN uv sync
+
+# Long-running OI poller for the OI capitulation-bottom strategy.
+# Required env: REDIS_URL
+# Optional env: OI_SYMBOLS (default BTCUSDT), OI_POLL_SECONDS (default 300),
+#               OI_TRIM_HOURS (default 30), BINANCE_FAPI (default https://fapi.binance.com)
+CMD ["uv", "run", "python", "scripts/oi_ingestor.py"]
