@@ -8,9 +8,14 @@ venv/
 .coverage
 .ruff_cache/
 .mypy_cache/
+test/
 dist/
 build/
 .DS_Store
 .verify_tmp/
+scripts/*.log
+scripts/*.txt
+scripts/*.jsonl
+scripts/_*.md
 
 

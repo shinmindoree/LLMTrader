@@ -14,9 +14,11 @@ build/
 .git/
 .DS_Store
 data/
+test/
 *.log
 scripts/*.log
 scripts/*.txt
 scripts/*.jsonl
+scripts/_*.md
 web/node_modules/
 web/.next/
