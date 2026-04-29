@@ -1,0 +1,31 @@
+[load] funding
+  6846 rows
+[load] klines
+  198365 bars
+[months] 37 buckets: 2023-04..2026-04
+[sweep] 2160 combos x 37 months = 79920 sims
+  ...200/2160
+  ...400/2160
+  ...600/2160
+  ...800/2160
+  ...1000/2160
+  ...1200/2160
+  ...1400/2160
+  ...1600/2160
+  ...1800/2160
+  ...2000/2160
+[done] wrote 2160 -> C:\dev\llmtrader\scripts\_funding_alpha_3y_monthly_results.jsonl
+
+=== Acceptance counts (out of 2160 combos, 36 months) ===
+  T1  agg_ret > 0                                      : 188
+  T2  +PF>=1.1 +trades>=30 +DD<=30%                    : 46
+  T3  +>=22/36 positive months (>=60%)                 : 26
+  T4  +>=25/36 positive months (~70%)                  : 7
+[summary] -> C:\dev\llmtrader\scripts\_funding_alpha_3y_monthly_summary.md
+
+Top 5 by agg_ret:
+  pos=+3e-05 neg=-1e-04 hold=24h tp=0.006 sl=0.020 | agg=+47.8% trades=716 pf=1.159 dd=11.3% +M=23/36
+  pos=+3e-05 neg=-7e-05 hold=24h tp=0.006 sl=0.020 | agg=+47.8% trades=724 pf=1.157 dd=11.3% +M=23/36
+  pos=+3e-05 neg=-5e-05 hold=24h tp=0.006 sl=0.020 | agg=+39.2% trades=746 pf=1.129 dd=11.3% +M=22/36
+  pos=+3e-05 neg=-3e-05 hold=24h tp=0.006 sl=0.020 | agg=+34.7% trades=764 pf=1.114 dd=11.3% +M=22/36
+  pos=+2e-05 neg=-7e-05 hold=24h tp=0.006 sl=0.020 | agg=+33.5% trades=755 pf=1.112 dd=14.4% +M=20/36
