@@ -118,9 +118,14 @@ class OiCapitulationBottomStrategy(Strategy):
         # always sets REDIS_URL (for its own cache), so env-only auto-detect
         # would incorrectly pick "live" during a backtest run.
         ctx_cls = type(ctx).__name__
+        ctx_module = type(ctx).__module__
         if "Backtest" in ctx_cls:
             mode = "backtest"
-        elif "Live" in ctx_cls:
+        elif (
+            "Live" in ctx_cls
+            or ctx_cls == "StreamBoundStrategyContext"
+            or ctx_module.startswith("live.")
+        ):
             mode = "live"
         else:
             mode = None  # fall through to env-based auto-detect

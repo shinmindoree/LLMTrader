@@ -31,6 +31,8 @@ jobs:
       AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME_TEST }}
       AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
       AZURE_CONTAINER_APP_NAME: test-runner
+      AZURE_REDIS_NAME: fdpo-test-redis
+      AZURE_REDIS_HOST: fdpo-test-redis.redis.cache.windows.net
       IMAGE_NAME: service-runner
       OI_BLOB_ACCOUNT_URL: https://teststrategies.blob.core.windows.net
       OI_BLOB_CONTAINER: market-data
@@ -64,11 +66,37 @@ jobs:
 
       - name: Update Container App image
         run: |
+          REDIS_NAME="${AZURE_REDIS_NAME:-fdpo-test-redis}"
+          REDIS_HOST="${AZURE_REDIS_HOST:-fdpo-test-redis.redis.cache.windows.net}"
+          REDIS_AAD_USERNAME="$(az containerapp show \
+            --name "${AZURE_CONTAINER_APP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --query identity.principalId \
+            --output tsv)"
+          EXISTING_ASSIGNMENT="$(az redis access-policy-assignment list \
+            --name "${REDIS_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --query "[?objectId=='${REDIS_AAD_USERNAME}'].name | [0]" \
+            --output tsv)"
+          if [ -z "${EXISTING_ASSIGNMENT}" ]; then
+            az redis access-policy-assignment create \
+              --name "${REDIS_NAME}" \
+              --resource-group "${AZURE_RESOURCE_GROUP}" \
+              --policy-assignment-name "${AZURE_CONTAINER_APP_NAME}-data-contributor" \
+              --access-policy-name "Data Contributor" \
+              --object-id "${REDIS_AAD_USERNAME}" \
+              --object-id-alias "${AZURE_CONTAINER_APP_NAME}"
+          fi
           az containerapp update \
             --name "${AZURE_CONTAINER_APP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
             --image "${IMAGE_TAG}" \
+            --remove-env-vars REDIS_URL REDIS_PASSWORD \
             --set-env-vars \
+            REDIS_HOST="${REDIS_HOST}" \
+            REDIS_PORT=6380 \
+            REDIS_SSL=true \
+            REDIS_USERNAME="${REDIS_AAD_USERNAME}" \
             AZURE_BLOB_ACCOUNT_URL="${OI_BLOB_ACCOUNT_URL}" \
             OI_PARQUET_BLOB_CONTAINER="${OI_BLOB_CONTAINER}" \
             OI_PARQUET_BLOB_NAME_BTCUSDT="${OI_BLOB_NAME_BTCUSDT}"
