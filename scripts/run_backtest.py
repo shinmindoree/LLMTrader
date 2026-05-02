@@ -42,6 +42,18 @@ def parse_args() -> argparse.Namespace:
         default=0.05,
         help="StopLoss 비율 (0.0~1.0, 예: 0.05 = 5%, 기본: 0.05)",
     )
+    parser.add_argument(
+        "--strategy-params",
+        type=str,
+        default=None,
+        help="전략 파라미터 JSON 문자열 (예: '{\"tp_pct\":0.08,\"sl_pct\":0.012}')",
+    )
+    parser.add_argument(
+        "--save-result",
+        type=Path,
+        default=None,
+        help="백테스트 결과(JSON) 저장 경로",
+    )
     return parser.parse_args()
 
 
@@ -158,7 +170,17 @@ async def main():
         # 전략 로드
         strategy_class = load_strategy_class(args.strategy_file)
         # 전략 인스턴스 생성 (전략 파라미터는 전략 코드 내부 기본값 사용)
-        strategy = strategy_class()
+        strategy_kwargs: dict = {}
+        if args.strategy_params:
+            try:
+                strategy_kwargs = json.loads(args.strategy_params)
+                if not isinstance(strategy_kwargs, dict):
+                    raise ValueError("strategy-params 는 dict JSON 이어야 합니다")
+                print(f"🧩 strategy params 주입: {strategy_kwargs}")
+            except Exception as e:
+                print(f"❌ --strategy-params 파싱 실패: {e}")
+                return
+        strategy = strategy_class(**strategy_kwargs)
         
         # 백테스트 엔진 생성 및 실행
         engine = BacktestEngine(strategy, ctx, klines)
@@ -170,7 +192,15 @@ async def main():
         print("📈 백테스트 결과")
         print("=" * 80)
         print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
-        
+
+        if args.save_result:
+            args.save_result.parent.mkdir(parents=True, exist_ok=True)
+            args.save_result.write_text(
+                json.dumps(results, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            print(f"💾 결과 저장: {args.save_result}")
+
     finally:
         await client.aclose()
 

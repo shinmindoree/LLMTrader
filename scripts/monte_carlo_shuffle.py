@@ -108,37 +108,34 @@ def _extract_returns(
                 continue
             except (TypeError, ValueError):
                 pass
-        # 2) Derive from entry/exit price + side.
-        entry = t.get("entry_price") or t.get("entry") or t.get("avg_entry_price")
-        exit_ = t.get("exit_price") or t.get("price")  # backtest uses 'price' as fill price
-        side = (t.get("side") or t.get("direction") or "").upper()
-        # Skip non-closing rows (entries without pnl recorded).
+        # 2) Only closing fills carry pnl; treat them as round trips.
         pnl = t.get("pnl") if "pnl" in t else t.get("realized_pnl")
-        if pnl is None or entry in (None, 0) or exit_ in (None, 0):
+        if pnl is None:
             continue
         try:
-            entry_f = float(entry)
-            exit_f = float(exit_)
+            pnl_f = float(pnl)
         except (TypeError, ValueError):
             continue
-        if entry_f <= 0:
-            continue
-        # In our backtest, a SELL fill that closes a long is the exit.
-        # 'side' on the trade row is the order side (BUY/SELL), so the
-        # position direction is the *opposite* of the closing fill.
-        if side == "SELL":
-            r = (exit_f - entry_f) / entry_f  # closing a long
-        elif side == "BUY":
-            r = (entry_f - exit_f) / entry_f  # closing a short
-        else:
-            # Fall back to sign of pnl
-            try:
-                pnl_f = float(pnl)
-            except (TypeError, ValueError):
+
+        qty = t.get("quantity") or t.get("qty")
+        price = t.get("price") or t.get("exit_price")
+        notional = t.get("position_size_usdt")
+        try:
+            if notional is not None and float(notional) > 0:
+                notional_f = float(notional)
+            elif qty is not None and price is not None and float(price) > 0:
+                notional_f = float(qty) * float(price)
+            else:
                 continue
-            r = pnl_f / abs(pnl_f) * abs(exit_f - entry_f) / entry_f if pnl_f else 0.0
+        except (TypeError, ValueError):
+            continue
+        if notional_f <= 0:
+            continue
+        # r = realized pnl as a fraction of the position notional that closed.
+        # This is the actual round-trip percent return regardless of side.
+        r = pnl_f / notional_f
         if apply_commission:
-            r -= 2.0 * commission  # entry + exit
+            r -= 2.0 * commission  # entry + exit fees
         rets.append(r)
     return rets
 
@@ -313,19 +310,19 @@ def main() -> None:
     print(f"Compounded simulation  (mode={args.r_mode}, leverage={args.leverage}x, "
           f"pos_pct={args.pos_pct}, initial={args.initial:.0f} USDT)")
     print("=" * 60)
-    print(f"  Original order  : final={orig_final:,.2f} USDT  "
-          f"({orig_total_pct:+,.1f}%)   max_dd={orig_dd * 100:.1f}%")
+    print(f"  Original order  : final={orig_final:,.6g} USDT  "
+          f"({orig_total_pct:+,.2f}%)   max_dd={orig_dd * 100:.2f}%")
     print()
     print(f"  Monte Carlo     : runs={args.runs}, seed={args.seed}")
     print(f"  Final equity (USDT) percentiles:")
     for q in ["p5", "p25", "p50", "p75", "p95"]:
-        print(f"     {q:>4}: {final_qs[q]:>16,.2f}")
+        print(f"     {q:>4}: {final_qs[q]:>20,.6g}")
     print(f"  Final return (%) percentiles:")
     for q in ["p5", "p25", "p50", "p75", "p95"]:
-        print(f"     {q:>4}: {final_pct_qs[q]:>+16,.1f}%")
+        print(f"     {q:>4}: {final_pct_qs[q]:>+16,.2f}%")
     print(f"  Max drawdown percentiles:")
     for q in ["p5", "p50", "p95"]:
-        print(f"     {q:>4}: {dd_qs[q] * 100:>6.1f}%")
+        print(f"     {q:>4}: {dd_qs[q] * 100:>6.2f}%")
     print(f"  Ruin probability (final<=0): {ruins / args.runs * 100:.2f}%  ({ruins}/{args.runs})")
 
     # ------------------------------------------------------------------
@@ -335,15 +332,20 @@ def main() -> None:
     print("=" * 60)
     print("Interpretation")
     print("=" * 60)
-    spread = (final_qs["p95"] - final_qs["p5"]) / max(1.0, final_qs["p50"])
-    print(f"  p95/p5 spread vs median = {spread:.1f}x")
-    print(f"    → high spread (>>1) means the headline number is highly")
-    print(f"      path-dependent (luck-of-order). Low spread (<1x) means")
-    print(f"      the alpha is robust to trade ordering.")
+    spread = (final_qs["p95"] - final_qs["p5"]) / max(1e-9, abs(final_qs["p50"]))
+    print(f"  Final-equity p95/p5 spread vs |median| = {spread:.3f}x")
+    print("    NOTE: under fixed-fraction sizing (equity *= 1 + lev*pos*r),")
+    print("    multiplication is commutative, so trade-order shuffling does")
+    print("    NOT change the final equity. The test's real signal is the")
+    print("    drawdown distribution below.")
+    dd_spread = dd_qs["p95"] - dd_qs["p5"]
+    print(f"  Max-drawdown spread (p95 - p5) = {dd_spread * 100:.2f} pp")
+    print(f"    -> larger spread means the path of losses can be much worse")
+    print(f"       in unlucky orderings even though the endpoint is fixed.")
     if mean_r > 0:
-        print(f"  mean per-trade return is positive ({mean_r * 100:+.3f}%) → edge present (pre-friction).")
+        print(f"  mean per-trade return is positive ({mean_r * 100:+.4f}%) -> edge present.")
     else:
-        print(f"  mean per-trade return is non-positive ({mean_r * 100:+.3f}%) → no clear edge.")
+        print(f"  mean per-trade return is non-positive ({mean_r * 100:+.4f}%) -> no edge after costs.")
 
 
 if __name__ == "__main__":
