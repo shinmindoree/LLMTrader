@@ -276,12 +276,18 @@ async def run_backtest(
             max_pyramid_entries=int(config.get("max_pyramid_entries") or 0),
         )
         risk_manager = BacktestRiskManager(risk_config)
+        fixed_notional_raw = config.get("fixed_notional")
+        try:
+            fixed_notional = float(fixed_notional_raw) if fixed_notional_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            fixed_notional = None
         ctx = BacktestContext(
             symbol=symbol,
             leverage=leverage,
             initial_balance=initial_balance,
             risk_manager=risk_manager,
             commission_rate=commission,
+            fixed_notional=fixed_notional,
         )
 
         strategy_file, cleanup_strategy_file = resolve_strategy_file(

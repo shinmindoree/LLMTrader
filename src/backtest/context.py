@@ -28,12 +28,18 @@ class BacktestContext:
         initial_balance: float,
         risk_manager: BacktestRiskManager,
         commission_rate: float = 0.0004,  # taker 수수료 0.04%
+        fixed_notional: float | None = None,
     ) -> None:
         self.symbol = symbol
         self.leverage = leverage
         self._balance = initial_balance
         self.risk_manager = risk_manager
         self.commission_rate = commission_rate
+        # 고정 사이즈 모드: 매 트레이드마다 자기자본과 무관하게 fixed_notional USDT 명목 사용.
+        # None이면 기존 동작(자기자본 × leverage × pct)으로 복리 효과가 적용된다.
+        self.fixed_notional: float | None = (
+            float(fixed_notional) if fixed_notional is not None and float(fixed_notional) > 0 else None
+        )
         
         self.position = BacktestPosition()
         self._current_price: float = 0.0
@@ -135,6 +141,12 @@ class BacktestContext:
         use_price = float(price if price is not None else self._current_price)
         if use_price <= 0:
             return 0.0
+        # 고정 사이즈 모드: 자기자본/복리 효과 무시하고 매 트레이드 동일한 명목으로 진입.
+        # 알파(트레이드당 평균 R) 측정과 Monte Carlo 분석에 사용.
+        if self.fixed_notional is not None:
+            notional = float(self.fixed_notional) * float(self.leverage)
+            qty = notional / use_price
+            return max(0.0, qty)
         equity = float(self.total_equity)
         if equity <= 0:
             return 0.0
