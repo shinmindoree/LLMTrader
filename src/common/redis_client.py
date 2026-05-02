@@ -102,6 +102,12 @@ class AzureRedisCredentialProvider:
             self._expires_on = int(token.expires_on)
         return self._username, self._token
 
+    async def get_credentials_async(self) -> tuple[str, str]:
+        # Async path used by redis.asyncio. Token acquisition is synchronous
+        # in azure-identity's sync DefaultAzureCredential, but this is fast
+        # (cached after first call) and only invoked on (re)connect.
+        return self.get_credentials()
+
 
 def create_redis_client_with_aad(
     *,
