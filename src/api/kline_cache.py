@@ -13,7 +13,10 @@ from typing import Any
 
 import msgpack
 
-from common.redis_client import create_async_redis_client
+from common.redis_client import (
+    create_async_redis_client,
+    create_async_redis_client_with_aad,
+)
 from settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -37,12 +40,23 @@ async def _get_redis() -> Any | None:
             logger.info("Redis not configured; kline cache disabled")
             return None
         try:
-            _redis_client = create_async_redis_client(
-                settings.redis.url,
-                decode_responses=False,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-            )
+            if settings.redis.is_aad_configured:
+                _redis_client = create_async_redis_client_with_aad(
+                    host=settings.redis.host,
+                    username=settings.redis.username,
+                    port=settings.redis.port,
+                    ssl=settings.redis.ssl,
+                    decode_responses=False,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
+            else:
+                _redis_client = create_async_redis_client(
+                    settings.redis.url,
+                    decode_responses=False,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
             await _redis_client.ping()
             logger.info("Redis kline cache connected")
         except Exception:

@@ -112,13 +112,21 @@ class RedisSettings(BaseSettings):
     """Redis 캐시 설정."""
 
     url: str = Field(default="", alias="REDIS_URL")
+    host: str = Field(default="", alias="REDIS_HOST")
+    port: int = Field(default=6380, alias="REDIS_PORT")
+    ssl: bool = Field(default=True, alias="REDIS_SSL")
+    username: str = Field(default="", alias="REDIS_USERNAME")
     kline_cache_ttl: int = Field(default=300, alias="REDIS_KLINE_CACHE_TTL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
+    def is_aad_configured(self) -> bool:
+        return bool(self.host.strip() and self.username.strip())
+
+    @property
     def is_configured(self) -> bool:
-        return bool(self.url.strip())
+        return self.is_aad_configured or bool(self.url.strip())
 
 
 class AzureBlobSettings(BaseSettings):

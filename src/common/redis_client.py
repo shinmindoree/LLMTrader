@@ -145,3 +145,32 @@ def create_async_redis_client(
             socket_timeout=socket_timeout,
         )
     )
+
+
+def create_async_redis_client_with_aad(
+    *,
+    host: str,
+    username: str,
+    port: int = 6380,
+    ssl: bool = True,
+    db: int = 0,
+    decode_responses: bool = True,
+    socket_connect_timeout: int = 5,
+    socket_timeout: int = 5,
+) -> Any:
+    """Async Redis client using Entra ID (managed identity) auth.
+
+    Mirrors `create_redis_client_with_aad` but for redis.asyncio.
+    """
+    import redis.asyncio as aioredis
+
+    return aioredis.Redis(
+        host=host,
+        port=port,
+        db=db,
+        ssl=ssl,
+        credential_provider=AzureRedisCredentialProvider(username),
+        decode_responses=decode_responses,
+        socket_connect_timeout=socket_connect_timeout,
+        socket_timeout=socket_timeout,
+    )
