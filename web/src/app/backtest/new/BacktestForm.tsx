@@ -94,6 +94,7 @@ export type BacktestInitialConfig = {
   stopLossPct?: number;
   stopLossEnabled?: boolean;
   maxPyramidEntries?: number;
+  fixedNotional?: number | null;
   startDate?: string;
   endDate?: string;
   strategyParams?: Record<string, unknown>;
@@ -123,6 +124,11 @@ export function BacktestForm({
   const [stopLossPct, setStopLossPct] = useState<number | string>(initialConfig?.stopLossPct ?? 0.05);
   const [stopLossEnabled, setStopLossEnabled] = useState(initialConfig?.stopLossEnabled ?? true);
   const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(initialConfig?.maxPyramidEntries ?? 0);
+  const [fixedNotional, setFixedNotional] = useState<number | string>(
+    initialConfig?.fixedNotional !== undefined && initialConfig?.fixedNotional !== null
+      ? initialConfig.fixedNotional
+      : "",
+  );
   const now = new Date();
   const [startDate, setStartDate] = useState(() => initialConfig?.startDate ?? formatDateInputValue(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
   const [endDate, setEndDate] = useState(() => initialConfig?.endDate ?? formatDateInputValue(now));
@@ -180,6 +186,11 @@ export function BacktestForm({
         start_ts: startTs,
         end_ts: endTs,
       };
+      const fixedNotionalNum =
+        fixedNotional === "" || fixedNotional === null ? null : Number(fixedNotional);
+      if (fixedNotionalNum !== null && !Number.isNaN(fixedNotionalNum) && fixedNotionalNum > 0) {
+        config.fixed_notional = fixedNotionalNum;
+      }
       if (Object.keys(strategyParams).length > 0) {
         config.strategy_params = strategyParams;
       }
@@ -411,6 +422,30 @@ export function BacktestForm({
             max={10}
             onChange={(e) => setMaxPyramidEntries(e.target.value === "" ? "" : Number(e.target.value))}
             onBlur={() => { if (maxPyramidEntries === "" || isNaN(Number(maxPyramidEntries))) setMaxPyramidEntries(0); }}
+          />
+        </label>
+        <label className="text-sm">
+          <div className="mb-1 text-xs text-[#868993]">
+            <>
+              {t.form.fixedNotional}
+              <InfoTooltip text={t.form.tooltipFixedNotional} />
+            </>
+          </div>
+          <input
+            id="fixed-notional"
+            name="fixed-notional"
+            className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
+            type="number"
+            min={0}
+            step={1}
+            placeholder={t.form.fixedNotionalPlaceholder}
+            value={fixedNotional}
+            onChange={(e) => setFixedNotional(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => {
+              if (fixedNotional !== "" && (isNaN(Number(fixedNotional)) || Number(fixedNotional) < 0)) {
+                setFixedNotional("");
+              }
+            }}
           />
         </label>
       </div>
