@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="백테스트 결과(JSON) 저장 경로",
     )
+    parser.add_argument(
+        "--fixed-notional",
+        type=float,
+        default=None,
+        help="고정 명목 사이즈 (USDT). 설정 시 자기자본/복리 무시하고 매 트레이드 동일 명목 진입.",
+    )
     return parser.parse_args()
 
 
@@ -165,6 +171,7 @@ async def main():
             initial_balance=args.initial_balance,
             risk_manager=risk_manager,
             commission_rate=args.commission,
+            fixed_notional=args.fixed_notional,
         )
         
         # 전략 로드

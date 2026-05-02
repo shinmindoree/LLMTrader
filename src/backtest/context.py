@@ -125,10 +125,18 @@ class BacktestContext:
         stop_loss_pct = self.risk_manager.config.stop_loss_pct
         if stop_loss_pct <= 0:
             return False
-        entry_balance = float(self.position.entry_balance or 0.0)
-        if entry_balance <= 0:
-            return False
-        current_pnl_pct = float(self.position.unrealized_pnl) / entry_balance
+        # 고정 사이즈 모드에서는 entry_balance가 의미 없으므로 (음수가 될 수도 있음)
+        # 진입 명목(quantity * entry_price)을 분모로 사용해 가격 기준 SL을 적용한다.
+        if self.fixed_notional is not None:
+            denom = abs(self.position.size) * float(self.position.entry_price or 0.0)
+            if denom <= 0:
+                return False
+            current_pnl_pct = float(self.position.unrealized_pnl) / denom
+        else:
+            entry_balance = float(self.position.entry_balance or 0.0)
+            if entry_balance <= 0:
+                return False
+            current_pnl_pct = float(self.position.unrealized_pnl) / entry_balance
         if current_pnl_pct <= -stop_loss_pct:
             position_type = "Long" if self.position.size > 0 else "Short"
             reason_msg = f"StopLoss {position_type} (PnL {current_pnl_pct * 100:.2f}% of entry balance)"
@@ -318,11 +326,15 @@ class BacktestContext:
             })
             return
         
-        valid, msg = self.risk_manager.validate_order_size(
-            quantity, price, self.total_equity, self.leverage
-        )
-        if not valid:
-            return
+        # 고정 사이즈 모드에서는 자기자본 기반 검증(equity * leverage * max_order_size)을
+        # 우회한다. 이 모드의 목적이 equity와 무관하게 매 트레이드 동일 명목으로
+        # 진입하는 것이므로 equity가 줄어들면 거부되는 것이 부적절하다.
+        if self.fixed_notional is None:
+            valid, msg = self.risk_manager.validate_order_size(
+                quantity, price, self.total_equity, self.leverage
+            )
+            if not valid:
+                return
         
         order_value = quantity * price
         commission = order_value * self.commission_rate
@@ -419,11 +431,13 @@ class BacktestContext:
             })
             return
         
-        valid, msg = self.risk_manager.validate_order_size(
-            quantity, price, self.total_equity, self.leverage
-        )
-        if not valid:
-            return
+        # 고정 사이즈 모드에서는 equity 기반 한도 검증 우회 (위 buy 참고).
+        if self.fixed_notional is None:
+            valid, msg = self.risk_manager.validate_order_size(
+                quantity, price, self.total_equity, self.leverage
+            )
+            if not valid:
+                return
         
         order_value = quantity * price
         commission = order_value * self.commission_rate
