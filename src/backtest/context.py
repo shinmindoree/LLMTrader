@@ -29,12 +29,20 @@ class BacktestContext:
         risk_manager: BacktestRiskManager,
         commission_rate: float = 0.0004,  # taker 수수료 0.04%
         fixed_notional: float | None = None,
+        slippage_bps: float = 0.0,
     ) -> None:
         self.symbol = symbol
         self.leverage = leverage
         self._balance = initial_balance
         self.risk_manager = risk_manager
         self.commission_rate = commission_rate
+        # 슬리피지 (basis points). 5 = 0.05%. 매수는 더 비싸게, 매도는 더 싸게 체결되는
+        # 불리한 방향으로 적용한다 (시장가 슬리피지 모델).
+        try:
+            slip = float(slippage_bps)
+        except (TypeError, ValueError):
+            slip = 0.0
+        self.slippage_rate = max(0.0, slip) / 10_000.0
         # 고정 사이즈 모드: 매 트레이드마다 자기자본과 무관하게 fixed_notional USDT 명목 사용.
         # None이면 기존 동작(자기자본 × leverage × pct)으로 복리 효과가 적용된다.
         self.fixed_notional: float | None = (
@@ -289,11 +297,13 @@ class BacktestContext:
         
         if self.position.size < 0:
             fill_qty = min(quantity, abs(self.position.size))
+            # 매수 체결은 슬리피지만큼 더 비싸게 들어간다 (숨 포지션 청산).
+            fill_price = price * (1.0 + self.slippage_rate) if self.slippage_rate > 0 else price
             
-            order_value = fill_qty * price
+            order_value = fill_qty * fill_price
             commission = order_value * self.commission_rate
             
-            pnl = (self.position.entry_price - price) * fill_qty
+            pnl = (self.position.entry_price - fill_price) * fill_qty
             self.balance += pnl - commission
             
             self.position.size += fill_qty
@@ -303,26 +313,26 @@ class BacktestContext:
                 self.position.entry_balance = 0.0
                 self._pyramid_count = 0
             
-            position_size_usdt = fill_qty * price
+            position_size_usdt = fill_qty * fill_price
             balance_after = self.balance
             self.trades.append({
                 "side": "BUY",
                 "quantity": fill_qty,
-                "price": price,
+                "price": fill_price,
                 "pnl": pnl,
                 "commission": commission,
                 "reason": reason or "",
                 "exit_reason": exit_reason,
                 "timestamp": self._current_timestamp,
                 "position_size_usdt": position_size_usdt,
-                "entry_price": self.position.entry_price if self.position.size != 0 else price,
+                "entry_price": self.position.entry_price if self.position.size != 0 else fill_price,
                 "balance_after": balance_after,
             })
             
             self.orders.append({
                 "side": "BUY",
                 "quantity": fill_qty,
-                "price": price,
+                "price": fill_price,
             })
             return
         
@@ -336,27 +346,31 @@ class BacktestContext:
             if not valid:
                 return
         
-        order_value = quantity * price
+        # 매수 진입 체결은 슬리피지만큼 더 비싸게 들어간다. 리스크 검증은 매매 의사결정 가격(price)
+        # 기준으로 수행하고, 슬리피지는 체결가에만 적용한다.
+        fill_price = price * (1.0 + self.slippage_rate) if self.slippage_rate > 0 else price
+        
+        order_value = quantity * fill_price
         commission = order_value * self.commission_rate
         
         if self.position.size == 0:
             self.position.size = quantity
-            self.position.entry_price = price
+            self.position.entry_price = fill_price
             self.position.entry_balance = self._balance
             self._pyramid_count = 0
         else:
-            total_value = self.position.size * self.position.entry_price + quantity * price
+            total_value = self.position.size * self.position.entry_price + quantity * fill_price
             self.position.size += quantity
             self.position.entry_price = total_value / self.position.size
         
         self.balance -= commission
         
-        position_size_usdt = quantity * price
+        position_size_usdt = quantity * fill_price
         balance_after = self.balance
         self.trades.append({
             "side": "BUY",
             "quantity": quantity,
-            "price": price,
+            "price": fill_price,
             "commission": commission,
             "reason": reason or "",
             "exit_reason": exit_reason,
@@ -369,7 +383,7 @@ class BacktestContext:
         self.orders.append({
             "side": "BUY",
             "quantity": quantity,
-            "price": price,
+            "price": fill_price,
         })
     
     def sell(
@@ -394,11 +408,13 @@ class BacktestContext:
         
         if self.position.size > 0:
             fill_qty = min(quantity, abs(self.position.size))
+            # 매도 체결은 슬리피지만큼 더 싸게 나간다 (롱 포지션 청산).
+            fill_price = price * (1.0 - self.slippage_rate) if self.slippage_rate > 0 else price
             
-            order_value = fill_qty * price
+            order_value = fill_qty * fill_price
             commission = order_value * self.commission_rate
             
-            pnl = (price - self.position.entry_price) * fill_qty
+            pnl = (fill_price - self.position.entry_price) * fill_qty
             self.balance += pnl - commission
             
             self.position.size -= fill_qty
@@ -408,26 +424,26 @@ class BacktestContext:
                 self.position.entry_balance = 0.0
                 self._pyramid_count = 0
             
-            position_size_usdt = fill_qty * price
+            position_size_usdt = fill_qty * fill_price
             balance_after = self.balance
             self.trades.append({
                 "side": "SELL",
                 "quantity": fill_qty,
-                "price": price,
+                "price": fill_price,
                 "pnl": pnl,
                 "commission": commission,
                 "reason": reason or "",
                 "exit_reason": exit_reason,
                 "timestamp": self._current_timestamp,
                 "position_size_usdt": position_size_usdt,
-                "entry_price": self.position.entry_price if abs(self.position.size) > 1e-12 else price,
+                "entry_price": self.position.entry_price if abs(self.position.size) > 1e-12 else fill_price,
                 "balance_after": balance_after,
             })
             
             self.orders.append({
                 "side": "SELL",
                 "quantity": fill_qty,
-                "price": price,
+                "price": fill_price,
             })
             return
         
@@ -439,40 +455,43 @@ class BacktestContext:
             if not valid:
                 return
         
-        order_value = quantity * price
+        # 숨 진입 체결은 슬리피지만큼 더 싸게. 리스크 검증은 의사결정 가격(price) 기준.
+        fill_price = price * (1.0 - self.slippage_rate) if self.slippage_rate > 0 else price
+        
+        order_value = quantity * fill_price
         commission = order_value * self.commission_rate
         
         if self.position.size == 0:
             self.position.size = -quantity
-            self.position.entry_price = price
+            self.position.entry_price = fill_price
             self.position.entry_balance = self._balance
             self._pyramid_count = 0
         else:
-            total_value = abs(self.position.size) * self.position.entry_price + quantity * price
+            total_value = abs(self.position.size) * self.position.entry_price + quantity * fill_price
             self.position.size -= quantity
             self.position.entry_price = total_value / abs(self.position.size)
         
         self.balance -= commission
         
-        position_size_usdt = quantity * price
+        position_size_usdt = quantity * fill_price
         balance_after = self.balance
         self.trades.append({
             "side": "SELL",
             "quantity": quantity,
-            "price": price,
+            "price": fill_price,
             "commission": commission,
             "reason": reason or "",
             "exit_reason": exit_reason,
             "timestamp": self._current_timestamp,
             "position_size_usdt": position_size_usdt,
-            "entry_price": self.position.entry_price if self.position.size != 0 else price,
+            "entry_price": self.position.entry_price if self.position.size != 0 else fill_price,
             "balance_after": balance_after,
         })
         
         self.orders.append({
             "side": "SELL",
             "quantity": quantity,
-            "price": price,
+            "price": fill_price,
         })
     
     def close_position(

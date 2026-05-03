@@ -372,6 +372,7 @@ const ko: TranslationKeys = {
     leverage: "레버리지",
     initialBalance: "초기 자본금 (USDT)",
     commission: "수수료",
+    slippageBps: "슬리피지 (bps)",
     stopLoss: "손절 (%)",
     maxPyramid: "피라미딩 최대 횟수",
     fixedNotional: "고정 명목 (USDT)",
@@ -399,6 +400,7 @@ const ko: TranslationKeys = {
     tooltipMaxPosition: "총 자본 대비 최대 포지션 비율 (1~100%). 100%이면 전체 자본을 사용합니다.",
     tooltipDailyLossLimit: "하루 최대 허용 손실액 (USDT). 초과 시 당일 트레이딩을 중단합니다.",
     tooltipCommission: "트레이드당 수수료율. 기본값 0.04%.",
+    tooltipSlippageBps: "체결가에 불리한 방향으로 적용되는 슬리피지 (basis point, 1bp = 0.01%). 매수는 더 비싸게, 매도는 더 싸게 체결됩니다. 이상적 체결은 0, 현실적 테이커 조건은 약 5bps 변을 권장.",
     tooltipInitialBalance: "백테스트 시뮬레이션의 가상 시작 자본입니다.",
   },
   jobDetail: {
@@ -431,6 +433,7 @@ const ko: TranslationKeys = {
     pyramid: "피라미딩",
     initialBalance: "초기 자본금",
     commission: "수수료",
+    slippage: "슬리피지",
     period: "기간",
     candles: "캔들",
     max: "최대",

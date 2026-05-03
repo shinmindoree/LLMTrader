@@ -91,6 +91,7 @@ export type BacktestInitialConfig = {
   leverage?: number;
   initialBalance?: number;
   commission?: number;
+  slippageBps?: number;
   stopLossPct?: number;
   stopLossEnabled?: boolean;
   maxPyramidEntries?: number;
@@ -121,6 +122,7 @@ export function BacktestForm({
   const [leverage, setLeverage] = useState<number | string>(initialConfig?.leverage ?? 1);
   const [initialBalance, setInitialBalance] = useState<number | string>(initialConfig?.initialBalance ?? 1000);
   const [commission, setCommission] = useState<number | string>(initialConfig?.commission ?? 0.0004);
+  const [slippageBps, setSlippageBps] = useState<number | string>(initialConfig?.slippageBps ?? 0);
   const [stopLossPct, setStopLossPct] = useState<number | string>(initialConfig?.stopLossPct ?? 0.05);
   const [stopLossEnabled, setStopLossEnabled] = useState(initialConfig?.stopLossEnabled ?? true);
   const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(initialConfig?.maxPyramidEntries ?? 0);
@@ -181,6 +183,7 @@ export function BacktestForm({
         leverage,
         initial_balance: initialBalance,
         commission,
+        slippage_bps: slippageBps === "" ? 0 : Number(slippageBps),
         stop_loss_pct: stopLossEnabled ? stopLossPct : 0,
         max_pyramid_entries: maxPyramidEntries,
         start_ts: startTs,
@@ -377,6 +380,20 @@ export function BacktestForm({
             value={commission}
             onChange={(e) => setCommission(e.target.value === "" ? "" : Number(e.target.value))}
             onBlur={() => { if (commission === "" || isNaN(Number(commission))) setCommission(0.0004); }}
+          />
+        </label>
+        <label className="text-sm">
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.slippageBps}<InfoTooltip text={t.form.tooltipSlippageBps} /></></div>
+          <input
+            id="slippage-bps"
+            name="slippage-bps"
+            className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
+            type="number"
+            step="0.5"
+            min={0}
+            value={slippageBps}
+            onChange={(e) => setSlippageBps(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => { if (slippageBps === "" || isNaN(Number(slippageBps)) || Number(slippageBps) < 0) setSlippageBps(0); }}
           />
         </label>
         <label className="text-sm">

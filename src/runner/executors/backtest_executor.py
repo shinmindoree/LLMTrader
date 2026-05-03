@@ -237,6 +237,12 @@ async def run_backtest(
     initial_balance = float(config.get("initial_balance") or 1000.0)
     commission = float(config.get("commission") or 0.0004)
     stop_loss_pct = float(config.get("stop_loss_pct") or 0.05)
+    try:
+        slippage_bps = float(config.get("slippage_bps") or 0.0)
+    except (TypeError, ValueError):
+        slippage_bps = 0.0
+    if slippage_bps < 0:
+        slippage_bps = 0.0
     start_ts = int(config.get("start_ts") or 0)
     end_ts = int(config.get("end_ts") or 0)
     strategy_params = config.get("strategy_params") or {}
@@ -288,6 +294,7 @@ async def run_backtest(
             risk_manager=risk_manager,
             commission_rate=commission,
             fixed_notional=fixed_notional,
+            slippage_bps=slippage_bps,
         )
 
         strategy_file, cleanup_strategy_file = resolve_strategy_file(

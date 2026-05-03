@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
         help="StopLoss 비율 (0.0~1.0, 예: 0.05 = 5%, 기본: 0.05)",
     )
     parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=0.0,
+        help="슬리피지 (basis points, 1bp=0.01%). 예: 5 = 0.05%. 기본 0 (슬리피지 없음).",
+    )
+    parser.add_argument(
         "--strategy-params",
         type=str,
         default=None,
@@ -122,6 +128,7 @@ async def main():
     print(f"기간: {args.start_date} ~ {args.end_date}")
     print(f"수수료율: {args.commission * 100:.4f}%")
     print(f"StopLoss 비율: {args.stop_loss_pct * 100:.1f}%")
+    print(f"슬리피지: {args.slippage_bps:.2f} bps ({args.slippage_bps / 100.0:.4f}%)")
     print("=" * 80)
     print()
     
@@ -172,6 +179,7 @@ async def main():
             risk_manager=risk_manager,
             commission_rate=args.commission,
             fixed_notional=args.fixed_notional,
+            slippage_bps=args.slippage_bps,
         )
         
         # 전략 로드

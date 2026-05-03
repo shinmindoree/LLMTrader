@@ -67,6 +67,7 @@ function extractBacktestConfig(config: Record<string, unknown>) {
     leverage: config.leverage != null ? `${config.leverage}x` : "-",
     initialBalance: config.initial_balance != null ? `${config.initial_balance} USDT` : "-",
     commission: config.commission != null ? `${(Number(config.commission) * 100).toFixed(2)}%` : "-",
+    slippageBps: config.slippage_bps != null ? `${Number(config.slippage_bps).toFixed(1)} bps` : "-",
     stopLossPct: config.stop_loss_pct != null ? `${(Number(config.stop_loss_pct) * 100).toFixed(1)}%` : "-",
     maxPyramidEntries: config.max_pyramid_entries != null ? String(config.max_pyramid_entries) : null,
     startDate: formatTs(config.start_ts),
@@ -152,6 +153,7 @@ export function JobConfigSummary({
         <ConfigEntry label={t.jobConfig.leverage} value={c.leverage} />
         <ConfigEntry label={t.jobConfig.initialBalance} value={c.initialBalance} />
         <ConfigEntry label={t.jobConfig.commission} value={c.commission} />
+        <ConfigEntry label={t.jobConfig.slippage} value={c.slippageBps} />
         <ConfigEntry label={t.jobConfig.stopLoss} value={c.stopLossPct} />
         {c.maxPyramidEntries && c.maxPyramidEntries !== "0" ? (
           <ConfigEntry label={t.jobConfig.pyramid} value={`${t.jobConfig.max} ${c.maxPyramidEntries}`} />

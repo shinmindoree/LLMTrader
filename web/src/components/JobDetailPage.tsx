@@ -63,6 +63,7 @@ function buildInitialConfig(job: Job): BacktestInitialConfig {
     leverage: Number(c.leverage ?? 1),
     initialBalance: Number(c.initial_balance ?? 1000),
     commission: Number(c.commission ?? 0.0004),
+    slippageBps: Number(c.slippage_bps ?? 0),
     stopLossPct: slPct > 0 ? slPct : 0.05,
     stopLossEnabled: slPct > 0,
     maxPyramidEntries: Number(c.max_pyramid_entries ?? 0),

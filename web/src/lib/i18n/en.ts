@@ -369,6 +369,7 @@ const en = {
     leverage: "Leverage",
     initialBalance: "Initial Balance (USDT)",
     commission: "Commission",
+    slippageBps: "Slippage (bps)",
     stopLoss: "Stop Loss (%)",
     maxPyramid: "Max Pyramid Entries",
     fixedNotional: "Fixed Notional (USDT)",
@@ -396,6 +397,7 @@ const en = {
     tooltipMaxPosition: "Max position percentage relative to total capital (1-100%). 100% = use all capital.",
     tooltipDailyLossLimit: "Max daily allowed loss in USDT. Trading stops for the day if exceeded.",
     tooltipCommission: "Trading fee rate per trade. Default is 0.04%.",
+    tooltipSlippageBps: "Adverse fill slippage in basis points (1 bp = 0.01%). Buys fill higher, sells fill lower. Use 0 for ideal fills, ~5 bps for realistic taker conditions.",
     tooltipInitialBalance: "Virtual starting capital for the backtest simulation.",
   },
   jobDetail: {
@@ -428,6 +430,7 @@ const en = {
     pyramid: "Pyramid",
     initialBalance: "Initial Balance",
     commission: "Commission",
+    slippage: "Slippage",
     period: "Period",
     candles: "candles",
     max: "max",
