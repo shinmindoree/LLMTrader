@@ -8,6 +8,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md /app/
 COPY src /app/src
 COPY scripts/oi_ingestor.py /app/scripts/oi_ingestor.py
+COPY scripts/refresh_oi_parquet.py /app/scripts/refresh_oi_parquet.py
 
 ENV PYTHONPATH=/app/src
 

@@ -123,17 +123,36 @@ def _download_blob(container_name: str, blob_name: str) -> bytes:
 class _ParquetOiBackend:
     """Backtest backend: in-process parquet lookup."""
 
+    # Refuse to serve a value when the requested ts is more than this many ms
+    # past the last row in the parquet. Keeps stale data from silently masking
+    # itself as "OI flat -> no signal". Override with OI_PARQUET_STALE_TOLERANCE_MS.
+    _DEFAULT_STALE_TOLERANCE_MS = 6 * 60 * 60 * 1000  # 6h
+
     def __init__(self, symbol: str) -> None:
         import pandas as pd
         path = _resolve_parquet_path(symbol)
         df = pd.read_parquet(path).sort_values("timestamp").reset_index(drop=True)
         self._ts = df["timestamp"].to_numpy(dtype="int64")
         self._oi = df["sum_oi"].to_numpy(dtype="float64")
-        logger.info("[oi] parquet backend %s rows=%d range=%d..%d path=%s",
-                    symbol, len(self._ts), int(self._ts[0]), int(self._ts[-1]), path)
+        try:
+            self._stale_tol_ms = int(os.environ.get(
+                "OI_PARQUET_STALE_TOLERANCE_MS",
+                str(self._DEFAULT_STALE_TOLERANCE_MS),
+            ))
+        except ValueError:
+            self._stale_tol_ms = self._DEFAULT_STALE_TOLERANCE_MS
+        logger.info("[oi] parquet backend %s rows=%d range=%d..%d path=%s stale_tol_ms=%d",
+                    symbol, len(self._ts), int(self._ts[0]), int(self._ts[-1]),
+                    path, self._stale_tol_ms)
 
     def value_at(self, ts_ms: int) -> float:
-        idx = int(np.searchsorted(self._ts, int(ts_ms), side="right")) - 1
+        ts = int(ts_ms)
+        # Stale guard: if the parquet hasn't been refreshed past `ts` (within
+        # tolerance) we return NaN instead of a stuck last-row value. This
+        # makes "no trades" obvious instead of silent during data outages.
+        if len(self._ts) and ts > int(self._ts[-1]) + self._stale_tol_ms:
+            return math.nan
+        idx = int(np.searchsorted(self._ts, ts, side="right")) - 1
         if idx < 0:
             return math.nan
         return float(self._oi[idx])

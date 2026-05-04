@@ -22,6 +22,12 @@ Env:
   OI_POLL_SECONDS default 300 (5 minutes)
   OI_TRIM_HOURS   default 30  (sorted set retention)
   BINANCE_FAPI    default https://fapi.binance.com
+
+Optional backtest-parquet refresh (off when blob env not set):
+  OI_PARQUET_REFRESH_HOURS         default 6 (0 disables)
+  OI_PARQUET_BLOB_CONTAINER        e.g. market-data
+  OI_PARQUET_BLOB_NAME_{SYMBOL}    e.g. perp_meta/BTCUSDT_oi_5m.parquet
+  AZURE_BLOB_ACCOUNT_URL or AZURE_BLOB_CONNECTION_STRING
 """
 from __future__ import annotations
 
@@ -39,6 +45,18 @@ from common.redis_client import (
     create_redis_client_from_parts,
     create_redis_client_with_aad,
 )
+
+# refresh_oi_parquet sits next to this script in scripts/
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+try:
+    from refresh_oi_parquet import refresh_oi_parquet  # type: ignore[import-not-found]
+except Exception as _exc:  # noqa: BLE001
+    refresh_oi_parquet = None  # type: ignore[assignment]
+    _REFRESH_IMPORT_ERR = _exc
+else:
+    _REFRESH_IMPORT_ERR = None
 
 logger = logging.getLogger("oi_ingestor")
 logging.basicConfig(
@@ -145,6 +163,23 @@ def main() -> int:
     symbols = [s.strip().upper() for s in os.environ.get("OI_SYMBOLS", "BTCUSDT").split(",") if s.strip()]
     poll_seconds = int(os.environ.get("OI_POLL_SECONDS", "300"))
     trim_hours = int(os.environ.get("OI_TRIM_HOURS", "30"))
+    refresh_hours = float(os.environ.get("OI_PARQUET_REFRESH_HOURS", "6"))
+    blob_container = os.environ.get("OI_PARQUET_BLOB_CONTAINER", "").strip()
+    parquet_refresh_enabled = (
+        refresh_hours > 0 and bool(blob_container) and refresh_oi_parquet is not None
+    )
+    if refresh_hours > 0 and refresh_oi_parquet is None:
+        logger.warning(
+            "OI_PARQUET_REFRESH_HOURS set but refresh_oi_parquet import failed: %s",
+            _REFRESH_IMPORT_ERR,
+        )
+    if parquet_refresh_enabled:
+        logger.info(
+            "parquet refresh enabled: every %.1fh -> blob container=%s",
+            refresh_hours, blob_container,
+        )
+    else:
+        logger.info("parquet refresh disabled")
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
@@ -190,12 +225,39 @@ def main() -> int:
 
         # 2) Poll loop
         next_run = time.time()
+        # Schedule first parquet refresh ~5 min after startup so we don't
+        # block the initial Redis backfill, then every refresh_hours.
+        next_parquet_refresh = (
+            time.time() + 300.0 if parquet_refresh_enabled else float("inf")
+        )
         while not _shutdown:
             for sym in symbols:
                 try:
                     loop_once(rd, http, sym, trim_hours=trim_hours)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("poll failed for %s: %s", sym, exc)
+
+            # Backtest parquet refresh (best-effort; failures never abort poll).
+            if parquet_refresh_enabled and time.time() >= next_parquet_refresh:
+                for sym in symbols:
+                    blob_name = os.environ.get(f"OI_PARQUET_BLOB_NAME_{sym}", "").strip()
+                    if not blob_name:
+                        logger.warning(
+                            "parquet refresh skipped for %s: OI_PARQUET_BLOB_NAME_%s not set",
+                            sym, sym,
+                        )
+                        continue
+                    try:
+                        result = refresh_oi_parquet(  # type: ignore[misc]
+                            symbol=sym,
+                            blob_container_name=blob_container,
+                            blob_name=blob_name,
+                        )
+                        logger.info("parquet refresh ok %s: %s", sym, result)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("parquet refresh failed for %s: %s", sym, exc)
+                next_parquet_refresh = time.time() + refresh_hours * 3600.0
+
             next_run += poll_seconds
             sleep_for = max(1.0, next_run - time.time())
             for _ in range(int(sleep_for)):
