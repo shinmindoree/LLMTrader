@@ -145,9 +145,10 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     klines = load_klines_window(int(payload["start_ts"]), int(payload["end_ts"]))
 
     strat_cls = load_strategy_class(strategy_file)
+    leverage = int(payload["leverage"])
     risk = BacktestRiskManager(
         RiskConfig(
-            max_leverage=float(payload["leverage"]),
+            max_leverage=float(leverage),
             max_position_size=float(payload["max_position"]),
             max_order_size=float(payload["max_position"]),
             stop_loss_pct=float(payload["stop_loss_pct"]),
@@ -155,7 +156,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     )
     ctx = BacktestContext(
         symbol=payload["symbol"],
-        leverage=int(payload["leverage"]),
+        leverage=leverage,
         initial_balance=float(payload["initial_balance"]),
         risk_manager=risk,
         commission_rate=float(payload["commission"]),
@@ -169,7 +170,12 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     with contextlib.redirect_stdout(buf):
         results = engine.run()
     m = compute_metrics(results)
-    m.update({"tp": float(payload["tp"]), "sl": float(payload["sl"]), "label": payload["label"]})
+    m.update({
+        "tp": float(payload["tp"]),
+        "sl": float(payload["sl"]),
+        "leverage": leverage,
+        "label": payload["label"],
+    })
     return m
 
 
@@ -190,11 +196,16 @@ def score_oos(row: dict[str, Any], min_trades: int) -> float:
     return pf * te["ret_pct"] / dd
 
 
+def parse_ints(s: str) -> list[int]:
+    return [int(x.strip()) for x in s.split(",") if x.strip()]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--strategy", default=str(PROJECT_ROOT / "scripts/strategies/oi_capitulation_bottom_strategy.py"))
     ap.add_argument("--symbol", default="BTCUSDT")
-    ap.add_argument("--leverage", type=int, default=1)
+    ap.add_argument("--leverage", type=int, default=1, help="single leverage when --leverage-list is not provided")
+    ap.add_argument("--leverage-list", default=None, help="comma-separated leverages to sweep, e.g. '1,2,3,5,7,10'")
     ap.add_argument("--max-position", type=float, default=0.5)
     ap.add_argument("--initial-balance", type=float, default=1000.0)
     ap.add_argument("--commission", type=float, default=0.0004,
@@ -224,7 +235,8 @@ def main() -> None:
 
     tp_list = parse_floats(args.tp_list)
     sl_list = parse_floats(args.sl_list)
-    grid = [(tp, sl) for tp in tp_list for sl in sl_list]
+    lev_list = parse_ints(args.leverage_list) if args.leverage_list else [int(args.leverage)]
+    grid = [(tp, sl, lev) for tp in tp_list for sl in sl_list for lev in lev_list]
 
     print("=" * 80)
     print("OI TP/SL Sweep")
@@ -235,6 +247,7 @@ def main() -> None:
     print(f"OOS   window  : {args.test_start} .. {args.test_end}")
     print(f"TP list ({len(tp_list)}): {tp_list}")
     print(f"SL list ({len(sl_list)}): {sl_list}")
+    print(f"LEV list ({len(lev_list)}): {lev_list}")
     print(f"grid combos   : {len(grid)}  → {len(grid)*2} backtests")
     print(f"commission    : {args.commission}  slippage_bps: {args.slippage_bps}")
     print(f"workers       : {args.workers}")
@@ -244,7 +257,6 @@ def main() -> None:
         "strategy_file": str(strategy_file),
         "base_params": base_params,
         "symbol": args.symbol,
-        "leverage": args.leverage,
         "max_position": args.max_position,
         "initial_balance": args.initial_balance,
         "commission": args.commission,
@@ -254,54 +266,56 @@ def main() -> None:
     }
 
     payloads: list[dict[str, Any]] = []
-    for tp, sl in grid:
-        payloads.append({**common, "tp": tp, "sl": sl, "label": "train",
+    for tp, sl, lev in grid:
+        payloads.append({**common, "tp": tp, "sl": sl, "leverage": lev, "label": "train",
                          "start_ts": train[0], "end_ts": train[1]})
-        payloads.append({**common, "tp": tp, "sl": sl, "label": "test",
+        payloads.append({**common, "tp": tp, "sl": sl, "leverage": lev, "label": "test",
                          "start_ts": test[0], "end_ts": test[1]})
 
     t0 = time.time()
-    metrics_by_key: dict[tuple[float, float, str], dict[str, Any]] = {}
+    metrics_by_key: dict[tuple[float, float, int, str], dict[str, Any]] = {}
+
+    def _log(i: int, m: dict[str, Any]) -> None:
+        print(f"[{i}/{len(payloads)}] {m['label']:5s} TP={m['tp']:.3f} SL={m['sl']:.3f} L={m['leverage']:>2d}x  "
+              f"ret={m['ret_pct']:+8.2f}% pf={fmt_pf(m['pf']):>6s} dd={m['max_dd_pct']:6.2f}% n={m['trades']:3d}")
 
     if args.workers <= 1:
         for i, p in enumerate(payloads, 1):
             m = run_one(p)
-            metrics_by_key[(m["tp"], m["sl"], m["label"])] = m
-            print(f"[{i}/{len(payloads)}] {m['label']:5s} TP={m['tp']:.3f} SL={m['sl']:.3f}  "
-                  f"ret={m['ret_pct']:+7.2f}% pf={fmt_pf(m['pf']):>5s} dd={m['max_dd_pct']:5.2f}% n={m['trades']:3d}")
+            metrics_by_key[(m["tp"], m["sl"], m["leverage"], m["label"])] = m
+            _log(i, m)
     else:
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futures = [ex.submit(run_one, p) for p in payloads]
             for i, fut in enumerate(as_completed(futures), 1):
                 m = fut.result()
-                metrics_by_key[(m["tp"], m["sl"], m["label"])] = m
-                print(f"[{i}/{len(payloads)}] {m['label']:5s} TP={m['tp']:.3f} SL={m['sl']:.3f}  "
-                      f"ret={m['ret_pct']:+7.2f}% pf={fmt_pf(m['pf']):>5s} dd={m['max_dd_pct']:5.2f}% n={m['trades']:3d}")
+                metrics_by_key[(m["tp"], m["sl"], m["leverage"], m["label"])] = m
+                _log(i, m)
 
     # zip train+test per combo
     rows: list[dict[str, Any]] = []
-    for tp, sl in grid:
-        tr = metrics_by_key.get((tp, sl, "train"))
-        te = metrics_by_key.get((tp, sl, "test"))
+    for tp, sl, lev in grid:
+        tr = metrics_by_key.get((tp, sl, lev, "train"))
+        te = metrics_by_key.get((tp, sl, lev, "test"))
         if tr is None or te is None:
             continue
         rr = round(tp / sl, 2) if sl > 0 else None
-        rows.append({"tp": tp, "sl": sl, "rr": rr, "train": tr, "test": te})
+        rows.append({"tp": tp, "sl": sl, "leverage": lev, "rr": rr, "train": tr, "test": te})
 
     rows.sort(key=lambda r: score_oos(r, args.min_trades), reverse=True)
 
     elapsed = time.time() - t0
     print("=" * 80)
     print(f"completed {len(rows)} combos in {elapsed:.1f}s")
-    print(f"\n=== TOP 15 by OOS PF×ret/maxDD (min OOS trades = {args.min_trades}) ===")
-    header = f"{'#':>2} {'TP':>6} {'SL':>6} {'RR':>5} | {'tr.ret':>8} {'tr.pf':>6} {'tr.dd':>6} {'tr.n':>5} | {'te.ret':>8} {'te.pf':>6} {'te.dd':>6} {'te.n':>5} {'te.wr':>6}"
+    print(f"\n=== TOP 20 by OOS PF×ret/maxDD (min OOS trades = {args.min_trades}) ===")
+    header = f"{'#':>2} {'TP':>6} {'SL':>6} {'L':>3} {'RR':>5} | {'tr.ret':>9} {'tr.pf':>6} {'tr.dd':>6} {'tr.n':>5} | {'te.ret':>9} {'te.pf':>6} {'te.dd':>6} {'te.n':>5} {'te.wr':>6}"
     print(header)
     print("-" * len(header))
-    for i, r in enumerate(rows[:15], 1):
+    for i, r in enumerate(rows[:20], 1):
         tr, te = r["train"], r["test"]
-        print(f"{i:>2} {r['tp']:>6.3f} {r['sl']:>6.3f} {str(r['rr']):>5} | "
-              f"{tr['ret_pct']:>+8.2f} {fmt_pf(tr['pf']):>6} {tr['max_dd_pct']:>6.2f} {tr['trades']:>5} | "
-              f"{te['ret_pct']:>+8.2f} {fmt_pf(te['pf']):>6} {te['max_dd_pct']:>6.2f} {te['trades']:>5} {te['win_rate']:>6.2f}")
+        print(f"{i:>2} {r['tp']:>6.3f} {r['sl']:>6.3f} {r['leverage']:>3d} {str(r['rr']):>5} | "
+              f"{tr['ret_pct']:>+9.2f} {fmt_pf(tr['pf']):>6} {tr['max_dd_pct']:>6.2f} {tr['trades']:>5} | "
+              f"{te['ret_pct']:>+9.2f} {fmt_pf(te['pf']):>6} {te['max_dd_pct']:>6.2f} {te['trades']:>5} {te['win_rate']:>6.2f}")
 
     # also dump full grid sorted by TP then SL
     out = {
