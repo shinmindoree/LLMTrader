@@ -18,4 +18,15 @@ scripts/*.txt
 scripts/*.jsonl
 scripts/_*.md
 
+# Local backtest / sweep artifacts
+sweep_*.log
+sweep_*.json
+sweep_*.txt
+bt_*.log
+data/bt_*.json
+data/bt_*.log
+
+# Local scratch directory
+.tmp/
+
 
