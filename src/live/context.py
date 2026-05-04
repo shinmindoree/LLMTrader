@@ -425,12 +425,15 @@ class LiveContext:
             # 메시지 타임아웃으로 인한 정상 재연결: 조용히 처리
             await self._reconcile_missed_trades(is_actual_disconnect=False)
             await self.update_account_info(force=True)
-        
-        self._log_audit("USER_STREAM_RECONNECTED", {
-            "is_actual_disconnect": is_actual_disconnect,
-            "position_size": self.position.size,
-            "balance": self.balance,
-        })
+
+        # 메시지 타임아웃으로 인한 무음 재연결은 거래가 없을 때 1분 주기로 반복되어
+        # job event 콘솔을 도배한다. 실제 연결 끊김인 경우에만 audit 로그를 남긴다.
+        if is_actual_disconnect:
+            self._log_audit("USER_STREAM_RECONNECTED", {
+                "is_actual_disconnect": is_actual_disconnect,
+                "position_size": self.position.size,
+                "balance": self.balance,
+            })
 
     async def _rest_fallback_loop(self) -> None:
         """REST 폴백 루프 - User Stream 끊김 시 주기적으로 REST로 계좌/포지션 조회.
