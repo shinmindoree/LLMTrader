@@ -4,8 +4,9 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, and_, delete, func, or_, select, update
+from sqlalchemy import Select, and_, case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control.enums import EventKind, JobStatus, JobType
@@ -274,6 +275,58 @@ async def list_jobs(
         stmt = stmt.where(Job.status == status)
     result = await session.execute(stmt.order_by(Job.created_at.desc()).limit(limit))
     return list(result.scalars().all())
+
+
+# Heavy keys stripped from result_json at SQL projection time for list endpoints.
+# Keep in sync with src/api/main.py JobSummary serializer expectations.
+_HEAVY_RESULT_KEYS: tuple[str, ...] = ("chart", "trades")
+
+
+async def list_job_summaries(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    limit: int = 50,
+    job_type: JobType | None = None,
+    status: JobStatus | None = None,
+) -> list[Row[Any]]:
+    """List jobs with a slimmed-down ``result_summary`` projection.
+
+    Strips heavy keys (``chart``, ``trades``) from ``result_json`` at the SQL
+    layer so the API process never materializes multi-MB JSONB blobs in memory.
+    Use this for list/summary endpoints; for full result payloads keep using
+    :func:`get_job` / :func:`list_jobs`.
+    """
+    slim_expr = Job.result_json
+    for key in _HEAVY_RESULT_KEYS:
+        slim_expr = slim_expr.op("-")(key)
+    result_summary = case(
+        (
+            func.jsonb_typeof(Job.result_json) == "object",
+            slim_expr,
+        ),
+        else_=Job.result_json,
+    ).label("result_summary")
+
+    stmt = select(
+        Job.job_id,
+        Job.type,
+        Job.status,
+        Job.strategy_path,
+        Job.config_json,
+        Job.error,
+        Job.created_at,
+        Job.started_at,
+        Job.ended_at,
+        result_summary,
+    ).where(Job.user_id == user_id)
+    if job_type is not None:
+        stmt = stmt.where(Job.type == job_type)
+    if status is not None:
+        stmt = stmt.where(Job.status == status)
+
+    result = await session.execute(stmt.order_by(Job.created_at.desc()).limit(limit))
+    return list(result.all())
 
 
 async def count_jobs(

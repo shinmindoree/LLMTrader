@@ -42,6 +42,7 @@ from control.repo import (
     list_events,
     count_jobs,
     list_jobs,
+    list_job_summaries,
     list_orders,
     list_strategy_meta,
     list_strategy_chat_sessions as repo_list_strategy_chat_sessions,
@@ -167,47 +168,31 @@ def _job_to_response(job: Any) -> JobResponse:
     )
 
 
-# Keys in result_json that are too large for summary lists (chart candles, trade arrays, etc.)
-_HEAVY_RESULT_KEYS = {"trades", "chart"}
+def _job_summary_row_to_response(row: Any) -> JobSummary:
+    """Build a ``JobSummary`` from a row produced by ``list_job_summaries``.
 
-
-def _job_to_summary(job: Any) -> JobSummary:
-    """Lightweight conversion — strips heavy data (trades, chart) from result to reduce payload."""
-    raw = job.result_json
-    if raw and isinstance(raw, dict):
-        # Compute win_rate from trades before stripping heavy keys (backtest)
-        win_rate_computed = None
-        trades = raw.get("trades")
-        if isinstance(trades, list) and trades:
-            sell_pnls = [
-                t["pnl"]
-                for t in trades
-                if isinstance(t, dict)
-                and str(t.get("side", "")).upper() == "SELL"
-                and isinstance(t.get("pnl"), (int, float))
-            ]
-            if sell_pnls:
-                wins = sum(1 for p in sell_pnls if p > 0)
-                losses = sum(1 for p in sell_pnls if p < 0)
-                total = wins + losses
-                if total > 0:
-                    win_rate_computed = round((wins / total) * 100, 1)
-        summary = {k: v for k, v in raw.items() if k not in _HEAVY_RESULT_KEYS}
-        if win_rate_computed is not None and "win_rate" not in summary:
-            summary["win_rate"] = win_rate_computed
+    The repo layer already strips heavy keys (``chart``, ``trades``) from
+    ``result_json`` via SQL projection, so we never load multi-MB JSONB blobs
+    into the API process. ``row.result_summary`` is therefore safe to pass
+    through directly.
+    """
+    raw_summary = row.result_summary
+    summary: dict[str, Any] | None
+    if isinstance(raw_summary, dict):
+        summary = raw_summary
     else:
-        summary = raw
+        summary = None
     return JobSummary(
-        job_id=job.job_id,
-        type=JobType(str(job.type)),
-        status=job.status,
-        strategy_path=job.strategy_path,
-        config=_public_job_config(job.config_json),
+        job_id=row.job_id,
+        type=JobType(str(row.type)),
+        status=row.status,
+        strategy_path=row.strategy_path,
+        config=_public_job_config(row.config_json),
         result_summary=summary,
-        error=job.error,
-        created_at=job.created_at,
-        started_at=job.started_at,
-        ended_at=job.ended_at,
+        error=row.error,
+        created_at=row.created_at,
+        started_at=row.started_at,
+        ended_at=row.ended_at,
     )
 
 
@@ -1798,15 +1783,15 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> list[JobSummary]:
-        """Lightweight job list — excludes heavy trades data from result."""
-        rows = await list_jobs(
+        """Lightweight job list — heavy result keys (chart, trades) are stripped at SQL projection time."""
+        rows = await list_job_summaries(
             session,
             user_id=user.user_id,
             limit=limit,
             job_type=job_type,
             status=status,
         )
-        return [_job_to_summary(j) for j in rows]
+        return [_job_summary_row_to_response(r) for r in rows]
 
     @app.get("/api/jobs/counts", response_model=JobCountsResponse)
     async def job_counts(
