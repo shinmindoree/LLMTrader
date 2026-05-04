@@ -107,6 +107,44 @@ class StreamBoundStrategyContext:
     def register_indicator(self, name: str, func: Any) -> None:
         self._portfolio.register_indicator(name, func)
 
+    def get_close_history(self, n: int | None = None) -> list[float]:
+        """Return recent close prices for this stream (oldest -> newest).
+
+        Used by strategies that need to seed internal close history at
+        ``initialize()`` time so they avoid a warmup blackout after restart.
+        """
+        try:
+            sc = self._portfolio.get_stream(self.symbol, self.candle_interval)
+        except Exception:  # noqa: BLE001
+            sc = None
+        if sc is None:
+            return []
+        closes = list(getattr(sc, "_closes", []) or [])
+        if n is not None and n > 0 and len(closes) > n:
+            closes = closes[-n:]
+        return closes
+
+    def log_event(self, action: str, data: dict[str, Any] | None = None) -> None:
+        """Emit a strategy diagnostic event into the live job event stream.
+
+        Routed through the underlying ``LiveContext`` audit hook so it appears
+        on the job detail page's realtime log alongside ORDER/TRADE events.
+        Silently no-ops when no audit hook is configured (e.g. in tests).
+        """
+        try:
+            ctx = self._portfolio._trade_contexts.get(self.symbol)  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            return
+        if ctx is None:
+            return
+        log_audit = getattr(ctx, "_log_audit", None)
+        if not callable(log_audit):
+            return
+        try:
+            log_audit(action, dict(data or {}))
+        except Exception:  # noqa: BLE001
+            pass
+
 
 class PortfolioLiveTradingEngine:
     """멀티 (symbol, interval) 스트림을 하나의 전략에서 처리하는 라이브 엔진."""

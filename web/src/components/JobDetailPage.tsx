@@ -17,6 +17,7 @@ import { JobProgressGauge } from "@/components/JobProgressGauge";
 import { JobConfigSummary } from "@/components/JobConfigSummary";
 import { FormModal } from "@/components/FormModal";
 import { BacktestForm, type BacktestInitialConfig } from "@/app/backtest/new/BacktestForm";
+import { JobEventsConsole } from "@/app/jobs/[jobId]/JobEventsConsole";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -252,6 +253,12 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
       ) : null}
 
       {job ? <TradeAnalysis job={job} liveTrades={trades} /> : null}
+
+      {job && job.type === "LIVE" && validJobId && jobId ? (
+        <section className="mt-6">
+          <JobEventsConsole jobId={jobId} />
+        </section>
+      ) : null}
 
       {job?.type === "BACKTEST" && finished ? (
         <FormModal

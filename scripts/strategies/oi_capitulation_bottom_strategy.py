@@ -102,6 +102,11 @@ class OiCapitulationBottomStrategy(Strategy):
         self._is_closing: bool = False
         self._oi_provider: Any = None
         self._prev_signal: bool = False  # for edge-triggered entry
+        # Diagnostic logging throttle (live only): emit at most one EVAL log
+        # every N new bars to keep the event stream readable.
+        self._eval_log_every_bars: int = 1
+        self._last_eval_log_bar: int = -10**9
+        self._mode: str | None = None  # 'live' | 'backtest' (set in initialize)
 
         # Strategy meta (used by web UI / logs)
         self.params = params
@@ -130,12 +135,36 @@ class OiCapitulationBottomStrategy(Strategy):
         else:
             mode = None  # fall through to env-based auto-detect
         self._oi_provider = get_oi_provider(symbol, mode=mode)
+        self._mode = mode
         self._closes = []
         self._entry_bar_index = None
         self._entry_price = None
         self._bar_index = 0
         self._is_closing = False
         self._prev_signal = False
+        self._last_eval_log_bar = -10**9
+
+        # ---- Live restart warmup mitigation -------------------------------
+        # In live, the engine seeds 1000 bars of history into the bound
+        # CandleStreamIndicatorContext but the strategy's own ``_closes``
+        # list starts empty, forcing a 24h blackout after every restart.
+        # When the context exposes ``get_close_history()`` (live), preload
+        # the last (oi_lookback_bars + 1) closes so signals can fire on the
+        # very first new bar after restart.
+        seeded = 0
+        history_fn = getattr(ctx, "get_close_history", None)
+        if callable(history_fn):
+            try:
+                seed_n = self.oi_lookback_bars + 1
+                seeded_closes = history_fn(seed_n)
+                if seeded_closes:
+                    self._closes = [float(x) for x in seeded_closes if x and x > 0]
+                    seeded = len(self._closes)
+                    # Treat seeded bars as already-counted so warmup status
+                    # reflects reality. Bar index stays 0; new bars increment
+                    # both _bar_index and _closes length.
+            except Exception:  # noqa: BLE001
+                seeded = 0
 
         # Register a thin wrapper as a custom indicator for the dashboard.
         def _oi_pct_change_24h(_inner_ctx: Any) -> float:
@@ -150,6 +179,21 @@ class OiCapitulationBottomStrategy(Strategy):
             # Some lightweight contexts may not support register_indicator;
             # the strategy still works because it queries the provider directly.
             pass
+
+        # Emit one INIT diagnostic event (live only) so users can confirm
+        # warmup state from the job detail page.
+        self._emit_event(ctx, "OI_STRATEGY_INIT", {
+            "symbol": symbol,
+            "mode": mode,
+            "oi_lookback_bars": self.oi_lookback_bars,
+            "oi_drop_threshold": self.oi_drop_threshold,
+            "price_drop_threshold": self.price_drop_threshold,
+            "tp_pct": self.tp_pct,
+            "sl_pct": self.sl_pct,
+            "max_hold_bars": self.max_hold_bars,
+            "seeded_closes": seeded,
+            "warmup_remaining_bars": max(0, self.oi_lookback_bars + 1 - seeded),
+        })
 
     def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
         # Reset closing flag once flat
@@ -180,15 +224,30 @@ class OiCapitulationBottomStrategy(Strategy):
             if low <= sl_level or tick_price <= sl_level:
                 self._is_closing = True
                 ctx.close_position(reason=f"OI: SL -{self.sl_pct * 100:.1f}%")
+                self._emit_event(ctx, "OI_EXIT_SL", {
+                    "entry_price": self._entry_price,
+                    "exit_price": tick_price,
+                    "sl_level": sl_level,
+                })
                 return
             if high >= tp_level or tick_price >= tp_level:
                 self._is_closing = True
                 ctx.close_position(reason=f"OI: TP +{self.tp_pct * 100:.1f}%")
+                self._emit_event(ctx, "OI_EXIT_TP", {
+                    "entry_price": self._entry_price,
+                    "exit_price": tick_price,
+                    "tp_level": tp_level,
+                })
                 return
             if (is_new_bar and self._entry_bar_index is not None and
                     self._bar_index - self._entry_bar_index >= self.max_hold_bars):
                 self._is_closing = True
                 ctx.close_position(reason=f"OI: time exit ({self.max_hold_bars} bars)")
+                self._emit_event(ctx, "OI_EXIT_TIME", {
+                    "entry_price": self._entry_price,
+                    "exit_price": close,
+                    "held_bars": self._bar_index - self._entry_bar_index,
+                })
                 return
 
         # ---- Entry: only on the close of a new 15m bar.
@@ -238,6 +297,26 @@ class OiCapitulationBottomStrategy(Strategy):
 
         signal_now = (oi_chg <= self.oi_drop_threshold and
                       price_chg <= self.price_drop_threshold)
+
+        # ---- Diagnostic event (throttled): expose signal/data state to the
+        # live job detail page so users can verify what the strategy is
+        # observing in realtime. Emitted only in live (no-op in backtest).
+        if (self._bar_index - self._last_eval_log_bar) >= max(1, self._eval_log_every_bars):
+            self._emit_event(ctx, "OI_SIGNAL_EVAL", {
+                "bar_ts": ts,
+                "close": close,
+                "ref_close_24h": float(ref_close),
+                "price_24h_pct": round(price_chg * 100.0, 4),
+                "oi_24h_pct": round(oi_chg * 100.0, 4),
+                "price_threshold_pct": round(self.price_drop_threshold * 100.0, 4),
+                "oi_threshold_pct": round(self.oi_drop_threshold * 100.0, 4),
+                "signal": signal_now,
+                "edge": signal_now and not self._prev_signal,
+                "closes_buffered": len(self._closes),
+                "warmup_done": len(self._closes) > self.oi_lookback_bars,
+            })
+            self._last_eval_log_bar = self._bar_index
+
         # Edge-triggered: only enter on the rising edge of the signal cluster.
         # This matches the discovery sweep, which counts one trade per cluster.
         if signal_now and not self._prev_signal:
@@ -250,7 +329,31 @@ class OiCapitulationBottomStrategy(Strategy):
                 ctx.enter_long(reason=reason, entry_pct=float(entry_pct))
             self._entry_bar_index = self._bar_index
             self._entry_price = close
+            self._emit_event(ctx, "OI_ENTRY_FIRED", {
+                "bar_ts": ts,
+                "entry_price": close,
+                "oi_24h_pct": round(oi_chg * 100.0, 4),
+                "price_24h_pct": round(price_chg * 100.0, 4),
+                "tp_level": round(close * (1.0 + self.tp_pct), 4),
+                "sl_level": round(close * (1.0 - self.sl_pct), 4),
+                "entry_pct": entry_pct,
+            })
         self._prev_signal = signal_now
+
+    # ---- Diagnostic helper -------------------------------------------------
+    def _emit_event(self, ctx: Any, action: str, data: dict[str, Any]) -> None:
+        """Best-effort emit a diagnostic event into the live job stream.
+
+        No-op in backtest or whenever the context does not expose
+        ``log_event``. Never raises.
+        """
+        fn = getattr(ctx, "log_event", None)
+        if not callable(fn):
+            return
+        try:
+            fn(action, data)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---- bar timestamp resolution helpers ---------------------------------------
