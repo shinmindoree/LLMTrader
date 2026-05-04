@@ -64,12 +64,16 @@ jobs:
           echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
 
       - name: Update Container App image
+        # NOTE: cpu=2.0 / memory=4Gi is required to avoid OOM (exit 137) during cold start
+        # (alembic upgrade + init_db + Redis AAD ping + LLM client init peaks well above 2Gi).
+        # See /memories/repo/test-api-redis-aad.md and incident on 2026-05-04.
+        # Do NOT lower these values without first reducing startup memory peak.
         run: |
           az containerapp update \
             --name "${AZURE_CONTAINER_APP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
             --image "${IMAGE_TAG}" \
-            --cpu 1.0 --memory 2Gi \
+            --cpu 2.0 --memory 4Gi \
             --set-env-vars \
             EMBEDDED_RUNNER=false \
             AZURE_BLOB_ACCOUNT_URL="${OI_BLOB_ACCOUNT_URL}" \
