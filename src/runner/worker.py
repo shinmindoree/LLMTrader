@@ -11,11 +11,14 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from control.enums import EventKind, JobStatus, JobType
+from control.live_heartbeat import is_alive as redis_hb_is_alive
 from control.repo import (
     append_event,
     claim_next_pending_job,
     finalize_orphaned_jobs,
+    find_stale_live_job_ids,
     get_job,
+    requeue_live_jobs_by_ids,
     requeue_stale_live_jobs,
     set_job_finished,
 )
@@ -85,14 +88,44 @@ class RunnerWorker:
             await asyncio.sleep(interval)
             try:
                 async with self._session_maker() as session:
-                    n = await requeue_stale_live_jobs(
+                    candidate_ids = await find_stale_live_job_ids(
                         session,
                         stale_seconds=stale_sec,
                         initial_grace_seconds=grace_sec,
-                        reason="stale_live_heartbeat",
                     )
-                    if n:
-                        logger.info("requeued stale LIVE jobs (heartbeat): %d", n)
+                    if not candidate_ids:
+                        await session.commit()
+                        continue
+
+                    # Cross-check with Redis liveness. Only requeue if both
+                    # the DB heartbeat is stale AND Redis confirms the runner
+                    # is gone (or Redis is unavailable, in which case fall
+                    # back to DB-only behaviour).
+                    truly_dead: list[uuid.UUID] = []
+                    rescued: list[uuid.UUID] = []
+                    for jid in candidate_ids:
+                        alive = await redis_hb_is_alive(jid)
+                        if alive is True:
+                            rescued.append(jid)
+                        else:
+                            # alive is False (key absent) or None (Redis
+                            # unavailable) → treat as candidate for requeue.
+                            truly_dead.append(jid)
+
+                    if rescued:
+                        logger.info(
+                            "skipped %d LIVE jobs with fresh Redis heartbeat: %s",
+                            len(rescued),
+                            [str(j) for j in rescued],
+                        )
+                    if truly_dead:
+                        n = await requeue_live_jobs_by_ids(
+                            session,
+                            truly_dead,
+                            reason="stale_live_heartbeat",
+                        )
+                        if n:
+                            logger.info("requeued stale LIVE jobs (heartbeat): %d", n)
                     await session.commit()
             except Exception as exc:  # noqa: BLE001
                 logger.error("periodic stale-live reconcile error: %s: %s", type(exc).__name__, exc)

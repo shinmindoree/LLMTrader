@@ -8,6 +8,8 @@ from typing import Any
 from binance.client import BinanceHTTPClient
 from common.risk import RiskConfig
 from control.enums import EventKind
+from control.live_heartbeat import clear_alive as redis_hb_clear
+from control.live_heartbeat import mark_alive as redis_hb_mark
 from control.repo import update_live_job_heartbeat, store_live_initial_equity
 from live.context import LiveContext
 from live.indicator_context import CandleStreamIndicatorContext
@@ -218,24 +220,88 @@ async def run_live(
         await session.commit()
 
     hb_interval = max(10, int(settings.runner_live_heartbeat_interval_sec))
+    # Redis TTL must comfortably outlive the runner-side stale threshold so a
+    # single late beat does not flap the key. We also factor in heartbeat
+    # interval so a brief stall does not immediately mark the job stale.
+    hb_ttl = max(int(settings.runner_stale_live_seconds), hb_interval * 3)
+    # Best-effort DB heartbeat with a short cap so PgBouncer pool wait cannot
+    # block the loop. Redis is the primary liveness signal; DB write is an
+    # auxiliary record and tolerates transient failures.
+    db_hb_timeout = 5.0
+
+    # Seed an initial Redis liveness marker so the reconcile loop never sees
+    # a brand-new RUNNING job as stale even if the first DB heartbeat is
+    # delayed by cold-path queries.
+    await redis_hb_mark(job_id, ttl_seconds=hb_ttl)
 
     async def _heartbeat_loop() -> None:
         nonlocal _initial_equity_persisted
+        consecutive_failures = 0
+        degraded_emitted = False
         while not should_stop.is_set():
             await asyncio.sleep(hb_interval)
             if should_stop.is_set():
                 break
+
+            # ---- Primary: Redis heartbeat (decoupled from DB pool) ---------
+            redis_ok = await redis_hb_mark(job_id, ttl_seconds=hb_ttl)
+
+            # ---- Auxiliary: DB heartbeat with hard timeout -----------------
+            db_ok = False
+            db_error: str | None = None
             try:
-                async with session_maker() as session:
-                    await update_live_job_heartbeat(session, job_id)
-                    if not _initial_equity_persisted and engine.snapshots:
-                        eq = float(engine.snapshots[0].get("portfolio_total_equity") or 0)
-                        if eq > 0:
-                            await store_live_initial_equity(session, job_id, eq)
-                            _initial_equity_persisted = True
-                    await session.commit()
+                async def _do_db_hb() -> None:
+                    nonlocal _initial_equity_persisted
+                    async with session_maker() as session:
+                        await update_live_job_heartbeat(session, job_id)
+                        if not _initial_equity_persisted and engine.snapshots:
+                            eq = float(engine.snapshots[0].get("portfolio_total_equity") or 0)
+                            if eq > 0:
+                                await store_live_initial_equity(session, job_id, eq)
+                                _initial_equity_persisted = True
+                        await session.commit()
+
+                await asyncio.wait_for(_do_db_hb(), timeout=db_hb_timeout)
+                db_ok = True
+            except asyncio.TimeoutError:
+                db_error = f"timeout>{db_hb_timeout}s"
             except Exception as exc:  # noqa: BLE001
-                print(f"[runner] live heartbeat failed job_id={job_id}: {type(exc).__name__}: {exc}")
+                db_error = f"{type(exc).__name__}: {exc}"
+
+            if not db_ok:
+                print(f"[runner] live heartbeat (DB) failed job_id={job_id}: {db_error}")
+
+            # ---- Failure tracking + degraded signal -----------------------
+            # Heartbeat is considered failed only when BOTH paths fail. Redis
+            # alone is enough to keep the runner from being requeued.
+            if not redis_ok and not db_ok:
+                consecutive_failures += 1
+                if consecutive_failures >= 3 and not degraded_emitted:
+                    degraded_emitted = True
+                    sink.emit(
+                        kind=EventKind.LOG,
+                        message="HEARTBEAT_DEGRADED",
+                        payload={
+                            "consecutive_failures": consecutive_failures,
+                            "redis_ok": redis_ok,
+                            "db_ok": db_ok,
+                            "db_error": db_error,
+                            "interval_sec": hb_interval,
+                        },
+                    )
+            else:
+                if degraded_emitted and (redis_ok or db_ok):
+                    sink.emit(
+                        kind=EventKind.LOG,
+                        message="HEARTBEAT_RECOVERED",
+                        payload={
+                            "redis_ok": redis_ok,
+                            "db_ok": db_ok,
+                            "previous_consecutive_failures": consecutive_failures,
+                        },
+                    )
+                    degraded_emitted = False
+                consecutive_failures = 0
 
     hb_task = asyncio.create_task(_heartbeat_loop(), name=f"live-heartbeat:{job_id}")
 
@@ -258,6 +324,9 @@ async def run_live(
             await hb_task
         except asyncio.CancelledError:
             pass
+        # Clear Redis liveness marker so a fresh requeue does not see a stale
+        # but still-present TTL key from this run. Best-effort; never raises.
+        await redis_hb_clear(job_id)
         if cleanup_strategy_file:
             strategy_file.unlink(missing_ok=True)
         await client.aclose()

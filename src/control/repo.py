@@ -471,14 +471,19 @@ async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner
     }
 
 
-async def requeue_stale_live_jobs(
+async def find_stale_live_job_ids(
     session: AsyncSession,
     *,
     stale_seconds: int,
     initial_grace_seconds: int,
-    reason: str = "stale_live_heartbeat",
-) -> int:
-    """LIVE + RUNNING 잡 중 하트비트가 오래된 것을 PENDING으로 되돌린다 (프로세스 고아 복구)."""
+) -> list[uuid.UUID]:
+    """Return job_ids of LIVE+RUNNING jobs whose DB heartbeat is older than
+    ``stale_seconds`` (or absent past the initial grace window).
+
+    The caller is expected to additionally consult an out-of-band liveness
+    signal (e.g. Redis) before deciding to requeue, so that DB pool churn on
+    the API layer cannot falsely mark a healthy runner as stale.
+    """
     now = datetime.now()
     stale_cutoff = now - timedelta(seconds=max(30, stale_seconds))
     grace_cutoff = now - timedelta(seconds=max(60, initial_grace_seconds))
@@ -487,27 +492,33 @@ async def requeue_stale_live_jobs(
         and_(Job.live_heartbeat_at.is_(None), Job.started_at < grace_cutoff),
         Job.live_heartbeat_at < stale_cutoff,
     )
-    stale_rows = list(
-        (
-            await session.execute(
-                select(Job.job_id).where(
-                    Job.type == JobType.LIVE,
-                    Job.status == JobStatus.RUNNING,
-                    Job.ended_at.is_(None),
-                    Job.started_at.is_not(None),
-                    stale_cond,
-                )
+    rows = (
+        await session.execute(
+            select(Job.job_id).where(
+                Job.type == JobType.LIVE,
+                Job.status == JobStatus.RUNNING,
+                Job.ended_at.is_(None),
+                Job.started_at.is_not(None),
+                stale_cond,
             )
         )
-        .scalars()
-        .all()
-    )
-    if not stale_rows:
-        return 0
+    ).scalars().all()
+    return list(rows)
 
+
+async def requeue_live_jobs_by_ids(
+    session: AsyncSession,
+    job_ids: list[uuid.UUID],
+    *,
+    reason: str,
+) -> int:
+    """Requeue the given LIVE job_ids back to PENDING and emit JOB_REQUEUED."""
+    if not job_ids:
+        return 0
+    now = datetime.now()
     await session.execute(
         update(Job)
-        .where(Job.job_id.in_(stale_rows))
+        .where(Job.job_id.in_(job_ids))
         .values(
             status=JobStatus.PENDING,
             started_at=None,
@@ -517,7 +528,7 @@ async def requeue_stale_live_jobs(
             live_heartbeat_at=None,
         )
     )
-    for jid in stale_rows:
+    for jid in job_ids:
         await append_event(
             session,
             job_id=jid,
@@ -525,7 +536,29 @@ async def requeue_stale_live_jobs(
             message="JOB_REQUEUED",
             payload_json={"reason": reason, "resume": True},
         )
-    return len(stale_rows)
+    return len(job_ids)
+
+
+async def requeue_stale_live_jobs(
+    session: AsyncSession,
+    *,
+    stale_seconds: int,
+    initial_grace_seconds: int,
+    reason: str = "stale_live_heartbeat",
+) -> int:
+    """LIVE + RUNNING 잡 중 하트비트가 오래된 것을 PENDING으로 되돌린다 (프로세스 고아 복구).
+
+    Note: This helper consults the DB heartbeat column only. Callers that
+    additionally maintain a Redis liveness key should prefer the two-step
+    ``find_stale_live_job_ids`` + ``requeue_live_jobs_by_ids`` pattern so
+    they can skip jobs whose Redis heartbeat is still fresh.
+    """
+    stale_rows = await find_stale_live_job_ids(
+        session,
+        stale_seconds=stale_seconds,
+        initial_grace_seconds=initial_grace_seconds,
+    )
+    return await requeue_live_jobs_by_ids(session, stale_rows, reason=reason)
 
 
 async def update_live_job_heartbeat(session: AsyncSession, job_id: uuid.UUID) -> None:
