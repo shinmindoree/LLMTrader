@@ -633,12 +633,46 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def _startup() -> None:
         nonlocal _keepalive_task, _runner_task, _runner_worker
-        if settings.auto_alembic_upgrade:
-            _logger.info("Applying database migrations (alembic upgrade head)...")
-            await asyncio.to_thread(run_alembic_upgrade_head)
-        await init_db(engine)
+
+        async def _try_db_init(max_attempts: int = 6, base_delay: float = 5.0) -> bool:
+            """Try alembic upgrade + init_db with bounded retries.
+
+            Returns True on success, False if all attempts fail. Failure does
+            NOT raise — the API still starts so the liveness probe can succeed
+            and DB-dependent endpoints surface 503 via middleware until PG
+            comes back. Total budget ~ 6 * (5 + 10 + 15 + 20 + 25 + 30) =
+            ~10s..30s per attempt with linear backoff, ~105s worst-case.
+            """
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if settings.auto_alembic_upgrade:
+                        _logger.info(
+                            "Applying database migrations (alembic upgrade head, attempt %d/%d)...",
+                            attempt,
+                            max_attempts,
+                        )
+                        await asyncio.to_thread(run_alembic_upgrade_head)
+                    await init_db(engine)
+                    return True
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning(
+                        "Startup DB init failed (attempt %d/%d): %s",
+                        attempt,
+                        max_attempts,
+                        exc,
+                    )
+                    if attempt < max_attempts:
+                        delay = base_delay * attempt
+                        await asyncio.sleep(delay)
+            _logger.error(
+                "Startup DB init exhausted retries; continuing without migrations. "
+                "API will return 503 from DB-dependent endpoints until PG is reachable."
+            )
+            return False
+
+        db_ready = await _try_db_init()
         _keepalive_task = asyncio.create_task(_db_keepalive())
-        _logger.info("DB keep-alive task started (interval=60s)")
+        _logger.info("DB keep-alive task started (interval=60s, db_ready=%s)", db_ready)
 
         if settings.embedded_runner:
             from runner.worker import RunnerWorker
@@ -743,11 +777,27 @@ def create_app() -> FastAPI:
             # Quality logging must never break main workflow.
             return
 
+    @app.get("/api/health/live")
+    async def health_live() -> dict[str, str]:
+        """Liveness probe: process is up, no external dependency check.
+
+        Used by Container Apps Liveness/Startup probes so a brief PG outage
+        does not cause the replica to be killed. Always returns 200 unless
+        the asyncio event loop itself is dead.
+        """
+        return {"status": "ok"}
+
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
+        """Readiness probe: includes DB SELECT 1.
+
+        Returns 200 with db_ok=false when DB is temporarily unavailable;
+        callers (and the readiness probe) treat that as "not ready".
+        """
         try:
-            async with session_maker() as session:
-                await session.execute(text("SELECT 1"))
+            async with asyncio.timeout(5):
+                async with session_maker() as session:
+                    await session.execute(text("SELECT 1"))
             return HealthResponse(status="ok", db_ok=True, db_error=None)
         except Exception as exc:  # noqa: BLE001
             return HealthResponse(status="error", db_ok=False, db_error=str(exc))
