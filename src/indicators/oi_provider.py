@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +31,29 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOOKBACK_MS = 24 * 3600 * 1000
 
 
+def _cache_ttl_seconds() -> int:
+    """How long a downloaded parquet may be served from local cache.
+
+    Default 30 min. Override with ``OI_PARQUET_CACHE_TTL_SEC``. Setting it to
+    0 forces a re-download on every resolution (only useful for tests).
+    """
+    try:
+        return int(os.environ.get("OI_PARQUET_CACHE_TTL_SEC", "1800"))
+    except ValueError:
+        return 1800
+
+
+def _is_cache_fresh(cache_path: Path) -> bool:
+    ttl = _cache_ttl_seconds()
+    if ttl <= 0:
+        return False
+    try:
+        age = time.time() - cache_path.stat().st_mtime
+    except OSError:
+        return False
+    return age < ttl
+
+
 def _resolve_parquet_path(symbol: str) -> Path:
     """Locate the OI parquet for `symbol`, downloading it if a URL is configured.
 
@@ -37,6 +61,12 @@ def _resolve_parquet_path(symbol: str) -> Path:
       1. `OI_PARQUET_PATH_{SYMBOL}` env var (absolute path)
       2. `<repo_root>/data/perp_meta/{symbol}_oi_5m.parquet`
       3. `OI_PARQUET_URL_{SYMBOL}` env var → download to /tmp cache
+      4. `OI_PARQUET_BLOB_CONTAINER` + `OI_PARQUET_BLOB_NAME_{SYMBOL}` → blob
+
+    For (3) and (4) the cached file is re-downloaded once it is older than
+    ``OI_PARQUET_CACHE_TTL_SEC`` (default 1800s), so backtests on a
+    long-lived runner pick up new rows produced by ``oi_ingestor``’s
+    periodic ``refresh_oi_parquet`` runs.
     """
     sym = symbol.upper()
     explicit = os.environ.get(f"OI_PARQUET_PATH_{sym}", "").strip()
@@ -55,14 +85,17 @@ def _resolve_parquet_path(symbol: str) -> Path:
         cache_dir = Path(os.environ.get("OI_PARQUET_CACHE_DIR", "/tmp/oi_parquet"))
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_path = cache_dir / f"{sym}_oi_5m.parquet"
-        if not cache_path.exists():
-            logger.info("[oi] downloading parquet for %s from %s", sym, url)
+        if not (cache_path.exists() and _is_cache_fresh(cache_path)):
+            logger.info("[oi] downloading parquet for %s from %s (ttl-refresh=%s)",
+                        sym, url, cache_path.exists())
             import httpx
+            tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
             with httpx.stream("GET", url, timeout=60.0, follow_redirects=True) as resp:
                 resp.raise_for_status()
-                with cache_path.open("wb") as f:
+                with tmp_path.open("wb") as f:
                     for chunk in resp.iter_bytes(chunk_size=1 << 16):
                         f.write(chunk)
+            tmp_path.replace(cache_path)
             logger.info("[oi] downloaded %d bytes to %s", cache_path.stat().st_size, cache_path)
         return cache_path
 
@@ -74,11 +107,13 @@ def _resolve_parquet_path(symbol: str) -> Path:
         cache_dir = Path(os.environ.get("OI_PARQUET_CACHE_DIR", "/tmp/oi_parquet"))
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_path = cache_dir / f"{sym}_oi_5m.parquet"
-        if not cache_path.exists():
-            logger.info("[oi] downloading parquet for %s from blob %s/%s",
-                        sym, container_name, blob_name)
+        if not (cache_path.exists() and _is_cache_fresh(cache_path)):
+            logger.info("[oi] downloading parquet for %s from blob %s/%s (ttl-refresh=%s)",
+                        sym, container_name, blob_name, cache_path.exists())
             data = _download_blob(container_name, blob_name)
-            cache_path.write_bytes(data)
+            tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+            tmp_path.write_bytes(data)
+            tmp_path.replace(cache_path)
             logger.info("[oi] downloaded %d bytes to %s", len(data), cache_path)
         return cache_path
 
@@ -134,6 +169,16 @@ class _ParquetOiBackend:
         df = pd.read_parquet(path).sort_values("timestamp").reset_index(drop=True)
         self._ts = df["timestamp"].to_numpy(dtype="int64")
         self._oi = df["sum_oi"].to_numpy(dtype="float64")
+        # Track the underlying file identity so the provider cache can
+        # invalidate the in-memory arrays when the file gets rewritten.
+        try:
+            st = path.stat()
+            self._source_mtime_ns = int(st.st_mtime_ns)
+            self._source_size = int(st.st_size)
+        except OSError:
+            self._source_mtime_ns = 0
+            self._source_size = 0
+        self._source_path = path
         try:
             self._stale_tol_ms = int(os.environ.get(
                 "OI_PARQUET_STALE_TOLERANCE_MS",
@@ -264,8 +309,27 @@ def get_oi_provider(symbol: str, mode: Optional[str] = None) -> object:
                 or os.environ.get("REDIS_HOST", "").strip()
             ) else "backtest"
     key = (sym, mode)
-    if key in _PROVIDERS:
-        return _PROVIDERS[key]
+    cached = _PROVIDERS.get(key)
+    if cached is not None:
+        # For backtest, ensure the in-memory arrays still reflect the file
+        # that's currently on disk. This lets the runner pick up a parquet
+        # that was just refreshed by oi_ingestor's periodic blob upload.
+        if mode == "backtest" and isinstance(cached, _ParquetOiBackend):
+            try:
+                fresh_path = _resolve_parquet_path(sym)
+                fresh_stat = fresh_path.stat()
+                if (int(fresh_stat.st_mtime_ns) != cached._source_mtime_ns
+                        or int(fresh_stat.st_size) != cached._source_size):
+                    logger.info(
+                        "[oi] parquet file changed on disk; rebuilding backend for %s",
+                        sym,
+                    )
+                    _PROVIDERS.pop(key, None)
+                    cached = None
+            except OSError as exc:  # noqa: BLE001
+                logger.warning("[oi] stat failed during freshness check: %s", exc)
+    if cached is not None:
+        return cached
     if mode == "backtest":
         prov = _ParquetOiBackend(sym)
     elif mode == "live":
