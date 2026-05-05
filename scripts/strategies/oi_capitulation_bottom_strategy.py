@@ -223,19 +223,43 @@ class OiCapitulationBottomStrategy(Strategy):
             # assume SL hits first.
             if low <= sl_level or tick_price <= sl_level:
                 self._is_closing = True
-                ctx.close_position(reason=f"OI: SL -{self.sl_pct * 100:.1f}%")
+                # Realistic fill price:
+                #   - If tick_price already <= sl_level (gap-down at this
+                #     sub-step), assume worse fill at tick_price.
+                #   - Otherwise the intrabar `low` touched SL; assume the
+                #     stop fills at sl_level (not the sub-step open price,
+                #     which would leak future info and produce optimistic
+                #     SL exits).
+                sl_fill = min(tick_price, sl_level)
+                if self._mode == "backtest" and hasattr(ctx, "close_position_at_price"):
+                    ctx.close_position_at_price(
+                        sl_fill, reason=f"OI: SL -{self.sl_pct * 100:.1f}%"
+                    )
+                else:
+                    ctx.close_position(reason=f"OI: SL -{self.sl_pct * 100:.1f}%")
                 self._emit_event(ctx, "OI_EXIT_SL", {
                     "entry_price": self._entry_price,
-                    "exit_price": tick_price,
+                    "exit_price": sl_fill,
                     "sl_level": sl_level,
                 })
                 return
             if high >= tp_level or tick_price >= tp_level:
                 self._is_closing = True
-                ctx.close_position(reason=f"OI: TP +{self.tp_pct * 100:.1f}%")
+                # Realistic TP fill: cap at tp_level. If tick_price is
+                # already >= tp_level we assume the limit-style fill at
+                # exactly tp_level; if only the intrabar `high` touched
+                # tp_level, same — fill at tp_level (avoids optimistic
+                # fills based on the sub-step's open price).
+                tp_fill = tp_level
+                if self._mode == "backtest" and hasattr(ctx, "close_position_at_price"):
+                    ctx.close_position_at_price(
+                        tp_fill, reason=f"OI: TP +{self.tp_pct * 100:.1f}%"
+                    )
+                else:
+                    ctx.close_position(reason=f"OI: TP +{self.tp_pct * 100:.1f}%")
                 self._emit_event(ctx, "OI_EXIT_TP", {
                     "entry_price": self._entry_price,
-                    "exit_price": tick_price,
+                    "exit_price": tp_fill,
                     "tp_level": tp_level,
                 })
                 return
