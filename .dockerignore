@@ -22,3 +22,12 @@ scripts/*.jsonl
 scripts/_*.md
 web/node_modules/
 web/.next/
+
+# Alpha-lab artefacts (huge, repo-root only; not needed in any image)
+alpha_lab_*.json
+sweep_*.json
+sweep_*.txt
+engine_*.json
+*_strategy.json
+*.parquet
+*.parquet.corrupt-*
