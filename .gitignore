@@ -25,6 +25,11 @@ sweep_*.txt
 bt_*.log
 data/bt_*.json
 data/bt_*.log
+alpha_lab_pass*.json
+engine_on_parquet.json
+run_bb_oi_q1.json
+scripts/_alpha_lab/
+data/
 
 # Local scratch directory
 .tmp/
