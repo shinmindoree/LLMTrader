@@ -193,3 +193,55 @@ fill block from
 [bb_rsi_oi_meanrev_strategy.py](../scripts/strategies/bb_rsi_oi_meanrev_strategy.py).
 The 17 legs would each be deployed as a separate live process under the
 existing `scripts/run_portfolio_trading.py` runner.
+
+## Deployment notes (UI / cloud runner)
+
+The portfolio strategy is implemented in
+[scripts/strategies/multi_factor_portfolio_strategy.py](../scripts/strategies/multi_factor_portfolio_strategy.py)
+and is selectable from the strategy picker in the web UI.
+
+It needs **5 parquet files** at runtime:
+
+```
+BTCUSDT_15m_klines.parquet    (~6 MB)
+BTCUSDT_oi_5m.parquet         (~12 MB)
+BTCUSDT_funding.parquet       (~0.1 MB)
+BTCUSDT_taker_5m.parquet      (~8 MB)
+BTCUSDT_lsr_5m.parquet        (~17 MB)
+```
+
+The strategy's `_resolve_parquet()` resolves each file in this order, so a
+backtest job will succeed if **any** of these is wired up:
+
+1. **Explicit env path:** `MFP_PARQUET_PATH_<KIND>_BTCUSDT`
+2. **Local file:** `data/perp_meta/<filename>` (default for the local CLI)
+3. **HTTP URL:** `MFP_PARQUET_URL_<KIND>_BTCUSDT` (per-kind) or
+   `MFP_PARQUET_BASE_URL` (joined with the filename)
+4. **Azure blob:** `MFP_PARQUET_BLOB_CONTAINER` +
+   `MFP_PARQUET_BLOB_NAME_<KIND>_BTCUSDT` (per-kind) or
+   `MFP_PARQUET_BLOB_PREFIX` (joined with filename)
+
+`<KIND>` ∈ {`KLINES`, `OI`, `FUNDING`, `TAKER`, `LSR`}.
+
+Downloaded parquets are cached at `MFP_PARQUET_CACHE_DIR`
+(default `/tmp/mfp_parquet`) so a cold container only pays the download cost
+once per pod restart.
+
+### Quickest path to enable in the cloud runner
+
+1. Upload the 5 parquets from `data/perp_meta/` to the same blob container
+   already used by the OI ingestor, e.g. under prefix `mfp/`.
+2. Set the runner Container App's env vars:
+
+   ```
+   MFP_PARQUET_BLOB_CONTAINER=<existing-container>
+   MFP_PARQUET_BLOB_PREFIX=mfp
+   ```
+
+   The strategy will then download `mfp/BTCUSDT_15m_klines.parquet`,
+   `mfp/BTCUSDT_oi_5m.parquet`, … on first request and cache them at
+   `/tmp/mfp_parquet/`.
+
+If none of the four sources is configured the strategy raises
+`RuntimeError` listing every path it tried, which surfaces verbatim in the UI
+job-failure message.

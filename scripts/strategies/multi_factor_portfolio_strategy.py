@@ -3,6 +3,26 @@
 Discovered by the alpha-lab Pass-5 sweep + trend mini-sweep + portfolio combiner.
 See [docs/multi-factor-portfolio-alpha.md] for the full discovery report.
 
+==============================================================================
+DATA RESOLUTION (cloud / local)
+==============================================================================
+The strategy needs 5 parquet files (15m klines + OI + funding + taker + LSR).
+Files are resolved per-kind in this order, mirroring the OI provider pattern:
+
+  1. Explicit env path:    MFP_PARQUET_PATH_<KIND>_<SYMBOL>
+  2. Local file:           data/perp_meta/<SYMBOL>_<file>.parquet
+  3. HTTP URL fallback:    MFP_PARQUET_URL_<KIND>_<SYMBOL>          (per-kind)
+                           or MFP_PARQUET_BASE_URL                  (joined w/ filename)
+  4. Azure blob fallback:  MFP_PARQUET_BLOB_CONTAINER + MFP_PARQUET_BLOB_NAME_<KIND>_<SYMBOL>
+                           or MFP_PARQUET_BLOB_PREFIX               (joined w/ filename)
+  5. Otherwise: RuntimeError with the list of attempted sources.
+
+KIND values: KLINES, OI, FUNDING, TAKER, LSR.
+
+Downloaded files are cached at MFP_PARQUET_CACHE_DIR (default /tmp/mfp_parquet)
+to avoid re-downloading on subsequent backtests.
+==============================================================================
+
 Composition (equal-weight):
   - 15 mean-reversion legs:
       pullback_in_trend × 1   (30m)
@@ -50,7 +70,9 @@ RUNTIME CONTRACT
 """
 from __future__ import annotations
 
+import logging
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -65,6 +87,8 @@ if str(_SRC) not in sys.path:
 
 from strategy.base import Strategy
 from strategy.context import StrategyContext
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +427,128 @@ _SIG_FUNCS: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "perp_meta"
 
+# kind -> filename suffix template ("{symbol}_<...>.parquet")
+_PARQUET_KINDS: dict[str, str] = {
+    "KLINES":  "{symbol}_15m_klines.parquet",
+    "OI":      "{symbol}_oi_5m.parquet",
+    "FUNDING": "{symbol}_funding.parquet",
+    "TAKER":   "{symbol}_taker_5m.parquet",
+    "LSR":     "{symbol}_lsr_5m.parquet",
+}
+
+
+def _cache_dir() -> Path:
+    p = Path(os.environ.get("MFP_PARQUET_CACHE_DIR", "/tmp/mfp_parquet"))
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _download_url_to(url: str, dest: Path) -> None:
+    import httpx  # local import: only needed when env URL is configured
+    logger.info("[mfp] downloading %s -> %s", url, dest)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    with httpx.stream("GET", url, timeout=60.0, follow_redirects=True) as resp:
+        resp.raise_for_status()
+        with tmp.open("wb") as f:
+            for chunk in resp.iter_bytes(chunk_size=1 << 16):
+                f.write(chunk)
+    tmp.replace(dest)
+
+
+def _download_blob_to(container_name: str, blob_name: str, dest: Path) -> None:
+    """Download an Azure blob using managed identity / connection string."""
+    from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
+    from azure.storage.blob import ContainerClient
+    conn_str = os.environ.get("AZURE_BLOB_CONNECTION_STRING", "").strip()
+    if conn_str:
+        client = ContainerClient.from_connection_string(conn_str, container_name)
+    else:
+        account_url = os.environ.get("AZURE_BLOB_ACCOUNT_URL", "").strip()
+        if not account_url:
+            raise RuntimeError(
+                "MFP_PARQUET_BLOB_* set but no AZURE_BLOB_CONNECTION_STRING / "
+                "AZURE_BLOB_ACCOUNT_URL configured."
+            )
+        client_id = os.environ.get("AZURE_CLIENT_ID", "").strip()
+        if os.environ.get("IDENTITY_ENDPOINT"):
+            kwargs: dict[str, Any] = {}
+            if client_id:
+                kwargs["client_id"] = client_id
+            credential = ManagedIdentityCredential(**kwargs)
+        else:
+            kwargs = {}
+            if client_id:
+                kwargs["managed_identity_client_id"] = client_id
+            credential = DefaultAzureCredential(**kwargs)
+        client = ContainerClient(account_url=account_url,
+                                 container_name=container_name,
+                                 credential=credential)
+    logger.info("[mfp] downloading blob %s/%s -> %s", container_name, blob_name, dest)
+    data = client.download_blob(blob_name).readall()
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(dest)
+
+
+def _resolve_parquet(symbol: str, kind: str) -> Path:
+    """Resolve a parquet file for (symbol, kind) using local + URL + blob fallbacks."""
+    sym = symbol.upper()
+    template = _PARQUET_KINDS[kind]
+    filename = template.format(symbol=sym)
+    attempted: list[str] = []
+
+    # 1) Explicit env path
+    env_path = os.environ.get(f"MFP_PARQUET_PATH_{kind}_{sym}", "").strip()
+    if env_path:
+        p = Path(env_path)
+        attempted.append(f"env path {p}")
+        if p.exists():
+            return p
+
+    # 2) Local file
+    local = _DATA_DIR / filename
+    attempted.append(f"local {local}")
+    if local.exists():
+        return local
+
+    # 3) HTTP URL (per-kind, then base url + filename)
+    url = os.environ.get(f"MFP_PARQUET_URL_{kind}_{sym}", "").strip()
+    if not url:
+        base = os.environ.get("MFP_PARQUET_BASE_URL", "").strip()
+        if base:
+            url = base.rstrip("/") + "/" + filename
+    if url:
+        attempted.append(f"url {url}")
+        cache = _cache_dir() / filename
+        if not cache.exists():
+            _download_url_to(url, cache)
+        return cache
+
+    # 4) Azure blob (per-kind name, or prefix + filename)
+    container_name = os.environ.get("MFP_PARQUET_BLOB_CONTAINER", "").strip()
+    if container_name:
+        blob_name = os.environ.get(f"MFP_PARQUET_BLOB_NAME_{kind}_{sym}", "").strip()
+        if not blob_name:
+            prefix = os.environ.get("MFP_PARQUET_BLOB_PREFIX", "").strip()
+            if prefix:
+                blob_name = prefix.rstrip("/") + "/" + filename
+            else:
+                blob_name = filename
+        attempted.append(f"blob {container_name}/{blob_name}")
+        cache = _cache_dir() / filename
+        if not cache.exists():
+            _download_blob_to(container_name, blob_name, cache)
+        return cache
+
+    raise RuntimeError(
+        f"MultiFactorPortfolioStrategy could not locate {kind} parquet for {sym}. "
+        f"Tried: {attempted}. "
+        f"Configure one of: MFP_PARQUET_PATH_{kind}_{sym}, "
+        f"file at {local}, MFP_PARQUET_URL_{kind}_{sym} (or MFP_PARQUET_BASE_URL), "
+        f"or MFP_PARQUET_BLOB_CONTAINER + MFP_PARQUET_BLOB_NAME_{kind}_{sym} "
+        f"(or MFP_PARQUET_BLOB_PREFIX)."
+    )
+
 
 def _last_known(times: np.ndarray, values: np.ndarray,
                 sample_times: np.ndarray) -> np.ndarray:
@@ -415,7 +561,7 @@ def _last_known(times: np.ndarray, values: np.ndarray,
 
 
 def _load_unified_dataset(symbol: str = "BTCUSDT") -> pd.DataFrame:
-    klines = pd.read_parquet(_DATA_DIR / f"{symbol}_15m_klines.parquet")
+    klines = pd.read_parquet(_resolve_parquet(symbol, "KLINES"))
     klines = klines.sort_values("ts").drop_duplicates("ts").reset_index(drop=True)
     klines = klines.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close"})
     ts = klines["ts"].to_numpy(dtype="int64")
@@ -426,25 +572,25 @@ def _load_unified_dataset(symbol: str = "BTCUSDT") -> pd.DataFrame:
         "low": klines["low"].to_numpy(dtype="float64"),
         "close": klines["close"].to_numpy(dtype="float64"),
     })
-    oi = pd.read_parquet(_DATA_DIR / f"{symbol}_oi_5m.parquet").sort_values("timestamp")
+    oi = pd.read_parquet(_resolve_parquet(symbol, "OI")).sort_values("timestamp")
     df["oi"] = _last_known(
         oi["timestamp"].to_numpy(dtype="int64"),
         oi["sum_oi"].to_numpy(dtype="float64"),
         ts,
     )
-    fund = pd.read_parquet(_DATA_DIR / f"{symbol}_funding.parquet").sort_values("funding_time")
+    fund = pd.read_parquet(_resolve_parquet(symbol, "FUNDING")).sort_values("funding_time")
     df["funding_rate"] = _last_known(
         fund["funding_time"].to_numpy(dtype="int64"),
         fund["funding_rate"].to_numpy(dtype="float64"),
         ts,
     )
-    taker = pd.read_parquet(_DATA_DIR / f"{symbol}_taker_5m.parquet").sort_values("timestamp")
+    taker = pd.read_parquet(_resolve_parquet(symbol, "TAKER")).sort_values("timestamp")
     df["taker_ratio"] = _last_known(
         taker["timestamp"].to_numpy(dtype="int64"),
         taker["sum_taker_long_short_vol_ratio"].to_numpy(dtype="float64"),
         ts,
     )
-    lsr = pd.read_parquet(_DATA_DIR / f"{symbol}_lsr_5m.parquet").sort_values("timestamp")
+    lsr = pd.read_parquet(_resolve_parquet(symbol, "LSR")).sort_values("timestamp")
     df["lsr_count"] = _last_known(
         lsr["timestamp"].to_numpy(dtype="int64"),
         lsr["count_long_short_ratio"].to_numpy(dtype="float64"),
@@ -572,6 +718,11 @@ class MultiFactorPortfolioStrategy(Strategy):
             )
 
         unified = _load_unified_dataset(self.symbol)
+        if len(unified) == 0:
+            raise RuntimeError(
+                f"MultiFactorPortfolioStrategy: unified dataset for {self.symbol} is empty. "
+                f"Check that the configured parquet sources contain rows for the backtest window."
+            )
         self._legs = [_LegState(leg, unified) for leg in ALL_LEGS]
         self._committed_side = 0
         self._last_bar_ts = 0
