@@ -63,8 +63,17 @@ RUNTIME CONTRACT
   net direction. Sizing is full-notional (`enter_long`/`enter_short` without
   `entry_pct`). For true 1/17-each notional weighting deploy 17 separate
   runner jobs with `entry_pct = 100/17 ≈ 5.88` and run one leg per job.
-- LIVE mode: this strategy runs in BACKTEST mode only. Funding/taker/LSR
-  data has no live provider yet; running live will raise NotImplementedError.
+- LIVE mode: requires the perp-meta ingestor (``scripts/perp_meta_ingestor.py``,
+  see ``infra/docs/perp-meta-ingestor-deployment.md``) running and writing
+  to Redis ZSETs ``funding:{S}:hist`` / ``taker:{S}:hist`` / ``lsr:{S}:hist``,
+  plus the OI ingestor (``oi:{S}:hist``). At ``initialize()`` the strategy
+  loads the parquet seed, gap-fills the window from Redis (and Binance for
+  klines), then keeps the unified dataset rolling on every new 15m bar.
+  Required env when running live:
+    REDIS_URL  (or REDIS_HOST + REDIS_USERNAME for AAD)
+    AZURE_BLOB_ACCOUNT_URL + MFP_PARQUET_BLOB_CONTAINER + MFP_PARQUET_BLOB_PREFIX
+  Optional:
+    MFP_LIVE_HISTORY_BARS_15M (default 5760 = 60 days of 15m bars)
 
 ==============================================================================
 """
@@ -560,6 +569,66 @@ def _last_known(times: np.ndarray, values: np.ndarray,
     return out
 
 
+def _fetch_klines_15m_sync(symbol: str, start_ms: int, end_ms: int) -> list[list]:
+    """Fetch 15m klines via Binance USDM REST. Used for live-mode gap-fill.
+
+    Returns a list of `[open_time, open, high, low, close, volume, ...]` raw
+    rows ordered by open_time. Paginates 1000 rows at a time. Times are
+    inclusive at both ends.
+    """
+    import httpx  # local import: only needed in live mode
+    if start_ms > end_ms:
+        return []
+    base = os.environ.get("BINANCE_FAPI", "https://fapi.binance.com")
+    url = f"{base}/fapi/v1/klines"
+    bar_ms = 15 * 60 * 1000
+    chunk_ms = 1000 * bar_ms
+    out: list[list] = []
+    cur = start_ms
+    with httpx.Client(timeout=20.0) as cli:
+        while cur <= end_ms:
+            params = {
+                "symbol": symbol.upper(),
+                "interval": "15m",
+                "startTime": int(cur),
+                "endTime": int(min(cur + chunk_ms, end_ms)),
+                "limit": 1000,
+            }
+            for attempt in range(5):
+                try:
+                    resp = cli.get(url, params=params)
+                    if resp.status_code == 429 or resp.status_code >= 500:
+                        import time as _t
+                        _t.sleep(2 ** attempt)
+                        continue
+                    resp.raise_for_status()
+                    rows = resp.json() or []
+                    out.extend(rows)
+                    if not rows:
+                        cur = cur + chunk_ms + bar_ms
+                    else:
+                        last_open = int(rows[-1][0])
+                        cur = last_open + bar_ms
+                    break
+                except httpx.HTTPError as exc:
+                    if attempt == 4:
+                        raise
+                    import time as _t
+                    _t.sleep(2 ** attempt)
+            else:
+                break
+    # Dedupe by open_time and sort.
+    by_ts: dict[int, list] = {}
+    for r in out:
+        try:
+            ts = int(r[0])
+        except Exception:  # noqa: BLE001
+            continue
+        if start_ms <= ts <= end_ms:
+            by_ts[ts] = r
+    return [by_ts[k] for k in sorted(by_ts)]
+
+
 def _load_unified_dataset(symbol: str = "BTCUSDT") -> pd.DataFrame:
     klines = pd.read_parquet(_resolve_parquet(symbol, "KLINES"))
     klines = klines.sort_values("ts").drop_duplicates("ts").reset_index(drop=True)
@@ -621,32 +690,51 @@ def _resample_to(df: pd.DataFrame, target_min: int) -> pd.DataFrame:
 class _LegState:
     __slots__ = (
         "family", "config", "interval_min", "tf_ts", "tf_open", "tf_high", "tf_low", "tf_close",
-        "long_sig", "short_sig", "side", "entry_price", "entry_tf_idx", "tp_pct", "sl_pct",
-        "max_hold_bars",
+        "long_sig", "short_sig", "side", "entry_price", "entry_tf_idx", "entry_tf_ts",
+        "tp_pct", "sl_pct", "max_hold_bars",
     )
 
     def __init__(self, leg: dict[str, Any], unified: pd.DataFrame) -> None:
         self.family = leg["family"]
         self.config = dict(leg["config"])
         self.interval_min = int(self.config["interval_min"])
-        # Resample once at init.
+        self.tp_pct = float(self.config["tp_pct"])
+        self.sl_pct = float(self.config["sl_pct"])
+        # Convert max_hold_h -> bars at the leg's TF.
+        self.max_hold_bars = int(round(float(self.config["max_hold_h"]) * 60 / self.interval_min))
+        # Position state.
+        self.side: int = 0
+        self.entry_price: float | None = None
+        self.entry_tf_idx: int | None = None
+        # Live mode preserves entries across rebuilds via TS, then re-derives idx.
+        self.entry_tf_ts: int | None = None
+        # Resample + signals.
+        self.refresh_signals(unified)
+
+    def refresh_signals(self, unified: pd.DataFrame) -> None:
+        """Re-resample and recompute signal arrays from `unified`.
+
+        Called once at construction (backtest) and on every new 15m bar in
+        live mode. When a position is open, ``entry_tf_idx`` is re-derived
+        from ``entry_tf_ts`` so the position state survives the rebuild.
+        """
         tf_df = _resample_to(unified, self.interval_min)
         self.tf_ts = tf_df["ts"].to_numpy(dtype="int64")
         self.tf_open = tf_df["open"].to_numpy(dtype="float64")
         self.tf_high = tf_df["high"].to_numpy(dtype="float64")
         self.tf_low = tf_df["low"].to_numpy(dtype="float64")
         self.tf_close = tf_df["close"].to_numpy(dtype="float64")
-        # Pre-compute signal arrays at the leg's TF.
         sig_fn = _SIG_FUNCS[self.family]
         self.long_sig, self.short_sig = sig_fn(tf_df, self.config)
-        # Position state.
-        self.side: int = 0
-        self.entry_price: float | None = None
-        self.entry_tf_idx: int | None = None
-        self.tp_pct = float(self.config["tp_pct"])
-        self.sl_pct = float(self.config["sl_pct"])
-        # Convert max_hold_h -> bars at the leg's TF.
-        self.max_hold_bars = int(round(float(self.config["max_hold_h"]) * 60 / self.interval_min))
+        # Re-derive entry index from preserved entry timestamp (live mode).
+        if self.entry_tf_ts is not None and self.tf_ts.size:
+            idx = int(np.searchsorted(self.tf_ts, self.entry_tf_ts, side="left"))
+            if idx < self.tf_ts.size and int(self.tf_ts[idx]) == int(self.entry_tf_ts):
+                self.entry_tf_idx = idx
+            else:
+                # Entry bar was trimmed out of the rolling window — force a
+                # time exit by clamping the index to "very old".
+                self.entry_tf_idx = -max(self.max_hold_bars, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -673,9 +761,15 @@ STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = [
 class MultiFactorPortfolioStrategy(Strategy):
     """17-leg equal-weight multi-factor portfolio for BTCUSDT-PERP.
 
-    Backtest-only strategy: requires the 5 parquet files at
-    ``data/perp_meta/`` (15m klines + OI + funding + taker + LSR).
-    See module docstring for details and live-mode caveats.
+    Backtest: requires the 5 parquet files at ``data/perp_meta/`` (15m klines
+    + OI + funding + taker + LSR), or equivalents accessible via the
+    ``MFP_PARQUET_*`` env-var resolvers.
+
+    Live: requires Redis ZSETs populated by ``scripts/oi_ingestor.py`` and
+    ``scripts/perp_meta_ingestor.py``. The strategy seeds from parquet at
+    ``initialize()``, gap-fills via providers, then keeps a rolling
+    in-memory dataset of the last ~60 days of 15m bars.
+    See module docstring for env-var details.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -690,6 +784,22 @@ class MultiFactorPortfolioStrategy(Strategy):
         self._committed_side: int = 0  # the side currently held by ctx
         self._mode: str | None = None
         self._last_bar_ts: int = 0
+        # Live-mode rolling state.
+        self._unified: pd.DataFrame | None = None
+        self._tail_ts_15m: int = 0
+        self._oi_provider: Any | None = None
+        self._funding_provider: Any | None = None
+        self._taker_provider: Any | None = None
+        self._lsr_provider: Any | None = None
+        # Bound the in-memory unified dataset. Donchian-192 on 240m needs 32d;
+        # 60d gives a safe headroom and keeps memory + CPU per refresh small.
+        try:
+            self._max_history_15m_bars = int(os.environ.get(
+                "MFP_LIVE_HISTORY_BARS_15M",
+                str(60 * 24 * 4),  # 60 days * 24h * 4 (15m per hour)
+            ))
+        except ValueError:
+            self._max_history_15m_bars = 60 * 24 * 4
 
     # ---- lifecycle ---------------------------------------------------------
     def initialize(self, ctx: StrategyContext) -> None:
@@ -704,17 +814,19 @@ class MultiFactorPortfolioStrategy(Strategy):
             mode = None
         self._mode = mode
 
-        if mode != "backtest":
-            raise NotImplementedError(
-                "MultiFactorPortfolioStrategy currently runs in BACKTEST mode only. "
-                "Live trading requires funding/taker/LSR providers in src/indicators/. "
-                "See docs/multi-factor-portfolio-alpha.md for the live-wiring TODO."
-            )
-
         if self.symbol != "BTCUSDT":
             raise ValueError(
                 f"This portfolio is BTCUSDT-only (was discovered on BTC perp data). "
                 f"got: {self.symbol}"
+            )
+
+        if mode == "live":
+            self._initialize_live(ctx)
+            return
+        if mode != "backtest":
+            raise NotImplementedError(
+                f"MultiFactorPortfolioStrategy: unsupported context "
+                f"{ctx_module}.{ctx_cls}; expected backtest or live."
             )
 
         unified = _load_unified_dataset(self.symbol)
@@ -723,15 +835,193 @@ class MultiFactorPortfolioStrategy(Strategy):
                 f"MultiFactorPortfolioStrategy: unified dataset for {self.symbol} is empty. "
                 f"Check that the configured parquet sources contain rows for the backtest window."
             )
+        self._unified = unified
         self._legs = [_LegState(leg, unified) for leg in ALL_LEGS]
         self._committed_side = 0
         self._last_bar_ts = 0
+        self._tail_ts_15m = int(unified["ts"].iloc[-1]) if len(unified) else 0
         self._emit_event(ctx, "MFP_INIT", {
+            "mode": "backtest",
             "n_legs": len(self._legs),
             "intervals": sorted({leg.interval_min for leg in self._legs}),
             "families": sorted({leg.family for leg in self._legs}),
             "data_rows_15m": int(len(unified)),
         })
+
+    # ---- live mode internals ----------------------------------------------
+    def _initialize_live(self, ctx: StrategyContext) -> None:
+        """Initialize for live trading: parquet seed + provider gap-fill + leg build.
+
+        Sequence:
+          1. Load parquet seed (same as backtest path).
+          2. Set up Redis-backed providers (forces mode='live').
+          3. Gap-fill OI/funding/taker/LSR from provider.range() over
+             ``[parquet.last_ts, now]``.
+          4. Gap-fill 15m klines from Binance REST over the same window.
+          5. Trim the unified dataset to the configured rolling window.
+          6. Build _LegState per leg.
+
+        Failures here are fatal: live trading without proper history would
+        produce wrong signals.
+        """
+        from indicators.oi_provider import get_oi_provider
+        from indicators.perp_meta_provider import (
+            get_funding_provider,
+            get_taker_provider,
+            get_lsr_provider,
+        )
+
+        # 1) Parquet seed (covers up to the last refresh of the blob parquets).
+        unified = _load_unified_dataset(self.symbol)
+        if len(unified) == 0:
+            raise RuntimeError(
+                "MultiFactorPortfolioStrategy live init: parquet seed is empty for "
+                f"{self.symbol}. Cannot bootstrap historical signals."
+            )
+        seed_last_ts = int(unified["ts"].iloc[-1])
+        now_ms = int(__import__("time").time() * 1000)
+        # Round 'now' down to the most recently CLOSED 15m bar.
+        bar_ms = 15 * 60 * 1000
+        latest_closed_open = ((now_ms // bar_ms) - 1) * bar_ms
+
+        # 2) Providers.
+        self._oi_provider = get_oi_provider(self.symbol, mode="live")
+        self._funding_provider = get_funding_provider(self.symbol, mode="live")
+        self._taker_provider = get_taker_provider(self.symbol, mode="live")
+        self._lsr_provider = get_lsr_provider(self.symbol, mode="live")
+
+        # 3+4) Gap-fill.
+        if latest_closed_open > seed_last_ts:
+            unified = self._gap_fill_to(unified, seed_last_ts, latest_closed_open)
+        else:
+            logger.info("[mfp] seed parquet already at-or-past latest 15m bar; "
+                        "no gap to fill")
+
+        # 5) Trim rolling window.
+        if len(unified) > self._max_history_15m_bars:
+            unified = unified.iloc[-self._max_history_15m_bars:].reset_index(drop=True)
+
+        # 6) Build legs.
+        self._unified = unified
+        self._legs = [_LegState(leg, unified) for leg in ALL_LEGS]
+        self._committed_side = 0
+        self._last_bar_ts = 0
+        self._tail_ts_15m = int(unified["ts"].iloc[-1])
+        self._emit_event(ctx, "MFP_INIT", {
+            "mode": "live",
+            "n_legs": len(self._legs),
+            "intervals": sorted({leg.interval_min for leg in self._legs}),
+            "families": sorted({leg.family for leg in self._legs}),
+            "data_rows_15m": int(len(unified)),
+            "seed_last_ts": seed_last_ts,
+            "live_tail_ts": self._tail_ts_15m,
+        })
+        logger.info(
+            "[mfp] live init: %s legs=%d rows=%d seed_last=%d tail=%d",
+            self.symbol, len(self._legs), len(unified),
+            seed_last_ts, self._tail_ts_15m,
+        )
+
+    def _gap_fill_to(self, unified: pd.DataFrame, last_ts: int,
+                     end_ts_inclusive: int) -> pd.DataFrame:
+        """Fetch 15m klines + indicator values for ``(last_ts, end_ts_inclusive]``
+        and append rows to ``unified``. Returns the appended DataFrame.
+        """
+        bar_ms = 15 * 60 * 1000
+        # Fetch klines (open_time, o, h, l, c) from Binance.
+        new_klines = _fetch_klines_15m_sync(
+            self.symbol, last_ts + 1, end_ts_inclusive
+        )
+        if not new_klines:
+            return unified
+        rows: list[dict[str, Any]] = []
+        for k in new_klines:
+            ts = int(k[0])
+            if ts <= last_ts or ts > end_ts_inclusive:
+                continue
+            rows.append({
+                "ts": ts,
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+                "oi": self._provider_value_at(self._oi_provider, ts, _kind="oi"),
+                "funding_rate": self._provider_value_at(self._funding_provider, ts),
+                "taker_ratio": self._provider_value_at(self._taker_provider, ts),
+                "lsr_count": self._provider_value_at(self._lsr_provider, ts),
+            })
+        if not rows:
+            return unified
+        new_df = pd.DataFrame(rows)
+        new_df["dt"] = pd.to_datetime(new_df["ts"], unit="ms", utc=True)
+        merged = pd.concat([unified, new_df], ignore_index=True)
+        merged = (
+            merged.sort_values("ts")
+            .drop_duplicates("ts", keep="last")
+            .reset_index(drop=True)
+        )
+        logger.info(
+            "[mfp] gap-fill: appended %d rows ts=%d..%d",
+            len(rows), int(rows[0]["ts"]), int(rows[-1]["ts"]),
+        )
+        return merged
+
+    @staticmethod
+    def _provider_value_at(provider: Any, ts: int, *, _kind: str = "") -> float:
+        if provider is None:
+            return float("nan")
+        try:
+            # OI provider exposes value_at via its private API only on the
+            # Redis backend; on the parquet backend it's exposed too. Use
+            # whichever method is present.
+            fn = getattr(provider, "value_at", None) or getattr(provider, "_value_at")
+            return float(fn(int(ts)))
+        except Exception:  # noqa: BLE001
+            return float("nan")
+
+    def _append_live_bar(self, bar: dict[str, Any], ts: int) -> bool:
+        """Append a new 15m bar to ``self._unified``. Returns True if appended."""
+        if self._unified is None:
+            return False
+        if ts <= self._tail_ts_15m:
+            return False
+        try:
+            o = float(bar.get("open"))
+            h = float(bar.get("high"))
+            lo = float(bar.get("low"))
+            c = float(bar.get("close"))
+        except (TypeError, ValueError):
+            return False
+        new_row = {
+            "ts": ts,
+            "open": o,
+            "high": h,
+            "low": lo,
+            "close": c,
+            "oi": self._provider_value_at(self._oi_provider, ts, _kind="oi"),
+            "funding_rate": self._provider_value_at(self._funding_provider, ts),
+            "taker_ratio": self._provider_value_at(self._taker_provider, ts),
+            "lsr_count": self._provider_value_at(self._lsr_provider, ts),
+            "dt": pd.Timestamp(ts, unit="ms", tz="UTC"),
+        }
+        self._unified = pd.concat(
+            [self._unified, pd.DataFrame([new_row])],
+            ignore_index=True,
+        )
+        if len(self._unified) > self._max_history_15m_bars:
+            self._unified = self._unified.iloc[-self._max_history_15m_bars:].reset_index(drop=True)
+        self._tail_ts_15m = ts
+        return True
+
+    def _refresh_legs_for_live(self) -> None:
+        """Rebuild signal arrays for every leg from the updated unified df.
+
+        Position state is preserved via each leg's ``entry_tf_ts``.
+        """
+        if self._unified is None:
+            return
+        for leg in self._legs:
+            leg.refresh_signals(self._unified)
 
     def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
         if self.new_bar_only and not bool(bar.get("is_new_bar", True)):
@@ -740,6 +1030,12 @@ class MultiFactorPortfolioStrategy(Strategy):
         if ts <= 0 or ts == self._last_bar_ts:
             return
         self._last_bar_ts = ts
+
+        # Live mode: append the new 15m bar to the rolling unified dataset
+        # and refresh signal arrays for every leg before per-leg processing.
+        if self._mode == "live" and ts > self._tail_ts_15m:
+            if self._append_live_bar(bar, ts):
+                self._refresh_legs_for_live()
 
         # Process exits then entries for each leg at this bar.
         for leg in self._legs:
@@ -790,29 +1086,29 @@ class MultiFactorPortfolioStrategy(Strategy):
                 tp_level = ep * (1.0 + leg.tp_pct)
                 sl_level = ep * (1.0 - leg.sl_pct)
                 if o <= sl_level:
-                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None
+                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None; leg.entry_tf_ts = None
                     return
                 if lo <= sl_level:
-                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None
+                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None; leg.entry_tf_ts = None
                     return
                 if h >= tp_level:
-                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None
+                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None; leg.entry_tf_ts = None
                     return
             else:  # short
                 tp_level = ep * (1.0 - leg.tp_pct)
                 sl_level = ep * (1.0 + leg.sl_pct)
                 if o >= sl_level:
-                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None
+                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None; leg.entry_tf_ts = None
                     return
                 if h >= sl_level:
-                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None
+                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None; leg.entry_tf_ts = None
                     return
                 if lo <= tp_level:
-                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None
+                    leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None; leg.entry_tf_ts = None
                     return
             # Time exit
             if (tf_idx - leg.entry_tf_idx) >= leg.max_hold_bars:
-                leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None
+                leg.side = 0; leg.entry_price = None; leg.entry_tf_idx = None; leg.entry_tf_ts = None
                 return
 
         # 2) Entry on this closed bar's signal (edge-triggered).
@@ -821,10 +1117,12 @@ class MultiFactorPortfolioStrategy(Strategy):
                 leg.side = 1
                 leg.entry_price = float(leg.tf_close[tf_idx])
                 leg.entry_tf_idx = tf_idx
+                leg.entry_tf_ts = int(leg.tf_ts[tf_idx])
             elif bool(leg.short_sig[tf_idx]):
                 leg.side = -1
                 leg.entry_price = float(leg.tf_close[tf_idx])
                 leg.entry_tf_idx = tf_idx
+                leg.entry_tf_ts = int(leg.tf_ts[tf_idx])
 
     def _reconcile(self, ctx: StrategyContext, target: int, long_count: int,
                     short_count: int, ts: int) -> None:

@@ -1,0 +1,30 @@
+FROM python:3.12-slim
+
+ENV TZ=UTC
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock README.md /app/
+COPY src /app/src
+COPY scripts/perp_meta_ingestor.py /app/scripts/perp_meta_ingestor.py
+
+ENV PYTHONPATH=/app/src
+
+RUN pip install --no-cache-dir uv
+RUN uv sync
+
+# Long-running poller that publishes funding rate / taker buy-sell ratio /
+# global long-short account ratio to Redis ZSETs for the
+# MultiFactorPortfolioStrategy live trading path.
+#
+# Required env: REDIS_URL (or REDIS_HOST + REDIS_USERNAME for AAD,
+#               or REDIS_HOST + REDIS_PASSWORD for access-key).
+# Optional env:
+#   MFP_SYMBOLS              default BTCUSDT
+#   MFP_INDICATORS           default funding,taker,lsr
+#   MFP_POLL_SECONDS         default 300 (taker, lsr)
+#   MFP_FUNDING_POLL_SECONDS default 1800 (funding cadence is 8h)
+#   MFP_TRIM_HOURS           default 30
+#   BINANCE_FAPI             default https://fapi.binance.com
+CMD ["uv", "run", "python", "scripts/perp_meta_ingestor.py"]

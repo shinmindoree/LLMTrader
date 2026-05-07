@@ -194,6 +194,63 @@ fill block from
 The 17 legs would each be deployed as a separate live process under the
 existing `scripts/run_portfolio_trading.py` runner.
 
+## Live mode (implemented)
+
+The strategy now supports live trading directly from the same module. At
+`initialize()` it auto-detects the runner context type and switches between:
+
+| Mode      | Data source                                                                 |
+| --------- | --------------------------------------------------------------------------- |
+| backtest  | parquet files (resolved via `MFP_PARQUET_*` env vars)                       |
+| live      | parquet seed + Redis ZSET providers + Binance REST gap-fill                 |
+
+Live data dependencies (must be running before the runner starts):
+
+- **OI Ingestor** (`scripts/oi_ingestor.py`): writes `oi:{SYMBOL}:hist` to Redis.
+  Already documented in
+  [`infra/docs/oi-ingestor-deployment.md`](../infra/docs/oi-ingestor-deployment.md).
+- **Perp-Meta Ingestor** (`scripts/perp_meta_ingestor.py`): writes
+  `funding:{SYMBOL}:hist`, `taker:{SYMBOL}:hist`, `lsr:{SYMBOL}:hist` to Redis.
+  Documented in
+  [`infra/docs/perp-meta-ingestor-deployment.md`](../infra/docs/perp-meta-ingestor-deployment.md).
+- **Parquet seed in blob**: same files as the backtest path, refreshed
+  daily (or via a separate cron) so the live `initialize()` only has to
+  gap-fill ~24 h of history at startup.
+
+Required runner env vars for live MFP:
+
+```
+# Redis (pick ONE auth combo)
+REDIS_URL=...                       # key auth
+# or
+REDIS_HOST=...
+REDIS_USERNAME=...                  # AAD (managed identity), or
+REDIS_PASSWORD=...                  # access-key
+
+# Parquet seed (same as backtest)
+MFP_PARQUET_BLOB_CONTAINER=market-data
+MFP_PARQUET_BLOB_PREFIX=perp_meta
+AZURE_BLOB_ACCOUNT_URL=https://teststrategies.blob.core.windows.net/
+
+# Optional tuning
+MFP_LIVE_HISTORY_BARS_15M=5760     # default 60 days * 24h * 4 = 5760
+```
+
+On every new 15 m bar the strategy:
+
+1. Appends a row to the in-memory `unified` DataFrame
+   (OHLC from the bar; OI / funding / taker / LSR from each provider's
+   `value_at(ts)` Redis lookup).
+2. Trims to the rolling history window.
+3. Calls `refresh_signals(unified)` on every leg — re-resamples to the
+   leg's TF and recomputes signal arrays. Position state survives via
+   each leg's preserved `entry_tf_ts`.
+4. Runs the same `_process_leg` exit + entry logic used in backtest.
+
+The 1/17-each notional split via separate runner processes is still the
+recommended deployment for capital efficiency, but a single-runner net
+direction implementation also works (the default sizing).
+
 ## Deployment notes (UI / cloud runner)
 
 The portfolio strategy is implemented in
