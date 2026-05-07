@@ -746,10 +746,18 @@ STRATEGY_PARAMS: dict[str, Any] = {
     # If True, only step the strategy on bars marked is_new_bar (matches the
     # vectorised lab semantics). If False, every tick can drive exits/entries.
     "new_bar_only": True,
+    # If True, emit a MFP_BAR debug event on every bar with the current
+    # target/long_count/short_count/committed_side snapshot. Useful for
+    # verifying live behaviour against backtest signals at the cost of one
+    # event per bar (~96 events/day on a 15m candle). Can also be enabled
+    # globally via env var MFP_DEBUG_BAR_EVENTS=1.
+    "debug_bar_events": False,
 }
 
 STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = [
     {"name": "new_bar_only", "type": "bool", "label": "Step on bar close only"},
+    {"name": "debug_bar_events", "type": "bool",
+     "label": "Emit per-bar debug event (MFP_BAR)"},
 ]
 
 
@@ -775,6 +783,10 @@ class MultiFactorPortfolioStrategy(Strategy):
         # max_order via the runner default sizing path.
         p = {**STRATEGY_PARAMS, **kwargs}
         self.new_bar_only = bool(p["new_bar_only"])
+        # Param wins over env var; env var is a fallback for ops debugging
+        # without needing to edit the saved job config.
+        env_dbg = os.environ.get("MFP_DEBUG_BAR_EVENTS", "").strip().lower()
+        self.debug_bar_events = bool(p["debug_bar_events"]) or env_dbg in ("1", "true", "yes", "on")
         self.params = dict(p)
 
         # Set in initialize() from ctx.symbol; default kept for type stability.
@@ -1058,8 +1070,31 @@ class MultiFactorPortfolioStrategy(Strategy):
         short_count = sum(1 for leg in self._legs if leg.side < 0)
         target = 1 if long_count > short_count else (-1 if short_count > long_count else 0)
 
+        # Snapshot committed_side BEFORE _reconcile so the debug event can
+        # report whether this bar caused a position change.
+        prev_committed = self._committed_side
+
         # Reconcile ctx position with target.
         self._reconcile(ctx, target, long_count, short_count, ts)
+
+        # Per-bar debug snapshot (off by default). Useful for live trading
+        # to verify that signals are firing at the expected cadence and
+        # that ctx position tracks the leg majority.
+        if self.debug_bar_events:
+            active_legs = [
+                {"i": i, "family": leg.family, "tf": leg.interval_min, "side": int(leg.side)}
+                for i, leg in enumerate(self._legs) if leg.side != 0
+            ]
+            self._emit_event(ctx, "MFP_BAR", {
+                "ts": ts,
+                "target": int(target),
+                "long_legs": long_count,
+                "short_legs": short_count,
+                "committed_side": int(self._committed_side),
+                "prev_side": int(prev_committed),
+                "changed": bool(prev_committed != self._committed_side),
+                "active_legs": active_legs,
+            })
 
     # ---- internals ---------------------------------------------------------
     def _tf_idx_for(self, leg: _LegState, ts_15m: int) -> int:
@@ -1146,7 +1181,9 @@ class MultiFactorPortfolioStrategy(Strategy):
                 pass
             self._committed_side = 0
             self._emit_event(ctx, "MFP_FLAT", {
-                "ts": ts, "long_legs": long_count, "short_legs": short_count,
+                "ts": ts, "target": int(target), "prev_side": int(cur),
+                "committed_side": 0,
+                "long_legs": long_count, "short_legs": short_count,
             })
         # Open new position in target direction. Sizing is delegated entirely
         # to the runner trade-settings (max_position/max_order); no per-strategy
@@ -1155,13 +1192,17 @@ class MultiFactorPortfolioStrategy(Strategy):
             ctx.enter_long(reason=f"MFP: net long ({long_count}>{short_count})")
             self._committed_side = 1
             self._emit_event(ctx, "MFP_ENTER_LONG", {
-                "ts": ts, "long_legs": long_count, "short_legs": short_count,
+                "ts": ts, "target": int(target), "prev_side": int(cur),
+                "committed_side": 1,
+                "long_legs": long_count, "short_legs": short_count,
             })
         elif target == -1:
             ctx.enter_short(reason=f"MFP: net short ({short_count}>{long_count})")
             self._committed_side = -1
             self._emit_event(ctx, "MFP_ENTER_SHORT", {
-                "ts": ts, "long_legs": long_count, "short_legs": short_count,
+                "ts": ts, "target": int(target), "prev_side": int(cur),
+                "committed_side": -1,
+                "long_legs": long_count, "short_legs": short_count,
             })
 
     @staticmethod
