@@ -60,9 +60,11 @@ RUNTIME CONTRACT
   Each new bar each leg outputs side ∈ {-1, 0, +1}. The strategy commands the
   ctx into the **majority direction** (long if Σside > 0, short if < 0, flat
   if 0). Per-leg SL/TP/TIME exits update internal leg state and may flip the
-  net direction. Sizing is full-notional (`enter_long`/`enter_short` without
-  `entry_pct`). For true 1/17-each notional weighting deploy 17 separate
-  runner jobs with `entry_pct = 100/17 ≈ 5.88` and run one leg per job.
+  net direction. Sizing is delegated to the runner trade-settings (i.e.
+  `max_position` / `max_order`); the strategy calls
+  `enter_long`/`enter_short` without an explicit entry_pct. For true
+  1/17-each notional weighting, deploy 17 separate runner jobs and set
+  trade-settings `max_position ≈ 5.88%` (= 100/17) on each one.
 - LIVE mode: requires the perp-meta ingestor (``scripts/perp_meta_ingestor.py``,
   see ``infra/docs/perp-meta-ingestor-deployment.md``) running and writing
   to Redis ZSETs ``funding:{S}:hist`` / ``taker:{S}:hist`` / ``lsr:{S}:hist``,
@@ -741,19 +743,12 @@ class _LegState:
 # Strategy (single class)
 # ---------------------------------------------------------------------------
 STRATEGY_PARAMS: dict[str, Any] = {
-    "symbol": "BTCUSDT",
-    # Sizing knob: full notional by default. Set to a fraction (0..1) to use a
-    # custom entry_pct on every position open. None => use the runner default.
-    "entry_pct": None,
     # If True, only step the strategy on bars marked is_new_bar (matches the
     # vectorised lab semantics). If False, every tick can drive exits/entries.
     "new_bar_only": True,
 }
 
 STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = [
-    {"name": "symbol", "type": "string", "label": "Symbol (BTCUSDT only)"},
-    {"name": "entry_pct", "type": "float", "min": 0.01, "max": 1.0, "step": 0.01,
-     "label": "Per-trade entry % (None = full notional)"},
     {"name": "new_bar_only", "type": "bool", "label": "Step on bar close only"},
 ]
 
@@ -774,11 +769,16 @@ class MultiFactorPortfolioStrategy(Strategy):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__()
+        # Legacy kwargs (`symbol`, `entry_pct`) from older job configs are
+        # silently ignored: symbol now comes from ctx.symbol (trade settings)
+        # and per-trade sizing is governed by trade-settings max_position /
+        # max_order via the runner default sizing path.
         p = {**STRATEGY_PARAMS, **kwargs}
-        self.symbol = str(p["symbol"]).upper()
-        self.entry_pct = p["entry_pct"]
         self.new_bar_only = bool(p["new_bar_only"])
         self.params = dict(p)
+
+        # Set in initialize() from ctx.symbol; default kept for type stability.
+        self.symbol: str = "BTCUSDT"
 
         self._legs: list[_LegState] = []
         self._committed_side: int = 0  # the side currently held by ctx
@@ -813,6 +813,15 @@ class MultiFactorPortfolioStrategy(Strategy):
         else:
             mode = None
         self._mode = mode
+
+        # Symbol comes from the runner trade-settings via the context, not
+        # from strategy params (it would be redundant with the trade panel).
+        ctx_symbol = getattr(ctx, "symbol", None)
+        if not ctx_symbol:
+            raise RuntimeError(
+                "MultiFactorPortfolioStrategy: ctx.symbol is required but missing."
+            )
+        self.symbol = str(ctx_symbol).upper()
 
         if self.symbol != "BTCUSDT":
             raise ValueError(
@@ -1139,21 +1148,17 @@ class MultiFactorPortfolioStrategy(Strategy):
             self._emit_event(ctx, "MFP_FLAT", {
                 "ts": ts, "long_legs": long_count, "short_legs": short_count,
             })
-        # Open new position in target direction.
+        # Open new position in target direction. Sizing is delegated entirely
+        # to the runner trade-settings (max_position/max_order); no per-strategy
+        # entry_pct override.
         if target == 1:
-            kw: dict[str, Any] = {"reason": f"MFP: net long ({long_count}>{short_count})"}
-            if self.entry_pct is not None:
-                kw["entry_pct"] = float(self.entry_pct)
-            ctx.enter_long(**kw)
+            ctx.enter_long(reason=f"MFP: net long ({long_count}>{short_count})")
             self._committed_side = 1
             self._emit_event(ctx, "MFP_ENTER_LONG", {
                 "ts": ts, "long_legs": long_count, "short_legs": short_count,
             })
         elif target == -1:
-            kw = {"reason": f"MFP: net short ({short_count}>{long_count})"}
-            if self.entry_pct is not None:
-                kw["entry_pct"] = float(self.entry_pct)
-            ctx.enter_short(**kw)
+            ctx.enter_short(reason=f"MFP: net short ({short_count}>{long_count})")
             self._committed_side = -1
             self._emit_event(ctx, "MFP_ENTER_SHORT", {
                 "ts": ts, "long_legs": long_count, "short_legs": short_count,
