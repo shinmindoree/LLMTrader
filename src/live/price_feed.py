@@ -40,8 +40,9 @@ class PriceFeed:
         self._last_emitted_close: float = 0.0
         self._last_emitted_volume: float = 0.0
         self._stream: BinanceMarketStream | None = None
-        # Lightweight debug counters so we can tell from container logs
-        # whether the websocket is actually delivering kline messages.
+        # Lightweight ops counters so container logs show that the kline
+        # source (REST poll) is delivering messages even when nothing else
+        # fires. Logged once per minute.
         self._msg_count: int = 0
         self._last_log_msg_count: int = 0
         self._last_log_ts_sec: float = 0.0
@@ -143,16 +144,17 @@ class PriceFeed:
         """
         try:
             self._msg_count += 1
-            # Heartbeat-style log every 30s so container stdout shows the
-            # websocket is delivering messages even when nothing else fires.
+            # Heartbeat-style log every 60s so container stdout shows the
+            # kline source is delivering messages even when nothing else fires.
             import time as _time  # local import to avoid widening module surface
             now_sec = _time.time()
-            if now_sec - self._last_log_ts_sec >= 30.0:
+            if now_sec - self._last_log_ts_sec >= 60.0:
                 delta = self._msg_count - self._last_log_msg_count
                 self._last_log_msg_count = self._msg_count
                 self._last_log_ts_sec = now_sec
                 print(
-                    f"[price_feed] {self.symbol}@{self.candle_interval} ws_msgs total={self._msg_count} +{delta}/30s"
+                    f"[price_feed] {self.symbol}@{self.candle_interval} kline_msgs total={self._msg_count} +{delta}/60s",
+                    flush=True,
                 )
             # 바이낸스 Kline Stream 형식 처리
             # 스트림 이름이 있는 경우: {"stream": "...", "data": {...}}
