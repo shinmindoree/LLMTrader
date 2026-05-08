@@ -10,7 +10,8 @@ COPY src /app/src
 COPY scripts/oi_ingestor.py /app/scripts/oi_ingestor.py
 COPY scripts/refresh_oi_parquet.py /app/scripts/refresh_oi_parquet.py
 
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1
 
 RUN pip install --no-cache-dir uv
 RUN uv sync

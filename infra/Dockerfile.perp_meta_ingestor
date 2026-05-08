@@ -9,7 +9,8 @@ COPY pyproject.toml uv.lock README.md /app/
 COPY src /app/src
 COPY scripts/perp_meta_ingestor.py /app/scripts/perp_meta_ingestor.py
 
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1
 
 RUN pip install --no-cache-dir uv
 RUN uv sync
