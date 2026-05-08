@@ -44,36 +44,60 @@ class BinanceMarketStream:
         self.running = True
         url = f"{self.base_url}/{self.stream_name}"
 
+        # Diagnostic counters: aggregated per-30s rolling print so we can tell
+        # from container logs whether the websocket is actually delivering
+        # any frames (TEXT/BINARY/PING/PONG/CLOSE/ERROR) once connected.
+        import time as _time
+        msg_total = 0
+        msg_text = 0
+        msg_other = 0
+        last_log_sec = 0.0
+        last_log_total = 0
+
         while self.running:
             try:
                 self._session = aiohttp.ClientSession()
                 async with self._session.ws_connect(url) as ws:
                     self._ws = ws
-                    print(f"⚡ Market Stream 연결됨: {self.stream_name} ({'테스트넷' if self.testnet else '라이브'})")
+                    print(f"⚡ Market Stream 연결됨: {self.stream_name} ({'테스트넷' if self.testnet else '라이브'})", flush=True)
 
                     async for msg in ws:
                         if not self.running:
                             break
 
+                        msg_total += 1
+                        now = _time.time()
+                        if now - last_log_sec >= 30.0:
+                            delta = msg_total - last_log_total
+                            last_log_total = msg_total
+                            last_log_sec = now
+                            print(
+                                f"[market_stream] {self.stream_name} frames total={msg_total} +{delta}/30s text={msg_text} other={msg_other}",
+                                flush=True,
+                            )
+
                         if msg.type == aiohttp.WSMsgType.TEXT:
+                            msg_text += 1
                             try:
                                 data = json.loads(msg.data)
                                 await self.callback(data)
                             except Exception as e:  # noqa: BLE001
-                                print(f"⚠️ Market Stream 메시지 처리 오류: {e}")
+                                print(f"⚠️ Market Stream 메시지 처리 오류: {e}", flush=True)
                         elif msg.type == aiohttp.WSMsgType.ERROR:
-                            print(f"⚠️ Market Stream 오류: {msg.data}")
+                            print(f"⚠️ Market Stream 오류: {msg.data}", flush=True)
                             break
                         elif msg.type == aiohttp.WSMsgType.CLOSE:
-                            print("⚠️ Market Stream 연결 종료됨")
+                            print("⚠️ Market Stream 연결 종료됨", flush=True)
                             break
+                        else:
+                            msg_other += 1
 
             except asyncio.CancelledError:
-                print("⚠️ Market Stream 취소됨")
+                print("⚠️ Market Stream 취소됨", flush=True)
                 break
             except Exception as e:  # noqa: BLE001
                 if self.running:
-                    print(f"⚠️ Market Stream 재연결 대기 중: {e}")
+                    print(f"⚠️ Market Stream 재연결 대기 중: {e!r}", flush=True)
                     await asyncio.sleep(5)
                 else:
                     break
