@@ -249,12 +249,17 @@ export function normalizeLiveTrades(trades: Trade[]): NormalizedTrade[] {
     const price = t.price ?? null;
     const positionSizeUsdt =
       quantity !== null && price !== null ? quantity * price : null;
-    const isExit = derivedSide === "SELL" && t.realized_pnl != null;
+    // Reason / exit_reason are populated by the runner from the strategy's
+    // own _reason / _exit_reason fields when the chase order is verified
+    // (see src/runner/event_sink.py::record_trade_from_user_trade and
+    // src/live/context.py TRADE_RECORDED). Trust those values verbatim —
+    // do NOT synthesize a fake "Entry Long" / "Exit Long" fallback. A
+    // SELL with realized_pnl == 0 is a fresh short entry, not a long
+    // exit, so heuristics on side+pnl mislabel real strategy events.
     const reasonFromRaw = raw ? asString(raw.reason) : null;
     const exitReasonFromRaw = raw ? asString(raw.exit_reason) : null;
-    const reason =
-      reasonFromRaw ?? exitReasonFromRaw ?? (derivedSide === "BUY" ? "Entry Long" : "Exit Long");
-    const exitReason = exitReasonFromRaw ?? (isExit ? "Exit Long" : null);
+    const reason = reasonFromRaw ?? exitReasonFromRaw;
+    const exitReason = exitReasonFromRaw;
     const orderId = t.order_id ?? (raw ? (typeof raw.orderId === "number" ? raw.orderId : null) : null);
     const makerRaw = raw ? raw.maker : null;
     const role: "Maker" | "Taker" | null = typeof makerRaw === "boolean" ? (makerRaw ? "Maker" : "Taker") : null;
