@@ -928,6 +928,29 @@ class MultiFactorPortfolioStrategy(Strategy):
         self._committed_side = 0
         self._last_bar_ts = 0
         self._tail_ts_15m = int(unified["ts"].iloc[-1])
+
+        # 7) History replay (warmup). Without this every leg starts flat at
+        # job-start and the runner only enters on the next NEW signal — far
+        # behind the backtest signal pool. We replay each leg's full TF
+        # history through ``_process_leg`` so leg.side / entry_price /
+        # entry_tf_idx all match what a backtest run up to this moment
+        # would hold. Stale entries (older than max_hold_bars) are
+        # auto-flattened by the time-exit branch inside _process_leg, so
+        # this is automatically safe against ancient open positions.
+        warmup_summary = self._warmup_replay()
+        # NOTE: _committed_side stays 0 here. The next on_bar() call will
+        # see leg majority != 0 and call ctx.enter_long/short via
+        # _reconcile, executing the warmup entry through the normal order
+        # path. This avoids issuing orders from inside initialize().
+        self._emit_event(ctx, "MFP_WARMUP", warmup_summary)
+        logger.info(
+            "[mfp] warmup replay: target=%d long_legs=%d short_legs=%d active=%d",
+            warmup_summary.get("target_side", 0),
+            warmup_summary.get("long_legs", 0),
+            warmup_summary.get("short_legs", 0),
+            len(warmup_summary.get("active", [])),
+        )
+
         self._emit_event(ctx, "MFP_INIT", {
             "mode": "live",
             "n_legs": len(self._legs),
@@ -942,6 +965,74 @@ class MultiFactorPortfolioStrategy(Strategy):
             self.symbol, len(self._legs), len(unified),
             seed_last_ts, self._tail_ts_15m,
         )
+
+    def _warmup_replay(self) -> dict[str, Any]:
+        """Replay each leg's TF history through ``_process_leg`` so that
+        ``leg.side`` / ``entry_price`` / ``entry_tf_idx`` reflect the same
+        position a backtest running to ``now`` would hold.
+
+        Without this, every leg starts flat at job-start (because
+        ``_LegState.__init__`` initialises ``side = 0``) and the runner only
+        enters on the next *new* signal. Backtest, in contrast, has been
+        accumulating leg state for the entire history window, so its
+        ``net direction`` at startup is rarely flat — meaning the runner is
+        effectively starting from a sparser leg pool than the backtest.
+
+        Replay is safe because:
+          * ``_process_leg`` is the same function the backtest uses, so the
+            replayed state is bit-identical to the backtest's state at the
+            same timestamp.
+          * Stale entries (older than ``max_hold_bars``) auto-flatten via
+            the time-exit branch inside ``_process_leg`` — no manual
+            cutoff needed.
+          * No ctx orders are issued here. ``_committed_side`` stays 0;
+            the first ``on_bar`` after initialize sees the leg majority
+            and routes the entry through the normal ``_reconcile`` ->
+            ``ctx.enter_long/short`` path.
+
+        Returns a summary dict (suitable for an MFP_WARMUP audit event)
+        with per-leg details of any active position.
+        """
+        active: list[dict[str, Any]] = []
+        if not self._legs:
+            return {
+                "replayed_legs": 0,
+                "long_legs": 0,
+                "short_legs": 0,
+                "target_side": 0,
+                "active": active,
+            }
+
+        long_count = 0
+        short_count = 0
+        for i, leg in enumerate(self._legs):
+            n = int(leg.tf_ts.size)
+            if n == 0:
+                continue
+            for tf_idx in range(n):
+                self._process_leg(leg, tf_idx)
+            if leg.side > 0:
+                long_count += 1
+            elif leg.side < 0:
+                short_count += 1
+            if leg.side != 0:
+                active.append({
+                    "i": i,
+                    "family": leg.family,
+                    "tf": int(leg.interval_min),
+                    "side": int(leg.side),
+                    "entry_tf_ts": int(leg.entry_tf_ts) if leg.entry_tf_ts is not None else None,
+                    "entry_price": float(leg.entry_price) if leg.entry_price is not None else None,
+                })
+
+        target = 1 if long_count > short_count else (-1 if short_count > long_count else 0)
+        return {
+            "replayed_legs": len(self._legs),
+            "long_legs": int(long_count),
+            "short_legs": int(short_count),
+            "target_side": int(target),
+            "active": active,
+        }
 
     def _gap_fill_to(self, unified: pd.DataFrame, last_ts: int,
                      end_ts_inclusive: int) -> pd.DataFrame:
