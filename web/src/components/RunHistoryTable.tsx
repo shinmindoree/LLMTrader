@@ -12,6 +12,7 @@ import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
 import { isRecord } from "@/components/JobResultSummary";
 import { buildPositions, normalizeLiveTrades } from "@/components/TradeAnalysis";
+import { TimeCell } from "@/components/TimeCell";
 
 const asNumber = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -337,9 +338,9 @@ export function RunHistoryTable({
               key={row.job.job_id}
               className="border-b border-[#2a2e39] hover:bg-[#252a37] transition-colors"
             >
-              <td className={tdClass}>{row.startedAt}</td>
+              <td className={tdClass}><TimeCell value={row.job.created_at} /></td>
               {type === "LIVE" && (
-                <td className={`${tdClass} text-[#868993]`}>{row.endedAt}</td>
+                <td className={`${tdClass} text-[#868993]`}><TimeCell value={row.job.ended_at ?? null} /></td>
               )}
               <td className={tdClass}>
                 <Link

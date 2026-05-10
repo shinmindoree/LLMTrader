@@ -6,6 +6,7 @@ import useSWR from "swr";
 import { getBinanceAccountSummary } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { BinanceAccountSummary } from "@/lib/types";
+import { TimeCell } from "@/components/TimeCell";
 
 const REFRESH_MS = 15_000;
 
@@ -61,7 +62,7 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
 
   const connected = snapshot?.connected === true;
   const hasConfig = snapshot?.configured === true;
-  const lastUpdated = snapshot?.update_time ? new Date(snapshot.update_time).toLocaleString() : "-";
+  const lastUpdatedRaw = snapshot?.update_time ?? null;
   const modeLabel = snapshot?.mode === "testnet" ? t.binanceAccount.testnet : snapshot?.mode === "mainnet" ? t.binanceAccount.mainnet : t.binanceAccount.custom;
 
   return (
@@ -93,7 +94,7 @@ export function BinanceAccountPanel({ embedded }: { embedded?: boolean }) {
       </div>
 
       <div className={`mt-2 text-xs text-[#868993] ${embedded ? "mt-0" : ""}`}>
-        {t.binanceAccount.lastUpdated} {lastUpdated}
+        <span className="inline-flex items-center gap-1">{t.binanceAccount.lastUpdated} <TimeCell value={lastUpdatedRaw} /></span>
       </div>
 
       {loading && !snapshot ? (

@@ -12,6 +12,7 @@ import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
 import { normalizeLiveTrades, buildPositions, computeTradeStats } from "@/components/TradeAnalysis";
+import { TimeCell } from "@/components/TimeCell";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -224,7 +225,7 @@ export function ActiveJobCard({
       ) : null}
 
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-xs text-[#868993]">
-        <span>{t.live.started} {new Date(job.created_at).toLocaleString()}</span>
+        <span className="inline-flex items-center gap-1">{t.live.started} <TimeCell value={job.created_at} /></span>
         {runningDuration && (
           <span className="text-[#d1d4dc]">· ⏱ {runningDuration}</span>
         )}

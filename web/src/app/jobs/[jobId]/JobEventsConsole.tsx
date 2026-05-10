@@ -4,9 +4,26 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { JobEvent } from "@/lib/types";
+import { useTimezone } from "@/lib/timeFormat";
+
+const TIME_ONLY_KST = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Seoul",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+const TIME_ONLY_UTC = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "UTC",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
 
 export function JobEventsConsole({ jobId }: { jobId: string }) {
   const { t } = useI18n();
+  const { tz } = useTimezone();
   const [events, setEvents] = useState<JobEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +103,7 @@ export function JobEventsConsole({ jobId }: { jobId: string }) {
         ) : (
           events.map((e) => (
             <div key={e.event_id} className={`whitespace-pre-wrap ${getEventColor(e)}`}>
-              <span className="text-[#868993]">[{new Date(e.ts).toLocaleTimeString()}]</span>{" "}
+              <span className="text-[#868993]">[{(tz === "UTC" ? TIME_ONLY_UTC : TIME_ONLY_KST).format(new Date(e.ts))}]</span>{" "}
               <span className="text-[#868993]">{e.kind}</span> {e.message}{" "}
               {e.payload ? (
                 <span className="text-[#868993]">{JSON.stringify(e.payload)}</span>

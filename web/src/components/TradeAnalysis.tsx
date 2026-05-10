@@ -5,7 +5,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
+import { TimeCell } from "@/components/TimeCell";
 import { useTopChart } from "@/components/TopChartContext";
+import { formatBinanceTime } from "@/lib/timeFormat";
 
 type NormalizedTrade = {
   id: string | number;
@@ -187,10 +189,12 @@ function escapeCsvValue(value: string): string {
 }
 
 function formatDateTime(ms: number | null): string {
-  if (!ms) return "-";
-  const dt = new Date(ms);
-  if (Number.isNaN(dt.getTime())) return "-";
-  return dt.toLocaleString();
+  // Used for CSV export and equity-tooltip labels. Binance-style
+  // `YYYY-MM-DD HH:mm:ss` in KST, locale-independent so exported files
+  // are parseable. The interactive trade table uses <TimeCell /> which
+  // honours the user's KST/UTC toggle; this fallback is intentionally
+  // fixed to KST 24h to keep CSVs deterministic across machines.
+  return formatBinanceTime(ms, "KST");
 }
 
 function parseTimestamp(value: unknown): number | null {
@@ -1027,7 +1031,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 {(timeSortAsc ? enrichedBacktest : [...enrichedBacktest].reverse()).map((t, idx) => (
                   <tr key={`bt-${t.id}`} className="border-b border-[#2a2e39]">
                     <td className="px-4 py-2 text-[#868993]">{t.orderId ?? idx + 1}</td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
+                    <td className="px-4 py-2 text-[#d1d4dc]"><TimeCell value={t.timestamp} /></td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.symbol ?? backtestSymbol ?? "-"}{" "}
                       <span className="rounded bg-[#2a2e39] px-1 py-0.5 text-[10px] text-[#868993]">Perp</span>
@@ -1083,7 +1087,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 {(timeSortAsc ? enrichedLive : [...enrichedLive].reverse()).map((t, idx) => (
                   <tr key={`lv-${t.id}`} className="border-b border-[#2a2e39]">
                     <td className="px-4 py-2 text-[#868993]">{t.orderId ?? idx + 1}</td>
-                    <td className="px-4 py-2 text-[#d1d4dc]">{t.timeLabel}</td>
+                    <td className="px-4 py-2 text-[#d1d4dc]"><TimeCell value={t.timestamp} /></td>
                     <td className="px-4 py-2 text-[#d1d4dc]">
                       {t.symbol ?? "-"}{" "}
                       <span className="rounded bg-[#2a2e39] px-1 py-0.5 text-[10px] text-[#868993]">Perp</span>

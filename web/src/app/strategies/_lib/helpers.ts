@@ -1,4 +1,5 @@
 import type { StrategyParamFieldSpec } from "@/lib/types";
+import { formatBinanceTime } from "@/lib/timeFormat";
 
 export type DiffLine = {
   type: "context" | "add" | "remove";
@@ -418,7 +419,10 @@ export function createEmptySession(): ChatSessionRecord {
 export function formatSessionTimestamp(iso: string): string {
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return "Unknown";
-  return parsed.toLocaleString();
+  // Binance-style 24h KST. This is a non-interactive label (rendered in a
+  // server component path), so it intentionally does not honour the
+  // KST/UTC toggle.
+  return formatBinanceTime(parsed.getTime(), "KST");
 }
 
 import type { StrategyChatSessionRecord } from "@/lib/types";
