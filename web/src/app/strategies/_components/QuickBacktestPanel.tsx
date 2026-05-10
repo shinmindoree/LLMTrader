@@ -26,6 +26,7 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
   const [days, setDays] = useState<number | string>(30);
   const [initialBalance, setInitialBalance] = useState<number | string>(10000);
   const [leverage, setLeverage] = useState<number | string>(1);
+  const [maxPositionPct, setMaxPositionPct] = useState<number | string>(100);
   const [commission, setCommission] = useState<number | string>(0.04);
   const [stopLossPct, setStopLossPct] = useState<number | string>(5);
   const [stopLossEnabled, setStopLossEnabled] = useState(true);
@@ -55,6 +56,7 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
         days: Number(days),
         initial_balance: Number(initialBalance),
         leverage: Number(leverage),
+        max_position: Math.min(1, Math.max(0.01, (Number(maxPositionPct) || 100) / 100)),
         commission: Number(commission) / 100,
         stop_loss_pct: stopLossEnabled ? Number(stopLossPct) / 100 : 0,
         strategy_params: strategyParams,
@@ -134,6 +136,19 @@ export default function QuickBacktestPanel({ code, strategyParams, onAnalyzeWith
               value={leverage}
               onChange={(e) => setLeverage(e.target.value === "" ? "" : Number(e.target.value))}
               onBlur={() => { if (leverage === "" || isNaN(Number(leverage))) setLeverage(1); else setLeverage(Math.min(20, Math.max(1, Number(leverage)))); }}
+            />
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[11px] text-[#9aa0ad]">최대 포지션 (%)</span>
+            <input
+              type="number"
+              className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 font-mono text-xs text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+              min={1}
+              max={100}
+              step={1}
+              value={maxPositionPct}
+              onChange={(e) => setMaxPositionPct(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (maxPositionPct === "" || isNaN(Number(maxPositionPct))) setMaxPositionPct(100); else setMaxPositionPct(Math.min(100, Math.max(1, Math.round(Number(maxPositionPct))))); }}
             />
           </label>
           <label className="flex flex-col gap-0.5">

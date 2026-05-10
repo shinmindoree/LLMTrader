@@ -138,6 +138,7 @@ export type QuickBacktestRequest = {
   days?: number;
   initial_balance?: number;
   leverage?: number;
+  max_position?: number;
   commission?: number;
   stop_loss_pct?: number;
   strategy_params?: Record<string, unknown>;

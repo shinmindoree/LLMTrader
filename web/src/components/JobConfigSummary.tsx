@@ -65,6 +65,9 @@ function extractBacktestConfig(config: Record<string, unknown>) {
     symbol: String(config.symbol ?? "-"),
     interval: String(config.interval ?? "-"),
     leverage: config.leverage != null ? `${config.leverage}x` : "-",
+    maxPosition: config.max_position != null
+      ? `${(Number(config.max_position) * 100).toFixed(0)}%`
+      : "-",
     initialBalance: config.initial_balance != null ? `${config.initial_balance} USDT` : "-",
     commission: config.commission != null ? `${(Number(config.commission) * 100).toFixed(2)}%` : "-",
     slippageBps: config.slippage_bps != null ? `${Number(config.slippage_bps).toFixed(1)} bps` : "-",
@@ -151,6 +154,7 @@ export function JobConfigSummary({
         <ConfigEntry label={t.jobConfig.symbol} value={c.symbol} />
         <ConfigEntry label={t.jobConfig.interval} value={c.interval} />
         <ConfigEntry label={t.jobConfig.leverage} value={c.leverage} />
+        <ConfigEntry label={t.jobConfig.maxPosition} value={c.maxPosition} />
         <ConfigEntry label={t.jobConfig.initialBalance} value={c.initialBalance} />
         <ConfigEntry label={t.jobConfig.commission} value={c.commission} />
         <ConfigEntry label={t.jobConfig.slippage} value={c.slippageBps} />

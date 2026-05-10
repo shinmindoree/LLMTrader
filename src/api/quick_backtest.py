@@ -436,9 +436,14 @@ async def _execute_backtest(req: QuickBacktestRequest) -> dict[str, Any]:
         params = dict(req.strategy_params) if req.strategy_params else {}
         strategy = build_strategy(strategy_class, params)
 
+        # max_position drives both max_position_size and max_order_size so that
+        # effective notional = equity * leverage * max_position. Without this
+        # cap, max_order_size defaults to 0.5 and silently halves the leverage.
+        max_position = float(req.max_position)
         risk_config = RiskConfig(
             max_leverage=float(req.leverage),
-            max_position_size=1.0,
+            max_position_size=max_position,
+            max_order_size=max_position,
             stop_loss_pct=req.stop_loss_pct,
         )
         risk_manager = BacktestRiskManager(risk_config)

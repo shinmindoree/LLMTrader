@@ -94,6 +94,7 @@ export type BacktestInitialConfig = {
   slippageBps?: number;
   stopLossPct?: number;
   stopLossEnabled?: boolean;
+  maxPosition?: number;
   maxPyramidEntries?: number;
   fixedNotional?: number | null;
   startDate?: string;
@@ -125,6 +126,9 @@ export function BacktestForm({
   const [slippageBps, setSlippageBps] = useState<number | string>(initialConfig?.slippageBps ?? 0);
   const [stopLossPct, setStopLossPct] = useState<number | string>(initialConfig?.stopLossPct ?? 0.05);
   const [stopLossEnabled, setStopLossEnabled] = useState(initialConfig?.stopLossEnabled ?? true);
+  const [maxPositionPct, setMaxPositionPct] = useState<number | string>(
+    initialConfig?.maxPosition !== undefined ? Math.round(initialConfig.maxPosition * 100) : 100,
+  );
   const [maxPyramidEntries, setMaxPyramidEntries] = useState<number | string>(initialConfig?.maxPyramidEntries ?? 0);
   const [fixedNotional, setFixedNotional] = useState<number | string>(
     initialConfig?.fixedNotional !== undefined && initialConfig?.fixedNotional !== null
@@ -185,6 +189,7 @@ export function BacktestForm({
         commission,
         slippage_bps: slippageBps === "" ? 0 : Number(slippageBps),
         stop_loss_pct: stopLossEnabled ? stopLossPct : 0,
+        max_position: Math.min(1, Math.max(0.01, (Number(maxPositionPct) || 100) / 100)),
         max_pyramid_entries: maxPyramidEntries,
         start_ts: startTs,
         end_ts: endTs,
@@ -244,6 +249,7 @@ export function BacktestForm({
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">Pos {maxPositionPct}%</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{startDate} → {endDate}</span>
         {(() => {
           const count = estimateCandleCount(startDate, endDate, interval);
@@ -440,6 +446,24 @@ export function BacktestForm({
             onChange={(e) => setMaxPyramidEntries(e.target.value === "" ? "" : Number(e.target.value))}
             onBlur={() => { if (maxPyramidEntries === "" || isNaN(Number(maxPyramidEntries))) setMaxPyramidEntries(0); }}
           />
+        </label>
+        <label className="text-sm">
+          <div className="mb-1 text-xs text-[#868993]"><>{t.form.maxPosition}<InfoTooltip text={t.form.tooltipMaxPosition} /></></div>
+          <div className="relative">
+            <input
+              id="max-position"
+              name="max-position"
+              className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 pr-8 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors"
+              type="number"
+              step="1"
+              min={1}
+              max={100}
+              value={maxPositionPct}
+              onChange={(e) => setMaxPositionPct(e.target.value === "" ? "" : Number(e.target.value))}
+              onBlur={() => { if (maxPositionPct === "" || isNaN(Number(maxPositionPct))) setMaxPositionPct(100); else setMaxPositionPct(Math.min(100, Math.max(1, Math.round(Number(maxPositionPct))))); }}
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#868993]">%</span>
+          </div>
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">

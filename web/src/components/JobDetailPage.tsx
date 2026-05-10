@@ -67,6 +67,7 @@ function buildInitialConfig(job: Job): BacktestInitialConfig {
     slippageBps: Number(c.slippage_bps ?? 0),
     stopLossPct: slPct > 0 ? slPct : 0.05,
     stopLossEnabled: slPct > 0,
+    maxPosition: c.max_position != null ? Number(c.max_position) : undefined,
     maxPyramidEntries: Number(c.max_pyramid_entries ?? 0),
     startDate: typeof c.start_ts === "number" ? formatDateFromTs(c.start_ts) : undefined,
     endDate: typeof c.end_ts === "number" ? formatDateFromTs(c.end_ts) : undefined,
