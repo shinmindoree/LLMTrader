@@ -182,12 +182,12 @@ def _check_live(config: dict[str, Any], result: JobPolicyCheckResult) -> None:
         max_position = _to_float(stream.get("max_position"))
         if max_position is None:
             result.blockers.append(f"{field_prefix}.max_position: 숫자여야 합니다.")
-        elif max_position <= 0 or max_position > 0.5:
-            result.blockers.append(f"{field_prefix}.max_position: (0, 0.5] 범위여야 합니다.")
+        elif max_position <= 0 or max_position > 1:
+            result.blockers.append(f"{field_prefix}.max_position: (0, 1] 범위여야 합니다.")
         else:
             total_max_position += max_position
-            if max_position > 0.3:
-                result.warnings.append(f"{field_prefix}.max_position이 {max_position:.2f}로 큽니다.")
+            if max_position > 0.5:
+                result.warnings.append(f"{field_prefix}.max_position이 {max_position:.2f}로 큽니다. 포지션 집중도가 높습니다.")
 
         daily_loss_limit = _to_float(stream.get("daily_loss_limit"))
         if daily_loss_limit is None:
