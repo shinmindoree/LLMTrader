@@ -28,6 +28,16 @@ Env (config):
   MFP_FUNDING_POLL_SECONDS  override funding-only cadence (default 1800s = 30 min)
   BINANCE_FAPI        default https://fapi.binance.com
   MFP_INDICATORS      comma-separated subset of {funding,taker,lsr}; default = all three
+
+Optional backtest-parquet refresh (off when blob env not set):
+  MFP_PARQUET_REFRESH_HOURS        default 6 (0 disables)
+  MFP_PARQUET_KINDS                comma-separated subset of {funding,taker,lsr,klines}
+                                   default = funding,taker,lsr,klines
+  MFP_PARQUET_BLOB_CONTAINER       e.g. market-data
+  MFP_PARQUET_BLOB_PREFIX          e.g. perp_meta (joined with filename)
+  MFP_PARQUET_BLOB_NAME_<KIND>_<SYMBOL>  per-kind override (e.g.
+                                   MFP_PARQUET_BLOB_NAME_FUNDING_BTCUSDT)
+  AZURE_BLOB_ACCOUNT_URL or AZURE_BLOB_CONNECTION_STRING
 """
 from __future__ import annotations
 
@@ -45,6 +55,20 @@ from common.redis_client import (
     create_redis_client_from_parts,
     create_redis_client_with_aad,
 )
+
+# refresh_perp_meta_parquet sits next to this script in scripts/
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+try:
+    from refresh_perp_meta_parquet import (  # type: ignore[import-not-found]
+        refresh_perp_meta_parquet,
+    )
+except Exception as _exc:  # noqa: BLE001
+    refresh_perp_meta_parquet = None  # type: ignore[assignment]
+    _PARQUET_IMPORT_ERR = _exc
+else:
+    _PARQUET_IMPORT_ERR = None
 
 logger = logging.getLogger("perp_meta_ingestor")
 logging.basicConfig(
@@ -267,6 +291,36 @@ def main() -> int:
     funding_poll_seconds = int(os.environ.get("MFP_FUNDING_POLL_SECONDS", "1800"))
     trim_hours = int(os.environ.get("MFP_TRIM_HOURS", "30"))
 
+    # Optional parquet refresh config (writes back to blob storage so backtests
+    # via the API/UI keep seeing fresh history; mirrors oi_ingestor pattern).
+    parquet_refresh_hours = float(os.environ.get("MFP_PARQUET_REFRESH_HOURS", "6"))
+    parquet_kinds = [
+        k.strip().lower()
+        for k in os.environ.get("MFP_PARQUET_KINDS", "funding,taker,lsr,klines").split(",")
+        if k.strip()
+    ]
+    parquet_blob_container = os.environ.get("MFP_PARQUET_BLOB_CONTAINER", "").strip()
+    parquet_blob_prefix = os.environ.get("MFP_PARQUET_BLOB_PREFIX", "").strip()
+    parquet_refresh_enabled = (
+        parquet_refresh_hours > 0
+        and bool(parquet_blob_container)
+        and refresh_perp_meta_parquet is not None
+        and bool(parquet_kinds)
+    )
+    if parquet_refresh_hours > 0 and refresh_perp_meta_parquet is None:
+        logger.warning(
+            "MFP_PARQUET_REFRESH_HOURS set but refresh_perp_meta_parquet import failed: %s",
+            _PARQUET_IMPORT_ERR,
+        )
+    if parquet_refresh_enabled:
+        logger.info(
+            "parquet refresh enabled: every %.1fh -> blob container=%s prefix=%s kinds=%s",
+            parquet_refresh_hours, parquet_blob_container, parquet_blob_prefix or "(none)",
+            parquet_kinds,
+        )
+    else:
+        logger.info("parquet refresh disabled")
+
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
@@ -298,6 +352,12 @@ def main() -> int:
                 funding_poll_seconds if ind == "funding" else poll_seconds
             )
 
+        # Schedule first parquet refresh ~5 min after startup so we don't
+        # block the initial Redis backfill, then every refresh_hours.
+        next_parquet_refresh = (
+            time.time() + 300.0 if parquet_refresh_enabled else float("inf")
+        )
+
         # 3) Poll loop.
         while not _shutdown:
             now = time.time()
@@ -314,6 +374,29 @@ def main() -> int:
                     )
                     next_run[ind] = now + cadence
                     ran_any = True
+
+            # Backtest parquet refresh (best-effort; failures never abort poll).
+            if parquet_refresh_enabled and time.time() >= next_parquet_refresh:
+                for sym in symbols:
+                    blob_names: dict[str, str] = {}
+                    for kind in parquet_kinds:
+                        env_key = f"MFP_PARQUET_BLOB_NAME_{kind.upper()}_{sym}"
+                        explicit = os.environ.get(env_key, "").strip()
+                        if explicit:
+                            blob_names[kind] = explicit
+                    try:
+                        result = refresh_perp_meta_parquet(  # type: ignore[misc]
+                            symbol=sym,
+                            kinds=parquet_kinds,
+                            blob_container_name=parquet_blob_container,
+                            blob_prefix=parquet_blob_prefix or None,
+                            blob_names=blob_names or None,
+                        )
+                        logger.info("parquet refresh ok %s: %s", sym, result)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("parquet refresh failed for %s: %s", sym, exc)
+                next_parquet_refresh = time.time() + parquet_refresh_hours * 3600.0
+
             # Sleep until the next earliest run, but at least 1s and at most 60s
             # so SIGTERM can interrupt promptly.
             if _shutdown:

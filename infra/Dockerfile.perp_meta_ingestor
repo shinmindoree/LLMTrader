@@ -8,6 +8,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md /app/
 COPY src /app/src
 COPY scripts/perp_meta_ingestor.py /app/scripts/perp_meta_ingestor.py
+COPY scripts/refresh_perp_meta_parquet.py /app/scripts/refresh_perp_meta_parquet.py
 
 ENV PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1
@@ -21,11 +22,17 @@ RUN uv sync
 #
 # Required env: REDIS_URL (or REDIS_HOST + REDIS_USERNAME for AAD,
 #               or REDIS_HOST + REDIS_PASSWORD for access-key).
-# Optional env:
+# Optional env (Redis poller):
 #   MFP_SYMBOLS              default BTCUSDT
 #   MFP_INDICATORS           default funding,taker,lsr
 #   MFP_POLL_SECONDS         default 300 (taker, lsr)
 #   MFP_FUNDING_POLL_SECONDS default 1800 (funding cadence is 8h)
 #   MFP_TRIM_HOURS           default 30
 #   BINANCE_FAPI             default https://fapi.binance.com
+# Optional env (parquet refresh — keeps backtest blobs current):
+#   MFP_PARQUET_REFRESH_HOURS    default 6 (0 disables)
+#   MFP_PARQUET_KINDS            default funding,taker,lsr,klines
+#   MFP_PARQUET_BLOB_CONTAINER   e.g. market-data
+#   MFP_PARQUET_BLOB_PREFIX      e.g. perp_meta
+#   AZURE_BLOB_ACCOUNT_URL or AZURE_BLOB_CONNECTION_STRING
 CMD ["uv", "run", "python", "scripts/perp_meta_ingestor.py"]

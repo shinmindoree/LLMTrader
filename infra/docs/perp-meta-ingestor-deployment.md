@@ -61,6 +61,43 @@ default 30 min) so its idle CPU contribution is negligible.
 | `BINANCE_FAPI`              | no       | `https://fapi.binance.com` | proxy/SaaS override |
 | `LOG_LEVEL`                 | no       | `INFO`                     | python logging level |
 
+### Optional: keep backtest parquets fresh in blob (mirrors `oi_ingestor`)
+
+When these env vars are set, the ingestor *also* refreshes the four
+parquets used by `MultiFactorPortfolioStrategy`'s backtest path (via the
+UI's quick-backtest endpoint and the runner's job executor). Without this,
+the blobs go stale and backtests get clipped to the parquet's last
+timestamp — even though the live Redis path keeps working.
+
+| Variable                          | Required | Default                  | Purpose |
+| --------------------------------- | -------- | ------------------------ | ------- |
+| `MFP_PARQUET_REFRESH_HOURS`       | no       | `6` (0 disables)         | how often to refresh blobs |
+| `MFP_PARQUET_KINDS`               | no       | `funding,taker,lsr,klines` | which kinds to refresh |
+| `MFP_PARQUET_BLOB_CONTAINER`      | when refresh enabled | — | container name (e.g. `market-data`) |
+| `MFP_PARQUET_BLOB_PREFIX`         | no       | — | path prefix joined with filename (e.g. `perp_meta`) |
+| `MFP_PARQUET_BLOB_NAME_<KIND>_<SYMBOL>` | no | — | per-kind override; KIND ∈ {FUNDING, TAKER, LSR, KLINES} |
+| `AZURE_BLOB_ACCOUNT_URL`          | when blob refresh enabled (and no conn string) | — | e.g. `https://teststrategies.blob.core.windows.net/` |
+| `AZURE_BLOB_CONNECTION_STRING`    | alternative to ACCOUNT_URL+MI | — | full connection string |
+
+The refreshed schemas exactly match `scripts/backfill_vision.py`'s output:
+
+- `<sym>_funding.parquet`     → `funding_time`, `funding_rate`
+- `<sym>_taker_5m.parquet`    → `timestamp`, `sum_taker_long_short_vol_ratio`
+- `<sym>_lsr_5m.parquet`      → `timestamp`, `count_long_short_ratio`, `sum_toptrader_long_short_ratio`, `count_toptrader_long_short_ratio`
+- `<sym>_15m_klines.parquet`  → `ts`, `o`, `h`, `l`, `c`
+
+When `MFP_PARQUET_REFRESH_HOURS=6` and the blob env is set, the ingestor:
+1. Schedules the first refresh ~5 min after startup (so it never blocks the Redis backfill).
+2. Then every 6 hours, downloads each blob, fetches the new tail from
+   Binance fapi (`/fapi/v1/fundingRate`, `/futures/data/{taker,lsr}` at 5m,
+   `/fapi/v1/klines` at 15m), merges + dedupes on the timestamp key, and
+   uploads back with `overwrite=True`.
+3. Failures of any one kind never abort the Redis poll loop; they're logged
+   as `parquet refresh failed for <symbol>: ...`.
+
+The ingestor's managed identity must have **Storage Blob Data Contributor**
+on the storage account that hosts the container.
+
 ## Build & deploy (Azure CLI)
 
 ```bash
