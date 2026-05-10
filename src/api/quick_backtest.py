@@ -184,15 +184,18 @@ def _compute_metrics(
     total_return_pct = ((final_balance - initial_balance) / initial_balance * 100) if initial_balance else 0.0
     total_commission = float(engine_result.get("total_commission", 0.0))
 
-    # Win rate
-    sell_trades = [t for t in trades if t.get("side") == "SELL"]
-    winning = [t for t in sell_trades if float(t.get("pnl", 0)) > 0]
-    total_trades = len(sell_trades)
+    # Win rate — use the realized-PnL filter so short exits (which are
+    # recorded as BUY trades) are not silently dropped. Long exits live on
+    # SELL trades, short exits on BUY trades; both carry a "pnl" key, while
+    # pure entries do not.
+    exit_trades = [t for t in trades if "pnl" in t]
+    winning = [t for t in exit_trades if float(t.get("pnl", 0)) > 0]
+    total_trades = len(exit_trades)
     win_rate = (len(winning) / total_trades * 100) if total_trades > 0 else 0.0
 
     # Avg win / avg loss
-    wins = [float(t.get("pnl", 0)) for t in sell_trades if float(t.get("pnl", 0)) > 0]
-    losses = [float(t.get("pnl", 0)) for t in sell_trades if float(t.get("pnl", 0)) < 0]
+    wins = [float(t.get("pnl", 0)) for t in exit_trades if float(t.get("pnl", 0)) > 0]
+    losses = [float(t.get("pnl", 0)) for t in exit_trades if float(t.get("pnl", 0)) < 0]
     avg_win_pct = (sum(wins) / len(wins) / initial_balance * 100) if wins else 0.0
     avg_loss_pct = (sum(losses) / len(losses) / initial_balance * 100) if losses else 0.0
 
@@ -213,7 +216,7 @@ def _compute_metrics(
     # Sharpe ratio (simplified: daily returns approximation)
     sharpe = 0.0
     if total_trades >= 2:
-        returns = [(float(t.get("pnl", 0)) - float(t.get("commission", 0))) / initial_balance for t in sell_trades]
+        returns = [(float(t.get("pnl", 0)) - float(t.get("commission", 0))) / initial_balance for t in exit_trades]
         if returns:
             import statistics
 
@@ -278,7 +281,9 @@ def _build_equity_curve(engine_result: dict[str, Any], initial_balance: float) -
         commission = float(t.get("commission", 0))
         ts = int(t.get("timestamp", 0))
         balance += pnl - commission
-        if t.get("side") == "SELL" and ts > 0:
+        # Plot one point per closed leg (exits carry the "pnl" key for both
+        # long-exit SELL and short-exit BUY trades).
+        if "pnl" in t and ts > 0:
             curve.append(QuickBacktestEquityPoint(ts=ts, balance=round(balance, 2)))
 
     return curve

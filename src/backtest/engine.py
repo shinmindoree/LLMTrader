@@ -187,12 +187,17 @@ class BacktestEngine:
         final_equity = final_balance
         total_return = (final_equity / initial_balance - 1) * 100 if initial_balance > 0 else 0
         
-        total_pnl = sum(t.get("pnl", 0) for t in self.ctx.trades if t.get("side") == "SELL")
+        # Exit fills are the only trades carrying a realized "pnl" field. This
+        # is direction-agnostic: long exits are SELL and short exits are BUY,
+        # both have "pnl" set; pure entries (long BUY, short SELL) and pyramid
+        # adds do NOT include the key. Filtering on "pnl" presence therefore
+        # counts every closed leg exactly once and works for both directions.
+        exit_trades = [t for t in self.ctx.trades if "pnl" in t]
+        total_pnl = sum(float(t.get("pnl", 0.0)) for t in exit_trades)
         total_commission = sum(t.get("commission", 0) for t in self.ctx.trades)
         
-        sell_trades = [t for t in self.ctx.trades if t.get("side") == "SELL"]
-        num_trades = len(sell_trades)
-        wins = sum(1 for t in sell_trades if t.get("pnl", 0) > 0)
+        num_trades = len(exit_trades)
+        wins = sum(1 for t in exit_trades if float(t.get("pnl", 0.0)) > 0)
         win_rate = (wins / num_trades * 100) if num_trades > 0 else 0.0
         
         self.results = {
