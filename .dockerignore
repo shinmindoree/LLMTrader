@@ -31,3 +31,17 @@ engine_*.json
 *_strategy.json
 *.parquet
 *.parquet.corrupt-*
+
+# Local experiment / sweep outputs (repo-root)
+mfp_*.json
+run_*.json
+la*.json
+
+# Ad-hoc analysis / debug scripts (anything starting with _)
+scripts/_*.py
+
+# Logs / runtime state at repo root
+runner.log
+.runtime_strategies/
+.tmp/
+--symbol
