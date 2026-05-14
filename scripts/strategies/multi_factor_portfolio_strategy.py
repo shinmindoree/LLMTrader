@@ -693,7 +693,7 @@ class _LegState:
     __slots__ = (
         "family", "config", "interval_min", "tf_ts", "tf_open", "tf_high", "tf_low", "tf_close",
         "long_sig", "short_sig", "side", "entry_price", "entry_tf_idx", "entry_tf_ts",
-        "tp_pct", "sl_pct", "max_hold_bars",
+        "tp_pct", "sl_pct", "max_hold_bars", "entry_clamped",
     )
 
     def __init__(self, leg: dict[str, Any], unified: pd.DataFrame) -> None:
@@ -710,6 +710,10 @@ class _LegState:
         self.entry_tf_idx: int | None = None
         # Live mode preserves entries across rebuilds via TS, then re-derives idx.
         self.entry_tf_ts: int | None = None
+        # Diagnostic flag: set True when refresh_signals had to clamp an
+        # entry that fell outside the rolling window. Read+cleared by the
+        # outer strategy so it can emit an MFP_ENTRY_LOST audit event.
+        self.entry_clamped: bool = False
         # Resample + signals.
         self.refresh_signals(unified)
 
@@ -735,8 +739,10 @@ class _LegState:
                 self.entry_tf_idx = idx
             else:
                 # Entry bar was trimmed out of the rolling window — force a
-                # time exit by clamping the index to "very old".
+                # time exit by clamping the index to "very old". Flag this
+                # so the outer strategy can emit MFP_ENTRY_LOST.
                 self.entry_tf_idx = -max(self.max_hold_bars, 1)
+                self.entry_clamped = True
 
 
 # ---------------------------------------------------------------------------
@@ -803,6 +809,18 @@ class MultiFactorPortfolioStrategy(Strategy):
         self._funding_provider: Any | None = None
         self._taker_provider: Any | None = None
         self._lsr_provider: Any | None = None
+        # Provider gap accounting (Phase 1.1). Counts NaN-producing reads
+        # per kind across the strategy's lifetime so they can be reported
+        # via MFP_DATA_GAP. ``_data_gap_warned`` rate-limits per-kind log
+        # warnings to once each (to avoid log spam in live mode).
+        self._data_gap_counts: dict[str, int] = {
+            "oi": 0, "funding": 0, "taker": 0, "lsr": 0,
+        }
+        self._data_gap_warned: set[str] = set()
+        # Diagnostic dump path. When MFP_DUMP_UNIFIED is set, the unified
+        # DataFrame is written here once after initialize() completes so
+        # backtest vs live data can be diffed offline (Phase 0.1).
+        self._dump_path: str = os.environ.get("MFP_DUMP_UNIFIED", "").strip()
         # Bound the in-memory unified dataset. Donchian-192 on 240m needs 32d;
         # 60d gives a safe headroom and keeps memory + CPU per refresh small.
         try:
@@ -861,12 +879,14 @@ class MultiFactorPortfolioStrategy(Strategy):
         self._committed_side = 0
         self._last_bar_ts = 0
         self._tail_ts_15m = int(unified["ts"].iloc[-1]) if len(unified) else 0
+        self._maybe_dump_unified("backtest")
         self._emit_event(ctx, "MFP_INIT", {
             "mode": "backtest",
             "n_legs": len(self._legs),
             "intervals": sorted({leg.interval_min for leg in self._legs}),
             "families": sorted({leg.family for leg in self._legs}),
             "data_rows_15m": int(len(unified)),
+            "dump_path": self._dump_path or None,
         })
 
     # ---- live mode internals ----------------------------------------------
@@ -951,6 +971,7 @@ class MultiFactorPortfolioStrategy(Strategy):
             len(warmup_summary.get("active", [])),
         )
 
+        self._maybe_dump_unified("live")
         self._emit_event(ctx, "MFP_INIT", {
             "mode": "live",
             "n_legs": len(self._legs),
@@ -959,6 +980,8 @@ class MultiFactorPortfolioStrategy(Strategy):
             "data_rows_15m": int(len(unified)),
             "seed_last_ts": seed_last_ts,
             "live_tail_ts": self._tail_ts_15m,
+            "data_gap_counts": dict(self._data_gap_counts),
+            "dump_path": self._dump_path or None,
         })
         logger.info(
             "[mfp] live init: %s legs=%d rows=%d seed_last=%d tail=%d",
@@ -1078,18 +1101,46 @@ class MultiFactorPortfolioStrategy(Strategy):
         )
         return merged
 
-    @staticmethod
-    def _provider_value_at(provider: Any, ts: int, *, _kind: str = "") -> float:
+    def _provider_value_at(self, provider: Any, ts: int, *, _kind: str = "") -> float:
+        """Read a single timestamped value from a provider.
+
+        Returns NaN when the provider is missing or raises. NaN reads are
+        counted under ``_data_gap_counts[kind]`` and the first occurrence
+        per kind triggers a single ``logger.warning`` (no event — at this
+        layer we don't have a ctx handle). The outer ``_initialize_live``
+        and ``on_bar`` paths surface the accumulated counts in
+        ``MFP_INIT`` / ``MFP_DATA_GAP`` events.
+        """
+        kind = _kind if _kind else "unknown"
         if provider is None:
+            self._record_data_gap(kind, "provider is None")
             return float("nan")
         try:
             # OI provider exposes value_at via its private API only on the
             # Redis backend; on the parquet backend it's exposed too. Use
             # whichever method is present.
             fn = getattr(provider, "value_at", None) or getattr(provider, "_value_at")
-            return float(fn(int(ts)))
-        except Exception:  # noqa: BLE001
+            v = float(fn(int(ts)))
+            if not math.isfinite(v):
+                self._record_data_gap(kind, f"non-finite value {v!r}")
+            return v
+        except Exception as exc:  # noqa: BLE001
+            self._record_data_gap(kind, repr(exc))
             return float("nan")
+
+    def _record_data_gap(self, kind: str, reason: str) -> None:
+        if kind in self._data_gap_counts:
+            self._data_gap_counts[kind] += 1
+        else:
+            self._data_gap_counts[kind] = 1
+        if kind not in self._data_gap_warned:
+            self._data_gap_warned.add(kind)
+            logger.warning(
+                "[mfp] provider gap detected: kind=%s reason=%s "
+                "(further occurrences will be counted silently and reported "
+                "via MFP_DATA_GAP events)",
+                kind, reason,
+            )
 
     def _append_live_bar(self, bar: dict[str, Any], ts: int) -> bool:
         """Append a new 15m bar to ``self._unified``. Returns True if appended."""
@@ -1145,9 +1196,44 @@ class MultiFactorPortfolioStrategy(Strategy):
 
         # Live mode: append the new 15m bar to the rolling unified dataset
         # and refresh signal arrays for every leg before per-leg processing.
+        # Capture pre-refresh gap counts so we can detect any newly-NaN
+        # provider reads triggered by ``_append_live_bar`` and emit a
+        # single ``MFP_DATA_GAP`` event per bar with the delta.
+        gap_before = (
+            dict(self._data_gap_counts) if self._mode == "live" else None
+        )
         if self._mode == "live" and ts > self._tail_ts_15m:
             if self._append_live_bar(bar, ts):
                 self._refresh_legs_for_live()
+        if gap_before is not None:
+            delta = {
+                k: int(self._data_gap_counts.get(k, 0) - gap_before.get(k, 0))
+                for k in self._data_gap_counts
+            }
+            if any(v > 0 for v in delta.values()):
+                self._emit_event(ctx, "MFP_DATA_GAP", {
+                    "ts": ts,
+                    "delta": delta,
+                    "total": dict(self._data_gap_counts),
+                })
+
+        # Surface any entries that were clamped out of the rolling window
+        # during refresh_signals. Backtest never clamps; only live mode
+        # with a 60-day rolling window can. Once reported, the flag is
+        # cleared so we don't double-emit.
+        clamped: list[dict[str, Any]] = []
+        for i, leg in enumerate(self._legs):
+            if leg.entry_clamped:
+                clamped.append({
+                    "i": i,
+                    "family": leg.family,
+                    "tf": int(leg.interval_min),
+                    "side": int(leg.side),
+                    "entry_tf_ts": int(leg.entry_tf_ts) if leg.entry_tf_ts is not None else None,
+                })
+                leg.entry_clamped = False
+        if clamped:
+            self._emit_event(ctx, "MFP_ENTRY_LOST", {"ts": ts, "legs": clamped})
 
         # Process exits then entries for each leg at this bar.
         for leg in self._legs:
@@ -1261,6 +1347,31 @@ class MultiFactorPortfolioStrategy(Strategy):
 
     def _reconcile(self, ctx: StrategyContext, target: int, long_count: int,
                     short_count: int, ts: int) -> None:
+        # Defensive sync (Phase 4.2): if the runner closed the position out
+        # from under us (e.g. runner-level STOP_LOSS, daily-loss-limit,
+        # external manual flatten), our cached ``_committed_side`` would
+        # disagree with the real ctx state and ``_reconcile`` would refuse
+        # to re-enter on subsequent leg-majority bars (``target == cur``
+        # short-circuit). Sync from ctx.position before every reconcile so
+        # we always reflect ground truth. This is a no-op when nothing
+        # external happened.
+        pos = getattr(ctx, "position", None)
+        if pos is not None:
+            try:
+                size = float(getattr(pos, "size", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                size = 0.0
+            if abs(size) < 1e-12:
+                actual = 0
+            else:
+                actual = 1 if size > 0 else -1
+            if actual != self._committed_side:
+                self._emit_event(ctx, "MFP_CTX_RESYNC", {
+                    "ts": ts,
+                    "cached_side": int(self._committed_side),
+                    "actual_side": int(actual),
+                })
+                self._committed_side = actual
         cur = self._committed_side
         if target == cur:
             return
@@ -1305,6 +1416,29 @@ class MultiFactorPortfolioStrategy(Strategy):
             fn(action, data)
         except Exception:  # noqa: BLE001
             pass
+
+    def _maybe_dump_unified(self, mode_label: str) -> None:
+        """If ``MFP_DUMP_UNIFIED`` is set, write the unified DataFrame to that
+        path (parquet) so backtest and live runs can be diff-compared.
+
+        Path may contain ``{mode}`` / ``{symbol}`` / ``{ts}`` placeholders.
+        Failures are swallowed (diagnostic-only).
+        """
+        if not self._dump_path or self._unified is None or len(self._unified) == 0:
+            return
+        try:
+            import time as _t
+            path = self._dump_path.format(
+                mode=mode_label,
+                symbol=self.symbol,
+                ts=int(_t.time()),
+            )
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            self._unified.to_parquet(path)
+            logger.info("[mfp] dumped unified df (%s) -> %s (rows=%d)",
+                        mode_label, path, len(self._unified))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[mfp] failed to dump unified df: %s", exc)
 
 
 def _bar_ts(bar: dict[str, Any]) -> int:
