@@ -209,10 +209,16 @@ def _fetch_indicator_paginated(client: httpx.Client, indicator: str, symbol: str
     """Page through ``fetch_indicator`` so deep windows can be backfilled
     despite the Binance per-request row cap.
 
-    Binance returns oldest-first when ``startTime`` is provided. We advance
-    the cursor past the last returned timestamp + one indicator period to
-    avoid duplicate pages, and bail when an empty page or a short page is
-    returned.
+    Binance ``/futures/data/*`` endpoints return *the most recent* up-to-
+    ``limit`` rows that fall in the supplied ``[startTime, endTime]`` window
+    — they do NOT walk forward from ``startTime``. To traverse a deep window
+    we therefore feed it ``limit * period`` ms-wide sub-windows so a single
+    call covers one page worth of data starting at ``cursor``. We then
+    advance the cursor past the last returned timestamp + one period and
+    keep paginating until ``end_ms`` is reached.
+
+    For ``/fapi/v1/fundingRate`` (8h cadence, limit=1000) a single call can
+    already cover ~333 days so the chunked approach is harmless.
     """
     cfg = INDICATORS[indicator]
     period_ms = int(cfg["period_ms"])
@@ -223,25 +229,28 @@ def _fetch_indicator_paginated(client: httpx.Client, indicator: str, symbol: str
         cursor = max(cursor, end_ms - int(lookback_cap_ms))
     out: list[dict] = []
     ts_field = cfg["ts_field"]
+    chunk_ms = binance_limit * period_ms
     page = 0
-    while cursor < end_ms and page < 200:
+    while cursor < end_ms and page < 400:
         if _shutdown:
             break
         page += 1
-        rows = fetch_indicator(client, indicator, symbol, cursor, end_ms)
+        chunk_end = min(end_ms, cursor + chunk_ms)
+        rows = fetch_indicator(client, indicator, symbol, cursor, chunk_end)
         if not rows:
-            break
+            cursor = chunk_end + 1
+            continue
         out.extend(rows)
         try:
             last_ts = int(rows[-1][ts_field])
         except Exception:  # noqa: BLE001
-            break
+            cursor = chunk_end + 1
+            continue
         next_cursor = last_ts + period_ms
         if next_cursor <= cursor:
-            break
+            cursor = chunk_end + 1
+            continue
         cursor = next_cursor
-        if len(rows) < binance_limit:
-            break
     return out
 
 

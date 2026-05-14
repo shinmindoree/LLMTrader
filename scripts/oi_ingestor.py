@@ -155,31 +155,35 @@ def _fetch_paginated(http: httpx.Client, symbol: str,
     """Page through ``/futures/data/openInterestHist`` 500 rows at a time
     until the requested window is covered.
 
-    Binance returns rows oldest-first when ``startTime`` is set. We advance
-    ``start_ms`` past the last returned timestamp and keep pulling until
-    either an empty page or the end of the window is reached.
+    Binance ``/futures/data/*`` endpoints return *the most recent* up-to-
+    ``limit`` rows that fall in the supplied ``[startTime, endTime]`` window
+    — they do NOT walk forward from ``startTime``. To traverse a deep window
+    we therefore have to feed it ``limit * period`` ms-wide sub-windows so a
+    single call covers exactly one page worth of data starting at
+    ``cursor``. We then advance the cursor past the last returned timestamp
+    + one period and keep paginating until ``end_ms`` is reached.
     """
     out: list[dict] = []
     cursor = max(start_ms, end_ms - BINANCE_OI_LOOKBACK_MS)
+    chunk_ms = BINANCE_OI_LIMIT * PERIOD_5M_MS  # 500 * 5min = 41.6h
     page = 0
-    while cursor < end_ms and page < 200:  # 200 pages * 500 rows = 100k cap
+    while cursor < end_ms and page < 400:  # 400 pages * 500 rows = 200k cap
         if _shutdown:
             break
         page += 1
-        rows = fetch_oi_5m(http, symbol, cursor, end_ms)
+        chunk_end = min(end_ms, cursor + chunk_ms)
+        rows = fetch_oi_5m(http, symbol, cursor, chunk_end)
         if not rows:
-            break
+            # Empty chunk — advance past it to avoid infinite loop.
+            cursor = chunk_end + 1
+            continue
         out.extend(rows)
         last_ts = int(rows[-1]["timestamp"])
-        # Advance one period past last returned ts to avoid duplicate pages.
         next_cursor = last_ts + PERIOD_5M_MS
         if next_cursor <= cursor:
-            # No forward progress; bail to avoid infinite loop.
-            break
+            cursor = chunk_end + 1
+            continue
         cursor = next_cursor
-        # Stop early if Binance returned fewer than the page cap.
-        if len(rows) < BINANCE_OI_LIMIT:
-            break
     return out
 
 
