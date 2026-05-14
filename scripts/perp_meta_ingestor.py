@@ -7,9 +7,19 @@ funding/taker/LSR signals. It mirrors ``oi_ingestor.py`` but covers three
 indicators in a single process so we only deploy one Container App.
 
 Lifecycle (per indicator, per symbol):
-  - On startup: backfill last ~30h via the relevant Binance endpoint.
+  - On startup: deep backfill of ``MFP_BACKFILL_HOURS`` (default =
+    ``MFP_TRIM_HOURS``) via paginated Binance requests.
   - Loop: poll every ``MFP_POLL_SECONDS`` (default 300) and ZADD new rows.
-  - Trim each ZSET to the most recent ``MFP_TRIM_HOURS`` (default 30h).
+  - Every ``MFP_GAPFILL_INTERVAL_SECONDS`` seconds, scan each ZSET for
+    missing buckets inside ``MFP_GAPFILL_WINDOW_HOURS`` and re-fetch them.
+  - Trim each ZSET to the most recent ``MFP_TRIM_HOURS``.
+
+Why gap-fill + deep backfill:
+  ``MultiFactorPortfolioStrategy`` reads up to ~60 days of funding/taker/LSR
+  when it warms up its 30m/60m/240m resampled views in live mode. Older
+  defaults capped the ZSETs at 30h, leaving ~70% of live lookups returning
+  NaN and causing the strategy to silently drop signals that the backtest
+  (which reads the full-history parquet) was producing.
 
 Redis schema (matches src/indicators/perp_meta_provider.py):
   funding:{SYMBOL}:hist  -> "{ts_ms}:{rate}"   from /fapi/v1/fundingRate
@@ -22,12 +32,16 @@ Env (Redis -- choose one auth path):
   REDIS_HOST + REDIS_PASSWORD legacy access key auth
 
 Env (config):
-  MFP_SYMBOLS         comma-separated, default BTCUSDT
-  MFP_POLL_SECONDS    default 300 (5 min)
-  MFP_TRIM_HOURS      default 30
-  MFP_FUNDING_POLL_SECONDS  override funding-only cadence (default 1800s = 30 min)
-  BINANCE_FAPI        default https://fapi.binance.com
-  MFP_INDICATORS      comma-separated subset of {funding,taker,lsr}; default = all three
+  MFP_SYMBOLS                      comma-separated, default BTCUSDT
+  MFP_POLL_SECONDS                 default 300 (5 min)
+  MFP_TRIM_HOURS                   default 720 (30 days; retention window)
+  MFP_BACKFILL_HOURS               default = MFP_TRIM_HOURS
+  MFP_GAPFILL_INTERVAL_SECONDS     default 1800 (30 min)
+  MFP_GAPFILL_WINDOW_HOURS         default 168 (1 week)
+  MFP_COVERAGE_LOG_HOURS           default 24
+  MFP_FUNDING_POLL_SECONDS         override funding-only cadence (default 1800s)
+  BINANCE_FAPI                     default https://fapi.binance.com
+  MFP_INDICATORS                   comma-separated subset of {funding,taker,lsr}
 
 Optional backtest-parquet refresh (off when blob env not set):
   MFP_PARQUET_REFRESH_HOURS        default 6 (0 disables)
@@ -35,8 +49,7 @@ Optional backtest-parquet refresh (off when blob env not set):
                                    default = funding,taker,lsr,klines
   MFP_PARQUET_BLOB_CONTAINER       e.g. market-data
   MFP_PARQUET_BLOB_PREFIX          e.g. perp_meta (joined with filename)
-  MFP_PARQUET_BLOB_NAME_<KIND>_<SYMBOL>  per-kind override (e.g.
-                                   MFP_PARQUET_BLOB_NAME_FUNDING_BTCUSDT)
+  MFP_PARQUET_BLOB_NAME_<KIND>_<SYMBOL>  per-kind override
   AZURE_BLOB_ACCOUNT_URL or AZURE_BLOB_CONNECTION_STRING
 """
 from __future__ import annotations
@@ -79,6 +92,9 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 
 BINANCE_FAPI = os.environ.get("BINANCE_FAPI", "https://fapi.binance.com")
 
+# Binance ``/futures/data/*`` endpoints only serve the most recent 30 days.
+BINANCE_FUTURES_DATA_LOOKBACK_MS = 30 * 24 * 3600 * 1000
+
 # ---------------------------------------------------------------------------
 # Indicator definitions
 # ---------------------------------------------------------------------------
@@ -95,7 +111,14 @@ INDICATORS: dict[str, dict] = {
             "startTime": int(start),
             "endTime": int(end),
         },
-        # Funding cadence is 8h. Backfill 4 days (12 events) is more than enough.
+        # Funding cadence is 8h.
+        "period_ms": 8 * 3600 * 1000,
+        # /fapi/v1/fundingRate caps at 1000 rows (= ~333 days @ 8h cadence),
+        # so a single call is enough for our retention window. ``None``
+        # disables strict pagination (we still loop until empty).
+        "binance_limit": 1000,
+        # /fapi/v1/* has no 30-day lookback cap (unlike /futures/data/*).
+        "lookback_cap_ms": None,
         "backfill_hours_default": 96,
     },
     "taker": {
@@ -110,6 +133,9 @@ INDICATORS: dict[str, dict] = {
             "startTime": int(start),
             "endTime": int(end),
         },
+        "period_ms": 5 * 60 * 1000,
+        "binance_limit": 500,
+        "lookback_cap_ms": BINANCE_FUTURES_DATA_LOOKBACK_MS,
         "backfill_hours_default": 30,
     },
     "lsr": {
@@ -126,6 +152,9 @@ INDICATORS: dict[str, dict] = {
             "startTime": int(start),
             "endTime": int(end),
         },
+        "period_ms": 5 * 60 * 1000,
+        "binance_limit": 500,
+        "lookback_cap_ms": BINANCE_FUTURES_DATA_LOOKBACK_MS,
         "backfill_hours_default": 30,
     },
 }
@@ -171,6 +200,177 @@ def fetch_indicator(client: httpx.Client, indicator: str, symbol: str,
     return _fetch_with_retry(client, url, params)
 
 
+def _fetch_indicator_paginated(client: httpx.Client, indicator: str, symbol: str,
+                               start_ms: int, end_ms: int) -> list[dict]:
+    """Page through ``fetch_indicator`` so deep windows can be backfilled
+    despite the Binance per-request row cap.
+
+    Binance returns oldest-first when ``startTime`` is provided. We advance
+    the cursor past the last returned timestamp + one indicator period to
+    avoid duplicate pages, and bail when an empty page or a short page is
+    returned.
+    """
+    cfg = INDICATORS[indicator]
+    period_ms = int(cfg["period_ms"])
+    binance_limit = int(cfg["binance_limit"])
+    lookback_cap_ms = cfg.get("lookback_cap_ms")
+    cursor = start_ms
+    if lookback_cap_ms is not None:
+        cursor = max(cursor, end_ms - int(lookback_cap_ms))
+    out: list[dict] = []
+    ts_field = cfg["ts_field"]
+    page = 0
+    while cursor < end_ms and page < 200:
+        if _shutdown:
+            break
+        page += 1
+        rows = fetch_indicator(client, indicator, symbol, cursor, end_ms)
+        if not rows:
+            break
+        out.extend(rows)
+        try:
+            last_ts = int(rows[-1][ts_field])
+        except Exception:  # noqa: BLE001
+            break
+        next_cursor = last_ts + period_ms
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if len(rows) < binance_limit:
+            break
+    return out
+
+
+def _existing_ts_set(rd, indicator: str, symbol: str,
+                     start_ms: int, end_ms: int) -> set[int]:
+    key = INDICATORS[indicator]["key_fmt"].format(symbol=symbol)
+    try:
+        pairs = rd.zrangebyscore(key, start_ms, end_ms, withscores=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("zrangebyscore failed for %s: %s", key, exc)
+        return set()
+    return {int(score) for _, score in pairs}
+
+
+def _expected_ts(indicator: str, start_ms: int, end_ms: int) -> list[int]:
+    period_ms = int(INDICATORS[indicator]["period_ms"])
+    if period_ms <= 0:
+        return []
+    first = (start_ms // period_ms) * period_ms
+    if first < start_ms:
+        first += period_ms
+    last = (end_ms // period_ms) * period_ms
+    if first > last:
+        return []
+    return list(range(first, last + 1, period_ms))
+
+
+def coverage_pct(rd, indicator: str, symbol: str,
+                 hours: int) -> tuple[float, int, int]:
+    end = int(time.time() * 1000)
+    start = end - hours * 3600 * 1000
+    expected = _expected_ts(indicator, start, end)
+    if not expected:
+        return 1.0, 0, 0
+    have = _existing_ts_set(rd, indicator, symbol, start, end)
+    # For funding (8h cadence) ``expected`` already aligns to the cadence; we
+    # report the fraction of expected timestamps that have a stored value.
+    have_count = sum(1 for t in expected if t in have)
+    return (have_count / len(expected)), have_count, len(expected)
+
+
+def gap_fill(rd, http: httpx.Client, indicator: str, symbol: str, *,
+             window_hours: int, trim_hours: int) -> int:
+    """Scan the ZSET for missing buckets inside the last ``window_hours``
+    and re-fetch them from Binance.
+
+    For 5m indicators (taker/lsr) this is a direct grid check. For funding
+    (8h cadence) Binance does not always emit *exactly* on the canonical
+    grid (delays / first event timestamp differs by symbol). We treat any
+    timestamp within ±10% of the period as "covered".
+    """
+    cfg = INDICATORS[indicator]
+    period_ms = int(cfg["period_ms"])
+    now = int(time.time() * 1000)
+    # leave the freshest bars to the regular poll
+    end = now - max(10 * 60 * 1000, period_ms)
+    start = now - window_hours * 3600 * 1000
+    lookback_cap_ms = cfg.get("lookback_cap_ms")
+    if lookback_cap_ms is not None:
+        start = max(start, now - int(lookback_cap_ms))
+    if start >= end:
+        return 0
+    expected = _expected_ts(indicator, start, end)
+    if not expected:
+        return 0
+    have_scores = _existing_ts_set(rd, indicator, symbol, start, end)
+    if indicator == "funding":
+        # Forgive small grid drift: a funding event within ±period/2 of an
+        # expected ts counts as present.
+        tolerance = period_ms // 2
+        sorted_have = sorted(have_scores)
+        missing: list[int] = []
+        i = 0
+        for t in expected:
+            while i < len(sorted_have) and sorted_have[i] < t - tolerance:
+                i += 1
+            if i >= len(sorted_have) or sorted_have[i] > t + tolerance:
+                missing.append(t)
+    else:
+        missing = [t for t in expected if t not in have_scores]
+    if not missing:
+        return 0
+    # Coalesce missing timestamps into contiguous runs.
+    ranges: list[tuple[int, int]] = []
+    run_start = missing[0]
+    run_end = run_start
+    for t in missing[1:]:
+        if t == run_end + period_ms:
+            run_end = t
+        else:
+            ranges.append((run_start, run_end))
+            run_start = run_end = t
+    ranges.append((run_start, run_end))
+    logger.info(
+        "gap-fill %s/%s: missing=%d in last %dh → %d ranges (first=%s..%s)",
+        indicator, symbol, len(missing), window_hours, len(ranges),
+        ranges[0][0], ranges[0][1],
+    )
+    fetched = 0
+    trim_after = now - trim_hours * 3600 * 1000
+    for rs, re_ in ranges:
+        if _shutdown:
+            break
+        rows = _fetch_indicator_paginated(
+            http, indicator, symbol, rs - period_ms, re_ + period_ms,
+        )
+        if rows:
+            fetched += publish(
+                rd, indicator, symbol, rows, trim_after_ms=trim_after,
+            )
+    return fetched
+
+
+def backfill_initial(rd, http: httpx.Client, indicator: str, symbol: str,
+                     hours: int) -> int:
+    end = int(time.time() * 1000)
+    start = end - hours * 3600 * 1000
+    logger.info(
+        "backfill: %s/%s hours=%d (paginated) start=%d end=%d",
+        indicator, symbol, hours, start, end,
+    )
+    rows = _fetch_indicator_paginated(http, indicator, symbol, start, end)
+    if not rows:
+        logger.warning("backfill: no rows for %s/%s", indicator, symbol)
+        return 0
+    n = publish(rd, indicator, symbol, rows, trim_after_ms=start)
+    logger.info("backfill: %s/%s rows=%d (~%d pages)",
+                indicator, symbol, n,
+                (len(rows) + INDICATORS[indicator]["binance_limit"] - 1)
+                // INDICATORS[indicator]["binance_limit"])
+    return n
+
+
 # ---------------------------------------------------------------------------
 # Publish to Redis
 # ---------------------------------------------------------------------------
@@ -196,19 +396,6 @@ def publish(rd, indicator: str, symbol: str, rows: Iterable[dict],
     if trim_after_ms > 0:
         pipe.zremrangebyscore(key, "-inf", trim_after_ms)
     pipe.execute()
-    return n
-
-
-def backfill_initial(rd, http: httpx.Client, indicator: str, symbol: str,
-                     hours: int) -> int:
-    end = int(time.time() * 1000)
-    start = end - hours * 3600 * 1000
-    rows = fetch_indicator(http, indicator, symbol, start, end)
-    if not rows:
-        logger.warning("backfill: no rows for %s/%s", indicator, symbol)
-        return 0
-    n = publish(rd, indicator, symbol, rows, trim_after_ms=start)
-    logger.info("backfill: %s/%s rows=%d", indicator, symbol, n)
     return n
 
 
@@ -289,7 +476,11 @@ def main() -> int:
     ).split(",") if s.strip()]
     poll_seconds = int(os.environ.get("MFP_POLL_SECONDS", "300"))
     funding_poll_seconds = int(os.environ.get("MFP_FUNDING_POLL_SECONDS", "1800"))
-    trim_hours = int(os.environ.get("MFP_TRIM_HOURS", "30"))
+    trim_hours = int(os.environ.get("MFP_TRIM_HOURS", "720"))  # 30 days default
+    backfill_hours = int(os.environ.get("MFP_BACKFILL_HOURS", str(trim_hours)))
+    gapfill_interval = int(os.environ.get("MFP_GAPFILL_INTERVAL_SECONDS", "1800"))
+    gapfill_window_hours = int(os.environ.get("MFP_GAPFILL_WINDOW_HOURS", "168"))
+    coverage_log_hours = int(os.environ.get("MFP_COVERAGE_LOG_HOURS", "24"))
 
     # Optional parquet refresh config (writes back to blob storage so backtests
     # via the API/UI keep seeing fresh history; mirrors oi_ingestor pattern).
@@ -330,19 +521,39 @@ def main() -> int:
         logger.error("redis ping failed: %s", exc)
         return 3
     logger.info(
-        "connected to redis; symbols=%s indicators=%s poll=%ds funding_poll=%ds trim=%dh",
+        "connected to redis; symbols=%s indicators=%s poll=%ds funding_poll=%ds "
+        "trim=%dh backfill=%dh gapfill_every=%ds gapfill_window=%dh",
         symbols, enabled, poll_seconds, funding_poll_seconds, trim_hours,
+        backfill_hours, gapfill_interval, gapfill_window_hours,
     )
 
     with httpx.Client() as http:
-        # 1) Initial backfill.
+        # 1) Initial backfill (paginated to cover the full retention window).
         for ind in enabled:
-            hours = INDICATORS[ind].get("backfill_hours_default", trim_hours)
+            # ``MFP_BACKFILL_HOURS`` is global; per-indicator legacy default
+            # is kept only as a floor for funding (8h cadence → short windows
+            # were historically OK) but trim_hours wins when larger.
+            hours = max(
+                backfill_hours,
+                INDICATORS[ind].get("backfill_hours_default", trim_hours),
+            )
             for sym in symbols:
                 try:
                     backfill_initial(rd, http, ind, sym, hours=hours)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("backfill failed %s/%s: %s", ind, sym, exc)
+                try:
+                    pct, have, total = coverage_pct(
+                        rd, ind, sym, hours=coverage_log_hours,
+                    )
+                    logger.info(
+                        "coverage %s/%s last_%dh: %.1f%% (%d/%d)",
+                        ind, sym, coverage_log_hours, pct * 100.0, have, total,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "coverage check failed %s/%s: %s", ind, sym, exc,
+                    )
 
         # 2) Per-indicator next-run schedule. Funding is on its own slower cadence.
         now = time.time()
@@ -357,6 +568,7 @@ def main() -> int:
         next_parquet_refresh = (
             time.time() + 300.0 if parquet_refresh_enabled else float("inf")
         )
+        next_gapfill = time.time() + gapfill_interval
 
         # 3) Poll loop.
         while not _shutdown:
@@ -374,6 +586,40 @@ def main() -> int:
                     )
                     next_run[ind] = now + cadence
                     ran_any = True
+
+            # Periodic gap-fill across all enabled indicators.
+            if time.time() >= next_gapfill:
+                for ind in enabled:
+                    for sym in symbols:
+                        try:
+                            n_gap = gap_fill(
+                                rd, http, ind, sym,
+                                window_hours=gapfill_window_hours,
+                                trim_hours=trim_hours,
+                            )
+                            if n_gap:
+                                logger.info(
+                                    "gap-fill %s/%s: re-fetched=%d rows",
+                                    ind, sym, n_gap,
+                                )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.error(
+                                "gap-fill failed %s/%s: %s", ind, sym, exc,
+                            )
+                        try:
+                            pct, have, total = coverage_pct(
+                                rd, ind, sym, hours=coverage_log_hours,
+                            )
+                            logger.info(
+                                "coverage %s/%s last_%dh: %.1f%% (%d/%d)",
+                                ind, sym, coverage_log_hours,
+                                pct * 100.0, have, total,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "coverage check failed %s/%s: %s", ind, sym, exc,
+                            )
+                next_gapfill = time.time() + gapfill_interval
 
             # Backtest parquet refresh (best-effort; failures never abort poll).
             if parquet_refresh_enabled and time.time() >= next_parquet_refresh:

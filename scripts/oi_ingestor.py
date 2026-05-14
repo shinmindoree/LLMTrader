@@ -2,9 +2,20 @@
 history to Redis as a sorted set.
 
 Lifecycle:
-  - On startup: backfill last 25h via `/futures/data/openInterestHist?period=5m`
-  - Loop: every 5 minutes, fetch the most recent points and ZADD them
-  - Trim the sorted set to the most recent ~30h (360 points) to bound memory
+  - On startup: deep backfill of OI_BACKFILL_HOURS (default = OI_TRIM_HOURS)
+    via paginated `/futures/data/openInterestHist?period=5m` requests.
+  - Loop: every OI_POLL_SECONDS, fetch the most recent points and ZADD them.
+  - Every OI_GAPFILL_INTERVAL_SECONDS, scan the ZSET for holes inside the
+    retention window and re-fetch the missing slots from Binance.
+  - Trim the sorted set to the most recent OI_TRIM_HOURS to bound memory.
+
+Why gap-fill + deep backfill:
+  ``MultiFactorPortfolioStrategy`` reads up to ~60 days of OI when it warms
+  up its 30m/60m/240m resampled views in live mode. Earlier defaults capped
+  the ZSET at 30h, leaving ~70% of live-mode lookups returning NaN and
+  causing the strategy to silently skip signal evaluations on bars where
+  the corresponding backtest produced trades. See
+  ``scripts/verify_perp_meta_drift.py`` for the diagnostic.
 
 Redis schema:
   Key:    oi:{SYMBOL}:hist        (sorted set)
@@ -18,10 +29,14 @@ Env:
     REDIS_HOST      alternative to REDIS_URL, used with REDIS_PASSWORD or REDIS_USERNAME
     REDIS_PASSWORD  key-based password for REDIS_HOST
     REDIS_USERNAME  Entra ID Redis username/object id for REDIS_HOST
-  OI_SYMBOLS      comma-separated, default BTCUSDT
-  OI_POLL_SECONDS default 300 (5 minutes)
-  OI_TRIM_HOURS   default 30  (sorted set retention)
-  BINANCE_FAPI    default https://fapi.binance.com
+  OI_SYMBOLS                       comma-separated, default BTCUSDT
+  OI_POLL_SECONDS                  default 300 (5 minutes)
+  OI_TRIM_HOURS                    default 720 (30 days; retention window)
+  OI_BACKFILL_HOURS                default = OI_TRIM_HOURS
+  OI_GAPFILL_INTERVAL_SECONDS      default 1800 (30 min)
+  OI_GAPFILL_WINDOW_HOURS          default 168 (1 week; how far back to scan)
+  OI_COVERAGE_LOG_HOURS            default 24 (log coverage_pct over this window)
+  BINANCE_FAPI                     default https://fapi.binance.com
 
 Optional backtest-parquet refresh (off when blob env not set):
   OI_PARQUET_REFRESH_HOURS         default 6 (0 disables)
@@ -67,6 +82,10 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 
 BINANCE_FAPI = os.environ.get("BINANCE_FAPI", "https://fapi.binance.com")
 REDIS_KEY_FMT = "oi:{symbol}:hist"
+PERIOD_5M_MS = 5 * 60 * 1000
+BINANCE_OI_LIMIT = 500  # /futures/data/openInterestHist hard cap
+# Binance /futures/data/* endpoints only serve the most recent 30 days.
+BINANCE_OI_LOOKBACK_MS = 30 * 24 * 3600 * 1000
 
 _shutdown = False
 
@@ -121,22 +140,148 @@ def publish(rd, symbol: str, rows: Iterable[dict],
         member = f"{ts}:{oi:.6f}"
         pipe.zadd(key, {member: ts})
         n += 1
-    pipe.zremrangebyscore(key, "-inf", trim_after_ms)
+    if trim_after_ms > 0:
+        pipe.zremrangebyscore(key, "-inf", trim_after_ms)
     pipe.execute()
     return n
 
 
-def backfill_initial(rd, http: httpx.Client, symbol: str,
-                     hours: int = 25) -> int:
+def _fetch_paginated(http: httpx.Client, symbol: str,
+                    start_ms: int, end_ms: int) -> list[dict]:
+    """Page through ``/futures/data/openInterestHist`` 500 rows at a time
+    until the requested window is covered.
+
+    Binance returns rows oldest-first when ``startTime`` is set. We advance
+    ``start_ms`` past the last returned timestamp and keep pulling until
+    either an empty page or the end of the window is reached.
+    """
+    out: list[dict] = []
+    cursor = max(start_ms, end_ms - BINANCE_OI_LOOKBACK_MS)
+    page = 0
+    while cursor < end_ms and page < 200:  # 200 pages * 500 rows = 100k cap
+        if _shutdown:
+            break
+        page += 1
+        rows = fetch_oi_5m(http, symbol, cursor, end_ms)
+        if not rows:
+            break
+        out.extend(rows)
+        last_ts = int(rows[-1]["timestamp"])
+        # Advance one period past last returned ts to avoid duplicate pages.
+        next_cursor = last_ts + PERIOD_5M_MS
+        if next_cursor <= cursor:
+            # No forward progress; bail to avoid infinite loop.
+            break
+        cursor = next_cursor
+        # Stop early if Binance returned fewer than the page cap.
+        if len(rows) < BINANCE_OI_LIMIT:
+            break
+    return out
+
+
+def _existing_ts_set(rd, symbol: str, start_ms: int, end_ms: int) -> set[int]:
+    """Return the set of 5m-bucket timestamps already stored in Redis for
+    ``[start_ms, end_ms]``. Reads scores only — cheap even at 30d depth.
+    """
+    key = REDIS_KEY_FMT.format(symbol=symbol)
+    try:
+        # Each member is "{ts}:{val}"; score is ts. Reading scores is enough.
+        pairs = rd.zrangebyscore(key, start_ms, end_ms, withscores=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("zrangebyscore failed for %s: %s", key, exc)
+        return set()
+    return {int(score) for _, score in pairs}
+
+
+def _expected_ts(start_ms: int, end_ms: int) -> list[int]:
+    """Aligned 5m buckets in ``[start_ms, end_ms)`` inclusive of start."""
+    first = (start_ms // PERIOD_5M_MS) * PERIOD_5M_MS
+    if first < start_ms:
+        first += PERIOD_5M_MS
+    last = (end_ms // PERIOD_5M_MS) * PERIOD_5M_MS
+    if first > last:
+        return []
+    return list(range(first, last + 1, PERIOD_5M_MS))
+
+
+def coverage_pct(rd, symbol: str, hours: int) -> tuple[float, int, int]:
     end = int(time.time() * 1000)
     start = end - hours * 3600 * 1000
-    rows = fetch_oi_5m(http, symbol, start, end)
+    expected = _expected_ts(start, end)
+    if not expected:
+        return 1.0, 0, 0
+    have = _existing_ts_set(rd, symbol, start, end)
+    have_count = sum(1 for t in expected if t in have)
+    return (have_count / len(expected)), have_count, len(expected)
+
+
+def gap_fill(rd, http: httpx.Client, symbol: str, *,
+             window_hours: int, trim_hours: int) -> int:
+    """Scan the ZSET for missing 5m buckets inside the last ``window_hours``
+    and re-fetch them from Binance.
+
+    The most recent ~10 minutes are skipped because Binance publishes 5m
+    bars with a small delay and we don't want to count them as "missing".
+    """
+    now = int(time.time() * 1000)
+    end = now - 10 * 60 * 1000  # leave the freshest bars to the regular poll
+    start = now - window_hours * 3600 * 1000
+    if start >= end:
+        return 0
+    expected = _expected_ts(start, end)
+    if not expected:
+        return 0
+    have = _existing_ts_set(rd, symbol, start, end)
+    missing = [t for t in expected if t not in have]
+    if not missing:
+        return 0
+    # Compact the missing list into contiguous ranges so each Binance call
+    # covers as much as possible.
+    ranges: list[tuple[int, int]] = []
+    run_start = missing[0]
+    run_end = run_start
+    for t in missing[1:]:
+        if t == run_end + PERIOD_5M_MS:
+            run_end = t
+        else:
+            ranges.append((run_start, run_end))
+            run_start = run_end = t
+    ranges.append((run_start, run_end))
+    logger.info(
+        "gap-fill %s: missing=%d in last %dh → %d ranges (first=%s..%s)",
+        symbol, len(missing), window_hours, len(ranges),
+        run_start_first := ranges[0][0], ranges[0][1],
+    )
+    fetched = 0
+    trim_after = now - trim_hours * 3600 * 1000
+    for rs, re_ in ranges:
+        if _shutdown:
+            break
+        # Pad the range edges to ensure the bucketing matches Binance's.
+        rows = _fetch_paginated(http, symbol, rs - PERIOD_5M_MS, re_ + PERIOD_5M_MS)
+        if rows:
+            fetched += publish(rd, symbol, rows, trim_after_ms=trim_after)
+    return fetched
+
+
+def backfill_initial(rd, http: httpx.Client, symbol: str,
+                     hours: int) -> int:
+    end = int(time.time() * 1000)
+    start = end - hours * 3600 * 1000
+    logger.info(
+        "backfill: %s hours=%d (paginated) start=%d end=%d",
+        symbol, hours, start, end,
+    )
+    rows = _fetch_paginated(http, symbol, start, end)
     if not rows:
         logger.warning("backfill: no rows received for %s", symbol)
         return 0
     n = publish(rd, symbol, rows, trim_after_ms=start)
-    logger.info("backfill: %s rows=%d range=%d..%d", symbol, n,
-                int(rows[0]["timestamp"]), int(rows[-1]["timestamp"]))
+    logger.info(
+        "backfill: %s rows=%d range=%d..%d (pages~%d)",
+        symbol, n, int(rows[0]["timestamp"]), int(rows[-1]["timestamp"]),
+        (len(rows) + BINANCE_OI_LIMIT - 1) // BINANCE_OI_LIMIT,
+    )
     return n
 
 
@@ -162,7 +307,11 @@ def main() -> int:
 
     symbols = [s.strip().upper() for s in os.environ.get("OI_SYMBOLS", "BTCUSDT").split(",") if s.strip()]
     poll_seconds = int(os.environ.get("OI_POLL_SECONDS", "300"))
-    trim_hours = int(os.environ.get("OI_TRIM_HOURS", "30"))
+    trim_hours = int(os.environ.get("OI_TRIM_HOURS", "720"))  # 30 days default
+    backfill_hours = int(os.environ.get("OI_BACKFILL_HOURS", str(trim_hours)))
+    gapfill_interval = int(os.environ.get("OI_GAPFILL_INTERVAL_SECONDS", "1800"))
+    gapfill_window_hours = int(os.environ.get("OI_GAPFILL_WINDOW_HOURS", "168"))
+    coverage_log_hours = int(os.environ.get("OI_COVERAGE_LOG_HOURS", "24"))
     refresh_hours = float(os.environ.get("OI_PARQUET_REFRESH_HOURS", "6"))
     blob_container = os.environ.get("OI_PARQUET_BLOB_CONTAINER", "").strip()
     parquet_refresh_enabled = (
@@ -212,16 +361,28 @@ def main() -> int:
             decode_responses=True,
         )
     rd.ping()
-    logger.info("connected to redis; symbols=%s poll=%ds trim=%dh",
-                symbols, poll_seconds, trim_hours)
+    logger.info(
+        "connected to redis; symbols=%s poll=%ds trim=%dh backfill=%dh "
+        "gapfill_every=%ds gapfill_window=%dh",
+        symbols, poll_seconds, trim_hours, backfill_hours,
+        gapfill_interval, gapfill_window_hours,
+    )
 
     with httpx.Client() as http:
-        # 1) Initial backfill
+        # 1) Initial backfill (paginated to cover the full retention window).
         for sym in symbols:
             try:
-                backfill_initial(rd, http, sym, hours=trim_hours)
+                backfill_initial(rd, http, sym, hours=backfill_hours)
             except Exception as exc:  # noqa: BLE001
                 logger.error("backfill failed for %s: %s", sym, exc)
+            try:
+                pct, have, total = coverage_pct(rd, sym, hours=coverage_log_hours)
+                logger.info(
+                    "coverage %s last_%dh: %.1f%% (%d/%d)",
+                    sym, coverage_log_hours, pct * 100.0, have, total,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("coverage check failed for %s: %s", sym, exc)
 
         # 2) Poll loop
         next_run = time.time()
@@ -230,12 +391,42 @@ def main() -> int:
         next_parquet_refresh = (
             time.time() + 300.0 if parquet_refresh_enabled else float("inf")
         )
+        # Gap-fill runs shortly after the first poll to give the deep
+        # backfill above a head-start.
+        next_gapfill = time.time() + gapfill_interval
         while not _shutdown:
             for sym in symbols:
                 try:
                     loop_once(rd, http, sym, trim_hours=trim_hours)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("poll failed for %s: %s", sym, exc)
+
+            # Periodic gap-fill: cheap when there are no holes (ZRANGE only).
+            if time.time() >= next_gapfill:
+                for sym in symbols:
+                    try:
+                        n_gap = gap_fill(
+                            rd, http, sym,
+                            window_hours=gapfill_window_hours,
+                            trim_hours=trim_hours,
+                        )
+                        if n_gap:
+                            logger.info(
+                                "gap-fill %s: re-fetched=%d rows", sym, n_gap,
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("gap-fill failed for %s: %s", sym, exc)
+                    try:
+                        pct, have, total = coverage_pct(
+                            rd, sym, hours=coverage_log_hours,
+                        )
+                        logger.info(
+                            "coverage %s last_%dh: %.1f%% (%d/%d)",
+                            sym, coverage_log_hours, pct * 100.0, have, total,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("coverage check failed for %s: %s", sym, exc)
+                next_gapfill = time.time() + gapfill_interval
 
             # Backtest parquet refresh (best-effort; failures never abort poll).
             if parquet_refresh_enabled and time.time() >= next_parquet_refresh:
