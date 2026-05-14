@@ -235,8 +235,16 @@ async def run_backtest(
     interval = str(config.get("interval") or "1h")
     leverage = int(config.get("leverage") or 1)
     initial_balance = float(config.get("initial_balance") or 1000.0)
-    commission = float(config.get("commission") or 0.0004)
-    stop_loss_pct = float(config.get("stop_loss_pct") or 0.05)
+    # NOTE: do NOT use ``or 0.05`` here — Python treats 0 as falsy, so the UI
+    # toggling stop-loss off (which sends stop_loss_pct=0) would silently flip
+    # back to the 0.05 default and produce STOP_LOSS exits the user didn't ask
+    # for. Strategies that manage their own SL (e.g. MFP) rely on
+    # stop_loss_pct=0 disabling the runner-level guard entirely.
+    _sl_raw = config.get("stop_loss_pct")
+    stop_loss_pct = float(_sl_raw) if _sl_raw is not None else 0.05
+    # Commission is treated the same way (0 is a legitimate user value).
+    _comm_raw = config.get("commission")
+    commission = float(_comm_raw) if _comm_raw is not None else 0.0004
     try:
         slippage_bps = float(config.get("slippage_bps") or 0.0)
     except (TypeError, ValueError):
