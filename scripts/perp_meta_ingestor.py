@@ -93,7 +93,11 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 BINANCE_FAPI = os.environ.get("BINANCE_FAPI", "https://fapi.binance.com")
 
 # Binance ``/futures/data/*`` endpoints only serve the most recent 30 days.
-BINANCE_FUTURES_DATA_LOOKBACK_MS = 30 * 24 * 3600 * 1000
+# The server enforces the cutoff against its own clock, so a ``startTime``
+# that is exactly ``now - 30d`` (per the client) lands a few hundred ms
+# outside the window and yields ``parameter 'startTime' is invalid``
+# (code -1130). Pull back 30 minutes for safe headroom against clock skew.
+BINANCE_FUTURES_DATA_LOOKBACK_MS = 30 * 24 * 3600 * 1000 - 30 * 60 * 1000
 
 # ---------------------------------------------------------------------------
 # Indicator definitions

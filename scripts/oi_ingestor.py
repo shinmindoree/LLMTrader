@@ -84,8 +84,12 @@ BINANCE_FAPI = os.environ.get("BINANCE_FAPI", "https://fapi.binance.com")
 REDIS_KEY_FMT = "oi:{symbol}:hist"
 PERIOD_5M_MS = 5 * 60 * 1000
 BINANCE_OI_LIMIT = 500  # /futures/data/openInterestHist hard cap
-# Binance /futures/data/* endpoints only serve the most recent 30 days.
-BINANCE_OI_LOOKBACK_MS = 30 * 24 * 3600 * 1000
+# Binance /futures/data/* endpoints only serve the most recent 30 days. The
+# server enforces the cutoff against *its own* clock, so a startTime that is
+# exactly ``now - 30d`` (per the client's clock) routinely lands a few
+# hundred milliseconds outside the window and returns ``parameter 'startTime'
+# is invalid`` (code -1130). Pull back by 30 minutes for ample headroom.
+BINANCE_OI_LOOKBACK_MS = 30 * 24 * 3600 * 1000 - 30 * 60 * 1000
 
 _shutdown = False
 
