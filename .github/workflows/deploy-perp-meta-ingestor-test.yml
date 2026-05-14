@@ -1,16 +1,17 @@
-name: Deploy OI Ingestor (test)
+name: Deploy Perp Meta Ingestor (test)
 
 on:
   push:
     branches:
       - main
     paths:
-      - scripts/oi_ingestor.py
+      - scripts/perp_meta_ingestor.py
+      - scripts/refresh_perp_meta_parquet.py
       - src/**
       - pyproject.toml
       - uv.lock
-      - infra/Dockerfile.oi_ingestor
-      - .github/workflows/deploy-oi-ingestor-test.yml
+      - infra/Dockerfile.perp_meta_ingestor
+      - .github/workflows/deploy-perp-meta-ingestor-test.yml
 
   workflow_dispatch:
 
@@ -27,10 +28,10 @@ jobs:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_TEST }}
       AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME_TEST }}
       AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER_TEST }}
-      AZURE_CONTAINER_APP_NAME: test-oi-ingestor
+      AZURE_CONTAINER_APP_NAME: test-perp-meta-ingestor
       AZURE_REDIS_HOST: ${{ vars.AZURE_REDIS_HOST_TEST }}
       AZURE_REDIS_AAD_USERNAME: ${{ vars.AZURE_REDIS_AAD_USERNAME_TEST }}
-      IMAGE_NAME: oi-ingestor
+      IMAGE_NAME: perp-meta-ingestor
 
     steps:
       - name: Checkout to the branch
@@ -54,7 +55,7 @@ jobs:
         run: |
           IMAGE_TAG="${AZURE_ACR_LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}"
           az acr login --name "${AZURE_ACR_NAME}"
-          docker build -f infra/Dockerfile.oi_ingestor -t "${IMAGE_TAG}" .
+          docker build -f infra/Dockerfile.perp_meta_ingestor -t "${IMAGE_TAG}" .
           docker push "${IMAGE_TAG}"
           echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
 
@@ -79,10 +80,12 @@ jobs:
               REDIS_PORT=6380 \
               REDIS_SSL=true \
               REDIS_USERNAME="${REDIS_AAD_USERNAME}" \
-              OI_SYMBOLS=BTCUSDT \
-              OI_POLL_SECONDS=300 \
-              OI_TRIM_HOURS=720 \
-              OI_BACKFILL_HOURS=720 \
-              OI_GAPFILL_INTERVAL_SECONDS=1800 \
-              OI_GAPFILL_WINDOW_HOURS=168 \
-              OI_COVERAGE_LOG_HOURS=24
+              MFP_SYMBOLS=BTCUSDT \
+              MFP_INDICATORS=funding,taker,lsr \
+              MFP_POLL_SECONDS=300 \
+              MFP_FUNDING_POLL_SECONDS=1800 \
+              MFP_TRIM_HOURS=720 \
+              MFP_BACKFILL_HOURS=720 \
+              MFP_GAPFILL_INTERVAL_SECONDS=1800 \
+              MFP_GAPFILL_WINDOW_HOURS=168 \
+              MFP_COVERAGE_LOG_HOURS=24
