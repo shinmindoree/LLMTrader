@@ -180,6 +180,7 @@ async def main():
             commission_rate=args.commission,
             fixed_notional=args.fixed_notional,
             slippage_bps=args.slippage_bps,
+            end_ts=end_ts,
         )
         
         # 전략 로드

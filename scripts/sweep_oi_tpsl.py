@@ -162,6 +162,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         commission_rate=float(payload["commission"]),
         fixed_notional=payload.get("fixed_notional"),
         slippage_bps=float(payload["slippage_bps"]),
+        end_ts=int(payload["end_ts"]),
     )
     strat = strat_cls(**base_params)
     engine = BacktestEngine(strat, ctx, klines)

@@ -121,6 +121,7 @@ def _collect_backtest_chart_data(
         initial_balance=1000.0,
         risk_manager=risk_manager,
         commission_rate=commission,
+        end_ts=int(candles[-1]["close_time"]) if candles else None,
     )
 
     try:
@@ -303,6 +304,7 @@ async def run_backtest(
             commission_rate=commission,
             fixed_notional=fixed_notional,
             slippage_bps=slippage_bps,
+            end_ts=end_ts,
         )
 
         strategy_file, cleanup_strategy_file = resolve_strategy_file(

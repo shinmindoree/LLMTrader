@@ -453,6 +453,7 @@ async def _execute_backtest(req: QuickBacktestRequest) -> dict[str, Any]:
             initial_balance=req.initial_balance,
             risk_manager=risk_manager,
             commission_rate=req.commission,
+            end_ts=end_ts,
         )
         engine = BacktestEngine(strategy=strategy, context=ctx, klines=klines)
 

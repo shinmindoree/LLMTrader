@@ -30,6 +30,7 @@ class BacktestContext:
         commission_rate: float = 0.0004,  # taker 수수료 0.04%
         fixed_notional: float | None = None,
         slippage_bps: float = 0.0,
+        end_ts: int | None = None,
     ) -> None:
         self.symbol = symbol
         self.leverage = leverage
@@ -48,6 +49,10 @@ class BacktestContext:
         self.fixed_notional: float | None = (
             float(fixed_notional) if fixed_notional is not None and float(fixed_notional) > 0 else None
         )
+        # 백테스트의 마지막 봉 타임스탬프(ms). 일부 전략(MFP)이 parquet seed 이후
+        # 구간을 REST 로 채워야 라이브와 동일한 신호를 만들 수 있어 노출한다.
+        # 기존 호출자 호환을 위해 None 허용.
+        self.end_ts: int | None = int(end_ts) if end_ts is not None else None
         
         self.position = BacktestPosition()
         self._current_price: float = 0.0

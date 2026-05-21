@@ -631,6 +631,226 @@ def _fetch_klines_15m_sync(symbol: str, start_ms: int, end_ms: int) -> list[list
     return [by_ts[k] for k in sorted(by_ts)]
 
 
+# ---------------------------------------------------------------------------
+# Auxiliary series REST fetchers (backtest gap-fill).
+#
+# Live mode reads OI/funding/taker/LSR through Redis providers populated by
+# the ingestors. Backtests historically had only the parquet seed, so once the
+# backtest window extended past the seed's last timestamp the unified DF froze
+# at the seed boundary and no signals fired. To restore live/backtest parity
+# we fetch the same aux series from Binance REST for the gap window and serve
+# them through ``_RestSeriesProvider`` (last-known-at-or-before semantics).
+# ---------------------------------------------------------------------------
+
+# Binance ``/futures/data/*`` endpoints reject ``startTime`` older than ~30d.
+# Use a safety margin so requests near the boundary do not trip ``-1130``.
+_FUTURES_DATA_LOOKBACK_MS = 30 * 24 * 3600 * 1000 - 30 * 60 * 1000
+
+_SERIES_CONFIG: dict[str, dict[str, Any]] = {
+    "oi": {
+        "path": "/futures/data/openInterestHist",
+        "ts_field": "timestamp",
+        "value_field": "sumOpenInterest",
+        "period_ms": 5 * 60 * 1000,
+        "limit": 500,
+        "extra_params": {"period": "5m"},
+        "lookback_cap_ms": _FUTURES_DATA_LOOKBACK_MS,
+    },
+    "funding": {
+        "path": "/fapi/v1/fundingRate",
+        "ts_field": "fundingTime",
+        "value_field": "fundingRate",
+        # Funding posts every 8h; lower bound used only for cursor padding.
+        "period_ms": 8 * 60 * 60 * 1000,
+        "limit": 1000,
+        "extra_params": {},
+        "lookback_cap_ms": None,
+    },
+    "taker": {
+        "path": "/futures/data/takerlongshortRatio",
+        "ts_field": "timestamp",
+        "value_field": "buySellRatio",
+        "period_ms": 5 * 60 * 1000,
+        "limit": 500,
+        "extra_params": {"period": "5m"},
+        "lookback_cap_ms": _FUTURES_DATA_LOOKBACK_MS,
+    },
+    "lsr": {
+        "path": "/futures/data/globalLongShortAccountRatio",
+        "ts_field": "timestamp",
+        "value_field": "longShortRatio",
+        "period_ms": 5 * 60 * 1000,
+        "limit": 500,
+        "extra_params": {"period": "5m"},
+        "lookback_cap_ms": _FUTURES_DATA_LOOKBACK_MS,
+    },
+}
+
+
+def _fetch_binance_series_sync(
+    kind: str, symbol: str, start_ms: int, end_ms: int
+) -> list[dict]:
+    """Paginated fetch for a single aux series. Returns raw row dicts.
+
+    Mirrors the cursor logic used by ``scripts/oi_ingestor.py`` and
+    ``scripts/perp_meta_ingestor.py``: each Binance request returns up to
+    ``limit`` rows within ``[startTime, endTime]``, so we step forward in
+    ``limit * period_ms`` chunks until the cursor passes ``end_ms``.
+    """
+    import httpx  # local import: only used during live/backtest gap-fill
+    if start_ms > end_ms:
+        return []
+    cfg = _SERIES_CONFIG[kind]
+    base = os.environ.get("BINANCE_FAPI", "https://fapi.binance.com")
+    url = f"{base}{cfg['path']}"
+    period_ms = int(cfg["period_ms"])
+    limit = int(cfg["limit"])
+    chunk_ms = limit * period_ms
+    lookback_cap_ms = cfg.get("lookback_cap_ms")
+    cursor = start_ms
+    if lookback_cap_ms is not None:
+        # Endpoint rejects startTime older than now-30d; clamp so we don't
+        # waste a request that would either fail (-1130) or return [].
+        cursor = max(cursor, end_ms - int(lookback_cap_ms))
+    out: list[dict] = []
+    # Hard cap on pagination iterations as a guard against pathological cursor
+    # advancement; 400 pages = 400*limit rows which is more than 30d of 5m data.
+    page = 0
+    with httpx.Client(timeout=20.0) as cli:
+        while cursor <= end_ms and page < 400:
+            page += 1
+            chunk_end = min(end_ms, cursor + chunk_ms)
+            params: dict[str, Any] = {
+                "symbol": symbol.upper(),
+                "limit": limit,
+                "startTime": int(cursor),
+                "endTime": int(chunk_end),
+            }
+            params.update(cfg["extra_params"])
+            rows: list[dict] = []
+            for attempt in range(5):
+                try:
+                    resp = cli.get(url, params=params)
+                    if resp.status_code == 429 or resp.status_code >= 500:
+                        import time as _t
+                        _t.sleep(2 ** attempt)
+                        continue
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    rows = payload if isinstance(payload, list) else []
+                    break
+                except httpx.HTTPError:
+                    if attempt == 4:
+                        raise
+                    import time as _t
+                    _t.sleep(2 ** attempt)
+            else:
+                break
+            if not rows:
+                cursor = chunk_end + 1
+                continue
+            out.extend(rows)
+            try:
+                last_ts = int(rows[-1][cfg["ts_field"]])
+            except (KeyError, TypeError, ValueError):
+                cursor = chunk_end + 1
+                continue
+            next_cursor = last_ts + period_ms
+            cursor = next_cursor if next_cursor > cursor else chunk_end + 1
+    return out
+
+
+def _build_rest_series_arrays(
+    kind: str, symbol: str, start_ms: int, end_ms: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fetch + parse a single aux series into sorted ``(times_ms, values)``.
+
+    The requested window is padded backwards by two periods so the resulting
+    provider always has an anchor entry at-or-before ``start_ms``. This makes
+    ``value_at(ts)`` return a real number for the very first bars of the
+    gap-fill window (otherwise an 8h-cadence series like funding would return
+    NaN for hours after the parquet boundary).
+    """
+    cfg = _SERIES_CONFIG[kind]
+    period_ms = int(cfg["period_ms"])
+    pad_ms = 2 * period_ms
+    fetch_start = max(0, int(start_ms) - pad_ms)
+    raw = _fetch_binance_series_sync(kind, symbol, fetch_start, end_ms)
+    by_ts: dict[int, float] = {}
+    for r in raw:
+        try:
+            ts = int(r[cfg["ts_field"]])
+            v = float(r[cfg["value_field"]])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if fetch_start <= ts <= end_ms and math.isfinite(v):
+            by_ts[ts] = v
+    if not by_ts:
+        return np.empty(0, dtype="int64"), np.empty(0, dtype="float64")
+    ts_sorted = sorted(by_ts.keys())
+    return (
+        np.asarray(ts_sorted, dtype="int64"),
+        np.asarray([by_ts[t] for t in ts_sorted], dtype="float64"),
+    )
+
+
+class _RestSeriesProvider:
+    """Pre-fetched aux series served via ``value_at(ts)``.
+
+    Matches the contract of the live Redis providers (``value_at`` /
+    ``_value_at``) so ``_provider_value_at`` can call into either without
+    branching. Lookup uses ``np.searchsorted`` to return the most recent
+    sample at-or-before ``ts`` — same semantics as ``_last_known`` used when
+    seeding aux columns from the parquet path.
+    """
+
+    __slots__ = ("_times", "_values", "_kind")
+
+    def __init__(self, times: np.ndarray, values: np.ndarray, kind: str) -> None:
+        self._times = np.asarray(times, dtype="int64")
+        self._values = np.asarray(values, dtype="float64")
+        self._kind = kind
+
+    @property
+    def kind(self) -> str:
+        return self._kind
+
+    @property
+    def size(self) -> int:
+        return int(self._times.size)
+
+    @property
+    def coverage(self) -> tuple[int, int] | None:
+        if self._times.size == 0:
+            return None
+        return (int(self._times[0]), int(self._times[-1]))
+
+    def value_at(self, ts: int) -> float:
+        if self._times.size == 0:
+            return float("nan")
+        idx = int(np.searchsorted(self._times, int(ts), side="right")) - 1
+        if idx < 0:
+            return float("nan")
+        return float(self._values[idx])
+
+
+def _build_backtest_rest_providers(
+    symbol: str, start_ms: int, end_ms: int
+) -> dict[str, _RestSeriesProvider]:
+    """Fetch OI/funding/taker/LSR for the gap window and wrap each as a provider."""
+    out: dict[str, _RestSeriesProvider] = {}
+    for kind in ("oi", "funding", "taker", "lsr"):
+        times, values = _build_rest_series_arrays(kind, symbol, start_ms, end_ms)
+        out[kind] = _RestSeriesProvider(times, values, kind)
+        logger.info(
+            "[mfp] backtest REST aux fetch kind=%s rows=%d coverage=%s",
+            kind,
+            int(times.size),
+            (int(times[0]), int(times[-1])) if times.size else None,
+        )
+    return out
+
+
 def _load_unified_dataset(symbol: str = "BTCUSDT") -> pd.DataFrame:
     klines = pd.read_parquet(_resolve_parquet(symbol, "KLINES"))
     klines = klines.sort_values("ts").drop_duplicates("ts").reset_index(drop=True)
@@ -874,6 +1094,42 @@ class MultiFactorPortfolioStrategy(Strategy):
                 f"MultiFactorPortfolioStrategy: unified dataset for {self.symbol} is empty. "
                 f"Check that the configured parquet sources contain rows for the backtest window."
             )
+        seed_last_ts = int(unified["ts"].iloc[-1])
+
+        # Resolve backtest end timestamp from the context (added in this fix).
+        # When ctx.end_ts is later than the parquet seed, the backtest engine
+        # will feed bars the strategy has no aux data for, so the leg state
+        # arrays freeze and no signals fire. Mirror _initialize_live by
+        # pre-fetching OI/funding/taker/LSR from Binance REST for the gap
+        # window and routing them through the same _gap_fill_to path.
+        bar_ms = 15 * 60 * 1000
+        ctx_end_ts_raw = int(getattr(ctx, "end_ts", 0) or 0)
+        # Round down to the most recently closed 15m bar boundary so the
+        # gap-fill targets actual bar opens (parquet ts is open_time).
+        backtest_end_ts = (ctx_end_ts_raw // bar_ms) * bar_ms if ctx_end_ts_raw > 0 else 0
+
+        gap_filled_rows = 0
+        gap_fill_error: str | None = None
+        if backtest_end_ts > seed_last_ts:
+            try:
+                rest_providers = _build_backtest_rest_providers(
+                    self.symbol, seed_last_ts + 1, backtest_end_ts
+                )
+                self._oi_provider = rest_providers["oi"]
+                self._funding_provider = rest_providers["funding"]
+                self._taker_provider = rest_providers["taker"]
+                self._lsr_provider = rest_providers["lsr"]
+                pre_len = len(unified)
+                unified = self._gap_fill_to(unified, seed_last_ts, backtest_end_ts)
+                gap_filled_rows = int(len(unified) - pre_len)
+            except Exception as exc:  # noqa: BLE001 — surface failure but keep backtest runnable
+                gap_fill_error = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "[mfp] backtest gap-fill failed; running with stale parquet "
+                    "(seed_last_ts=%d, end_ts=%d): %s",
+                    seed_last_ts, backtest_end_ts, gap_fill_error,
+                )
+
         self._unified = unified
         self._legs = [_LegState(leg, unified) for leg in ALL_LEGS]
         self._committed_side = 0
@@ -886,6 +1142,11 @@ class MultiFactorPortfolioStrategy(Strategy):
             "intervals": sorted({leg.interval_min for leg in self._legs}),
             "families": sorted({leg.family for leg in self._legs}),
             "data_rows_15m": int(len(unified)),
+            "seed_last_ts": seed_last_ts,
+            "backtest_end_ts": backtest_end_ts,
+            "gap_filled_rows": gap_filled_rows,
+            "gap_fill_error": gap_fill_error,
+            "data_gap_counts": dict(self._data_gap_counts),
             "dump_path": self._dump_path or None,
         })
 
