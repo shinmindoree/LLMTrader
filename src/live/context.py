@@ -98,7 +98,12 @@ class LiveContext:
         self._last_trade_check_time: float = 0.0
         self._processed_trade_ids: set[int] = set()
         self._processed_order_ids: set[int] = set()
+        # 전략(이 LiveContext)이 직접 발주한 모든 Binance orderId 집합.
+        # 사용자가 Binance에서 수동으로 청산한 주문을 구분하기 위해 사용.
+        self._placed_order_ids: set[int] = set()
         self._chase_order_ids: list[int] = []
+        # 외부(수동) 청산 감지 시 즉시 REST 거래 백필을 트리거하기 위한 락
+        self._external_close_fetch_inflight: set[int] = set()
         
         # Periodic backfill: Binance REST → DB (5 min)
         self._backfill_interval: float = 300.0
@@ -474,6 +479,8 @@ class LiveContext:
             new_trades = [t for t in trades if t.get("id") not in self._processed_trade_ids]
             
             if new_trades:
+                # 외부(수동) 청산 거래는 reason/exit_reason을 미리 채워준다.
+                self._augment_trades_with_external_reason(new_trades)
                 if is_actual_disconnect:
                     print(f"📋 누락 거래 {len(new_trades)}건 발견, 로그 기록 중...")
                 for trade in new_trades:
@@ -481,7 +488,7 @@ class LiveContext:
                     if trade_id:
                         self._processed_trade_ids.add(trade_id)
                     
-                    self._log_audit("MISSED_TRADE_RECONCILED", {
+                    audit_data: dict[str, Any] = {
                         "trade_id": trade_id,
                         "order_id": trade.get("orderId"),
                         "side": trade.get("side"),
@@ -491,7 +498,13 @@ class LiveContext:
                         "commission": trade.get("commission"),
                         "time": trade.get("time"),
                         "trade": trade,
-                    })
+                    }
+                    # audit_hook이 인식할 수 있도록 reason/exit_reason을 형제 키로 노출
+                    if trade.get("reason"):
+                        audit_data["reason"] = trade.get("reason")
+                    if trade.get("exit_reason"):
+                        audit_data["exit_reason"] = trade.get("exit_reason")
+                    self._log_audit("MISSED_TRADE_RECONCILED", audit_data)
                 
                 if len(self._processed_trade_ids) > 10000:
                     sorted_ids = sorted(self._processed_trade_ids)
@@ -503,6 +516,8 @@ class LiveContext:
             # Backfill to DB (bypasses _processed_trade_ids, checks DB directly)
             if self._trade_backfill_hook and trades:
                 try:
+                    # 외부(수동) 청산 reason 라벨링: 백필 raw_json에도 포함되도록 한다.
+                    self._augment_trades_with_external_reason(trades)
                     inserted = await self._trade_backfill_hook(self.symbol, trades)
                     if inserted > 0 and is_actual_disconnect:
                         print(f"🔄 재연결 백필: {inserted}건 누락 거래 DB 저장")
@@ -527,20 +542,28 @@ class LiveContext:
                 start_time=start_time,
                 limit=20,
             )
+
+            # 외부(수동) 청산 거래에 reason/exit_reason 라벨 부여
+            self._augment_trades_with_external_reason(trades)
             
             for trade in trades:
                 trade_id = trade.get("id")
                 if trade_id and trade_id not in self._processed_trade_ids:
                     self._processed_trade_ids.add(trade_id)
                     print(f"📋 REST 폴백: 거래 감지 orderId={trade.get('orderId')} side={trade.get('side')} qty={trade.get('qty')}")
-                    self._log_audit("REST_FALLBACK_TRADE_DETECTED", {
+                    audit_data: dict[str, Any] = {
                         "trade_id": trade_id,
                         "order_id": trade.get("orderId"),
                         "side": trade.get("side"),
                         "price": trade.get("price"),
                         "qty": trade.get("qty"),
                         "trade": trade,
-                    })
+                    }
+                    if trade.get("reason"):
+                        audit_data["reason"] = trade.get("reason")
+                    if trade.get("exit_reason"):
+                        audit_data["exit_reason"] = trade.get("exit_reason")
+                    self._log_audit("REST_FALLBACK_TRADE_DETECTED", audit_data)
             
             # Backfill to DB (bypasses _processed_trade_ids, checks DB directly)
             if self._trade_backfill_hook and trades:
@@ -578,6 +601,8 @@ class LiveContext:
             )
             if not trades:
                 return
+            # 외부(수동) 청산 거래는 reason/exit_reason을 채워서 raw_json에 그대로 저장되게 한다.
+            self._augment_trades_with_external_reason(trades)
             inserted = await self._trade_backfill_hook(self.symbol, trades)
             if inserted > 0:
                 self._log_audit("BACKFILL_TRADES_INSERTED", {
@@ -762,6 +787,13 @@ class LiveContext:
             self._open_orders_by_id.pop(order_id_int, None)
 
         self.open_orders = list(self._open_orders_by_id.values())
+
+        # 전략이 발주하지 않은 주문이 체결된 경우(바이낸스에서 사용자가 수동 청산),
+        # 차트/포지션/트레이드 내역에 즉시 반영되도록 REST에서 거래를 끌어와 기록한다.
+        if status in {"FILLED", "PARTIALLY_FILLED"} and self._is_external_order_id(order_id_int):
+            executed_qty = order_info.get("executed_qty") or 0.0
+            if executed_qty and executed_qty > 0:
+                self._schedule_external_close_fetch(order_id_int)
 
     async def _wait_for_user_stream_account_update(self, timeout: float = 1.0) -> bool:
         if not self._use_user_stream:
@@ -1646,6 +1678,8 @@ class LiveContext:
 
             order_id = response.get("orderId")
             if order_id:
+                # 전략 발주 orderId 등록 (외부 수동 청산 구분용)
+                self._record_placed_order_id(order_id)
                 self.pending_orders[order_id] = {
                     "order_id": order_id,
                     "side": side,
@@ -1841,6 +1875,8 @@ class LiveContext:
                 order_status = response.get("status")
                 
                 if order_id:
+                    # 전략 발주 orderId 등록 (외부 수동 청산 구분용)
+                    self._record_placed_order_id(order_id)
                     chase_order_ids.append(order_id)
                     chase_fills.append({
                         "order_id": order_id,
@@ -2364,3 +2400,156 @@ class LiveContext:
             except Exception:  # noqa: BLE001
                 # Audit hook must never break trading execution.
                 pass
+
+    # ------------------------------------------------------------------
+    # 외부(수동) 청산 감지: 전략이 직접 발주하지 않은 주문/체결을 식별한다.
+    # ------------------------------------------------------------------
+
+    def _record_placed_order_id(self, order_id: Any) -> None:
+        """전략이 직접 발주한 orderId를 기록한다.
+
+        이 집합에 없는 orderId의 체결은 사용자가 Binance에서 수동으로 발주/청산한 것으로 간주한다.
+        """
+        if order_id is None:
+            return
+        try:
+            oid = int(order_id)
+        except (TypeError, ValueError):
+            return
+        self._placed_order_ids.add(oid)
+        if len(self._placed_order_ids) > 20000:
+            # 메모리 누수 방지: 오래된 orderId는 잘라낸다.
+            sorted_ids = sorted(self._placed_order_ids)
+            self._placed_order_ids = set(sorted_ids[-10000:])
+
+    def _is_external_order_id(self, order_id: Any) -> bool:
+        """orderId가 전략이 발주한 것이 아닌지 여부."""
+        if order_id is None:
+            return False
+        try:
+            oid = int(order_id)
+        except (TypeError, ValueError):
+            return False
+        return oid not in self._placed_order_ids
+
+    def _classify_external_trade(self, trade: dict[str, Any]) -> tuple[str | None, str | None]:
+        """체결 정보를 보고 외부(수동) 청산 여부를 판정한다.
+
+        Returns:
+            (reason, exit_reason). 전략 발주 체결이면 (None, None).
+            사용자가 Binance에서 수동 청산한 경우 ("manual_close_binance", "Manual close on Binance").
+        """
+        if self._is_external_order_id(trade.get("orderId")):
+            return "manual_close_binance", "Manual close on Binance"
+        return None, None
+
+    def _augment_trades_with_external_reason(
+        self,
+        trades: list[dict[str, Any]],
+    ) -> None:
+        """외부 체결로 분류되는 거래에 reason/exit_reason 필드를 채워준다.
+
+        이 거래 dict는 그대로 DB raw_json에 저장되므로 웹에서 그대로 표시된다.
+        """
+        for trade in trades:
+            if not isinstance(trade, dict):
+                continue
+            reason, exit_reason = self._classify_external_trade(trade)
+            if reason and not trade.get("reason"):
+                trade["reason"] = reason
+            if exit_reason and not trade.get("exit_reason"):
+                trade["exit_reason"] = exit_reason
+
+    def _schedule_external_close_fetch(self, order_id: int) -> None:
+        """사용자가 Binance에서 수동 청산한 주문의 체결을 즉시 가져오도록 예약한다.
+
+        - User Stream의 ORDER_TRADE_UPDATE 이벤트만으로는 체결 정보(qty/price/PnL)가
+          그대로 거래 내역에 반영되지 않으므로 REST에서 즉시 끌어와 audit_hook로 흘려보낸다.
+        - 같은 orderId에 대해 중복 호출이 발생하지 않도록 inflight 락을 둔다.
+        """
+        if order_id in self._external_close_fetch_inflight:
+            return
+        self._external_close_fetch_inflight.add(order_id)
+        try:
+            asyncio.create_task(
+                self._fetch_and_record_external_close(order_id),
+                name=f"external-close-fetch:{self.symbol}:{order_id}",
+            )
+        except RuntimeError:
+            # 이벤트 루프가 없으면 다음 주기적 backfill에 위임
+            self._external_close_fetch_inflight.discard(order_id)
+
+    async def _fetch_and_record_external_close(self, order_id: int) -> None:
+        """외부(수동) 청산 주문의 체결 내역을 REST로 가져와서 즉시 기록한다."""
+        try:
+            # Binance가 체결 정보를 인덱싱할 시간을 약간 준다.
+            await asyncio.sleep(0.5)
+            now_ms = int(time.time() * 1000)
+            start_time = now_ms - 120_000  # 최근 2분 범위 조회
+            trades = await self.client.fetch_user_trades(
+                symbol=self.symbol,
+                start_time=start_time,
+                limit=50,
+            )
+            matching = [t for t in trades if t.get("orderId") == order_id]
+            if not matching:
+                # 한 번 더 짧게 재시도(2초 후) — REST 인덱싱 지연 대비
+                await asyncio.sleep(2.0)
+                trades = await self.client.fetch_user_trades(
+                    symbol=self.symbol,
+                    start_time=start_time,
+                    limit=50,
+                )
+                matching = [t for t in trades if t.get("orderId") == order_id]
+            if not matching:
+                self._log_audit("EXTERNAL_CLOSE_TRADES_NOT_FOUND_YET", {
+                    "order_id": order_id,
+                    "trades_checked": len(trades),
+                })
+                return
+
+            self._augment_trades_with_external_reason(matching)
+
+            for trade in matching:
+                trade_id = trade.get("id")
+                if trade_id and trade_id in self._processed_trade_ids:
+                    # 이미 처리됨 — DB 백필이 처리. 중복 audit만 방지.
+                    continue
+                if trade_id:
+                    self._processed_trade_ids.add(trade_id)
+                audit_data: dict[str, Any] = {
+                    "trade_id": trade_id,
+                    "order_id": trade.get("orderId"),
+                    "side": trade.get("side"),
+                    "price": trade.get("price"),
+                    "qty": trade.get("qty"),
+                    "realized_pnl": trade.get("realizedPnl"),
+                    "commission": trade.get("commission"),
+                    "trade": trade,
+                }
+                # audit_hook이 인식할 수 있도록 reason/exit_reason을 형제 키로 노출
+                if trade.get("reason"):
+                    audit_data["reason"] = trade.get("reason")
+                if trade.get("exit_reason"):
+                    audit_data["exit_reason"] = trade.get("exit_reason")
+                self._log_audit("EXTERNAL_CLOSE_TRADE_DETECTED", audit_data)
+                pnl_val = trade.get("realizedPnl")
+                qty_val = trade.get("qty")
+                print(
+                    f"⚠️ 외부 수동 청산 감지 ({self.symbol}): "
+                    f"orderId={order_id} side={trade.get('side')} qty={qty_val} pnl={pnl_val}"
+                )
+
+            # DB 백필 경로에도 라벨이 들어가도록 동기화 — on_conflict_do_nothing이라 중복 안전.
+            if self._trade_backfill_hook:
+                try:
+                    await self._trade_backfill_hook(self.symbol, matching)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as e:  # noqa: BLE001
+            self._log_audit("EXTERNAL_CLOSE_FETCH_FAILED", {
+                "order_id": order_id,
+                "error": str(e),
+            })
+        finally:
+            self._external_close_fetch_inflight.discard(order_id)
