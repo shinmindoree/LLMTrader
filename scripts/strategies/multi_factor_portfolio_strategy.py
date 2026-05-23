@@ -1058,6 +1058,25 @@ class MultiFactorPortfolioStrategy(Strategy):
             ))
         except ValueError:
             self._max_history_15m_bars = 60 * 24 * 4
+        # Redis-backed state persistence (live mode only). When the runner
+        # gets replaced (deploy / SIGTERM) the new replica reads this
+        # snapshot and skips the heavy warmup replay. See
+        # ``post_initialize_async`` and ``_schedule_persist_state``.
+        self._persist_job_id: str | None = None
+        self._persist_loop: asyncio.AbstractEventLoop | None = None
+        # Restored from snapshot at init time; ``True`` means the on_bar
+        # path can skip the next save (state already matches snapshot).
+        self._state_restored_from_snapshot: bool = False
+        # Snapshot freshness window. Snapshots older than this are
+        # ignored; we run a full warmup instead. 30 min is comfortably
+        # longer than any plausible deploy or watchdog cycle but short
+        # enough that we cannot drift far from backtest semantics.
+        try:
+            self._state_max_age_sec = int(os.environ.get(
+                "MFP_STATE_MAX_AGE_SEC", "1800",
+            ))
+        except ValueError:
+            self._state_max_age_sec = 1800
 
     # ---- lifecycle ---------------------------------------------------------
     def initialize(self, ctx: StrategyContext) -> None:
@@ -1255,6 +1274,49 @@ class MultiFactorPortfolioStrategy(Strategy):
         """
         if self._mode != "live" or not self._needs_warmup:
             return
+
+        # Capture the running event loop so the synchronous ``on_bar``
+        # path can fire-and-forget Redis state saves via
+        # ``run_coroutine_threadsafe``. ``on_bar`` is dispatched from the
+        # same loop thread that runs this coroutine, so the captured
+        # reference stays valid for the job's lifetime.
+        try:
+            self._persist_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._persist_loop = None
+        self._persist_job_id = self._extract_job_id(ctx)
+
+        # 1) Try to restore from a fresh Redis snapshot first. When the
+        # runner is restarted (deploy / scale event) within ~30 min, the
+        # old replica's last on_bar save lets us skip the heavy warmup
+        # replay entirely.
+        restored = await self._try_restore_state(ctx)
+        if restored:
+            self._needs_warmup = False
+            self._state_restored_from_snapshot = True
+            self._emit_event(ctx, "MFP_INIT", {
+                "mode": "live",
+                "n_legs": len(self._legs),
+                "intervals": sorted({leg.interval_min for leg in self._legs}),
+                "families": sorted({leg.family for leg in self._legs}),
+                "data_rows_15m": int(len(self._unified)) if self._unified is not None else 0,
+                "seed_last_ts": self._live_init_seed_last_ts,
+                "live_tail_ts": self._tail_ts_15m,
+                "data_gap_counts": dict(self._data_gap_counts),
+                "dump_path": self._dump_path or None,
+                "restored_from_snapshot": True,
+            })
+            logger.info(
+                "[mfp] live init (restored): %s legs=%d tail=%d "
+                "committed_side=%d active=%d",
+                self.symbol, len(self._legs), self._tail_ts_15m,
+                int(self._committed_side),
+                sum(1 for leg in self._legs if leg.side != 0),
+            )
+            return
+
+        # 2) No fresh snapshot → run the full warmup replay in a thread so
+        # the event loop stays responsive.
         try:
             warmup_summary = await asyncio.to_thread(self._warmup_replay)
         except Exception as exc:  # noqa: BLE001
@@ -1285,12 +1347,184 @@ class MultiFactorPortfolioStrategy(Strategy):
             "live_tail_ts": self._tail_ts_15m,
             "data_gap_counts": dict(self._data_gap_counts),
             "dump_path": self._dump_path or None,
+            "restored_from_snapshot": False,
         })
         logger.info(
             "[mfp] live init (post-warmup): %s legs=%d tail=%d active=%d",
             self.symbol, len(self._legs), self._tail_ts_15m,
             len(warmup_summary.get("active", [])),
         )
+
+        # Persist the post-warmup state immediately so subsequent restarts
+        # (e.g. a back-to-back deploy) can short-circuit.
+        await self._persist_state_async()
+
+    # ---- state persistence -------------------------------------------------
+    @staticmethod
+    def _extract_job_id(ctx: Any) -> str | None:
+        """Pull the LIVE Job UUID out of ``ctx`` (or any wrapper) as a string.
+
+        Returns ``None`` if ``ctx`` exposes no ``job_id``. Used as the
+        Redis key so each job has its own snapshot.
+        """
+        jid = getattr(ctx, "job_id", None)
+        if jid is None:
+            return None
+        return str(jid)
+
+    def _build_snapshot(self) -> dict[str, Any]:
+        """Serialise the current rolling state to a JSON-friendly dict."""
+        import time as _t
+        return {
+            "version": 1,
+            "saved_at_ms": int(_t.time() * 1000),
+            "symbol": self.symbol,
+            "tail_ts_15m": int(self._tail_ts_15m),
+            "committed_side": int(self._committed_side),
+            "legs": [
+                {
+                    "family": leg.family,
+                    "interval_min": int(leg.interval_min),
+                    "side": int(leg.side),
+                    "entry_price": (
+                        float(leg.entry_price) if leg.entry_price is not None else None
+                    ),
+                    "entry_tf_ts": (
+                        int(leg.entry_tf_ts) if leg.entry_tf_ts is not None else None
+                    ),
+                }
+                for leg in self._legs
+            ],
+        }
+
+    def _restore_from_snapshot(self, snap: dict[str, Any]) -> bool:
+        """Apply ``snap`` to the in-memory leg states.
+
+        Returns ``True`` if the snapshot was compatible (same leg shape)
+        and was applied. Returns ``False`` if shape mismatched, in which
+        case the caller should fall back to a full warmup replay.
+        """
+        snap_legs = snap.get("legs") or []
+        if not isinstance(snap_legs, list) or len(snap_legs) != len(self._legs):
+            return False
+        # Validate per-leg shape (family + interval_min identity).
+        for i, leg in enumerate(self._legs):
+            entry = snap_legs[i]
+            if not isinstance(entry, dict):
+                return False
+            if entry.get("family") != leg.family:
+                return False
+            if int(entry.get("interval_min", -1)) != int(leg.interval_min):
+                return False
+        # Apply.
+        for i, leg in enumerate(self._legs):
+            entry = snap_legs[i]
+            leg.side = int(entry.get("side", 0) or 0)
+            ep = entry.get("entry_price")
+            leg.entry_price = float(ep) if ep is not None else None
+            ets = entry.get("entry_tf_ts")
+            leg.entry_tf_ts = int(ets) if ets is not None else None
+            # Re-derive entry_tf_idx from entry_tf_ts via the existing
+            # ``refresh_signals`` path so it lines up with the current
+            # rolling window.
+            leg.refresh_signals(self._unified)
+        try:
+            self._committed_side = int(snap.get("committed_side", 0) or 0)
+        except (TypeError, ValueError):
+            self._committed_side = 0
+        return True
+
+    async def _try_restore_state(self, ctx: Any) -> bool:
+        """Best-effort load + restore. Returns ``True`` on success.
+
+        Returns ``False`` (and leaves state untouched) if:
+        - Redis is not configured / unreachable
+        - No snapshot exists for this job_id
+        - Snapshot is older than ``_state_max_age_sec``
+        - Snapshot shape does not match the current ``ALL_LEGS`` layout
+        """
+        if not self._persist_job_id:
+            return False
+        try:
+            from control.strategy_state import load_state
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            snap = await load_state(self._persist_job_id)
+        except Exception:  # noqa: BLE001
+            return False
+        if not snap:
+            return False
+        # Freshness check.
+        try:
+            saved_at_ms = int(snap.get("saved_at_ms", 0) or 0)
+        except (TypeError, ValueError):
+            saved_at_ms = 0
+        if saved_at_ms <= 0:
+            return False
+        import time as _t
+        age_sec = (int(_t.time() * 1000) - saved_at_ms) / 1000.0
+        if age_sec > self._state_max_age_sec:
+            self._emit_event(ctx, "MFP_RESTORE_SKIPPED", {
+                "reason": "snapshot_stale",
+                "age_sec": round(age_sec, 1),
+                "max_age_sec": int(self._state_max_age_sec),
+            })
+            return False
+        # Symbol guard: snapshot symbol must match (defensive; key is
+        # already job-scoped so this should always match).
+        if str(snap.get("symbol", "")) != str(self.symbol):
+            return False
+        if not self._restore_from_snapshot(snap):
+            self._emit_event(ctx, "MFP_RESTORE_SKIPPED", {
+                "reason": "shape_mismatch",
+                "snap_leg_count": len(snap.get("legs") or []),
+                "current_leg_count": len(self._legs),
+            })
+            return False
+        long_count = sum(1 for leg in self._legs if leg.side > 0)
+        short_count = sum(1 for leg in self._legs if leg.side < 0)
+        self._emit_event(ctx, "MFP_RESTORED", {
+            "age_sec": round(age_sec, 1),
+            "snap_tail_ts": int(snap.get("tail_ts_15m", 0) or 0),
+            "live_tail_ts": int(self._tail_ts_15m),
+            "committed_side": int(self._committed_side),
+            "long_legs": long_count,
+            "short_legs": short_count,
+        })
+        return True
+
+    async def _persist_state_async(self) -> bool:
+        """Save the current snapshot to Redis. Best-effort, never raises."""
+        if not self._persist_job_id:
+            return False
+        try:
+            from control.strategy_state import save_state
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            return await save_state(self._persist_job_id, self._build_snapshot())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _schedule_persist_state(self) -> None:
+        """Fire-and-forget Redis save from the synchronous ``on_bar`` path.
+
+        Uses ``run_coroutine_threadsafe`` so this never blocks. Safe to
+        call from any thread; safe to call when Redis is unconfigured
+        (the inner save coroutine no-ops).
+        """
+        loop = self._persist_loop
+        if loop is None or not loop.is_running():
+            return
+        if not self._persist_job_id:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._persist_state_async(), loop)
+        except Exception:  # noqa: BLE001
+            # Scheduling failed (loop closed?) — silently drop; the next
+            # on_bar will try again.
+            pass
 
     def _warmup_replay(self) -> dict[str, Any]:
         """Replay each leg's TF history through ``_process_leg`` so that
@@ -1575,6 +1809,12 @@ class MultiFactorPortfolioStrategy(Strategy):
                 "changed": bool(prev_committed != self._committed_side),
                 "active_legs": active_legs,
             })
+
+        # Persist the post-on_bar state to Redis so a runner restart can
+        # restore us without a warmup replay. Throttled implicitly by the
+        # 15m bar cadence (~96 saves/day per symbol).
+        if self._mode == "live":
+            self._schedule_persist_state()
 
     # ---- internals ---------------------------------------------------------
     def _tf_idx_for(self, leg: _LegState, ts_15m: int) -> int:

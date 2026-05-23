@@ -42,6 +42,7 @@ class LiveContext:
         risk_reporter: Callable[[float], None] | None = None,
         audit_hook: Callable[[str, dict[str, Any]], None] | None = None,
         trade_backfill_hook: Callable[..., Any] | None = None,
+        job_id: Any | None = None,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -50,6 +51,9 @@ class LiveContext:
             risk_manager: 리스크 관리자
             symbol: 거래 심볼
             leverage: 레버리지
+            job_id: 이 컨텍스트가 처리 중인 LIVE Job의 UUID. 전략이
+                Redis 등에 자기 상태를 저장할 때 키로 사용한다. None이면
+                전략 측에서 상태 영속화를 건너뛴다.
         """
         self.client = client
         self.risk_manager = risk_manager
@@ -60,6 +64,10 @@ class LiveContext:
         self._logger = get_logger("llmtrader.live")
         self.strategy_name: str | None = None
         self.strategy_meta: dict[str, Any] = {}
+        # Exposed as a public attribute so strategies (which are loaded via
+        # an unrelated import path) can read it via duck-typing without
+        # importing LiveContext.
+        self.job_id: Any | None = job_id
         self._indicator_config: dict[str, Any] = dict(indicator_config or {})
         self._indicator_registry: dict[str, Callable[..., Any]] = {}
         self._indicator_error_logged: set[str] = set()

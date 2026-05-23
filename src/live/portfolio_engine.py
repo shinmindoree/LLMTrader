@@ -30,6 +30,20 @@ class StreamBoundStrategyContext:
         self.candle_interval = interval
 
     @property
+    def job_id(self) -> Any | None:
+        """Exposes the underlying LiveContext's job_id to strategies.
+
+        Strategies that persist their own state (e.g. MFP's Redis leg
+        snapshot) need a stable per-job key. Returns ``None`` if the
+        backing context has no job_id attached (e.g. unit-test paths).
+        """
+        try:
+            ctx = self._portfolio._trade_contexts.get(self.symbol)  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            return None
+        return getattr(ctx, "job_id", None) if ctx is not None else None
+
+    @property
     def current_price(self) -> float:
         return self._portfolio.for_symbol(self.symbol).current_price
 

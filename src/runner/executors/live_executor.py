@@ -164,6 +164,7 @@ async def run_live(
             risk_reporter=portfolio_risk_manager.record_trade,
             audit_hook=sink.audit_hook,
             trade_backfill_hook=sink.backfill_trades,
+            job_id=job_id,
         )
         trade_contexts[sym] = ctx
 
