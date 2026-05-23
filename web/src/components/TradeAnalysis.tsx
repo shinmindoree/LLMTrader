@@ -789,6 +789,104 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     };
   }, [backtestChartPayload, topChartTrades, setBacktestChart]);
 
+  // ── Live chart (Binance klines + trade markers) ─────────────────────────
+  // For LIVE jobs we don't get a precomputed chart payload from the runner,
+  // so we fetch candles for the configured symbol/interval from the Binance
+  // futures REST proxy and feed them into the same BacktestExecutionChart
+  // component used for backtests. The window covers the period spanned by
+  // existing trades (with a small pad for context) up to ``now`` for running
+  // jobs or the job's ``ended_at`` for finished ones.
+  const liveStream = useMemo(() => {
+    if (job.type !== "LIVE" || !isRecord(job.config)) return null;
+    const streams = Array.isArray(job.config.streams) ? job.config.streams : [];
+    const first = streams[0];
+    if (!isRecord(first)) return null;
+    const symbol = String(first.symbol ?? "").toUpperCase();
+    const interval = String(first.interval ?? "");
+    if (!symbol || !interval) return null;
+    return { symbol, interval };
+  }, [job.type, job.config]);
+
+  // Tick once a minute while a LIVE job is running so the chart end-window
+  // creeps forward and we refetch the latest candles. For non-running jobs
+  // the end is pinned to ``ended_at`` and the tick is disabled.
+  const isLiveRunning = job.type === "LIVE" && job.status === "RUNNING";
+  const [liveTick, setLiveTick] = useState(0);
+  useEffect(() => {
+    if (!isLiveRunning) return;
+    const id = setInterval(() => setLiveTick((v) => v + 1), 60_000);
+    return () => clearInterval(id);
+  }, [isLiveRunning]);
+
+  const liveChartWindow = useMemo(() => {
+    if (job.type !== "LIVE" || !liveStream) return null;
+    const tradeTs = sortedTrades
+      .map((t) => t.timestamp)
+      .filter((t): t is number => typeof t === "number" && Number.isFinite(t));
+    const minTrade = tradeTs.length > 0 ? Math.min(...tradeTs) : null;
+    const maxTrade = tradeTs.length > 0 ? Math.max(...tradeTs) : null;
+    const startedAtMs = job.started_at ? Date.parse(job.started_at) : NaN;
+    const endedAtMs = job.ended_at ? Date.parse(job.ended_at) : NaN;
+    const startCandidates: number[] = [];
+    if (Number.isFinite(startedAtMs)) startCandidates.push(startedAtMs);
+    if (minTrade != null) startCandidates.push(minTrade);
+    if (startCandidates.length === 0) return null;
+    // 4h pad before/after for visual context around the first/last marker.
+    const pad = 4 * 60 * 60_000;
+    const startMs = Math.min(...startCandidates) - pad;
+    const liveEnd = isLiveRunning ? Date.now() : (Number.isFinite(endedAtMs) ? endedAtMs : Date.now());
+    const endCandidates: number[] = [liveEnd];
+    if (maxTrade != null) endCandidates.push(maxTrade);
+    const endMs = Math.max(...endCandidates) + pad;
+    return { startMs, endMs };
+    // ``liveTick`` is intentionally included so the window slides forward
+    // every minute while the job is running, even if no new trades arrive.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    job.type, job.started_at, job.ended_at, liveStream,
+    sortedTrades, isLiveRunning, liveTick,
+  ]);
+
+  const [liveCandles, setLiveCandles] = useState<BacktestChartPayload["candles"] | null>(null);
+  useEffect(() => {
+    if (!liveStream || !liveChartWindow) {
+      setLiveCandles(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const url =
+          `/api/binance/klines?symbol=${encodeURIComponent(liveStream.symbol)}` +
+          `&interval=${encodeURIComponent(liveStream.interval)}` +
+          `&startTime=${liveChartWindow.startMs}` +
+          `&endTime=${liveChartWindow.endMs}`;
+        const res = await fetch(url, { signal: ctrl.signal });
+        if (!res.ok) return;
+        const data = (await res.json()) as { candles?: BacktestChartPayload["candles"] };
+        if (Array.isArray(data?.candles)) {
+          setLiveCandles(data.candles);
+        }
+      } catch {
+        // Aborts and transient errors silently drop; the previous candles
+        // (if any) keep showing until the next successful fetch.
+      }
+    })();
+    return () => ctrl.abort();
+  }, [
+    liveStream?.symbol, liveStream?.interval,
+    liveChartWindow?.startMs, liveChartWindow?.endMs,
+  ]);
+
+  const liveChartPayload = useMemo<BacktestChartPayload | null>(() => {
+    if (!liveStream || !liveCandles || liveCandles.length === 0) return null;
+    return {
+      symbol: liveStream.symbol,
+      interval: liveStream.interval,
+      candles: liveCandles,
+    };
+  }, [liveStream, liveCandles]);
+
   const downloadCsv = useCallback(() => {
     const enriched =
       job.type === "BACKTEST" ? enrichedBacktest : enrichedLive;
@@ -1001,6 +1099,16 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 <div className="mb-4">
                   <BacktestExecutionChart
                     chart={backtestChartPayload}
+                    trades={topChartTrades}
+                    height={420}
+                  />
+                </div>
+              ) : null}
+
+              {job.type === "LIVE" && liveChartPayload ? (
+                <div className="mb-4">
+                  <BacktestExecutionChart
+                    chart={liveChartPayload}
                     trades={topChartTrades}
                     height={420}
                   />
