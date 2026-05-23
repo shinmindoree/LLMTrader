@@ -177,14 +177,17 @@ class BacktestEngine:
                 self.progress_callback(progress)
         
         self.strategy.finalize(self.ctx)
-        
-        final_balance = self.ctx.balance
-        
-        if abs(self.ctx.position_size) > 1e-12:
-            self.ctx.close_position(reason="백테스트 종료")
-            final_balance = self.ctx.balance
-        
-        final_equity = final_balance
+
+        # If a position is still open at the end of the backtest window, leave
+        # it open: forcing a close here was just an artifact of the engine,
+        # not a real exit signal, and produced a misleading "백테스트 종료"
+        # trade whose timestamp/price came from the last (often still-in-progress)
+        # candle. The position naturally remains in ``ctx.position`` /
+        # ``ctx.trades`` (entry fill only, no matching exit), and the final
+        # equity is the mark-to-market value (balance + unrealized PnL at the
+        # last bar's close).
+        final_equity = self.ctx.total_equity
+        final_balance = final_equity
         total_return = (final_equity / initial_balance - 1) * 100 if initial_balance > 0 else 0
         
         # Exit fills are the only trades carrying a realized "pnl" field. This
