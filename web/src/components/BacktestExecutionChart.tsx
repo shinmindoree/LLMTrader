@@ -88,6 +88,17 @@ function findTradesAtTime(tradesByTime: Map<number, MarkerTrade[]>, timeSec: num
   return nearest;
 }
 
+// Classify a marker trade as entry vs exit. ``pnl`` alone is unreliable
+// because Binance reports ``realized_pnl == 0`` (numeric) on every entry
+// fill, so ``pnl !== null`` would flag every live entry as an exit. The
+// runner only fills ``exit_reason`` when the strategy closes a position,
+// so it's the canonical signal. A non-zero pnl is kept as a fallback
+// exit indicator for legacy trades that pre-date the ``exit_reason``
+// plumbing.
+function isExitTrade(t: MarkerTrade): boolean {
+  return t.exitReason != null || (t.pnl != null && t.pnl !== 0);
+}
+
 export function BacktestExecutionChart({
   chart: chartPayload,
   trades,
@@ -133,7 +144,7 @@ export function BacktestExecutionChart({
     for (const trade of trades) {
       if (!trade.timestamp || !trade.price) continue;
       const time = msToSec(trade.timestamp);
-      const isExit = trade.pnl !== null;
+      const isExit = isExitTrade(trade);
       const side = trade.side ?? "";
 
       if (!isExit && side === "BUY") {
@@ -420,18 +431,20 @@ export function BacktestExecutionChart({
               transform: "translate(-50%, -100%)",
             }}
           >
-            {tooltip.trades.map((t, i) => (
+            {tooltip.trades.map((t, i) => {
+              const isExit = isExitTrade(t);
+              return (
               <div key={i} className={i > 0 ? "mt-2 border-t border-[#2a2e39] pt-2" : ""}>
                 <div className="space-y-1 text-[#d1d4dc]">
                   <div className="font-medium">
-                    {t.pnl !== null ? "Exit" : t.side === "BUY" ? "Long Entry" : "Short Entry"}
+                    {isExit ? "Exit" : t.side === "BUY" ? "Long Entry" : "Short Entry"}
                   </div>
                   <div className="text-[#868993]">
                     Time: {t.timestamp != null ? formatBinanceTime(t.timestamp, tz) : "-"}
                   </div>
                   <div>Side: {t.side ?? "-"}</div>
                   <div>Price: {t.price != null ? t.price.toFixed(2) : "-"}</div>
-                  {t.pnl !== null && (
+                  {isExit && t.pnl != null && (
                     <div className={t.pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}>
                       Realized Profit: {t.pnl >= 0 ? "+" : ""}{t.pnl.toFixed(2)} USDT
                     </div>
@@ -440,7 +453,8 @@ export function BacktestExecutionChart({
                   {t.exitReason && <div className="text-[#868993]">Exit Reason: {t.exitReason}</div>}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
