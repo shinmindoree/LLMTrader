@@ -81,6 +81,7 @@ RUNTIME CONTRACT
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -1022,6 +1023,13 @@ class MultiFactorPortfolioStrategy(Strategy):
         self._committed_side: int = 0  # the side currently held by ctx
         self._mode: str | None = None
         self._last_bar_ts: int = 0
+        # Live-mode warmup deferral: ``_initialize_live`` builds the leg
+        # objects synchronously but defers the heavy history replay to the
+        # async ``post_initialize_async`` so the runner's heartbeat loop
+        # stays responsive. These attributes are flipped in
+        # ``_initialize_live`` and consumed in ``post_initialize_async``.
+        self._needs_warmup: bool = False
+        self._live_init_seed_last_ts: int = 0
         # Live-mode rolling state.
         self._unified: pd.DataFrame | None = None
         self._tail_ts_15m: int = 0
@@ -1210,19 +1218,54 @@ class MultiFactorPortfolioStrategy(Strategy):
         self._last_bar_ts = 0
         self._tail_ts_15m = int(unified["ts"].iloc[-1])
 
-        # 7) History replay (warmup). Without this every leg starts flat at
-        # job-start and the runner only enters on the next NEW signal — far
-        # behind the backtest signal pool. We replay each leg's full TF
-        # history through ``_process_leg`` so leg.side / entry_price /
-        # entry_tf_idx all match what a backtest run up to this moment
-        # would hold. Stale entries (older than max_hold_bars) are
-        # auto-flattened by the time-exit branch inside _process_leg, so
-        # this is automatically safe against ancient open positions.
-        warmup_summary = self._warmup_replay()
-        # NOTE: _committed_side stays 0 here. The next on_bar() call will
-        # see leg majority != 0 and call ctx.enter_long/short via
-        # _reconcile, executing the warmup entry through the normal order
-        # path. This avoids issuing orders from inside initialize().
+        # 7) Defer the heavy warmup replay to ``post_initialize_async`` so the
+        # runner's event loop is free to fire heartbeats while the replay runs
+        # in a thread. Without this, ~17 legs × thousands of bars of pure-
+        # Python ``_process_leg`` calls would block the loop for several
+        # seconds and starve the live heartbeat task, occasionally tripping
+        # the stale-heartbeat watchdog and causing a spurious second restart
+        # right after a fresh deploy. The MFP_INIT event is also emitted from
+        # ``post_initialize_async`` so its payload reflects the post-warmup
+        # state (including ``warmup_summary``).
+        self._live_init_seed_last_ts = seed_last_ts
+        self._needs_warmup = True
+        self._maybe_dump_unified("live")
+        logger.info(
+            "[mfp] live init (pre-warmup): %s legs=%d rows=%d seed_last=%d tail=%d",
+            self.symbol, len(self._legs), len(unified),
+            seed_last_ts, self._tail_ts_15m,
+        )
+
+    async def post_initialize_async(self, ctx: StrategyContext) -> None:
+        """Heavy post-init phase that the runner awaits after ``initialize``.
+
+        The runner's heartbeat loop ticks on the same event loop that calls
+        ``initialize`` / ``post_initialize_async``. ``_warmup_replay`` is
+        CPU-bound pure-Python code (no I/O, no awaits), so running it
+        directly here would block the event loop and the heartbeat task
+        cannot fire. We hand it to a worker thread via
+        ``asyncio.to_thread`` so the loop stays responsive — the heartbeat
+        loop continues to run normally during warmup, preventing the
+        stale-heartbeat watchdog from re-queuing the job right after a
+        fresh deploy.
+
+        Only the live path needs this; the backtest path already builds
+        its leg state synchronously inside ``initialize`` and the backtest
+        engine has no heartbeat to worry about.
+        """
+        if self._mode != "live" or not self._needs_warmup:
+            return
+        try:
+            warmup_summary = await asyncio.to_thread(self._warmup_replay)
+        except Exception as exc:  # noqa: BLE001
+            # Warmup failure must not silently leave the strategy half-
+            # initialised. Surface it via an event and re-raise so the
+            # runner marks the job FAILED rather than running flat.
+            self._emit_event(ctx, "MFP_WARMUP_ERROR", {
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            raise
+        self._needs_warmup = False
         self._emit_event(ctx, "MFP_WARMUP", warmup_summary)
         logger.info(
             "[mfp] warmup replay: target=%d long_legs=%d short_legs=%d active=%d",
@@ -1232,22 +1275,21 @@ class MultiFactorPortfolioStrategy(Strategy):
             len(warmup_summary.get("active", [])),
         )
 
-        self._maybe_dump_unified("live")
         self._emit_event(ctx, "MFP_INIT", {
             "mode": "live",
             "n_legs": len(self._legs),
             "intervals": sorted({leg.interval_min for leg in self._legs}),
             "families": sorted({leg.family for leg in self._legs}),
-            "data_rows_15m": int(len(unified)),
-            "seed_last_ts": seed_last_ts,
+            "data_rows_15m": int(len(self._unified)) if self._unified is not None else 0,
+            "seed_last_ts": self._live_init_seed_last_ts,
             "live_tail_ts": self._tail_ts_15m,
             "data_gap_counts": dict(self._data_gap_counts),
             "dump_path": self._dump_path or None,
         })
         logger.info(
-            "[mfp] live init: %s legs=%d rows=%d seed_last=%d tail=%d",
-            self.symbol, len(self._legs), len(unified),
-            seed_last_ts, self._tail_ts_15m,
+            "[mfp] live init (post-warmup): %s legs=%d tail=%d active=%d",
+            self.symbol, len(self._legs), self._tail_ts_15m,
+            len(warmup_summary.get("active", [])),
         )
 
     def _warmup_replay(self) -> dict[str, Any]:

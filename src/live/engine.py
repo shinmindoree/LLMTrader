@@ -136,6 +136,11 @@ class LiveTradingEngine:
             if hasattr(self.ctx, "get_indicator_config"):
                 self._indicator_config = self.ctx.get_indicator_config()
             self.strategy.initialize(self.ctx)
+            # Optional async post-init phase: see ``PortfolioLiveTradingEngine``
+            # for the rationale (heartbeat-safe heavy bootstrap).
+            post_init = getattr(self.strategy, "post_initialize_async", None)
+            if post_init is not None and asyncio.iscoroutinefunction(post_init):
+                await post_init(self.ctx)
             self._initialized = True
 
         # 시딩 직후 바로 지표가 유효해야 한다(라이브 재시작 시점 요구사항).

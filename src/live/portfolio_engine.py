@@ -255,6 +255,17 @@ class PortfolioLiveTradingEngine:
             first_key = next(iter(self.price_feeds.keys()))
             init_ctx = StreamBoundStrategyContext(self.ctx, symbol=first_key[0], interval=first_key[1])
             self.strategy.initialize(init_ctx)
+            # Optional async post-init phase. Strategies that need to do
+            # heavy CPU-bound bootstrap work (e.g. MFP's history replay)
+            # implement ``post_initialize_async`` and run that work inside
+            # ``asyncio.to_thread`` so the runner's heartbeat loop on this
+            # same event loop keeps ticking. Without this, the heartbeat
+            # task can be starved during a several-second synchronous
+            # warmup and the stale-heartbeat watchdog re-queues the job
+            # right after a fresh deploy.
+            post_init = getattr(self.strategy, "post_initialize_async", None)
+            if post_init is not None and asyncio.iscoroutinefunction(post_init):
+                await post_init(init_ctx)
             self._initialized = True
 
         # 4) subscribe feeds + bookTicker per tradable symbol
