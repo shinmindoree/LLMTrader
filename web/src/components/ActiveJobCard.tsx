@@ -7,11 +7,12 @@ import useSWR from "swr";
 import { getBinanceAccountSummary, listTrades } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { BinanceAccountSummary, BinancePositionSummary, JobSummary, JobStatus, Trade } from "@/lib/types";
+import type { BinanceAccountSummary, JobSummary, JobStatus, Trade } from "@/lib/types";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { JobConfigInline } from "@/components/JobConfigSummary";
 import { jobDetailPath } from "@/lib/routes";
 import { normalizeLiveTrades, buildPositions, computeTradeStats } from "@/components/TradeAnalysis";
+import { PositionPanel } from "@/components/LivePositionPanel";
 import { TimeCell } from "@/components/TimeCell";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
@@ -49,32 +50,6 @@ const formatSigned = (value: number, suffix = ""): string => {
   const sign = value > 0 ? "+" : "";
   return `${sign}${formatted}${suffix ? ` ${suffix}` : ""}`;
 };
-
-function PositionRow({ position, t }: { position: BinancePositionSummary; t: ReturnType<typeof useI18n>["t"] }) {
-  const pnlColor = position.unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
-  const sideColor = position.side === "LONG" ? "text-[#26a69a]" : "text-[#ef5350]";
-  return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs">
-      <span className="text-[#d1d4dc] font-medium">{position.symbol}</span>
-      <span className={sideColor}>{position.side}</span>
-      <span className="text-[#868993]">
-        {t.live.posQty} <span className="text-[#d1d4dc]">{formatNumber(Math.abs(position.position_amt), 5)}</span>
-      </span>
-      <span className="text-[#868993]">
-        {t.live.posEntry} <span className="text-[#d1d4dc]">{formatNumber(position.entry_price, 2)}</span>
-      </span>
-      <span className="text-[#868993]">
-        {t.live.posNotional} <span className="text-[#d1d4dc]">{formatNumber(Math.abs(position.notional), 2)}</span>
-      </span>
-      <span className="text-[#868993]">
-        {t.live.posLeverage} <span className="text-[#d1d4dc]">{position.leverage}x</span>
-      </span>
-      <span className="text-[#868993]">
-        {t.live.posUnrealizedPnl} <span className={pnlColor}>{formatSigned(position.unrealized_pnl, "USDT")}</span>
-      </span>
-    </div>
-  );
-}
 
 export function ActiveJobCard({
   job,
@@ -277,28 +252,9 @@ export function ActiveJobCard({
       )}
 
       {matchedPositions.length > 0 && (
-        <>
-          <style>{`
-            @keyframes orange-glow {
-              0%, 100% { border-color: rgba(255, 152, 0, 0.2); box-shadow: none; }
-              50% { border-color: rgba(255, 152, 0, 0.5); box-shadow: 0 0 8px rgba(255, 152, 0, 0.1); }
-            }
-          `}</style>
-          <div
-            className="mt-2 rounded bg-[#131722] px-3 py-2"
-            style={{
-              border: "1px solid rgba(255, 152, 0, 0.2)",
-              animation: "orange-glow 2.5s ease-in-out infinite",
-            }}
-          >
-            <div className="mb-1 text-[10px] font-medium text-[#868993]">{t.live.openPosition}</div>
-            <div className="space-y-1">
-              {matchedPositions.map((p) => (
-                <PositionRow key={`${p.symbol}-${p.side}`} position={p} t={t} />
-              ))}
-            </div>
-          </div>
-        </>
+        <div className="mt-2">
+          <PositionPanel positions={matchedPositions} />
+        </div>
       )}
     </li>
   );
