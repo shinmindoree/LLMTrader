@@ -10,6 +10,7 @@ import {
   ColorType,
   CrosshairMode,
 } from "lightweight-charts";
+import { formatBinanceTime, useTimezone } from "@/lib/timeFormat";
 
 type CandlePoint = {
   open_time: number;
@@ -100,6 +101,7 @@ export function BacktestExecutionChart({
   const oscRef = useRef<HTMLDivElement>(null);
   const chartWrapperRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const { tz } = useTimezone();
 
   const candles = useMemo(() => {
     if (!Array.isArray(chartPayload.candles)) return [];
@@ -424,14 +426,18 @@ export function BacktestExecutionChart({
                   <div className="font-medium">
                     {t.pnl !== null ? "Exit" : t.side === "BUY" ? "Long Entry" : "Short Entry"}
                   </div>
+                  <div className="text-[#868993]">
+                    Time: {t.timestamp != null ? formatBinanceTime(t.timestamp, tz) : "-"}
+                  </div>
+                  <div>Side: {t.side ?? "-"}</div>
                   <div>Price: {t.price != null ? t.price.toFixed(2) : "-"}</div>
                   {t.pnl !== null && (
                     <div className={t.pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}>
-                      PnL: {t.pnl >= 0 ? "+" : ""}{t.pnl.toFixed(2)}
+                      Realized Profit: {t.pnl >= 0 ? "+" : ""}{t.pnl.toFixed(2)} USDT
                     </div>
                   )}
                   {t.reason && <div className="text-[#868993]">Reason: {t.reason}</div>}
-                  {t.exitReason && <div className="text-[#868993]">Exit: {t.exitReason}</div>}
+                  {t.exitReason && <div className="text-[#868993]">Exit Reason: {t.exitReason}</div>}
                 </div>
               </div>
             ))}

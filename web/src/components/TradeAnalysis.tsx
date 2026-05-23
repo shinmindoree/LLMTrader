@@ -7,6 +7,7 @@ import type { Job, Trade } from "@/lib/types";
 import { isRecord } from "@/components/JobResultSummary";
 import { TimeCell } from "@/components/TimeCell";
 import { useTopChart } from "@/components/TopChartContext";
+import { BacktestExecutionChart } from "@/components/BacktestExecutionChart";
 import { formatBinanceTime } from "@/lib/timeFormat";
 
 type NormalizedTrade = {
@@ -995,6 +996,16 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                   </div>
                 </div>
               </details>
+
+              {job.type === "BACKTEST" && backtestChartPayload && topChartTrades.length > 0 ? (
+                <div className="mb-4">
+                  <BacktestExecutionChart
+                    chart={backtestChartPayload}
+                    trades={topChartTrades}
+                    height={420}
+                  />
+                </div>
+              ) : null}
 
               <Chart
                 points={chartPoints}
