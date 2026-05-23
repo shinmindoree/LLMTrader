@@ -73,19 +73,29 @@ type TooltipState = {
   trades: MarkerTrade[];
 };
 
-function findTradesAtTime(tradesByTime: Map<number, MarkerTrade[]>, timeSec: number): MarkerTrade[] {
-  const exact = tradesByTime.get(timeSec);
-  if (exact?.length) return exact;
-  let nearest: MarkerTrade[] = [];
-  let minDist = 120;
-  for (const [tSec, list] of tradesByTime) {
-    const d = Math.abs(tSec - timeSec);
-    if (d < minDist) {
-      minDist = d;
-      nearest = list;
-    }
+type SnappedTrade = { trade: MarkerTrade; snappedSec: number };
+
+// Pick the index of the candle whose ``close_time`` (seconds) is nearest
+// to ``tSec``. ``candleSecs`` MUST be sorted ascending. Returns -1 when
+// the input is empty so callers can fall back gracefully.
+function nearestCandleIdx(candleSecs: number[], tSec: number): number {
+  if (candleSecs.length === 0) return -1;
+  let lo = 0;
+  let hi = candleSecs.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (candleSecs[mid] < tSec) lo = mid + 1;
+    else hi = mid;
   }
-  return nearest;
+  // ``lo`` is the smallest index with ``candleSecs[lo] >= tSec`` (or the
+  // final index if all entries are < tSec). Compare with the previous
+  // candle to pick the truly nearest neighbour.
+  if (lo > 0) {
+    const prevDist = tSec - candleSecs[lo - 1];
+    const currDist = candleSecs[lo] - tSec;
+    if (prevDist <= currDist) return lo - 1;
+  }
+  return lo;
 }
 
 // Classify a marker trade as entry vs exit. ``pnl`` alone is unreliable
@@ -139,11 +149,35 @@ export function BacktestExecutionChart({
 
   const hasOscillator = oscillatorIndicators.length > 0;
 
+  // Snap each trade to the close_time of its nearest candle. Live trade
+  // timestamps are Binance fill times that fall mid-candle (or even
+  // outside the visible window for the first/last entries), which used
+  // to break tooltip hover because the crosshair always reports the
+  // candle-snapped time. Snapping fixes three things at once:
+  //   1. markers always render on a real data point
+  //   2. the crosshair's ``param.time`` exact-matches ``tradesByTime``
+  //   3. the effective hover zone becomes the full candle width
+  // Backtests already align trades to candle close_time so snapping is a
+  // no-op for them.
+  const snappedTrades = useMemo<SnappedTrade[]>(() => {
+    if (candles.length === 0) return [];
+    const candleSecs = candles.map((c) => Math.floor(c.close_time / 1000));
+    const result: SnappedTrade[] = [];
+    for (const trade of trades) {
+      if (trade.timestamp == null) continue;
+      const tSec = trade.timestamp / 1000;
+      const idx = nearestCandleIdx(candleSecs, tSec);
+      if (idx < 0) continue;
+      result.push({ trade, snappedSec: candleSecs[idx] });
+    }
+    return result;
+  }, [trades, candles]);
+
   const markers = useMemo<SeriesMarker<Time>[]>(() => {
     const result: SeriesMarker<Time>[] = [];
-    for (const trade of trades) {
-      if (!trade.timestamp || !trade.price) continue;
-      const time = msToSec(trade.timestamp);
+    for (const { trade, snappedSec } of snappedTrades) {
+      if (!trade.price) continue;
+      const time = snappedSec as Time;
       const isExit = isExitTrade(trade);
       const side = trade.side ?? "";
 
@@ -183,19 +217,17 @@ export function BacktestExecutionChart({
     }
     result.sort((a, b) => (a.time as number) - (b.time as number));
     return result;
-  }, [trades]);
+  }, [snappedTrades]);
 
   const tradesByTime = useMemo(() => {
     const map = new Map<number, MarkerTrade[]>();
-    for (const trade of trades) {
-      if (!trade.timestamp) continue;
-      const t = Math.floor(trade.timestamp / 1000);
-      const list = map.get(t) ?? [];
+    for (const { trade, snappedSec } of snappedTrades) {
+      const list = map.get(snappedSec) ?? [];
       list.push(trade);
-      map.set(t, list);
+      map.set(snappedSec, list);
     }
     return map;
-  }, [trades]);
+  }, [snappedTrades]);
 
   const tradesByTimeRef = useRef(tradesByTime);
   useEffect(() => {
@@ -377,7 +409,11 @@ export function BacktestExecutionChart({
         setTooltip(null);
         return;
       }
-      const found = findTradesAtTime(tradesByTimeRef.current, timeSec);
+      // The crosshair always snaps ``param.time`` to a candle's
+      // ``close_time`` (in seconds), which is exactly how we key
+      // ``tradesByTime`` after snapping in ``snappedTrades``. Exact
+      // lookup is therefore sufficient — no fuzzy fallback needed.
+      const found = tradesByTimeRef.current.get(timeSec) ?? [];
       if (found.length) {
         setTooltip({ x: param.point.x, y: param.point.y, trades: found });
       } else {
