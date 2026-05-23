@@ -73,6 +73,7 @@ async def run_live(
     job_id: uuid.UUID,
     user_id: str = "legacy",
     session_maker: Any = None,
+    should_drain: asyncio.Event | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     if not session_maker:
@@ -315,11 +316,62 @@ async def run_live(
             await asyncio.sleep(0.5)
 
     watcher_task = asyncio.create_task(stop_watcher(), name="live-stop-watcher")
+
+    # Graceful drain watcher (SIGTERM/SIGINT). Distinct from ``stop_watcher``:
+    # ``should_drain`` does NOT terminate the engine. It only asks the strategy
+    # to flush its in-memory state to persistent storage so the new replica
+    # can resume seamlessly when this process is killed by the orchestrator's
+    # grace period. The engine continues running until SIGKILL.
+    drain_task: asyncio.Task[None] | None = None
+    if should_drain is not None:
+
+        async def _drain_watcher() -> None:
+            try:
+                await should_drain.wait()
+            except asyncio.CancelledError:
+                return
+            sink.emit(
+                kind=EventKind.STATUS,
+                message="DRAINING",
+                payload={
+                    "strategy": type(strategy).__name__,
+                    "reason": "runner_shutdown_signal",
+                },
+            )
+            drain_fn = getattr(strategy, "drain_async", None)
+            if drain_fn is None or not asyncio.iscoroutinefunction(drain_fn):
+                return
+            try:
+                # Cap the drain so a hung Redis write cannot block the rest
+                # of the runner's shutdown sequence. 5s is generous compared
+                # to the 2s save timeout inside ``strategy_state.save_state``.
+                await asyncio.wait_for(drain_fn(), timeout=5.0)
+                sink.emit(kind=EventKind.STATUS, message="DRAINED")
+            except asyncio.TimeoutError:
+                sink.emit(
+                    kind=EventKind.LOG,
+                    message="DRAIN_TIMEOUT",
+                    payload={"timeout_sec": 5.0},
+                )
+            except Exception as exc:  # noqa: BLE001
+                sink.emit(
+                    kind=EventKind.LOG,
+                    message="DRAIN_ERROR",
+                    payload={"error": f"{type(exc).__name__}: {exc}"},
+                )
+
+        drain_task = asyncio.create_task(_drain_watcher(), name="live-drain-watcher")
     try:
         await engine.start()
         return {"summary": engine.get_summary()}
     finally:
         watcher_task.cancel()
+        if drain_task is not None:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except asyncio.CancelledError:
+                pass
         hb_task.cancel()
         try:
             await hb_task

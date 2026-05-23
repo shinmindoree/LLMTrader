@@ -1526,6 +1526,31 @@ class MultiFactorPortfolioStrategy(Strategy):
             # on_bar will try again.
             pass
 
+    async def drain_async(self) -> None:
+        """Called by the runner on graceful shutdown (SIGTERM/SIGINT).
+
+        The last ``on_bar``-scheduled save may be up to one full bar
+        (15 min) old. Force a fresh synchronous save here so the new
+        replica's restore sees the up-to-the-second state.
+        """
+        if self._mode != "live":
+            return
+        if not self._persist_job_id:
+            return
+        try:
+            saved = await self._persist_state_async()
+            logger.info(
+                "[mfp] drain_async: final snapshot saved=%s job_id=%s tail=%d "
+                "committed_side=%d",
+                bool(saved), self._persist_job_id, int(self._tail_ts_15m),
+                int(self._committed_side),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[mfp] drain_async failed job_id=%s: %s: %s",
+                self._persist_job_id, type(exc).__name__, exc,
+            )
+
     def _warmup_replay(self) -> dict[str, Any]:
         """Replay each leg's TF history through ``_process_leg`` so that
         ``leg.side`` / ``entry_price`` / ``entry_tf_idx`` reflect the same

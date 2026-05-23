@@ -219,6 +219,7 @@ class RunnerWorker:
                     user_id=user_id,
                     session_maker=self._session_maker,
                     job_id=job_id,
+                    should_drain=self._shutting_down,
                 )
 
             status = JobStatus.STOPPED if should_stop.is_set() else JobStatus.SUCCEEDED
