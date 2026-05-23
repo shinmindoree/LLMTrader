@@ -1813,8 +1813,18 @@ class MultiFactorPortfolioStrategy(Strategy):
         # report whether this bar caused a position change.
         prev_committed = self._committed_side
 
-        # Reconcile ctx position with target.
-        self._reconcile(ctx, target, long_count, short_count, ts)
+        # Reconcile ctx position with target. Wrap in try/finally so any
+        # exception raised by the engine's risk checks (e.g. portfolio
+        # exposure limit) still lets us emit the per-bar debug event and
+        # persist the post-bar state to Redis. Without this, the very
+        # first bar that fails risk checks would silently freeze the
+        # snapshot (no MFP_BAR, no save) until the position eventually
+        # clears.
+        reconcile_exc: BaseException | None = None
+        try:
+            self._reconcile(ctx, target, long_count, short_count, ts)
+        except BaseException as exc:  # noqa: BLE001
+            reconcile_exc = exc
 
         # Per-bar debug snapshot (off by default). Useful for live trading
         # to verify that signals are firing at the expected cadence and
@@ -1833,6 +1843,9 @@ class MultiFactorPortfolioStrategy(Strategy):
                 "prev_side": int(prev_committed),
                 "changed": bool(prev_committed != self._committed_side),
                 "active_legs": active_legs,
+                "reconcile_error": (
+                    str(reconcile_exc) if reconcile_exc is not None else None
+                ),
             })
 
         # Persist the post-on_bar state to Redis so a runner restart can
@@ -1840,6 +1853,12 @@ class MultiFactorPortfolioStrategy(Strategy):
         # 15m bar cadence (~96 saves/day per symbol).
         if self._mode == "live":
             self._schedule_persist_state()
+
+        # Re-raise the reconcile exception (if any) so the engine still
+        # records STRATEGY_ERROR for visibility. The persist+event above
+        # have already fired by this point.
+        if reconcile_exc is not None:
+            raise reconcile_exc
 
     # ---- internals ---------------------------------------------------------
     def _tf_idx_for(self, leg: _LegState, ts_15m: int) -> int:
