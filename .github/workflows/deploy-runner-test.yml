@@ -2,16 +2,24 @@ name: Deploy Runner (test)
 
 # When this action will be executed
 on:
-  # Automatically trigger it when runner related files change
+  # Automatically trigger it when runner related files change.
+  #
+  # Note (2026-05-22): the previous filter `scripts/**` caused every diagnostic
+  # script (e.g. `scripts/_diag_*.py`) and one-off research code to redeploy
+  # the runner, which causes the live trading job to restart and clears the
+  # strategy's in-memory leg state. The runner only loads strategies from
+  # `scripts/strategies/` at runtime; all other files under `scripts/` are
+  # tooling and do not affect live behaviour.
   push:
     branches:
       - main
     paths:
       - src/**
-      - scripts/**
+      - scripts/strategies/**
       - pyproject.toml
       - uv.lock
       - infra/Dockerfile.runner
+      - .github/workflows/deploy-runner-test.yml
       - .github/workflows/llmtrader-runner-AutoDeployTrigger-fce05b31-a5b9-45c7-af61-c1fa39994159.yml
 
   # Allow manual trigger
