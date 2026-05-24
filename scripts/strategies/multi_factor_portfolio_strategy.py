@@ -1964,8 +1964,21 @@ class MultiFactorPortfolioStrategy(Strategy):
             return
         # Flatten if currently in opposite-or-neutral target.
         if cur != 0 and target != cur:
+            # Distinguish FLIP (will re-enter opposite direction below) from
+            # FLAT (majority became neutral, no re-entry). Distinct close
+            # reasons make the trade history unambiguous.
+            if target == 0:
+                close_reason = f"MFP: net flat ({long_count}={short_count})"
+                close_kind = "flat"
+            else:
+                prev_label = "long" if cur > 0 else "short"
+                next_label = "long" if target > 0 else "short"
+                close_reason = (
+                    f"MFP: net direction flip ({prev_label}->{next_label})"
+                )
+                close_kind = "flip"
             try:
-                ctx.close_position(reason="MFP: net direction flip/flat")
+                ctx.close_position(reason=close_reason)
             except Exception:  # noqa: BLE001
                 pass
             self._committed_side = 0
@@ -1973,6 +1986,7 @@ class MultiFactorPortfolioStrategy(Strategy):
                 "ts": ts, "target": int(target), "prev_side": int(cur),
                 "committed_side": 0,
                 "long_legs": long_count, "short_legs": short_count,
+                "kind": close_kind,
             })
         # Open new position in target direction. Sizing is delegated entirely
         # to the runner trade-settings (max_position/max_order); no per-strategy
