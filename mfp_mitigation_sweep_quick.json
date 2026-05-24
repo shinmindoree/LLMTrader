@@ -1,0 +1,356 @@
+{
+  "config": {
+    "start": "2020-09-01",
+    "end": "2026-05-09",
+    "initial_balance": 10000.0,
+    "fixed_notional": 1000.0,
+    "leverage": 1,
+    "max_position": 1.0,
+    "commission": 0.0004,
+    "slippage_bps": 1.0,
+    "stop_loss_pct": 0.5,
+    "quick": true,
+    "only": "all",
+    "save_json": "mfp_mitigation_sweep_quick.json"
+  },
+  "results": [
+    {
+      "label": "MFPDefensive (baseline)",
+      "strategy_kwargs": {},
+      "final_balance": 12762.033803612889,
+      "total_return_pct": 27.62033803612889,
+      "total_commission": 2024.7174012960004,
+      "n_trades": 2530,
+      "wins": 1236,
+      "losses": 1294,
+      "win_rate_pct": 48.85375494071146,
+      "profit_factor": 1.2958190058648749,
+      "max_drawdown_pct": 5.337340892575518,
+      "max_drawdown_usd": 585.3489973725082,
+      "sharpe": 1.0758422970377612,
+      "calmar": 5.174924853413434,
+      "yearly": {
+        "2020": 5.148048419565021,
+        "2021": 0.868475169788141,
+        "2022": 0.4206985714720224,
+        "2023": 3.4440662403825373,
+        "2024": 7.118750383458994,
+        "2025": 4.8665719116634865,
+        "2026": 3.2167954596140858
+      },
+      "yearly_positive": 7,
+      "yearly_count": 7,
+      "variant": "baseline"
+    },
+    {
+      "label": "TPSL tp=2.00% sl=1.50%",
+      "strategy_kwargs": {
+        "portfolio_tp_pct": 0.02,
+        "portfolio_sl_pct": 0.015
+      },
+      "final_balance": 10389.709518744401,
+      "total_return_pct": 3.8970951874440107,
+      "total_commission": 2023.2689624987493,
+      "n_trades": 2528,
+      "wins": 1249,
+      "losses": 1279,
+      "win_rate_pct": 49.40664556962025,
+      "profit_factor": 1.1681753069821836,
+      "max_drawdown_pct": 6.540530780041041,
+      "max_drawdown_usd": 659.1232355152533,
+      "sharpe": 0.23160327564552805,
+      "calmar": 0.595837756675087,
+      "yearly": {
+        "2020": -1.1680311971676738,
+        "2021": -2.9228223093784145,
+        "2022": 0.8785292300472758,
+        "2023": 3.624738845916986,
+        "2024": 0.16611303666507204,
+        "2025": 2.0288043066259975,
+        "2026": 1.4838799116386303
+      },
+      "yearly_positive": 5,
+      "yearly_count": 7,
+      "variant": "tpsl"
+    },
+    {
+      "label": "TPSL tp=2.00% sl=2.50%",
+      "strategy_kwargs": {
+        "portfolio_tp_pct": 0.02,
+        "portfolio_sl_pct": 0.025
+      },
+      "final_balance": 10576.600215600614,
+      "total_return_pct": 5.766002156006134,
+      "total_commission": 2023.2521756821875,
+      "n_trades": 2528,
+      "wins": 1307,
+      "losses": 1221,
+      "win_rate_pct": 51.70094936708861,
+      "profit_factor": 1.1759622959852558,
+      "max_drawdown_pct": 7.013724123455897,
+      "max_drawdown_usd": 707.0603930043399,
+      "sharpe": 0.3158889401008848,
+      "calmar": 0.8221027879786397,
+      "yearly": {
+        "2020": -1.064941889707538,
+        "2021": -3.524541362880995,
+        "2022": 0.33665080926148505,
+        "2023": 3.5061943657126005,
+        "2024": 1.4170503208482899,
+        "2025": 2.54701887562625,
+        "2026": 2.71267605443708
+      },
+      "yearly_positive": 5,
+      "yearly_count": 7,
+      "variant": "tpsl"
+    },
+    {
+      "label": "TPSL tp=3.00% sl=1.50%",
+      "strategy_kwargs": {
+        "portfolio_tp_pct": 0.03,
+        "portfolio_sl_pct": 0.015
+      },
+      "final_balance": 11123.211767348062,
+      "total_return_pct": 11.232117673480623,
+      "total_commission": 2023.314797393042,
+      "n_trades": 2528,
+      "wins": 1186,
+      "losses": 1342,
+      "win_rate_pct": 46.914556962025316,
+      "profit_factor": 1.2089547937490763,
+      "max_drawdown_pct": 5.428896917119522,
+      "max_drawdown_usd": 548.9111412798011,
+      "sharpe": 0.5753175544047354,
+      "calmar": 2.0689502572909766,
+      "yearly": {
+        "2020": -0.1033854849476823,
+        "2021": -1.274992003704556,
+        "2022": 1.6239370658897023,
+        "2023": 4.035462756674746,
+        "2024": 2.2061521453952126,
+        "2025": 2.467911857640881,
+        "2026": 1.9741488648221894
+      },
+      "yearly_positive": 5,
+      "yearly_count": 7,
+      "variant": "tpsl"
+    },
+    {
+      "label": "TPSL tp=3.00% sl=2.50%",
+      "strategy_kwargs": {
+        "portfolio_tp_pct": 0.03,
+        "portfolio_sl_pct": 0.025
+      },
+      "final_balance": 11471.272744216812,
+      "total_return_pct": 14.712727442168116,
+      "total_commission": 2023.2843913286192,
+      "n_trades": 2528,
+      "wins": 1250,
+      "losses": 1278,
+      "win_rate_pct": 49.446202531645575,
+      "profit_factor": 1.2254453889787265,
+      "max_drawdown_pct": 5.7830119520275565,
+      "max_drawdown_usd": 587.3498395232709,
+      "sharpe": 0.7095018780162501,
+      "calmar": 2.544128831864121,
+      "yearly": {
+        "2020": 0.2950292320000436,
+        "2021": -1.644034489798174,
+        "2022": 1.3924082685806694,
+        "2023": 4.094214082724967,
+        "2024": 3.6232304148197114,
+        "2025": 2.841858425740451,
+        "2026": 3.499447573406411
+      },
+      "yearly_positive": 6,
+      "yearly_count": 7,
+      "variant": "tpsl"
+    },
+    {
+      "label": "TPSL tp=4.00% sl=1.50%",
+      "strategy_kwargs": {
+        "portfolio_tp_pct": 0.04,
+        "portfolio_sl_pct": 0.015
+      },
+      "final_balance": 11596.997498245542,
+      "total_return_pct": 15.969974982455426,
+      "total_commission": 2023.3371573879415,
+      "n_trades": 2528,
+      "wins": 1168,
+      "losses": 1360,
+      "win_rate_pct": 46.20253164556962,
+      "profit_factor": 1.237200242429838,
+      "max_drawdown_pct": 5.152647504664458,
+      "max_drawdown_usd": 533.6559336720475,
+      "sharpe": 0.7635425020278329,
+      "calmar": 3.0993726949104383,
+      "yearly": {
+        "2020": 1.3128038299159428,
+        "2021": 0.8157496002679343,
+        "2022": 0.6418682604426795,
+        "2023": 3.361585935501976,
+        "2024": 3.5727899468443125,
+        "2025": 4.002710767983597,
+        "2026": 1.4343907639132292
+      },
+      "yearly_positive": 7,
+      "yearly_count": 7,
+      "variant": "tpsl"
+    },
+    {
+      "label": "TPSL tp=4.00% sl=2.50%",
+      "strategy_kwargs": {
+        "portfolio_tp_pct": 0.04,
+        "portfolio_sl_pct": 0.025
+      },
+      "final_balance": 11941.971978445523,
+      "total_return_pct": 19.419719784455225,
+      "total_commission": 2023.2461037869261,
+      "n_trades": 2528,
+      "wins": 1232,
+      "losses": 1296,
+      "win_rate_pct": 48.734177215189874,
+      "profit_factor": 1.25125737528704,
+      "max_drawdown_pct": 5.634743887479899,
+      "max_drawdown_usd": 586.6372710213163,
+      "sharpe": 0.8762847463626651,
+      "calmar": 3.446424570885078,
+      "yearly": {
+        "2020": 1.8757408002159748,
+        "2021": 0.22302588635922937,
+        "2022": 0.24813495176863043,
+        "2023": 3.3133990329718976,
+        "2024": 5.2107091230749525,
+        "2025": 4.255078893028652,
+        "2026": 3.0611317183135256
+      },
+      "yearly_positive": 7,
+      "yearly_count": 7,
+      "variant": "tpsl"
+    },
+    {
+      "label": "Trail act=1.20% trail=0.50%",
+      "strategy_kwargs": {
+        "trail_activation_pct": 0.012,
+        "trail_pct": 0.005
+      },
+      "final_balance": 9133.250622385647,
+      "total_return_pct": -8.66749377614353,
+      "total_commission": 2464.8604425934964,
+      "n_trades": 3080,
+      "wins": 1647,
+      "losses": 1433,
+      "win_rate_pct": 53.47402597402598,
+      "profit_factor": 1.097192950649938,
+      "max_drawdown_pct": 16.398489217445047,
+      "max_drawdown_usd": 1668.4530292917225,
+      "sharpe": -0.42291027121468144,
+      "calmar": -0.5285544089587761,
+      "yearly": {
+        "2020": -0.6429702280264293,
+        "2021": -3.9711186813956356,
+        "2022": -7.1703921784304185,
+        "2023": -1.8129557170273536,
+        "2024": -1.163412541013198,
+        "2025": 3.060335223532995,
+        "2026": 3.242767144259684
+      },
+      "yearly_positive": 2,
+      "yearly_count": 7,
+      "variant": "trail"
+    },
+    {
+      "label": "Trail act=1.20% trail=1.00%",
+      "strategy_kwargs": {
+        "trail_activation_pct": 0.012,
+        "trail_pct": 0.01
+      },
+      "final_balance": 9440.183089161208,
+      "total_return_pct": -5.598169108387918,
+      "total_commission": 2443.3666359513113,
+      "n_trades": 3053,
+      "wins": 1607,
+      "losses": 1446,
+      "win_rate_pct": 52.63675073698002,
+      "profit_factor": 1.1150514046856335,
+      "max_drawdown_pct": 14.58384209059154,
+      "max_drawdown_usd": 1491.5235153842495,
+      "sharpe": -0.26185567528940784,
+      "calmar": -0.3838610616882268,
+      "yearly": {
+        "2020": -0.3081988182936257,
+        "2021": -3.330032125101301,
+        "2022": -6.2619016498670295,
+        "2023": -1.663814935932939,
+        "2024": -0.5120822175064044,
+        "2025": 2.998026079610683,
+        "2026": 3.8404088294235805
+      },
+      "yearly_positive": 2,
+      "yearly_count": 7,
+      "variant": "trail"
+    },
+    {
+      "label": "Trail act=2.00% trail=0.50%",
+      "strategy_kwargs": {
+        "trail_activation_pct": 0.02,
+        "trail_pct": 0.005
+      },
+      "final_balance": 10069.005819670867,
+      "total_return_pct": 0.690058196708665,
+      "total_commission": 2285.7233471047552,
+      "n_trades": 2856,
+      "wins": 1420,
+      "losses": 1436,
+      "win_rate_pct": 49.719887955182074,
+      "profit_factor": 1.1381708984829408,
+      "max_drawdown_pct": 12.500685383658219,
+      "max_drawdown_usd": 1312.3450113712588,
+      "sharpe": 0.05657587725454273,
+      "calmar": 0.055201628993139684,
+      "yearly": {
+        "2020": 0.367448462771347,
+        "2021": -0.5952741153914531,
+        "2022": -7.929832096036771,
+        "2023": 0.965649787303513,
+        "2024": 2.9919587350055066,
+        "2025": 1.6278502792085314,
+        "2026": 3.8504678586158247
+      },
+      "yearly_positive": 5,
+      "yearly_count": 7,
+      "variant": "trail"
+    },
+    {
+      "label": "Trail act=2.00% trail=1.00%",
+      "strategy_kwargs": {
+        "trail_activation_pct": 0.02,
+        "trail_pct": 0.01
+      },
+      "final_balance": 10135.427959404567,
+      "total_return_pct": 1.354279594045682,
+      "total_commission": 2278.5450114925407,
+      "n_trades": 2847,
+      "wins": 1418,
+      "losses": 1429,
+      "win_rate_pct": 49.80681419037584,
+      "profit_factor": 1.1424849472774845,
+      "max_drawdown_pct": 11.991746670520964,
+      "max_drawdown_usd": 1259.907546392682,
+      "sharpe": 0.08716782351270763,
+      "calmar": 0.11293430650723105,
+      "yearly": {
+        "2020": 0.17055104719196912,
+        "2021": -0.4045450441958698,
+        "2022": -7.3170067856498715,
+        "2023": 0.8959615843655344,
+        "2024": 2.5254748541699623,
+        "2025": 1.8616598600125212,
+        "2026": 4.153310727681658
+      },
+      "yearly_positive": 5,
+      "yearly_count": 7,
+      "variant": "trail"
+    }
+  ]
+}
