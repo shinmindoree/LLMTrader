@@ -1,34 +1,151 @@
-"""RSI 기반 롱/숏 전략 (1분봉 튜닝판).
+"""RSI 추세-풀백 LONG/SHORT 멀티-트리거 스캘퍼 (v6.0).
 
-목적:
-- BTCUSDT 1분봉 + 약 10회/일 매매 빈도(30일 ≈ 300회)에서 꾸준히 우상향 가능하도록
-  순수 RSI 크로스 전략에 추세필터(EMA), ATR 기반 TP/SL, 쿨다운을 추가.
+목적 / 위임 사항
+----------------
+- 사용자 위임:
+    1) 1m~15m 단기 스캘핑, 하루 3회 이상 거래
+    2) RSI 반드시 활용 (다른 지표는 자유)
+    3) 어떤 백테스트 기간에서도 우상향 + 낮은 MDD
+    4) 다양한 기간에 대한 과최적화 회피
+- 이전 실험 요약:
+    * 단순 RSI 평균회귀(BB+RSI extreme): -7~-15% (구조적 손실)
+    * Donchian 채널 돌파 5m/15m: -10~-15% (5m breakouts are noise)
+    * RSI 50-cross 추세추종: WR 24% → 대량 손실
+    * 깊은 풀백(35→45) + 추세필터 (v3a): 35 trades / 8mo, 5/8 positive,
+      MDD 1.13%, PF 2.43, avg_rtn -0.26% — 가장 안정적이지만 빈도 부족
+- v6 설계: v3a 의 깊은 풀백 엣지를 유지하면서, 같은 추세 정렬 안에서
+  여러 트리거 임계(45/55) 를 허용해 진입 빈도를 확장한다.
 
-신호 규칙:
-- 롱 진입: RSI(rsi_period)가 long_entry_rsi 상향 돌파 AND close > EMA(trend_period)
-- 숏 진입: RSI(rsi_period)가 short_entry_rsi 하향 돌파 AND close < EMA(trend_period)
+신호 규칙 (RSI 멀티-트리거 추세-풀백)
+-------------------------------------
+- 추세 정렬 (close vs EMA(trend_period), 옵션 slope 체크).
+- 무장(armed) 조건:
+    * require_pullback=1:
+        - long_armed: long_bias 상태에서 RSI <= rsi_oversold 도달
+        - short_armed: short_bias 상태에서 RSI >= rsi_overbought 도달
+    * require_pullback=0:
+        - long_armed = long_bias, short_armed = short_bias
+- 진입 트리거 (모든 트리거가 같은 봉에서 발화하면 첫 발화로 진입):
+    * Long: long_armed AND RSI cross_above 임계 (multi_trigger_levels 중 하나)
+    * Short: short_armed AND RSI cross_below 임계
+- 추가 필터:
+    * ATR finite
+    * ADX >= adx_min
+    * 쿨다운 cooldown_bars
 - 청산:
-    * TP: ATR(atr_period) × atr_tp_multiplier 도달
-    * SL: ATR(atr_period) × atr_sl_multiplier (시스템 stop_loss_pct도 별도로 작동)
-    * RSI 반대 크로스(long_exit_rsi 상향 / short_exit_rsi 하향) 도달
-    * max_hold_bars 초과 시 시간 만료
-- 청산 후 cooldown_bars 동안 신규 진입 금지
+    * TP = entry ± ATR × atr_tp_multiplier
+    * SL = entry ± ATR × atr_sl_multiplier
+    * BE: entry ± entry_atr × breakeven_atr 도달 시 SL → entry
+    * RSI 조기 청산: 롱 보유 중 RSI > long_exit_rsi / 숏 보유 중 RSI < short_exit_rsi
+    * 시간 청산: bars_in_position >= max_hold_bars
+- 청산 후 cooldown_bars 동안 신규 진입 금지.
 
-참고:
-- 수량/리스크는 시스템(Context/Risk)에서 처리.
-- 새 봉(is_new_bar=True)에서만 RSI 크로스 판단/prev_rsi 갱신.
+웹 UI / 인프라
+--------------
+- 파일명/클래스명 `RsiLongShortStrategy` 는 web UI / runner / sweeper 가 의존하므로 유지.
+- 모듈 레벨 `STRATEGY_PARAMS`, `STRATEGY_PARAM_SCHEMA` 노출.
 """
 
 from __future__ import annotations
 
 import importlib
 import math
+import sys
+from pathlib import Path
 from typing import Any
+
+import numpy as np
+
+_SRC = Path(__file__).resolve().parents[2] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 from strategy.base import Strategy
 from strategy.context import StrategyContext
 
 
+# ---------------------------------------------------------------------------
+# 기본 파라미터 (BTCUSDT 5m, 8개월 다기간 안정성 우선)
+# ---------------------------------------------------------------------------
+STRATEGY_PARAMS: dict[str, Any] = {
+    # === RSI 코어 (v3a-best 디폴트) ===
+    "rsi_period": 14,
+    "rsi_oversold": 35.0,        # 풀백 무장 임계 (롱) — 깊은 풀백이 edge
+    "rsi_overbought": 65.0,      # 풀백 무장 임계 (숏)
+    # 멀티 트리거 — 쉼표 구분 또는 JSON 배열. 첫 발화로 진입.
+    # 풀백 모드에서는 첫 트리거(45) 만 실효; 두 번째(55)는 require_pullback=0 일 때 의미.
+    "long_trigger_levels": "45",
+    "short_trigger_levels": "55",
+    "long_exit_rsi": 80.0,       # 보유 중 롱 청산 (반전)
+    "short_exit_rsi": 20.0,
+    "require_pullback": 1,       # 0 → bias 만 충족하면 무장 (풀백 미요구)
+
+    # === 추세 필터 ===
+    "trend_period": 100,         # close vs EMA
+    "slope_lookback": 5,
+    "require_slope": 0,          # 1 → EMA 기울기 정렬 필요
+
+    # === ADX 강도 필터 ===
+    "adx_period": 14,
+    "adx_min": 12.0,
+
+    # === ATR 리스크 ===
+    "atr_period": 14,
+    "atr_tp_multiplier": 3.5,
+    "atr_sl_multiplier": 2.5,    # R:R 1.4 (v3a 와 동일)
+    "breakeven_atr": 1.2,        # 1.2×ATR 수익 시 SL → entry
+
+    # === 보유/쿨다운 ===
+    "max_hold_bars": 80,
+    "cooldown_bars": 1,
+}
+
+
+STRATEGY_PARAM_SCHEMA: dict[str, Any] = {
+    "rsi_period": {"type": "integer", "min": 2, "max": 100, "label": "RSI 기간",
+        "description": "RSI 계산 기간.", "group": "지표 (Indicator)"},
+    "rsi_oversold": {"type": "number", "min": 1, "max": 99, "label": "RSI 과매도",
+        "description": "롱 풀백 무장 임계.", "group": "진입 (Entry)"},
+    "rsi_overbought": {"type": "number", "min": 1, "max": 99, "label": "RSI 과매수",
+        "description": "숏 풀백 무장 임계.", "group": "진입 (Entry)"},
+    "long_trigger_levels": {"type": "string", "label": "롱 트리거 레벨",
+        "description": "RSI cross-up 트리거 레벨 (쉼표/JSON). 예: \"45,55\".", "group": "진입 (Entry)"},
+    "short_trigger_levels": {"type": "string", "label": "숏 트리거 레벨",
+        "description": "RSI cross-down 트리거 레벨 (쉼표/JSON). 예: \"55,45\".", "group": "진입 (Entry)"},
+    "long_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "롱 조기 청산 RSI",
+        "description": "롱 보유 중 RSI > 이 값이면 조기 청산.", "group": "청산 (Exit)"},
+    "short_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "숏 조기 청산 RSI",
+        "description": "숏 보유 중 RSI < 이 값이면 조기 청산.", "group": "청산 (Exit)"},
+    "require_pullback": {"type": "integer", "min": 0, "max": 1, "label": "풀백 요구",
+        "description": "0=bias 만으로 무장, 1=oversold/overbought 도달 필요.", "group": "진입 (Entry)"},
+    "trend_period": {"type": "integer", "min": 5, "max": 1000, "label": "추세 EMA 기간",
+        "description": "close vs EMA(이 값) 으로 long/short bias 결정.", "group": "필터 (Filter)"},
+    "slope_lookback": {"type": "integer", "min": 1, "max": 100, "label": "EMA 기울기 lookback",
+        "description": "EMA 기울기 비교 봉 수.", "group": "필터 (Filter)"},
+    "require_slope": {"type": "integer", "min": 0, "max": 1, "label": "기울기 정렬 요구",
+        "description": "1=EMA 기울기 부호도 일치해야 진입.", "group": "필터 (Filter)"},
+    "adx_period": {"type": "integer", "min": 2, "max": 100, "label": "ADX 기간",
+        "description": "ADX 계산 기간.", "group": "지표 (Indicator)"},
+    "adx_min": {"type": "number", "min": 0, "max": 100, "label": "ADX 최소",
+        "description": "ADX 가 이 값 이상이어야 진입.", "group": "필터 (Filter)"},
+    "atr_period": {"type": "integer", "min": 2, "max": 100, "label": "ATR 기간",
+        "description": "ATR 계산 기간.", "group": "지표 (Indicator)"},
+    "atr_tp_multiplier": {"type": "number", "min": 0.1, "max": 20, "label": "TP ATR 배수",
+        "description": "익절 거리 = entry ± ATR × 이 값.", "group": "청산 (Exit)"},
+    "atr_sl_multiplier": {"type": "number", "min": 0.1, "max": 20, "label": "SL ATR 배수",
+        "description": "손절 거리 = entry ± ATR × 이 값.", "group": "청산 (Exit)"},
+    "breakeven_atr": {"type": "number", "min": 0, "max": 20, "label": "BE 이동 배수",
+        "description": "이 배수 × ATR 수익 시 SL을 진입가로 이동.", "group": "청산 (Exit)"},
+    "max_hold_bars": {"type": "integer", "min": 1, "max": 2000, "label": "최대 보유 봉",
+        "description": "초과 시 강제 청산.", "group": "청산 (Exit)"},
+    "cooldown_bars": {"type": "integer", "min": 0, "max": 500, "label": "재진입 쿨다운",
+        "description": "청산 후 이 만큼 봉이 지나야 신규 진입.", "group": "진입 (Entry)"},
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def _last_non_nan(values: Any) -> float | None:
     try:
         n = int(getattr(values, "size", len(values)))
@@ -44,294 +161,277 @@ def _last_non_nan(values: Any) -> float | None:
     return None
 
 
-def register_talib_indicator(ctx: StrategyContext, name: str) -> None:
-    """TA-Lib builtin 인디케이터 등록 (마지막 non-nan 값을 float로 반환)."""
+def _value_at_offset(values: Any, offset_from_end: int) -> float | None:
+    try:
+        n = int(getattr(values, "size", len(values)))
+    except Exception:  # noqa: BLE001
+        return None
+    idx = n - 1 - offset_from_end
+    if idx < 0:
+        return None
+    try:
+        v = float(values[idx])
+    except Exception:  # noqa: BLE001
+        return None
+    if math.isnan(v):
+        return None
+    return v
+
+
+def _register_talib_indicator(ctx: StrategyContext, name: str) -> None:
+    """TA-Lib 인디케이터 등록 (slope_offset 커스텀 kwarg 지원).
+
+    slope_offset=N 이면 가장 최근값이 아닌 N봉 전의 값을 반환 (기울기 계산용).
+    """
 
     try:
-        import numpy as np  # type: ignore
         abstract = importlib.import_module("talib.abstract")
     except Exception:  # noqa: BLE001
         return
 
-    _OHLCV_KEYS = {"open", "high", "low", "close", "volume", "real"}
+    _OHLCV = {"open", "high", "low", "close", "volume", "real"}
 
     def _indicator(inner_ctx: Any, *args: Any, **kwargs: Any) -> Any:
+        slope_offset = int(kwargs.pop("slope_offset", 0) or 0)
         output = kwargs.pop("output", None)
         kwargs.pop("output_index", None)
         price_source = kwargs.pop("price", None)
-
         if args:
             if len(args) == 1 and "period" not in kwargs and "timeperiod" not in kwargs:
                 kwargs["period"] = args[0]
             else:
-                raise TypeError("builtin indicator params must be passed as keywords (or single period)")
-
+                raise TypeError("builtin indicator params must be passed as keywords")
         if "period" in kwargs and "timeperiod" not in kwargs:
             kwargs["timeperiod"] = kwargs.pop("period")
-
-        inputs = getattr(inner_ctx, "_get_builtin_indicator_inputs", None)
-        if not callable(inputs):
+        inputs_fn = getattr(inner_ctx, "_get_builtin_indicator_inputs", None)
+        if not callable(inputs_fn):
             return float("nan")
-        raw_inputs = inputs()
-        prepared_inputs = {
+        raw = inputs_fn()
+        prepared = {
             key: (np.asarray(list(values), dtype="float64") if not hasattr(values, "dtype") else values)
-            for key, values in raw_inputs.items()
+            for key, values in raw.items()
         }
-        if "real" not in prepared_inputs and "close" in prepared_inputs:
-            prepared_inputs["real"] = prepared_inputs["close"]
-        if price_source is not None and price_source.lower() in _OHLCV_KEYS:
-            prepared_inputs["real"] = prepared_inputs.get(
-                price_source.lower(), prepared_inputs.get("close")
-            )
-
-        normalized = name.strip().upper()
-        fn = abstract.Function(normalized)
-        result = fn(prepared_inputs, **kwargs)
-
+        if "real" not in prepared and "close" in prepared:
+            prepared["real"] = prepared["close"]
+        if price_source is not None and price_source.lower() in _OHLCV:
+            prepared["real"] = prepared.get(price_source.lower(), prepared.get("close"))
+        fn = abstract.Function(name.strip().upper())
+        result = fn(prepared, **kwargs)
         if isinstance(result, dict):
-            if output is not None and output in result:
-                v = _last_non_nan(result[output])
-            else:
-                v = _last_non_nan(list(result.values())[0])
+            target = result[output] if (output is not None and output in result) else list(result.values())[0]
         elif isinstance(result, (list, tuple)):
-            v = _last_non_nan(result[0])
+            target = result[0]
         else:
-            v = _last_non_nan(result)
+            target = result
+        if slope_offset > 0:
+            v = _value_at_offset(target, slope_offset)
+        else:
+            v = _last_non_nan(target)
         return float(v) if v is not None else math.nan
 
     ctx.register_indicator(name, _indicator)
 
 
-# 웹 UI 파라미터 패널이 이 dict를 읽고 AST로 안전하게 갱신합니다.
-STRATEGY_PARAMS: dict[str, Any] = {
-    # 1m BTCUSDT 30일(2026-03-30 ~ 2026-04-29, +13.8% 강세장) 튜닝 결과
-    # ~3회/일, win_rate ~42%, gross PnL ≈ flat. 횡보 구간 평균회귀 노림.
-    "rsi_period": 7,
-    "long_entry_rsi": 22.0,
-    "long_exit_rsi": 95.0,       # ATR/시간 청산 우선 → RSI 역크로스 사실상 비활성
-    "short_entry_rsi": 78.0,
-    "short_exit_rsi": 5.0,
-    "trend_period": 0,            # 0이면 EMA 추세 필터 비활성
-    "adx_period": 14,
-    "adx_max": 25.0,              # ADX < adx_max (횡보장)에서만 진입
-    "bb_period": 20,
-    "bb_stddev": 2.2,             # close가 BB 확장 이탈일 때만 (RSI + BB 컨플루언스)
-    "use_bb_filter": 1,
-    "use_bb_middle_tp": 0,
-    "atr_period": 14,
-    "atr_tp_multiplier": 2.5,
-    "atr_sl_multiplier": 1.8,
-    "breakeven_atr": 0.0,
-    "max_hold_bars": 30,
-    "cooldown_bars": 8,
-}
-
-STRATEGY_PARAM_SCHEMA: dict[str, Any] = {
-    "rsi_period": {"type": "integer", "min": 2, "max": 100, "label": "RSI 기간",
-        "description": "RSI 계산 기간. 작을수록 민감.", "group": "지표 (Indicator)"},
-    "long_entry_rsi": {"type": "number", "min": 1, "max": 99, "label": "롱 진입 RSI",
-        "description": "RSI 상향 돌파 시 롱 진입.", "group": "진입 (Entry)"},
-    "long_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "롱 청산 RSI",
-        "description": "RSI 상향 돌파 시 롱 청산.", "group": "청산 (Exit)"},
-    "short_entry_rsi": {"type": "number", "min": 1, "max": 99, "label": "숏 진입 RSI",
-        "description": "RSI 하향 돌파 시 숏 진입.", "group": "진입 (Entry)"},
-    "short_exit_rsi": {"type": "number", "min": 1, "max": 99, "label": "숏 청산 RSI",
-        "description": "RSI 하향 돌파 시 숏 청산.", "group": "청산 (Exit)"},
-    "trend_period": {"type": "integer", "min": 10, "max": 1000, "label": "추세 EMA 기간",
-        "description": "close > EMA면 롱만, close < EMA면 숏만 허용.", "group": "필터 (Filter)"},
-    "atr_period": {"type": "integer", "min": 2, "max": 100, "label": "ATR 기간",
-        "description": "ATR 계산 기간 (TP/SL용).", "group": "지표 (Indicator)"},
-    "atr_tp_multiplier": {"type": "number", "min": 0.1, "max": 10.0, "label": "ATR TP 배수",
-        "description": "진입가 ± ATR × 배수에서 익절.", "group": "청산 (Exit)"},
-    "atr_sl_multiplier": {"type": "number", "min": 0.1, "max": 10.0, "label": "ATR SL 배수",
-        "description": "진입가 ± ATR × 배수에서 손절.", "group": "청산 (Exit)"},
-    "max_hold_bars": {"type": "integer", "min": 1, "max": 1000, "label": "최대 보유 봉 수",
-        "description": "초과 시 강제 청산.", "group": "청산 (Exit)"},
-    "cooldown_bars": {"type": "integer", "min": 0, "max": 1000, "label": "쿨다운 봉 수",
-        "description": "청산 직후 N봉 동안 신규 진입 금지.", "group": "필터 (Filter)"},
-}
+def _parse_levels(raw: Any) -> list[float]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [float(x) for x in raw]
+    if isinstance(raw, (int, float)):
+        return [float(raw)]
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return []
+        if s.startswith("["):
+            import json
+            try:
+                arr = json.loads(s)
+                return [float(x) for x in arr]
+            except Exception:  # noqa: BLE001
+                pass
+        return [float(x.strip()) for x in s.split(",") if x.strip()]
+    return []
 
 
-def crossed_above(prev: float, current: float, level: float) -> bool:
-    return prev < level <= current
-
-
-def crossed_below(prev: float, current: float, level: float) -> bool:
-    return current <= level < prev
-
-
+# ---------------------------------------------------------------------------
+# 전략 본체
+# ---------------------------------------------------------------------------
 class RsiLongShortStrategy(Strategy):
-    """RSI + EMA 추세필터 + ATR TP/SL 롱/숏 전략 (1분봉 튜닝판)."""
+    """RSI 추세-풀백 멀티-트리거 LONG/SHORT 스캘퍼.
+
+    파일명/클래스명은 인프라 의존성 (web UI, runner, sweeper) 으로 유지.
+    """
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__()
         p = {**STRATEGY_PARAMS, **kwargs}
-        rsi_period = int(p["rsi_period"])
-        long_entry_rsi = float(p["long_entry_rsi"])
-        long_exit_rsi = float(p["long_exit_rsi"])
-        short_entry_rsi = float(p["short_entry_rsi"])
-        short_exit_rsi = float(p["short_exit_rsi"])
 
-        if not (0 < long_entry_rsi < long_exit_rsi < 100):
-            raise ValueError("invalid long RSI thresholds")
-        if not (0 < short_exit_rsi < short_entry_rsi < 100):
-            raise ValueError("invalid short RSI thresholds")
-        if rsi_period <= 1:
-            raise ValueError("rsi_period must be > 1")
+        # RSI
+        self.rsi_period: int = int(p["rsi_period"])
+        self.rsi_oversold: float = float(p["rsi_oversold"])
+        self.rsi_overbought: float = float(p["rsi_overbought"])
+        self.long_trigger_levels: list[float] = sorted(_parse_levels(p["long_trigger_levels"]))
+        # short triggers cross DOWN, so we sort descending so we test high-first
+        self.short_trigger_levels: list[float] = sorted(_parse_levels(p["short_trigger_levels"]), reverse=True)
+        if not self.long_trigger_levels:
+            self.long_trigger_levels = [45.0]
+        if not self.short_trigger_levels:
+            self.short_trigger_levels = [55.0]
+        self.long_exit_rsi: float = float(p["long_exit_rsi"])
+        self.short_exit_rsi: float = float(p["short_exit_rsi"])
+        self.require_pullback: int = int(p["require_pullback"])
 
-        self.rsi_period = rsi_period
-        self.long_entry_rsi = long_entry_rsi
-        self.long_exit_rsi = long_exit_rsi
-        self.short_entry_rsi = short_entry_rsi
-        self.short_exit_rsi = short_exit_rsi
-        self.trend_period = int(p["trend_period"])
-        self.adx_period = int(p["adx_period"])
-        self.adx_max = float(p["adx_max"])
-        self.bb_period = int(p["bb_period"])
-        self.bb_stddev = float(p["bb_stddev"])
-        self.use_bb_filter = bool(int(p["use_bb_filter"]))
-        self.use_bb_middle_tp = bool(int(p.get("use_bb_middle_tp", 0)))
-        self.atr_period = int(p["atr_period"])
-        self.atr_tp_multiplier = float(p["atr_tp_multiplier"])
-        self.atr_sl_multiplier = float(p["atr_sl_multiplier"])
-        self.breakeven_atr = float(p.get("breakeven_atr", 0.0))
-        self.max_hold_bars = int(p["max_hold_bars"])
-        self.cooldown_bars = int(p["cooldown_bars"])
+        # Trend / slope
+        self.trend_period: int = int(p["trend_period"])
+        self.slope_lookback: int = int(p["slope_lookback"])
+        self.require_slope: int = int(p["require_slope"])
 
-        self.prev_rsi: float | None = None
-        self.is_closing: bool = False
-        self.tp_price: float = 0.0
-        self.sl_price: float = 0.0
-        self.entry_price: float = 0.0
-        self.entry_atr: float = 0.0
-        self.breakeven_done: bool = False
+        # ADX
+        self.adx_period: int = int(p["adx_period"])
+        self.adx_min: float = float(p["adx_min"])
+
+        # ATR
+        self.atr_period: int = int(p["atr_period"])
+        self.atr_tp_multiplier: float = float(p["atr_tp_multiplier"])
+        self.atr_sl_multiplier: float = float(p["atr_sl_multiplier"])
+        self.breakeven_atr: float = float(p["breakeven_atr"])
+
+        # Hold / cooldown
+        self.max_hold_bars: int = int(p["max_hold_bars"])
+        self.cooldown_bars: int = int(p["cooldown_bars"])
+
+        # 런타임 상태
+        self._mode: str | None = None
+        self._bars_since_close: int = 10**9
         self._bars_in_position: int = 0
-        self._bars_since_close: int | None = None
+        self._entry_price: float = 0.0
+        self._entry_atr: float = 0.0
+        self._stop_price: float = 0.0
+        self._take_price: float = 0.0
+        self._side: str | None = None
+        self._long_armed: bool = False
+        self._short_armed: bool = False
+        self._prev_rsi: float = math.nan
+        self._banner_emitted: bool = False
+        self._last_bias: str | None = None
 
         self.params = dict(p)
-        cfg: dict[str, Any] = {
-            "RSI": {"period": self.rsi_period},
-            "ATR": {"period": self.atr_period},
-            "ADX": {"period": self.adx_period},
-        }
-        if self.trend_period > 0:
-            cfg["EMA"] = {"period": self.trend_period}
-        if self.use_bb_filter:
-            cfg["BBANDS"] = {"period": self.bb_period, "nbdevup": self.bb_stddev, "nbdevdn": self.bb_stddev}
-        self.indicator_config = cfg
+        self.indicator_config = {}
 
+    # ------------------------------------------------------------------ init
     def initialize(self, ctx: StrategyContext) -> None:
-        print("🚀 [버전확인] RsiLongShortStrategy v2.0 (1m tuned) 시작!")
-        register_talib_indicator(ctx, "RSI")
-        if self.trend_period > 0:
-            register_talib_indicator(ctx, "EMA")
-        register_talib_indicator(ctx, "ATR")
-        register_talib_indicator(ctx, "ADX")
-        if self.use_bb_filter:
-            register_talib_indicator(ctx, "BBANDS")
-        self.prev_rsi = None
-        self.is_closing = False
-        self.tp_price = 0.0
-        self.sl_price = 0.0
-        self.entry_price = 0.0
-        self.entry_atr = 0.0
-        self.breakeven_done = False
+        ctx_cls = type(ctx).__name__
+        ctx_module = type(ctx).__module__
+        if "Backtest" in ctx_cls:
+            self._mode = "backtest"
+        elif (
+            "Live" in ctx_cls
+            or ctx_cls == "StreamBoundStrategyContext"
+            or ctx_module.startswith("live.")
+        ):
+            self._mode = "live"
+        else:
+            self._mode = None
+
+        _register_talib_indicator(ctx, "RSI")
+        _register_talib_indicator(ctx, "ATR")
+        _register_talib_indicator(ctx, "ADX")
+        _register_talib_indicator(ctx, "EMA")
+
+        # 상태 초기화
+        self._bars_since_close = 10**9
         self._bars_in_position = 0
-        self._bars_since_close = None
+        self._entry_price = 0.0
+        self._entry_atr = 0.0
+        self._stop_price = 0.0
+        self._take_price = 0.0
+        self._side = None
+        self._long_armed = False
+        self._short_armed = False
+        self._prev_rsi = math.nan
+        self._last_bias = None
 
-    def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
+    # ------------------------------------------------------------------ helpers
+    def _reset_position_state(self) -> None:
+        self._bars_in_position = 0
+        self._entry_price = 0.0
+        self._entry_atr = 0.0
+        self._stop_price = 0.0
+        self._take_price = 0.0
+        self._side = None
+
+    def _maybe_breakeven_shift(self, last_price: float) -> None:
+        if self.breakeven_atr <= 0 or self._side is None or self._entry_atr <= 0:
+            return
+        threshold = self._entry_atr * self.breakeven_atr
+        if self._side == "LONG":
+            if last_price - self._entry_price >= threshold and self._stop_price < self._entry_price:
+                self._stop_price = self._entry_price
+        else:  # SHORT
+            if self._entry_price - last_price >= threshold and (self._stop_price > self._entry_price or self._stop_price == 0):
+                self._stop_price = self._entry_price
+
+    # ------------------------------------------------------------------ bar
+    def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:  # noqa: C901
+        if not self._banner_emitted:
+            try:
+                print(
+                    "🚀 [버전확인] RsiLongShortStrategy v6.0 "
+                    "(RSI multi-trigger trend-pullback) 시작!",
+                    flush=True,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            self._banner_emitted = True
+
+        # 무포지션 정리 (이전 봉에서 청산되었을 수 있음)
         if ctx.position_size == 0:
-            if self.is_closing:
+            if self._side is not None:
+                self._reset_position_state()
                 self._bars_since_close = 0
-            self.is_closing = False
-            self._bars_in_position = 0
-            self.tp_price = 0.0
-            self.sl_price = 0.0
-            self.entry_price = 0.0
-            self.entry_atr = 0.0
-            self.breakeven_done = False
 
-        if ctx.get_open_orders():
+        last_price = float(bar.get("price", bar.get("close", 0.0)) or 0.0)
+        if not math.isfinite(last_price) or last_price <= 0:
             return
 
-        # ===== 즉시 TP/SL 평가 =====
-        if ctx.position_size != 0 and not self.is_closing:
-            price = float(ctx.current_price)
-            # 브레이크이벤 시프트: 가격이 entry+breakeven_atr*ATR 도달 시 SL을 진입가로 이동
-            if (
-                self.breakeven_atr > 0
-                and not self.breakeven_done
-                and self.entry_atr > 0
-                and self.entry_price > 0
-            ):
-                trigger = self.entry_atr * self.breakeven_atr
-                if ctx.position_size > 0 and price >= self.entry_price + trigger:
-                    self.sl_price = max(self.sl_price, self.entry_price)
-                    self.breakeven_done = True
-                elif ctx.position_size < 0 and price <= self.entry_price - trigger:
-                    self.sl_price = min(self.sl_price, self.entry_price) if self.sl_price > 0 else self.entry_price
-                    self.breakeven_done = True
-            if ctx.position_size > 0:
-                if self.tp_price > 0 and price >= self.tp_price:
-                    self.is_closing = True
-                    ctx.close_position(reason=f"ATR TP Long {price:.2f}>={self.tp_price:.2f}", exit_reason="TAKE_PROFIT")
+        # 매 틱: BE 시프트 + TP/SL 체크 (보유 중)
+        if ctx.position_size != 0 and self._side is not None:
+            self._maybe_breakeven_shift(last_price)
+            if self._side == "LONG":
+                if self._take_price > 0 and last_price >= self._take_price:
+                    ctx.close_position(reason=f"v6: TP +{self.atr_tp_multiplier}xATR")
                     return
-                if self.sl_price > 0 and price <= self.sl_price:
-                    self.is_closing = True
-                    ctx.close_position(reason=f"ATR SL Long {price:.2f}<={self.sl_price:.2f}", exit_reason="STOP_LOSS")
+                if self._stop_price > 0 and last_price <= self._stop_price:
+                    ctx.close_position(reason=f"v6: SL -{self.atr_sl_multiplier}xATR")
                     return
-            else:
-                if self.tp_price > 0 and price <= self.tp_price:
-                    self.is_closing = True
-                    ctx.close_position(reason=f"ATR TP Short {price:.2f}<={self.tp_price:.2f}", exit_reason="TAKE_PROFIT")
+            else:  # SHORT
+                if self._take_price > 0 and last_price <= self._take_price:
+                    ctx.close_position(reason=f"v6: TP +{self.atr_tp_multiplier}xATR")
                     return
-                if self.sl_price > 0 and price >= self.sl_price:
-                    self.is_closing = True
-                    ctx.close_position(reason=f"ATR SL Short {price:.2f}>={self.sl_price:.2f}", exit_reason="STOP_LOSS")
+                if self._stop_price > 0 and last_price >= self._stop_price:
+                    ctx.close_position(reason=f"v6: SL -{self.atr_sl_multiplier}xATR")
                     return
 
-        if not bool(bar.get("is_new_bar", True)):
+        # 새 봉에서만 의사결정
+        is_new_bar = bool(bar.get("is_new_bar", True))
+        if not is_new_bar:
             return
 
+        # 카운터
         if ctx.position_size != 0:
             self._bars_in_position += 1
-        if self._bars_since_close is not None:
+        else:
             self._bars_since_close += 1
 
-        rsi = float(ctx.get_indicator("RSI", period=self.rsi_period))
-        if not math.isfinite(rsi):
-            return
+        # 봉 종가 (bar 의 close 사용; 없으면 last_price)
+        close_price = float(bar.get("close", last_price) or last_price)
 
-        prev_rsi = self.prev_rsi
-        self.prev_rsi = rsi
-        if prev_rsi is None or not math.isfinite(prev_rsi):
-            return
-
-        # ===== 시간 만료 청산 =====
-        if ctx.position_size != 0 and not self.is_closing:
-            if self._bars_in_position >= self.max_hold_bars:
-                self.is_closing = True
-                ctx.close_position(reason=f"Time Exit ({self._bars_in_position}b)")
-                return
-
-        # ===== RSI 반대 크로스 청산 =====
-        if ctx.position_size > 0 and not self.is_closing:
-            if crossed_above(prev_rsi, rsi, self.long_exit_rsi):
-                self.is_closing = True
-                ctx.close_position(reason=f"RSI Exit Long ({prev_rsi:.1f}->{rsi:.1f})")
-                return
-        if ctx.position_size < 0 and not self.is_closing:
-            if crossed_below(prev_rsi, rsi, self.short_exit_rsi):
-                self.is_closing = True
-                ctx.close_position(reason=f"RSI Exit Short ({prev_rsi:.1f}->{rsi:.1f})")
-                return
-
-        # ===== 신규 진입 =====
-        if ctx.position_size != 0:
-            return
-        if self._bars_since_close is not None and self._bars_since_close < self.cooldown_bars:
-            return
-
+        # 지표
+        try:
+            rsi = float(ctx.get_indicator("RSI", period=self.rsi_period))
+        except Exception:  # noqa: BLE001
+            rsi = math.nan
         try:
             atr = float(ctx.get_indicator("ATR", period=self.atr_period))
         except Exception:  # noqa: BLE001
@@ -340,69 +440,136 @@ class RsiLongShortStrategy(Strategy):
             adx = float(ctx.get_indicator("ADX", period=self.adx_period))
         except Exception:  # noqa: BLE001
             adx = math.nan
-        price = float(ctx.current_price)
-        if not (math.isfinite(atr) and atr > 0):
-            return
-
-        # ADX 필터: 추세 강하면 스킵 (평균회귀 함정 회피)
-        if math.isfinite(adx) and adx >= self.adx_max:
-            return
-
-        ema: float = math.nan
-        if self.trend_period > 0:
+        try:
+            ema = float(ctx.get_indicator("EMA", period=self.trend_period))
+        except Exception:  # noqa: BLE001
+            ema = math.nan
+        ema_prev = math.nan
+        if self.require_slope and self.slope_lookback > 0:
             try:
-                ema = float(ctx.get_indicator("EMA", period=self.trend_period))
+                ema_prev = float(ctx.get_indicator(
+                    "EMA", period=self.trend_period, slope_offset=self.slope_lookback,
+                ))
             except Exception:  # noqa: BLE001
-                ema = math.nan
-            if not math.isfinite(ema):
+                ema_prev = math.nan
+
+        # 추세 bias
+        long_bias = False
+        short_bias = False
+        if not math.isnan(ema):
+            long_bias = close_price > ema
+            short_bias = close_price < ema
+            if self.require_slope and not math.isnan(ema_prev):
+                slope_up = ema > ema_prev
+                slope_dn = ema < ema_prev
+                long_bias = long_bias and slope_up
+                short_bias = short_bias and slope_dn
+        current_bias = "LONG" if long_bias else ("SHORT" if short_bias else None)
+
+        # 보유 중: 시간/RSI 조기 청산
+        if ctx.position_size != 0 and self._side is not None:
+            if self._bars_in_position >= self.max_hold_bars:
+                ctx.close_position(reason="v6: TIME_EXIT")
                 return
-
-        long_ok = (self.trend_period <= 0) or (price > ema)
-        short_ok = (self.trend_period <= 0) or (price < ema)
-
-        # BB 확장 이탈 필터 (평균회귀 신호 강화)
-        bb_mid = math.nan
-        if self.use_bb_filter:
-            try:
-                upper = float(ctx.get_indicator("BBANDS", period=self.bb_period,
-                                                 nbdevup=self.bb_stddev, nbdevdn=self.bb_stddev,
-                                                 output="upperband"))
-                lower = float(ctx.get_indicator("BBANDS", period=self.bb_period,
-                                                 nbdevup=self.bb_stddev, nbdevdn=self.bb_stddev,
-                                                 output="lowerband"))
-                bb_mid = float(ctx.get_indicator("BBANDS", period=self.bb_period,
-                                                 nbdevup=self.bb_stddev, nbdevdn=self.bb_stddev,
-                                                 output="middleband"))
-            except Exception:  # noqa: BLE001
-                upper = lower = math.nan
-            if not (math.isfinite(upper) and math.isfinite(lower)):
+            if (
+                self._side == "LONG"
+                and not math.isnan(rsi)
+                and rsi >= self.long_exit_rsi
+            ):
+                ctx.close_position(reason="v6: RSI_EXIT_LONG")
                 return
-            long_ok = long_ok and (price < lower)
-            short_ok = short_ok and (price > upper)
-
-        if long_ok and crossed_above(prev_rsi, rsi, self.long_entry_rsi):
-            tp = price + atr * self.atr_tp_multiplier
-            if self.use_bb_middle_tp and self.use_bb_filter and math.isfinite(bb_mid):
-                # BB middle이 TP보다 먼저 닿으면 그걸 사용 (더 비튼 타격)
-                if bb_mid > price:
-                    tp = min(tp, bb_mid)
-            self.tp_price = tp
-            self.sl_price = price - atr * self.atr_sl_multiplier
-            self.entry_price = price
-            self.entry_atr = atr
-            self.breakeven_done = False
-            ctx.enter_long(reason=f"Entry Long RSI {prev_rsi:.1f}->{rsi:.1f}")
+            if (
+                self._side == "SHORT"
+                and not math.isnan(rsi)
+                and rsi <= self.short_exit_rsi
+            ):
+                ctx.close_position(reason="v6: RSI_EXIT_SHORT")
+                return
+            self._prev_rsi = rsi if not math.isnan(rsi) else self._prev_rsi
             return
 
-        if short_ok and crossed_below(prev_rsi, rsi, self.short_entry_rsi):
-            tp = price - atr * self.atr_tp_multiplier
-            if self.use_bb_middle_tp and self.use_bb_filter and math.isfinite(bb_mid):
-                if bb_mid < price:
-                    tp = max(tp, bb_mid)
-            self.tp_price = tp
-            self.sl_price = price + atr * self.atr_sl_multiplier
-            self.entry_price = price
-            self.entry_atr = atr
-            self.breakeven_done = False
-            ctx.enter_short(reason=f"Entry Short RSI {prev_rsi:.1f}->{rsi:.1f}")
+        # === 무포지션 — 무장 / 트리거 판정 ===
+
+        # bias 가 반대편으로 가면 반대편 arm 만 클리어
+        if current_bias == "LONG":
+            self._short_armed = False
+        elif current_bias == "SHORT":
+            self._long_armed = False
+        self._last_bias = current_bias
+
+        if not math.isnan(rsi):
+            if self.require_pullback:
+                # v3a 호환: bias 가 정렬된 상태에서만 oversold/overbought 도달을
+                # arm 으로 기록 (반대 사이드 풀백이 다음 추세 진입 신호를 오염시키지 않게).
+                if long_bias and rsi <= self.rsi_oversold:
+                    self._long_armed = True
+                if short_bias and rsi >= self.rsi_overbought:
+                    self._short_armed = True
+            else:
+                self._long_armed = long_bias
+                self._short_armed = short_bias
+
+        # 진입 게이트
+        if self._bars_since_close < self.cooldown_bars:
+            self._prev_rsi = rsi if not math.isnan(rsi) else self._prev_rsi
             return
+        if math.isnan(atr) or atr <= 0:
+            self._prev_rsi = rsi if not math.isnan(rsi) else self._prev_rsi
+            return
+        if not math.isnan(self.adx_min) and (math.isnan(adx) or adx < self.adx_min):
+            self._prev_rsi = rsi if not math.isnan(rsi) else self._prev_rsi
+            return
+        if math.isnan(rsi) or math.isnan(self._prev_rsi):
+            self._prev_rsi = rsi if not math.isnan(rsi) else self._prev_rsi
+            return
+
+        prev_rsi = self._prev_rsi
+
+        # 롱 멀티 트리거: 어느 하나라도 cross-up 이면 진입
+        if long_bias and self._long_armed:
+            for level in self.long_trigger_levels:
+                if prev_rsi < level <= rsi:
+                    self._open_long(ctx, close_price, atr, level)
+                    return
+
+        # 숏 멀티 트리거: 어느 하나라도 cross-down 이면 진입
+        if short_bias and self._short_armed:
+            for level in self.short_trigger_levels:
+                if prev_rsi > level >= rsi:
+                    self._open_short(ctx, close_price, atr, level)
+                    return
+
+        self._prev_rsi = rsi
+
+    # ------------------------------------------------------------------ entry helpers
+    def _open_long(
+        self, ctx: StrategyContext, price: float, atr: float, level: float,
+    ) -> None:
+        try:
+            ctx.enter_long(reason=f"v6 LONG cross↑{level:.0f} RSI")
+        except Exception:  # noqa: BLE001
+            return
+        self._side = "LONG"
+        self._entry_price = price
+        self._entry_atr = atr
+        self._take_price = price + atr * self.atr_tp_multiplier
+        self._stop_price = price - atr * self.atr_sl_multiplier
+        self._bars_in_position = 0
+        self._long_armed = False
+        self._short_armed = False
+
+    def _open_short(
+        self, ctx: StrategyContext, price: float, atr: float, level: float,
+    ) -> None:
+        try:
+            ctx.enter_short(reason=f"v6 SHORT cross↓{level:.0f} RSI")
+        except Exception:  # noqa: BLE001
+            return
+        self._side = "SHORT"
+        self._entry_price = price
+        self._entry_atr = atr
+        self._take_price = price - atr * self.atr_tp_multiplier
+        self._stop_price = price + atr * self.atr_sl_multiplier
+        self._bars_in_position = 0
+        self._long_armed = False
+        self._short_armed = False
