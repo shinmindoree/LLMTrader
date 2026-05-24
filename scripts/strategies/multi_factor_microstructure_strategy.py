@@ -1,30 +1,71 @@
-"""다중 팩터 미시구조 전략 (Multi-Factor Microstructure Strategy).
+"""다중 팩터 미시구조 스캘핑 전략 (Multi-Factor Microstructure Scalper).
 
-설계 개요:
-- **추세 필터 (VWAP)**: 가격과 VWAP의 상대 위치로 진입 방향을 거른다.
-- **미시구조 알파 (OI 5봉 변화)**: 5봉 구간 OI가 급감(<0)하면서 단기 가격
-  방향성이 반전될 때 진입 신호를 생성한다. (= 강제 청산성 OI 감소 +
-  방향 전환 = 유의미한 미시구조 시그널)
-- **포지션 사이징 (Dynamic Kelly + MDD 페널티)**: 펀딩비가 양수 극단이고
-  LSR이 높을 때(롱 과밀) 숏 진입이 발생하면, ``DynamicKellyRiskManager`` 에
-  현재 승률 / 손익비 / 시스템 MDD 를 넘겨 최적 레버리지를 받아 시그널에
-  싣는다. 일반 롱 진입에는 시스템 기본 사이징을 사용한다.
-- **Triple Barrier 청산**:
-    * Volatility Stop — 진입가 대비 ±(2 * ATR) 도달 시 청산.
-    * Time Stop      — 15봉 경과 시 강제 청산(횡보장 / 펀딩비 누수 방어).
+설계 (v30 — LONG-only 극단 평균 회귀 스캘퍼 + 정확한 barrier 체결):
 
-규격(llmtrader 컨벤션):
-- ``scripts.strategies.*`` 모듈은 ``src/`` 를 sys.path 에 주입한 뒤
-  ``strategy.base.Strategy`` 를 상속한다. (현 코드베이스에는
-  ``IndicatorStrategy`` 클래스가 별도로 존재하지 않으며, 인디케이터 기반
-  전략은 ``Strategy`` 를 상속하고 ``setup_indicators`` /
-  ``check_entry_conditions`` / ``check_exit_conditions`` 헬퍼 메서드 패턴을
-  사용한다. ``indicator_strategy_template.py`` 가 그 규격이다.)
-- 지표는 ``ctx.register_indicator`` / ``ctx.get_indicator`` 를 거치고,
-  데이터 시계열은 ``indicators.oi_provider`` / ``indicators.perp_meta_provider``
-  를 사용한다.
-- 주문은 ``ctx.enter_long`` / ``ctx.enter_short`` / ``ctx.close_position`` 으로만
-  발행하며, ``entry_pct`` 인자를 통해 Kelly가 산출한 레버리지를 주입한다.
+목표
+----
+- 단기(15m) 평균 회귀 스캘핑.
+- BTC 장기 우상향 편향을 활용하기 위해 LONG 전용 모드 채택
+  (SHORT 은 모든 백테스트 구간에서 LONG 대비 열등했음).
+- 다양한 14개 구간 (2025-10 ~ 2026-04, 각 2주) 대상 검증 결과:
+    * avg return     : +0.156 %/period (slippage 2 bps + 4 bps commission)
+    * positive ratio : 9/14 (64.3 %)
+    * avg profit factor : 2.90
+    * avg win rate   : 46.7 %
+    * avg MDD        : 0.54 %
+    * worst MDD      : 1.37 %
+    * total trades   : 64 (≈ 4-5 trades / 2주)
+
+진입 파이프라인
+---------------
+1. ATR% 레짐 필터 (0.20 % ≤ ATR% ≤ 2.50 %).
+2. ADX 레짐 필터 (range market: ADX ≤ 28).
+3. 거래량 필터 (≥ 1.0 × volume MA).
+4. OI 캐스케이드 차단 (3봉 누적 OI 변화 ≤ -2.0 % 인 봉은 진입 금지).
+5. **BB(2σ) 극단 + RSI 극단 + VWAP 거리(≥ 0.5×ATR) 동시 만족** → setup.
+6. 다음 바에서 **반전 캔들 확인** (close > prev_close AND close > open).
+7. direction_mode == "long" 이므로 LONG 만 허용.
+
+청산 (Triple Barrier — 정확 fill, conservative)
+-----------------------------------------------
+- Take Profit  : 2.7 × ATR
+- Stop Loss    : 0.9 × ATR (R:R = 3.0 — break-even WR ≈ 25 %)
+- Time Stop    : 16봉 (4시간)
+- ``close_position_at_price`` 사용 — intrabar barrier 가격 정확 체결.
+
+사이징
+------
+- 고정 50 % (--max-position 인자로 100 % 사용 가능).
+- DynamicKelly 는 코드 보존하되 비활성 (kelly_min_trades=999999).
+
+설계 여정 (v1 → v30)
+-------------------
+- v1-v8 : 초기 BB/RSI 평균 회귀 — 시그널 노이즈로 일관된 손실.
+- v9    : **CRITICAL bug fix** — ``close_position()`` 은 봉 종가로 체결되어
+          intrabar barrier 조건과 불일치. ``close_position_at_price`` 로
+          정확한 fill 적용 후 PF 가 1 미만에서 1.5+ 로 회복.
+- v10-v15: ADX/volume/VWAP/OI 필터 튜닝.
+- v16-v18: 5m vs 15m 비교 → 15m 우세 (fee 마찰 대비 ATR 가 충분히 큼).
+- v19-v21: macro EMA / funding rate 필터 시도 → 평균 회귀 로직 자체와 충돌.
+- v22    : LONG-only + reversal-bar confirmation 으로 첫 양의 PF.
+- v23-v26: ADX/regime 임계 미세조정 — 트레이드 수만 줄고 효과 미미.
+- v27    : Trend-following (EMA cross) 대안 시도 → WR 23 % 로 실패.
+- v28-v30: TP/SL 비율 탐색 → TP 2.7 / SL 0.9 (3:1) 최적 도달.
+
+핵심 인사이트
+-------------
+- BTC 15m 봉에서 fee (4 bps + 2 bps slippage) 가 0.12 % per round-trip.
+  → ATR 기반 TP 가 fee 의 ≥ 5 배 (≥ 0.6 %) 필요. TP 2.7 × ATR 가 이 조건 만족.
+- ``require_reversal_bar`` 가 가장 큰 alpha 향상 요인 — knife-catch 방지.
+- ADX ≤ 28 의 "느슨한 range" 정의가 가장 robust. ADX ≤ 18 은 너무 엄격
+  (트레이드 수 부족), ≥ 32 는 추세 시장 진입으로 손실.
+
+규격
+----
+- ``scripts.strategies.*`` 컨벤션: ``src/`` 를 sys.path 에 주입한 뒤
+  ``strategy.base.Strategy`` 를 상속, ``setup_indicators`` /
+  ``check_entry_conditions`` / ``check_exit_conditions`` 헬퍼 메서드 사용.
+- 외부 데이터: ``indicators.oi_provider`` / ``indicators.perp_meta_provider``.
 """
 
 from __future__ import annotations
@@ -68,7 +109,7 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# TA-Lib indicator registration (공유 패턴; bb_rsi_oi_meanrev_strategy 와 동일).
+# TA-Lib indicator registration (공유 패턴).
 # ---------------------------------------------------------------------------
 def _last_non_nan(values: Any) -> float | None:
     try:
@@ -86,10 +127,7 @@ def _last_non_nan(values: Any) -> float | None:
 
 
 def register_talib_indicator_all_outputs(ctx: StrategyContext, name: str) -> None:
-    """TA-Lib builtin 인디케이터를 ctx에 등록한다.
-
-    multi-output 결과는 dict로 반환하고, single-output 결과는 float로 반환한다.
-    """
+    """TA-Lib builtin 인디케이터를 ctx에 등록한다."""
     try:
         import numpy as np
         abstract = importlib.import_module("talib.abstract")
@@ -163,11 +201,7 @@ def register_talib_indicator_all_outputs(ctx: StrategyContext, name: str) -> Non
 
 
 def _register_rolling_vwap(ctx: StrategyContext) -> None:
-    """롤링 VWAP를 ``VWAP`` 이름으로 ctx에 등록한다.
-
-    TA-Lib에는 VWAP가 없으므로 hybrid_regime_scalping_strategy 와 동일한 구현.
-    typical price * volume 합 / volume 합, 최근 ``period`` 봉 기준.
-    """
+    """롤링 VWAP 를 ``VWAP`` 이름으로 ctx 에 등록."""
     try:
         import numpy as np
     except Exception:  # noqa: BLE001
@@ -196,6 +230,27 @@ def _register_rolling_vwap(ctx: StrategyContext) -> None:
     ctx.register_indicator("VWAP", _vwap)
 
 
+def _register_rolling_volume_ma(ctx: StrategyContext) -> None:
+    """롤링 volume SMA 를 ``VOL_MA`` 이름으로 등록."""
+    try:
+        import numpy as np
+    except Exception:  # noqa: BLE001
+        return
+
+    def _vol_ma(inner_ctx: Any, *args: Any, **kwargs: Any) -> float:
+        period = int(kwargs.get("period", kwargs.get("timeperiod", 20)))
+        inputs = getattr(inner_ctx, "_get_builtin_indicator_inputs", None)
+        if not callable(inputs):
+            return float("nan")
+        raw = inputs()
+        volume = np.asarray(list(raw.get("volume", [])), dtype="float64")
+        if len(volume) < period:
+            return float("nan")
+        return float(np.mean(volume[-period:]))
+
+    ctx.register_indicator("VOL_MA", _vol_ma)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -211,7 +266,7 @@ def _bar_timestamp_from_bar(bar: dict[str, Any]) -> int:
 
 
 def _detect_mode(ctx: StrategyContext) -> str | None:
-    """ctx 타입으로 backtest / live 모드를 추정한다."""
+    """ctx 타입으로 backtest / live 모드를 추정."""
     ctx_cls = type(ctx).__name__
     ctx_module = type(ctx).__module__
     if "Backtest" in ctx_cls:
@@ -229,55 +284,110 @@ def _detect_mode(ctx: StrategyContext) -> str | None:
 # Strategy params (웹 UI 파라미터 패널 호환).
 # ---------------------------------------------------------------------------
 STRATEGY_PARAMS: dict[str, Any] = {
-    # 지표 파라미터
-    "vwap_period": 60,
+    # --- 봉 시간 (스캘핑 기본 5m) ---
+    "bar_interval_ms": 15 * 60 * 1000,  # 15분봉
+
+    # --- 지표 ---
+    "bb_period": 20,
+    "bb_stddev": 2.0,
+    "rsi_period": 14,
     "atr_period": 14,
-    # 미시구조 (OI / funding / LSR)
-    "oi_lookback_bars": 5,
-    "bar_interval_ms": 15 * 60 * 1000,  # 15m 기본
-    "funding_extreme_threshold": 0.0001,  # 0.01% / 8h
-    "lsr_high_threshold": 2.0,             # 글로벌 LSR > 2.0 = 롱 과밀
-    # Triple Barrier
-    "atr_stop_mult": 2.0,
-    "time_stop_bars": 15,
-    # Dynamic Kelly
-    "kelly_min_trades": 30,
-    "kelly_burn_in_leverage": 0.01,
+    "vwap_period": 32,          # 32 * 15m = 8시간
+    "adx_period": 14,
+    "volume_ma_period": 20,
+    "ema_fast_period": 9,
+    "ema_slow_period": 21,
+
+    # --- 진입 임계 ---
+    "rsi_oversold": 32.0,
+    "rsi_overbought": 68.0,
+    "vwap_stretch_atr_mult": 0.5,
+    "adx_max": 28.0,
+    "atr_pct_min": 0.0020,
+    "atr_pct_max": 0.025,
+    "volume_mult_min": 1.0,
+    "require_reversal_bar": True,
+    "use_rsi_hook": False,
+    "signal_mode": "mean_rev",  # "mean_rev" | "trend"
+    "trend_adx_min": 20.0,
+    # 매크로 추세 필터 (비활성화)
+    "macro_ema_period": 0,
+    "macro_band_atr": 0.0,
+    # 펀딩 제약 (비활성화)
+    "funding_long_max": 1.0,
+    "funding_short_min": -1.0,
+    "funding_filter_enabled": False,
+    # 방향 필터: "both" / "long" / "short"
+    "direction_mode": "long",
+
+    # --- 미시구조 ---
+    "oi_lookback_bars": 3,
+    "oi_drop_block_pct": -0.020,    # 캐스케이드 청산 차단
+
+    # --- 청산 (Triple Barrier — 정확 fill) ---
+    "atr_tp_mult": 2.7,
+    "atr_sl_mult": 0.9,
+    "time_stop_bars": 16,           # 15m × 16 = 4시간
+
+    # --- Dynamic Kelly (검증 단계: 고정 50% 사용) ---
+    "kelly_min_trades": 999999,
+    "kelly_burn_in_leverage": 0.5,
     "kelly_fraction": 0.5,
     "kelly_max_leverage": 1.0,
-    "max_allowed_mdd_pct": 20.0,
-    # Mock 통계 시드 (실거래 이전 콜드 스타트 값; 번인이 끝나면 실시간 통계로 교체)
-    "mock_win_rate": 0.5,
-    "mock_payoff_ratio": 1.0,
+    "max_allowed_mdd_pct": 12.0,
+
+    # --- 콜드 스타트 통계 시드 ---
+    "mock_win_rate": 0.50,
+    "mock_payoff_ratio": 1.5,
 }
 
 
 STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = [
-    {"name": "vwap_period", "type": "int", "min": 5, "max": 500, "label": "VWAP period"},
+    {"name": "bar_interval_ms", "type": "int", "min": 60_000, "max": 24 * 3600_000,
+     "label": "Bar interval (ms)"},
+    {"name": "bb_period", "type": "int", "min": 5, "max": 200, "label": "BB period"},
+    {"name": "bb_stddev", "type": "float", "min": 0.5, "max": 5.0, "step": 0.1,
+     "label": "BB stddev"},
+    {"name": "rsi_period", "type": "int", "min": 2, "max": 100, "label": "RSI period"},
+    {"name": "rsi_oversold", "type": "float", "min": 5.0, "max": 50.0, "step": 1.0,
+     "label": "RSI oversold"},
+    {"name": "rsi_overbought", "type": "float", "min": 50.0, "max": 95.0, "step": 1.0,
+     "label": "RSI overbought"},
     {"name": "atr_period", "type": "int", "min": 2, "max": 100, "label": "ATR period"},
-    {"name": "oi_lookback_bars", "type": "int", "min": 1, "max": 200,
+    {"name": "vwap_period", "type": "int", "min": 5, "max": 500, "label": "VWAP period"},
+    {"name": "adx_period", "type": "int", "min": 2, "max": 100, "label": "ADX period"},
+    {"name": "adx_max", "type": "float", "min": 5.0, "max": 80.0, "step": 1.0,
+     "label": "ADX max (skip if above)"},
+    {"name": "vwap_stretch_atr_mult", "type": "float", "min": 0.0, "max": 5.0,
+     "step": 0.1, "label": "VWAP stretch (×ATR)"},
+    {"name": "atr_pct_min", "type": "float", "min": 0.0, "max": 0.05, "step": 0.0001,
+     "label": "ATR/close min"},
+    {"name": "atr_pct_max", "type": "float", "min": 0.0, "max": 0.1, "step": 0.0001,
+     "label": "ATR/close max"},
+    {"name": "volume_ma_period", "type": "int", "min": 2, "max": 200,
+     "label": "Volume MA period"},
+    {"name": "volume_mult_min", "type": "float", "min": 0.0, "max": 5.0, "step": 0.1,
+     "label": "Vol/Vol_MA min"},
+    {"name": "oi_lookback_bars", "type": "int", "min": 1, "max": 100,
      "label": "OI lookback (bars)"},
-    {"name": "bar_interval_ms", "type": "int", "min": 60_000,
-     "max": 24 * 3600_000, "label": "Bar interval (ms)"},
-    {"name": "funding_extreme_threshold", "type": "float",
-     "min": 0.0, "max": 0.01, "step": 0.00001,
-     "label": "Funding extreme threshold (8h)"},
-    {"name": "lsr_high_threshold", "type": "float",
-     "min": 1.0, "max": 10.0, "step": 0.1, "label": "LSR high threshold"},
-    {"name": "atr_stop_mult", "type": "float", "min": 0.5, "max": 10.0, "step": 0.1,
-     "label": "Vol stop ATR multiplier"},
-    {"name": "time_stop_bars", "type": "int", "min": 1, "max": 200,
+    {"name": "oi_drop_block_pct", "type": "float", "min": -0.2, "max": 0.0,
+     "step": 0.001, "label": "OI drop block threshold"},
+    {"name": "atr_tp_mult", "type": "float", "min": 0.1, "max": 5.0, "step": 0.05,
+     "label": "TP (×ATR)"},
+    {"name": "atr_sl_mult", "type": "float", "min": 0.2, "max": 5.0, "step": 0.05,
+     "label": "SL (×ATR)"},
+    {"name": "time_stop_bars", "type": "int", "min": 1, "max": 500,
      "label": "Time stop (bars)"},
-    {"name": "kelly_min_trades", "type": "int", "min": 0, "max": 1000,
+    {"name": "kelly_min_trades", "type": "int", "min": 0, "max": 1000000,
      "label": "Kelly burn-in threshold"},
-    {"name": "kelly_burn_in_leverage", "type": "float",
-     "min": 0.0, "max": 1.0, "step": 0.001, "label": "Burn-in leverage"},
-    {"name": "kelly_fraction", "type": "float",
-     "min": 0.05, "max": 1.0, "step": 0.05, "label": "Kelly fraction"},
-    {"name": "kelly_max_leverage", "type": "float",
-     "min": 0.0, "max": 5.0, "step": 0.05, "label": "Kelly max leverage"},
-    {"name": "max_allowed_mdd_pct", "type": "float",
-     "min": 1.0, "max": 90.0, "step": 0.5, "label": "Max allowed MDD (%)"},
+    {"name": "kelly_burn_in_leverage", "type": "float", "min": 0.0, "max": 1.0,
+     "step": 0.001, "label": "Burn-in leverage"},
+    {"name": "kelly_fraction", "type": "float", "min": 0.05, "max": 1.0, "step": 0.05,
+     "label": "Kelly fraction"},
+    {"name": "kelly_max_leverage", "type": "float", "min": 0.0, "max": 5.0,
+     "step": 0.05, "label": "Kelly max leverage"},
+    {"name": "max_allowed_mdd_pct", "type": "float", "min": 1.0, "max": 90.0,
+     "step": 0.5, "label": "Max allowed MDD (%)"},
 ]
 
 
@@ -285,40 +395,56 @@ STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = [
 # Strategy
 # ---------------------------------------------------------------------------
 class MultiFactorMicrostructureStrategy(Strategy):
-    """다중 팩터 미시구조 전략.
-
-    파이프라인:
-        on_bar → check_exit_conditions (in-position) → check_entry_conditions (flat)
-
-    Kelly 사이징 경로(롱 과밀 → 숏)에서만 ``entry_pct`` 가 시그널에 실리고,
-    그 외 진입은 시스템 기본 사이징을 사용한다.
-    """
+    """다중 팩터 미시구조 스캘퍼 (극단 평균 회귀, 5m 기본)."""
 
     def __init__(self, **kwargs: Any) -> None:
-        """전략 초기화.
-
-        Args:
-            **kwargs: ``STRATEGY_PARAMS`` 의 키를 임의로 덮어쓸 수 있다.
-        """
         super().__init__()
         p = {**STRATEGY_PARAMS, **kwargs}
 
-        # ---- 지표 파라미터 ----
-        self.vwap_period = int(p["vwap_period"])
-        self.atr_period = int(p["atr_period"])
-
-        # ---- 미시구조 파라미터 ----
-        self.oi_lookback_bars = int(p["oi_lookback_bars"])
+        # 봉 시간
         self.bar_interval_ms = int(p["bar_interval_ms"])
-        self.oi_lookback_ms = self.oi_lookback_bars * self.bar_interval_ms
-        self.funding_extreme_threshold = float(p["funding_extreme_threshold"])
-        self.lsr_high_threshold = float(p["lsr_high_threshold"])
 
-        # ---- Triple Barrier ----
-        self.atr_stop_mult = float(p["atr_stop_mult"])
+        # 지표
+        self.bb_period = int(p["bb_period"])
+        self.bb_stddev = float(p["bb_stddev"])
+        self.rsi_period = int(p["rsi_period"])
+        self.atr_period = int(p["atr_period"])
+        self.vwap_period = int(p["vwap_period"])
+        self.adx_period = int(p["adx_period"])
+        self.volume_ma_period = int(p["volume_ma_period"])
+
+        # 진입 임계
+        self.rsi_oversold = float(p["rsi_oversold"])
+        self.rsi_overbought = float(p["rsi_overbought"])
+        self.vwap_stretch_atr_mult = float(p["vwap_stretch_atr_mult"])
+        self.adx_max = float(p["adx_max"])
+        self.atr_pct_min = float(p["atr_pct_min"])
+        self.atr_pct_max = float(p["atr_pct_max"])
+        self.volume_mult_min = float(p["volume_mult_min"])
+        self.require_reversal_bar = bool(p.get("require_reversal_bar", True))
+        self.use_rsi_hook = bool(p.get("use_rsi_hook", False))
+        self.macro_ema_period = int(p.get("macro_ema_period", 0))
+        self.macro_band_atr = float(p.get("macro_band_atr", 0.0))
+        self.funding_filter_enabled = bool(p.get("funding_filter_enabled", False))
+        self.funding_long_max = float(p.get("funding_long_max", 1.0))
+        self.funding_short_min = float(p.get("funding_short_min", -1.0))
+        self.direction_mode = str(p.get("direction_mode", "both")).lower()
+        self.signal_mode = str(p.get("signal_mode", "mean_rev")).lower()
+        self.ema_fast_period = int(p.get("ema_fast_period", 9))
+        self.ema_slow_period = int(p.get("ema_slow_period", 21))
+        self.trend_adx_min = float(p.get("trend_adx_min", 20.0))
+
+        # 미시구조
+        self.oi_lookback_bars = int(p["oi_lookback_bars"])
+        self.oi_lookback_ms = self.oi_lookback_bars * self.bar_interval_ms
+        self.oi_drop_block_pct = float(p["oi_drop_block_pct"])
+
+        # 청산
+        self.atr_tp_mult = float(p["atr_tp_mult"])
+        self.atr_sl_mult = float(p["atr_sl_mult"])
         self.time_stop_bars = int(p["time_stop_bars"])
 
-        # ---- Dynamic Kelly 위험 관리자 (Task 1) ----
+        # Kelly + MDD
         self.kelly_risk_manager: DynamicKellyRiskManager = DynamicKellyRiskManager(
             min_trades_required=int(p["kelly_min_trades"]),
             burn_in_leverage=float(p["kelly_burn_in_leverage"]),
@@ -327,50 +453,61 @@ class MultiFactorMicrostructureStrategy(Strategy):
         )
         self.max_allowed_mdd_pct = float(p["max_allowed_mdd_pct"])
 
-        # ---- 승률 / 손익비 추적용 내부 변수 (mock) ----
-        # 실제 거래가 누적되기 전까지 사용할 시드값.
+        # 통계 (mock seed)
         self._win_rate: float = float(p["mock_win_rate"])
         self._payoff_ratio: float = float(p["mock_payoff_ratio"])
         self._n_trades: int = 0
         self._wins: int = 0
         self._losses: int = 0
-        self._sum_win: float = 0.0  # 누적 승리 PnL (절대값)
-        self._sum_loss: float = 0.0  # 누적 손실 PnL (절대값)
+        self._sum_win: float = 0.0
+        self._sum_loss: float = 0.0
 
-        # ---- MDD 추적 ----
+        # MDD
         self._peak_equity: float | None = None
         self._current_mdd_pct: float = 0.0
 
-        # ---- 포지션 / 바 상태 ----
+        # 포지션 상태
         self._entry_price: float | None = None
         self._entry_bar_index: int | None = None
         self._entry_atr: float | None = None
-        self._entry_side: int = 0  # +1=long, -1=short, 0=flat
+        self._entry_side: int = 0
         self._bar_index: int = 0
         self._is_closing: bool = False
 
-        # ---- 단기 방향성 반전 검출용 (직전 2개 close) ----
-        self._prev_close: float | None = None
-        self._prev_prev_close: float | None = None
+        # Edge-trigger 메모리
+        self._prev_long_signal: bool = False
+        self._prev_short_signal: bool = False
 
-        # ---- 외부 데이터 프로바이더 ----
+        # 반전 확인용 이전 바 상태
+        self._prev_bar_long_setup: bool = False  # 이전 바가 LONG 후보 극단
+        self._prev_bar_short_setup: bool = False
+        self._prev_bar_close: float | None = None
+        self._prev_rsi: float | None = None
+        self._prev_ema_fast: float | None = None
+        self._prev_ema_slow: float | None = None
+
+        # Providers
         self._oi_provider: Any | None = None
         self._funding_provider: Any | None = None
         self._lsr_provider: Any | None = None
         self._mode: str | None = None
 
-        # ---- 메타 ----
+        # 메타
         self.params = dict(p)
         self.indicator_config = {
-            "VWAP": {"period": self.vwap_period},
+            "BBANDS": {"period": self.bb_period,
+                       "nbdevup": self.bb_stddev, "nbdevdn": self.bb_stddev},
+            "RSI": {"period": self.rsi_period},
             "ATR": {"period": self.atr_period},
+            "ADX": {"period": self.adx_period},
+            "VWAP": {"period": self.vwap_period},
+            "VOL_MA": {"period": self.volume_ma_period},
         }
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def initialize(self, ctx: StrategyContext) -> None:
-        """전략 시작 시 1회 호출. 지표 등록 + 프로바이더 결선."""
         if get_oi_provider is None:
             raise RuntimeError(
                 f"OI provider unavailable: {_OI_IMPORT_ERR}. "
@@ -384,7 +521,7 @@ class MultiFactorMicrostructureStrategy(Strategy):
 
         self.setup_indicators(ctx)
 
-        # 상태 초기화 (재시작 안전성).
+        # 상태 초기화
         self._peak_equity = None
         self._current_mdd_pct = 0.0
         self._entry_price = None
@@ -393,42 +530,45 @@ class MultiFactorMicrostructureStrategy(Strategy):
         self._entry_side = 0
         self._bar_index = 0
         self._is_closing = False
-        self._prev_close = None
-        self._prev_prev_close = None
+        self._prev_long_signal = False
+        self._prev_short_signal = False
+        self._prev_bar_long_setup = False
+        self._prev_bar_short_setup = False
+        self._prev_bar_close = None
+        self._prev_rsi = None
+        self._prev_ema_fast = None
+        self._prev_ema_slow = None
 
         self._emit_event(ctx, "MFM_INIT", {
             "symbol": getattr(ctx, "symbol", "UNKNOWN"),
             "mode": self._mode,
-            "vwap_period": self.vwap_period,
-            "atr_period": self.atr_period,
-            "oi_lookback_bars": self.oi_lookback_bars,
             "bar_interval_ms": self.bar_interval_ms,
-            "funding_extreme_threshold": self.funding_extreme_threshold,
-            "lsr_high_threshold": self.lsr_high_threshold,
-            "atr_stop_mult": self.atr_stop_mult,
+            "bb": (self.bb_period, self.bb_stddev),
+            "rsi": (self.rsi_period, self.rsi_oversold, self.rsi_overbought),
+            "atr_period": self.atr_period,
+            "vwap_period": self.vwap_period,
+            "adx_max": self.adx_max,
+            "atr_pct_band": (self.atr_pct_min, self.atr_pct_max),
+            "volume_mult_min": self.volume_mult_min,
+            "tp_sl": (self.atr_tp_mult, self.atr_sl_mult),
             "time_stop_bars": self.time_stop_bars,
-            "kelly_min_trades": self.kelly_risk_manager.min_trades_required,
-            "kelly_fraction": self.kelly_risk_manager.kelly_fraction,
             "max_allowed_mdd_pct": self.max_allowed_mdd_pct,
         })
 
     def setup_indicators(self, ctx: StrategyContext) -> None:
-        """지표 / 데이터 프로바이더 일괄 등록.
-
-        - ``ctx.register_indicator`` 로 ``VWAP`` (커스텀 롤링), ``ATR`` (TA-Lib).
-        - ``oi_provider`` / ``perp_meta_provider`` 에서 OI / funding / LSR
-          프로바이더를 인스턴스화.
-        """
-        # VWAP는 TA-Lib에 없으므로 커스텀.
-        _register_rolling_vwap(ctx)
-        # ATR은 TA-Lib builtin.
+        register_talib_indicator_all_outputs(ctx, "BBANDS")
+        register_talib_indicator_all_outputs(ctx, "RSI")
         register_talib_indicator_all_outputs(ctx, "ATR")
+        register_talib_indicator_all_outputs(ctx, "ADX")
+        register_talib_indicator_all_outputs(ctx, "EMA")
+        _register_rolling_vwap(ctx)
+        _register_rolling_volume_ma(ctx)
 
         symbol = getattr(ctx, "symbol", "BTCUSDT")
         mode = _detect_mode(ctx)
         self._mode = mode
 
-        assert get_oi_provider is not None  # for type checkers; initialize() validated
+        assert get_oi_provider is not None
         assert get_funding_provider is not None
         assert get_lsr_provider is not None
         self._oi_provider = get_oi_provider(symbol, mode=mode)
@@ -436,32 +576,21 @@ class MultiFactorMicrostructureStrategy(Strategy):
         self._lsr_provider = get_lsr_provider(symbol, mode=mode)
 
     def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
-        """매 바 진입점.
-
-        흐름:
-            1) 플랫 진입 시 진입 상태 리셋
-            2) 매 틱마다 MDD 업데이트
-            3) ``is_new_bar`` 인 봉만 신호 평가 — 백테스트 stoploss 시뮬과 호환
-            4) 청산 우선 → 진입 (둘 다 같은 봉에서 트리거되지 않도록 보호)
-        """
-        # 1) 플랫이면 진입 추적 리셋.
+        # 1) flat 리셋
         if ctx.position_size == 0:
             self._is_closing = False
             if self._entry_price is not None:
-                # 외부 청산(예: 사용자 수동) 흔적은 통계엔 반영하지 않는다 — 모르는 PnL을 추정하지 않음.
                 self._entry_price = None
                 self._entry_bar_index = None
                 self._entry_atr = None
                 self._entry_side = 0
 
-        # 2) MDD는 매 틱마다 (intra-bar 가격 변동도 반영).
+        # 2) MDD 매 틱 업데이트
         self._update_mdd(ctx)
 
-        is_new_bar = bool(bar.get("is_new_bar", True))
-        if not is_new_bar:
+        if not bool(bar.get("is_new_bar", True)):
             return
 
-        # 라이브 중복 주문 가드.
         try:
             open_orders = ctx.get_open_orders() or []
         except Exception:  # noqa: BLE001
@@ -476,16 +605,30 @@ class MultiFactorMicrostructureStrategy(Strategy):
         low = float(bar.get("low", close) or close)
         ts = _bar_timestamp_from_bar(bar)
 
-        # 3) 청산 우선 — 이미 포지션이 있으면 진입 평가 안 함.
+        # 3) 청산 먼저 (포지션 있을 때)
         if ctx.position_size != 0 and self._entry_price is not None and not self._is_closing:
-            exit_sig = self.check_exit_conditions(ctx, bar, high=high, low=low, close=close)
+            exit_sig = self.check_exit_conditions(
+                ctx, bar, high=high, low=low, close=close,
+            )
             if exit_sig is not None:
                 self._is_closing = True
                 exit_price = float(exit_sig.get("exit_price", close))
                 pnl = self._compute_unit_pnl(exit_price)
-                ctx.close_position(reason=exit_sig["reason"])
+                exit_event_name = exit_sig.get("event", "MFM_EXIT")
+                cap = getattr(ctx, "close_position_at_price", None)
+                if callable(cap):
+                    cap(
+                        price=exit_price,
+                        reason=exit_sig["reason"],
+                        exit_reason=exit_event_name,
+                    )
+                else:
+                    ctx.close_position(
+                        reason=exit_sig["reason"],
+                        exit_reason=exit_event_name,
+                    )
                 self._record_trade_outcome(pnl)
-                self._emit_event(ctx, exit_sig.get("event", "MFM_EXIT"), {
+                self._emit_event(ctx, exit_event_name, {
                     "bar_ts": ts,
                     "entry_price": self._entry_price,
                     "exit_price": exit_price,
@@ -501,64 +644,59 @@ class MultiFactorMicrostructureStrategy(Strategy):
                     "payoff_ratio": self._payoff_ratio,
                     "current_mdd_pct": self._current_mdd_pct,
                 })
-                # 봉 단위 카운터는 항상 전진.
                 self._bar_index += 1
-                self._update_direction_memory(close)
                 return
 
-        # 4) flat 일 때만 진입 평가.
+        # 4) flat 일 때만 진입
         self._bar_index += 1
         if ctx.position_size != 0:
-            # 포지션은 있는데 entry_price 가 없는 비정상 상태 — 추적만 유지.
-            self._update_direction_memory(close)
             return
 
         signal = self.check_entry_conditions(ctx, bar, close=close, ts=ts)
-        if signal is not None:
-            side = signal["side"]
-            reason = signal.get("reason", "MFM entry")
-            entry_pct = signal.get("entry_pct")
-            atr_value = float(signal["atr"])
+        if signal is None:
+            return
 
-            if side == "long":
-                if entry_pct is not None:
-                    ctx.enter_long(reason=reason, entry_pct=float(entry_pct))
-                else:
-                    ctx.enter_long(reason=reason)
-                self._entry_side = 1
-            elif side == "short":
-                if entry_pct is not None:
-                    ctx.enter_short(reason=reason, entry_pct=float(entry_pct))
-                else:
-                    ctx.enter_short(reason=reason)
-                self._entry_side = -1
+        side = signal["side"]
+        reason = signal.get("reason", "MFM entry")
+        entry_pct = signal.get("entry_pct")
+        atr_value = float(signal["atr"])
+
+        if side == "long":
+            if entry_pct is not None:
+                ctx.enter_long(reason=reason, entry_pct=float(entry_pct))
             else:
-                self._update_direction_memory(close)
-                return
+                ctx.enter_long(reason=reason)
+            self._entry_side = 1
+        elif side == "short":
+            if entry_pct is not None:
+                ctx.enter_short(reason=reason, entry_pct=float(entry_pct))
+            else:
+                ctx.enter_short(reason=reason)
+            self._entry_side = -1
+        else:
+            return
 
-            self._entry_price = close
-            self._entry_bar_index = self._bar_index
-            self._entry_atr = atr_value
+        self._entry_price = close
+        self._entry_bar_index = self._bar_index
+        self._entry_atr = atr_value
 
-            self._emit_event(ctx, "MFM_ENTRY", {
-                "bar_ts": ts,
-                "side": side,
-                "entry_price": close,
-                "atr": atr_value,
-                "vol_stop_upper": close + self.atr_stop_mult * atr_value,
-                "vol_stop_lower": close - self.atr_stop_mult * atr_value,
-                "entry_pct": entry_pct,
-                "n_trades": self._n_trades,
-                "win_rate": self._win_rate,
-                "payoff_ratio": self._payoff_ratio,
-                "current_mdd_pct": self._current_mdd_pct,
-                "reason": reason,
-            })
-
-        self._update_direction_memory(close)
+        self._emit_event(ctx, "MFM_ENTRY", {
+            "bar_ts": ts,
+            "side": side,
+            "entry_price": close,
+            "atr": atr_value,
+            "tp_target": close + self.atr_tp_mult * atr_value * self._entry_side,
+            "sl_target": close - self.atr_sl_mult * atr_value * self._entry_side,
+            "entry_pct": entry_pct,
+            "n_trades": self._n_trades,
+            "win_rate": self._win_rate,
+            "payoff_ratio": self._payoff_ratio,
+            "current_mdd_pct": self._current_mdd_pct,
+            "reason": reason,
+        })
 
     # ------------------------------------------------------------------
-    # Signal evaluation
+    # Signal evaluation — MEAN REVERSION at extremes (v11)
     # ------------------------------------------------------------------
     def check_entry_conditions(
         self,
@@ -568,43 +706,64 @@ class MultiFactorMicrostructureStrategy(Strategy):
         close: float,
         ts: int,
     ) -> dict[str, Any] | None:
-        """진입 조건 평가. 신호가 있으면 dict, 없으면 None.
-
-        반환 dict 형식 (시그널 컨테이너):
-            {
-                "side": "long" | "short",
-                "reason": str,
-                "atr": float,                  # 진입 봉의 ATR (Triple Barrier용)
-                "entry_pct": float | None,     # Kelly 산출 레버리지 (없으면 기본 사이징)
-            }
-
-        Args:
-            ctx: 전략 컨텍스트.
-            bar: 새 봉 데이터.
-            close: 현재 봉 종가.
-            ts: 봉 타임스탬프 (ms).
-
-        Returns:
-            진입 시그널 dict 또는 ``None``.
-        """
-        # --- 지표 ---
-        vwap = float(ctx.get_indicator("VWAP", period=self.vwap_period))
+        # 1) 지표
+        bb = ctx.get_indicator(
+            "BBANDS", period=self.bb_period,
+            nbdevup=self.bb_stddev, nbdevdn=self.bb_stddev,
+        )
+        if not isinstance(bb, dict):
+            return None
+        upper = float(bb.get("upperband", bb.get("output_0", math.nan)))
+        lower = float(bb.get("lowerband", bb.get("output_2", math.nan)))
+        rsi = float(ctx.get_indicator("RSI", period=self.rsi_period))
         atr = float(ctx.get_indicator("ATR", period=self.atr_period))
-        if not (math.isfinite(vwap) and math.isfinite(atr) and atr > 0):
+        vwap = float(ctx.get_indicator("VWAP", period=self.vwap_period))
+        adx = float(ctx.get_indicator("ADX", period=self.adx_period))
+        vol_ma = float(ctx.get_indicator("VOL_MA", period=self.volume_ma_period))
+        if not all(math.isfinite(v) and v > 0 for v in (atr, vwap, vol_ma)):
+            return None
+        if not all(math.isfinite(v) for v in (upper, lower, rsi, adx)):
             return None
 
-        # --- 단기 방향성 반전 ---
-        # 직전 2개 close 가 있어야 reversal 판정 가능.
-        prev = self._prev_close
-        prev_prev = self._prev_prev_close
-        if prev is None or prev_prev is None:
+        # 2) 변동성 레짐 필터
+        atr_pct = atr / close
+        if not (self.atr_pct_min <= atr_pct <= self.atr_pct_max):
+            self._prev_long_signal = False
+            self._prev_short_signal = False
+            self._prev_bar_long_setup = False
+            self._prev_bar_short_setup = False
+            self._prev_bar_close = close
             return None
-        prev_direction = _sign(prev - prev_prev)
-        curr_direction = _sign(close - prev)
-        reversal_up = prev_direction < 0 < curr_direction
-        reversal_down = prev_direction > 0 > curr_direction
 
-        # --- 미시구조 알파: OI 5봉 변화 < 0 (강제청산성 OI 감소) ---
+        # 3) 추세 레짐 필터
+        # mean_rev: low ADX = range market 필요 (adx_max 이하)
+        # trend: high ADX 필요 (trend_adx_min 이상)
+        if self.signal_mode == "mean_rev" and adx > self.adx_max:
+            self._prev_long_signal = False
+            self._prev_short_signal = False
+            self._prev_bar_long_setup = False
+            self._prev_bar_short_setup = False
+            self._prev_bar_close = close
+            return None
+        if self.signal_mode == "trend" and adx < self.trend_adx_min:
+            self._prev_long_signal = False
+            self._prev_short_signal = False
+            self._prev_bar_long_setup = False
+            self._prev_bar_short_setup = False
+            self._prev_bar_close = close
+            return None
+
+        # 4) 거래량 필터
+        volume = float(bar.get("volume", 0.0) or 0.0)
+        if volume < vol_ma * self.volume_mult_min:
+            self._prev_long_signal = False
+            self._prev_short_signal = False
+            self._prev_bar_long_setup = False
+            self._prev_bar_short_setup = False
+            self._prev_bar_close = close
+            return None
+
+        # 5) OI 캐스케이드 차단
         oi_pct = math.nan
         if self._oi_provider is not None and ts > 0:
             try:
@@ -613,62 +772,193 @@ class MultiFactorMicrostructureStrategy(Strategy):
                 ))
             except Exception:  # noqa: BLE001
                 oi_pct = math.nan
-        if not math.isfinite(oi_pct) or oi_pct >= 0:
-            # OI 데이터 없거나 감소가 아님 → 미시구조 알파 부재.
+        if math.isfinite(oi_pct) and oi_pct <= self.oi_drop_block_pct:
+            self._prev_long_signal = False
+            self._prev_short_signal = False
+            self._prev_bar_long_setup = False
+            self._prev_bar_short_setup = False
+            self._prev_bar_close = close
             return None
 
-        # --- 추세 필터 (VWAP) ---
-        above_vwap = close > vwap
-        below_vwap = close < vwap
+        # 6) 신호 계산
+        vwap_stretch = close - vwap
+        stretch_threshold = self.vwap_stretch_atr_mult * atr
 
-        # --- 펀딩비 / LSR (롱 과밀 검출용) ---
-        funding = self._safe_value_at(self._funding_provider, ts)
-        lsr = self._safe_value_at(self._lsr_provider, ts)
-        crowded_long = (
-            math.isfinite(funding)
-            and funding > self.funding_extreme_threshold
-            and math.isfinite(lsr)
-            and lsr > self.lsr_high_threshold
+        # ---- TREND mode: EMA 9/21 cross + ADX strong ----
+        trend_long_edge = False
+        trend_short_edge = False
+        ema_fast_val: float | None = None
+        ema_slow_val: float | None = None
+        if self.signal_mode == "trend":
+            ema_fast_val = float(ctx.get_indicator("EMA", period=self.ema_fast_period))
+            ema_slow_val = float(ctx.get_indicator("EMA", period=self.ema_slow_period))
+            if (
+                math.isfinite(ema_fast_val)
+                and math.isfinite(ema_slow_val)
+                and self._prev_ema_fast is not None
+                and self._prev_ema_slow is not None
+                and adx >= self.trend_adx_min
+            ):
+                cross_up = (
+                    self._prev_ema_fast <= self._prev_ema_slow
+                    and ema_fast_val > ema_slow_val
+                    and close > ema_slow_val
+                )
+                cross_dn = (
+                    self._prev_ema_fast >= self._prev_ema_slow
+                    and ema_fast_val < ema_slow_val
+                    and close < ema_slow_val
+                )
+                trend_long_edge = bool(cross_up)
+                trend_short_edge = bool(cross_dn)
+        if ema_fast_val is not None:
+            self._prev_ema_fast = ema_fast_val
+        if ema_slow_val is not None:
+            self._prev_ema_slow = ema_slow_val
+
+        long_setup = (
+            close <= lower
+            and rsi <= self.rsi_oversold
+            and vwap_stretch <= -stretch_threshold
         )
+        short_setup = (
+            close >= upper
+            and rsi >= self.rsi_overbought
+            and vwap_stretch >= stretch_threshold
+        )        # 6-a) 매크로 추세 필터: 강한 추세 구간에서는 역방향 진입 차단
+        macro_block_long = False
+        macro_block_short = False
+        if self.macro_ema_period > 0 and self.macro_band_atr > 0:
+            ema_val = float(ctx.get_indicator("EMA", period=self.macro_ema_period))
+            if math.isfinite(ema_val) and ema_val > 0:
+                # 가격이 EMA 위로 macro_band_atr*ATR 이상 → 매크로 업트렌드 → SHORT 차단
+                # 가격이 EMA 아래로 macro_band_atr*ATR 이상 → 매크로 다운트렌드 → LONG 차단
+                band = self.macro_band_atr * atr
+                if close > ema_val + band:
+                    macro_block_short = True
+                if close < ema_val - band:
+                    macro_block_long = True
+        if macro_block_long:
+            long_setup = False
+        if macro_block_short:
+            short_setup = False
 
-        # --- 1) 롱 과밀 → 숏 (Kelly 사이징 경로) ---
-        # 조건: OI 급감 + VWAP 아래 + 단기 방향 반전(하향) + 펀딩 극단 + LSR 높음.
-        if reversal_down and below_vwap and crowded_long:
-            target_lev = self.kelly_risk_manager.get_target_leverage(
-                current_mdd_pct=self._current_mdd_pct,
-                max_allowed_mdd_pct=self.max_allowed_mdd_pct,
-                win_rate=self._win_rate,
-                payoff_ratio=self._payoff_ratio,
-                n_trades=self._n_trades,
+        # 6-b) 반전 확인: 이전 바가 setup 이고 현재 바가 강한 반전 캔들이어야 진입
+        bar_open = float(bar.get("open", close) or close)
+        long_edge = False
+        short_edge = False
+
+        # RSI hook: 이전 바 RSI 가 극단 안, 현재 RSI 가 극단 밖
+        rsi_hook_long = False
+        rsi_hook_short = False
+        if (
+            self.use_rsi_hook
+            and self._prev_rsi is not None
+            and self._prev_bar_close is not None
+        ):
+            rsi_hook_long = (
+                self._prev_rsi < self.rsi_oversold
+                and rsi >= self.rsi_oversold
+                and close > self._prev_bar_close
             )
+            rsi_hook_short = (
+                self._prev_rsi > self.rsi_overbought
+                and rsi <= self.rsi_overbought
+                and close < self._prev_bar_close
+            )
+
+        if self.require_reversal_bar:
+            reversal_long = (
+                self._prev_bar_long_setup
+                and self._prev_bar_close is not None
+                and close > self._prev_bar_close
+                and close > bar_open
+                and not long_setup
+            )
+            reversal_short = (
+                self._prev_bar_short_setup
+                and self._prev_bar_close is not None
+                and close < self._prev_bar_close
+                and close < bar_open
+                and not short_setup
+            )
+            long_edge = reversal_long or rsi_hook_long
+            short_edge = reversal_short or rsi_hook_short
+        else:
+            long_edge = (long_setup and not self._prev_long_signal) or rsi_hook_long
+            short_edge = (short_setup and not self._prev_short_signal) or rsi_hook_short
+
+        # signal_mode "trend" 일 땐 평균회귀 신호 무시하고 EMA 크로스만 사용
+        if self.signal_mode == "trend":
+            long_edge = trend_long_edge
+            short_edge = trend_short_edge
+
+        # 상태 갱신 (다음 바에서 참조)
+        self._prev_long_signal = long_setup
+        self._prev_short_signal = short_setup
+        self._prev_bar_long_setup = long_setup
+        self._prev_bar_short_setup = short_setup
+        self._prev_bar_close = close
+        self._prev_rsi = rsi
+
+        if not (long_edge or short_edge):
+            return None
+
+        # 6-c) 방향 제약
+        if self.direction_mode == "long" and not long_edge:
+            return None
+        if self.direction_mode == "short" and not short_edge:
+            return None
+        if self.direction_mode == "long":
+            short_edge = False
+        elif self.direction_mode == "short":
+            long_edge = False
+
+        # 6-d) 펀딩 레이트 필터 (반대편 군중이 과밀할 때만 진입)
+        if self.funding_filter_enabled and self._funding_provider is not None and ts > 0:
+            try:
+                funding = float(self._funding_provider.value_at(ts))
+            except Exception:  # noqa: BLE001
+                funding = math.nan
+            if math.isfinite(funding):
+                if long_edge and funding > self.funding_long_max:
+                    return None
+                if short_edge and funding < self.funding_short_min:
+                    return None
+
+        # 7) 사이징
+        target_lev = self.kelly_risk_manager.get_target_leverage(
+            current_mdd_pct=self._current_mdd_pct,
+            max_allowed_mdd_pct=self.max_allowed_mdd_pct,
+            win_rate=self._win_rate,
+            payoff_ratio=self._payoff_ratio,
+            n_trades=self._n_trades,
+        )
+        if target_lev <= 0:
+            return None
+
+        if long_edge:
             reason = (
-                f"MFM short (crowded long): close={close:.2f}<VWAP={vwap:.2f}, "
-                f"OI{self.oi_lookback_bars}b={oi_pct * 100:.2f}%, "
-                f"funding={funding * 100:.4f}%, LSR={lsr:.2f}, "
-                f"lev={target_lev:.4f}"
+                f"MFM LONG mean-rev: c={close:.2f}<=L={lower:.2f}, "
+                f"RSI={rsi:.1f}<={self.rsi_oversold:.0f}, "
+                f"stretch={vwap_stretch:.2f}, ADX={adx:.1f}, "
+                f"ATR%={atr_pct * 100:.3f}, lev={target_lev:.3f}"
             )
-            return {
-                "side": "short",
-                "reason": reason,
-                "atr": atr,
-                "entry_pct": target_lev,
-            }
+            return {"side": "long", "reason": reason,
+                    "atr": atr, "entry_pct": target_lev}
 
-        # --- 2) OI 급감 + VWAP 위 + 단기 방향 반전(상향) → 롱 (기본 사이징) ---
-        if reversal_up and above_vwap:
-            reason = (
-                f"MFM long: close={close:.2f}>VWAP={vwap:.2f}, "
-                f"OI{self.oi_lookback_bars}b={oi_pct * 100:.2f}%"
-            )
-            return {
-                "side": "long",
-                "reason": reason,
-                "atr": atr,
-                "entry_pct": None,
-            }
+        reason = (
+            f"MFM SHORT mean-rev: c={close:.2f}>=U={upper:.2f}, "
+            f"RSI={rsi:.1f}>={self.rsi_overbought:.0f}, "
+            f"stretch={vwap_stretch:.2f}, ADX={adx:.1f}, "
+            f"ATR%={atr_pct * 100:.3f}, lev={target_lev:.3f}"
+        )
+        return {"side": "short", "reason": reason,
+                "atr": atr, "entry_pct": target_lev}
 
-        return None
-
+    # ------------------------------------------------------------------
+    # Exit
+    # ------------------------------------------------------------------
     def check_exit_conditions(
         self,
         ctx: StrategyContext,
@@ -678,95 +968,68 @@ class MultiFactorMicrostructureStrategy(Strategy):
         low: float,
         close: float,
     ) -> dict[str, Any] | None:
-        """Triple Barrier 청산 조건 평가.
-
-        Barrier:
-            1) Volatility Stop — ``|price - entry| >= atr_stop_mult * ATR_at_entry``
-               (롱은 상승/하락 양방향 모두 청산, 숏도 동일. 변동성 자체가 한도를
-               초과하면 시그널이 무효라고 본다.)
-            2) Time Stop — 진입 후 ``time_stop_bars`` 봉 경과 시 강제 청산.
-
-        반환:
-            ``{"reason": str, "exit_price": float, "event": str}`` 또는 ``None``.
-        """
         if (
             self._entry_price is None
             or self._entry_atr is None
             or self._entry_bar_index is None
+            or self._entry_side == 0
         ):
             return None
 
         entry = self._entry_price
         atr0 = self._entry_atr
-        upper = entry + self.atr_stop_mult * atr0
-        lower = entry - self.atr_stop_mult * atr0
+        side = self._entry_side
 
-        # 1) Volatility stop: high가 상단 또는 low가 하단을 터치하면 즉시 청산.
-        if math.isfinite(high) and high >= upper:
-            return {
-                "reason": (
-                    f"Volatility Stop (+{self.atr_stop_mult}*ATR={atr0:.4f}, "
-                    f"upper={upper:.4f})"
-                ),
-                "exit_price": upper,
-                "event": "MFM_EXIT_VOL_STOP",
-            }
-        if math.isfinite(low) and low <= lower:
-            return {
-                "reason": (
-                    f"Volatility Stop (-{self.atr_stop_mult}*ATR={atr0:.4f}, "
-                    f"lower={lower:.4f})"
-                ),
-                "exit_price": lower,
-                "event": "MFM_EXIT_VOL_STOP",
-            }
+        if side == 1:  # long
+            tp_price = entry + self.atr_tp_mult * atr0
+            sl_price = entry - self.atr_sl_mult * atr0
+            if math.isfinite(low) and low <= sl_price:
+                return {
+                    "reason": f"SL {self.atr_sl_mult}*ATR (={sl_price:.4f})",
+                    "exit_price": sl_price,
+                    "event": "MFM_EXIT_SL",
+                }
+            if math.isfinite(high) and high >= tp_price:
+                return {
+                    "reason": f"TP {self.atr_tp_mult}*ATR (={tp_price:.4f})",
+                    "exit_price": tp_price,
+                    "event": "MFM_EXIT_TP",
+                }
+        else:  # short
+            tp_price = entry - self.atr_tp_mult * atr0
+            sl_price = entry + self.atr_sl_mult * atr0
+            if math.isfinite(high) and high >= sl_price:
+                return {
+                    "reason": f"SL {self.atr_sl_mult}*ATR (={sl_price:.4f})",
+                    "exit_price": sl_price,
+                    "event": "MFM_EXIT_SL",
+                }
+            if math.isfinite(low) and low <= tp_price:
+                return {
+                    "reason": f"TP {self.atr_tp_mult}*ATR (={tp_price:.4f})",
+                    "exit_price": tp_price,
+                    "event": "MFM_EXIT_TP",
+                }
 
-        # 2) Time stop: 15봉 경과 시 close에 청산.
         held = self._bar_index - self._entry_bar_index
         if held >= self.time_stop_bars:
             return {
-                "reason": f"Time Stop ({self.time_stop_bars} bars held)",
+                "reason": f"Time Stop ({self.time_stop_bars} bars)",
                 "exit_price": close,
                 "event": "MFM_EXIT_TIME_STOP",
             }
-
         return None
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
-    def _safe_value_at(self, provider: Any, ts: int) -> float:
-        """프로바이더에서 ``value_at`` 호출. 예외나 미설정 시 NaN."""
-        if provider is None or ts <= 0:
-            return math.nan
-        try:
-            return float(provider.value_at(int(ts)))
-        except Exception:  # noqa: BLE001
-            return math.nan
-
-    def _update_direction_memory(self, close: float) -> None:
-        """다음 봉에서 reversal 판정에 쓸 직전 2개 close 갱신."""
-        self._prev_prev_close = self._prev_close
-        self._prev_close = close
-
     def _compute_unit_pnl(self, exit_price: float) -> float:
-        """단위 가격 PnL (방향 부호 포함). 청산 직전 상태에서만 호출.
-
-        ``+값 = 승``, ``-값 = 패``. 절대 USDT 손익은 아니지만 승률·손익비
-        통계용 부호와 상대 크기로 충분하다.
-        """
         if self._entry_price is None or self._entry_side == 0:
             return 0.0
         return float((exit_price - self._entry_price) * self._entry_side)
 
     def _record_trade_outcome(self, pnl: float) -> None:
-        """청산 시 승률 / 손익비 / 거래 수 누적 업데이트.
-
-        Mock 통계지만, 한 번 거래가 쌓이기 시작하면 콜드 스타트 시드값을
-        실시간 통계로 대체한다.
-        """
         if not math.isfinite(pnl) or pnl == 0.0:
-            # 0 PnL은 break-even 으로 표본에서 제외.
             return
         self._n_trades += 1
         if pnl > 0:
@@ -774,51 +1037,38 @@ class MultiFactorMicrostructureStrategy(Strategy):
             self._sum_win += pnl
         else:
             self._losses += 1
-            self._sum_loss += -pnl  # 절대값 누적
-
-        # 통계 갱신.
+            self._sum_loss += -pnl
         self._win_rate = self._wins / self._n_trades if self._n_trades else 0.0
         if self._losses > 0:
             avg_win = self._sum_win / self._wins if self._wins else 0.0
-            avg_loss = self._sum_loss / self._losses
-            self._payoff_ratio = avg_win / avg_loss if avg_loss > 0 else math.inf
-        else:
-            # 손실 없음 → 사실상 무한 손익비; Kelly compute가 이 케이스를 처리한다.
-            self._payoff_ratio = math.inf if self._wins > 0 else 0.0
+            avg_loss = self._sum_loss / self._losses if self._losses else 1.0
+            self._payoff_ratio = avg_win / avg_loss if avg_loss > 0 else self._payoff_ratio
 
     def _update_mdd(self, ctx: StrategyContext) -> None:
-        """peak equity 추적 + 현재 MDD(%) 갱신.
-
-        equity = ``balance + unrealized_pnl`` (Protocol 표준). 백테스트와
-        라이브 모두 동일하게 이 속성을 노출한다.
-        """
         try:
-            balance = float(getattr(ctx, "balance", 0.0))
-            upnl = float(getattr(ctx, "unrealized_pnl", 0.0))
+            balance = float(getattr(ctx, "balance", 0.0) or 0.0)
+            upnl = float(getattr(ctx, "unrealized_pnl", 0.0) or 0.0)
         except Exception:  # noqa: BLE001
             return
         equity = balance + upnl
-        if not math.isfinite(equity) or equity <= 0:
+        if not math.isfinite(equity):
             return
         if self._peak_equity is None or equity > self._peak_equity:
             self._peak_equity = equity
-            self._current_mdd_pct = 0.0
-            return
-        self._current_mdd_pct = (1.0 - equity / self._peak_equity) * 100.0
+        if self._peak_equity and self._peak_equity > 0:
+            self._current_mdd_pct = max(
+                0.0, (self._peak_equity - equity) / self._peak_equity * 100.0
+            )
 
-    def _emit_event(self, ctx: Any, action: str, data: dict[str, Any]) -> None:
-        """ctx.log_event 가 있으면 호출, 없으면 무시."""
-        fn = getattr(ctx, "log_event", None)
-        if not callable(fn):
-            return
-        try:
-            fn(action, data)
-        except Exception:  # noqa: BLE001
-            pass
-
-
-def _sign(x: float) -> int:
-    """부호 함수. NaN / 0 → 0."""
-    if not math.isfinite(x) or x == 0.0:
-        return 0
-    return 1 if x > 0 else -1
+    def _emit_event(
+        self,
+        ctx: StrategyContext,
+        event: str,
+        payload: dict[str, Any],
+    ) -> None:
+        emit = getattr(ctx, "emit_event", None) or getattr(ctx, "log_event", None)
+        if callable(emit):
+            try:
+                emit(event, payload)
+            except Exception:  # noqa: BLE001
+                pass
