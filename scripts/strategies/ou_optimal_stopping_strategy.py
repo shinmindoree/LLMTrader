@@ -59,6 +59,28 @@ from typing import Any
 from strategy.base import Strategy
 from strategy.context import StrategyContext
 
+# Optimal-stopping barrier solver (closed-form via OU scale function).
+# Imported lazily inside the method to avoid a hard dependency for users
+# who only ever run the "none" mode.
+try:
+    from . import _ou_barriers  # type: ignore[attr-defined]
+except ImportError:
+    _ou_barriers = None  # type: ignore[assignment]
+    try:
+        # Fallback: same-directory import when this file is loaded via
+        # importlib (the backtest engine + scripts/run_backtest do this).
+        import importlib.util as _ilu  # noqa: PLC0415
+        import os as _os  # noqa: PLC0415
+        _here = _os.path.dirname(_os.path.abspath(__file__))
+        _spec = _ilu.spec_from_file_location(
+            "_ou_barriers", _os.path.join(_here, "_ou_barriers.py")
+        )
+        if _spec and _spec.loader:
+            _ou_barriers = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_ou_barriers)
+    except Exception:  # noqa: BLE001
+        _ou_barriers = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -244,6 +266,23 @@ STRATEGY_PARAMS: dict[str, Any] = {
     # snapshot. Useful for sanity-checking theta/half-life drift in live
     # mode. Off by default to keep audit volume low.
     "emit_fit_events": 0,
+
+    # --- Closed-form / numerical barrier solver --------------------------
+    # Optional: replace the user-supplied entry interval [entry_z_lo,
+    # entry_z_hi] (and the exit barrier b) with the **optimal** values
+    # derived from the OU first-passage-probability scale function +
+    # cost-aware expected PnL. See ``_ou_barriers.py``.
+    # Modes:
+    #   "none"   : use the user-supplied z thresholds (default; same as
+    #              the v1 behaviour).
+    #   "solver" : on each refit, call solve_barriers() and override
+    #              entry_z_lo/entry_z_hi/exit_z with the solver's output.
+    #              stop_z is treated as the user-fixed loss barrier L.
+    "barrier_mode": "none",
+    # When ``barrier_mode == "solver"``, the solver's a*_L is in z-space;
+    # use this to add a safety margin (in z units) to a*_L so we don't
+    # enter exactly at the zero-PnL edge.
+    "solver_entry_margin": 0.05,
 }
 
 
@@ -356,6 +395,18 @@ STRATEGY_PARAM_SCHEMA: dict[str, Any] = {
         "description": "1이면 매 재적합마다 OU_FIT 감사 이벤트를 emit (live 진단용).",
         "group": "진단",
     },
+    "barrier_mode": {
+        "type": "string",
+        "label": "배리어 모드 (none|solver)",
+        "description": "solver = OU 척도함수 기반 최적정지 솔버로 entry/exit barrier를 매 refit마다 갱신. none = 사용자 설정값 사용.",
+        "group": "임계점",
+    },
+    "solver_entry_margin": {
+        "type": "number", "min": 0.0, "max": 1.0,
+        "label": "솔버 진입 마진 (z)",
+        "description": "barrier_mode=solver일 때 a*_L에서 안쪽으로 추가하는 z 마진.",
+        "group": "임계점",
+    },
 }
 
 
@@ -427,12 +478,21 @@ class OuOptimalStoppingStrategy(Strategy):
         self.new_bar_only = bool(int(p["new_bar_only"]))
         self.emit_fit_events = bool(int(p["emit_fit_events"]))
 
+        # --- Barrier solver mode
+        self.barrier_mode = str(p["barrier_mode"]).strip().lower()
+        if self.barrier_mode not in ("none", "solver"):
+            raise ValueError(f"barrier_mode must be 'none' or 'solver', got {self.barrier_mode!r}")
+        self.solver_entry_margin = float(p["solver_entry_margin"])
+
         # --- Runtime state ---------------------------------------------------
         self._mode: str | None = None
         self._last_bar_ts: int = 0
         self._last_fit_bar_ts: int = 0
         # Most recent successful fit; None when filtered out / not yet fit.
         self._fit: dict[str, float] | None = None
+        # Most recent solver output (None when barrier_mode == "none" or
+        # the solver hasn't run yet).
+        self._barriers: Any | None = None
         # Trade lifecycle counters.
         self._bars_in_position: int = 0
         self._bars_since_close: int | None = None
@@ -553,6 +613,55 @@ class OuOptimalStoppingStrategy(Strategy):
                 "half_life_bars": fit["half_life"],
                 "log_price": int(self.use_log_price),
             })
+
+        # Solver hook: when barrier_mode == "solver" and the solver
+        # module is available, override the symmetric entry/exit
+        # thresholds with the optimal-stopping output. stop_z is treated
+        # as the user-fixed loss barrier L; the per-side overrides (long /
+        # short) are left untouched so an asymmetric tuning still wins
+        # over the symmetric solver values for that side.
+        if self.barrier_mode == "solver" and _ou_barriers is not None:
+            try:
+                barriers = _ou_barriers.solve_barriers(
+                    sigma_inf=float(fit["sigma_inf"]),
+                    exit_z=self.exit_z,
+                    stop_z=self.stop_z,
+                    fees_bps=self.fee_round_trip_bps + self.min_edge_bps,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("OU solver failed: %s; falling back to user thresholds", exc)
+                barriers = None
+            self._barriers = barriers
+            if (
+                barriers is not None
+                and math.isfinite(barriers.a_star)
+                and math.isfinite(barriers.d_star)
+                and barriers.d_star > barriers.a_star
+            ):
+                # In z-space, the long entry region is (-stop_z, -exit_z).
+                # The solver returns a_star (closer to -stop_z) and d_star
+                # (closer to -exit_z). We use them in absolute-value form
+                # for the strategy's existing entry-zone check.
+                # |z| ∈ [|d_star|, |a_star|]  (since a_star < d_star < 0).
+                lo_abs = abs(barriers.d_star) + self.solver_entry_margin
+                hi_abs = abs(barriers.a_star) - self.solver_entry_margin
+                if lo_abs < hi_abs:
+                    self.entry_z_lo_long = lo_abs
+                    self.entry_z_hi_long = hi_abs
+                    self.entry_z_lo_short = lo_abs
+                    self.entry_z_hi_short = hi_abs
+                self.exit_z_long = max(0.01, barriers.b_star)
+                self.exit_z_short = max(0.01, barriers.b_star)
+                if self.emit_fit_events:
+                    self._emit_event(ctx, "OU_SOLVER", {
+                        "ts": ts,
+                        "a_star": barriers.a_star,
+                        "d_star": barriers.d_star,
+                        "b_star": barriers.b_star,
+                        "L_star": barriers.L_star,
+                        "expected_pnl_bps": barriers.expected_pnl_at_entry_bps,
+                    })
+
         return fit
 
     def _bar_step_ms_safe(self, ts: int) -> int:
