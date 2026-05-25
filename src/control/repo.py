@@ -388,32 +388,40 @@ async def delete_jobs(
     }
 
 
-async def finalize_orphaned_jobs(session: AsyncSession, *, reason: str = "runner_restart") -> dict[str, int]:
+async def finalize_orphaned_jobs(
+    session: AsyncSession,
+    *,
+    reason: str = "runner_restart",
+    job_type_filter: JobType | None = None,
+) -> dict[str, int]:
+    """Reconcile RUNNING/STOP_REQUESTED jobs from a previous runner.
+
+    When ``job_type_filter`` is provided, only jobs of that type are
+    reconciled. Used by the split-role runners (RUNNER_ROLE=live or
+    =backtest) so each container only touches its own job type and does
+    not interfere with the other container's in-flight jobs.
+    """
     now = datetime.now()
 
-    running_rows = list(
-        (
-            await session.execute(
-                select(Job.job_id, Job.type)
-                .where(Job.ended_at.is_(None))
-                .where(Job.status == JobStatus.RUNNING)
-            )
-        ).all()
+    running_stmt = (
+        select(Job.job_id, Job.type)
+        .where(Job.ended_at.is_(None))
+        .where(Job.status == JobStatus.RUNNING)
     )
+    if job_type_filter is not None:
+        running_stmt = running_stmt.where(Job.type == job_type_filter)
+    running_rows = list((await session.execute(running_stmt)).all())
     running_live_ids = [job_id for job_id, job_type in running_rows if str(job_type) == str(JobType.LIVE)]
     running_backtest_ids = [job_id for job_id, job_type in running_rows if str(job_type) != str(JobType.LIVE)]
 
-    stop_requested_ids = list(
-        (
-            await session.execute(
-                select(Job.job_id)
-                .where(Job.ended_at.is_(None))
-                .where(Job.status == JobStatus.STOP_REQUESTED)
-            )
-        )
-        .scalars()
-        .all()
+    stop_requested_stmt = (
+        select(Job.job_id)
+        .where(Job.ended_at.is_(None))
+        .where(Job.status == JobStatus.STOP_REQUESTED)
     )
+    if job_type_filter is not None:
+        stop_requested_stmt = stop_requested_stmt.where(Job.type == job_type_filter)
+    stop_requested_ids = list((await session.execute(stop_requested_stmt)).scalars().all())
 
     # Requeue orphaned backtest jobs (PENDING) so they auto-retry on the next runner.
     res_backtest_requeued = None

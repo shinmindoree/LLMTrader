@@ -30,6 +30,9 @@ from settings import get_settings
 logger = logging.getLogger("runner")
 
 
+_VALID_ROLES = ("live", "backtest", "both")
+
+
 class RunnerWorker:
     def __init__(
         self,
@@ -38,12 +41,23 @@ class RunnerWorker:
         session_maker: async_sessionmaker[AsyncSession],
         poll_interval_ms: int,
         live_concurrency: int = 1,
+        role: str = "both",
     ) -> None:
         self._repo_root = repo_root
         self._session_maker = session_maker
         self._poll_interval = max(50, poll_interval_ms) / 1000.0
         self._live_concurrency = max(1, int(live_concurrency))
         self._shutting_down = asyncio.Event()
+        normalized = str(role or "both").strip().lower()
+        if normalized not in _VALID_ROLES:
+            logger.warning(
+                "invalid RUNNER_ROLE=%r; falling back to 'both' (valid: %s)",
+                role, _VALID_ROLES,
+            )
+            normalized = "both"
+        self._role = normalized
+        self._handles_live = normalized in ("live", "both")
+        self._handles_backtest = normalized in ("backtest", "both")
 
     async def run_forever(self) -> None:
         # Register SIGTERM/SIGINT for graceful shutdown.
@@ -55,23 +69,43 @@ class RunnerWorker:
                 # Windows: signal handlers not supported in asyncio, use thread-based fallback
                 signal.signal(sig, lambda s, f: loop.call_soon_threadsafe(self._request_shutdown, s))
 
-        # On runner startup, reconcile jobs left RUNNING/STOP_REQUESTED from a previous crash/restart.
-        # LIVE jobs are re-queued so the runner can resume them automatically.
+        # On runner startup, reconcile jobs left RUNNING/STOP_REQUESTED from a
+        # previous crash/restart. When role is split, only touch jobs of our
+        # own type so we never interfere with the sibling container.
+        if self._role == "both":
+            reconcile_filter: JobType | None = None
+        elif self._role == "live":
+            reconcile_filter = JobType.LIVE
+        else:
+            reconcile_filter = JobType.BACKTEST
         try:
             async with self._session_maker() as session:
-                counts = await finalize_orphaned_jobs(session, reason="runner_startup")
+                counts = await finalize_orphaned_jobs(
+                    session,
+                    reason="runner_startup",
+                    job_type_filter=reconcile_filter,
+                )
                 if counts.get("requeued_backtest") or counts.get("requeued_live") or counts.get("finalized_stopped"):
-                    logger.info("reconciled orphaned jobs: %s", counts)
+                    logger.info("reconciled orphaned jobs (role=%s): %s", self._role, counts)
                 await session.commit()
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to reconcile orphaned jobs on startup: %s: %s", type(exc).__name__, exc)
 
-        loops: list[asyncio.Task[None]] = [
-            asyncio.create_task(self._run_loop(JobType.BACKTEST), name="runner-backtest-0"),
-            asyncio.create_task(self._periodic_stale_live_reconcile(), name="runner-stale-live-reconcile"),
-        ]
-        for i in range(self._live_concurrency):
-            loops.append(asyncio.create_task(self._run_loop(JobType.LIVE), name=f"runner-live-{i}"))
+        loops: list[asyncio.Task[None]] = []
+        if self._handles_backtest:
+            loops.append(
+                asyncio.create_task(self._run_loop(JobType.BACKTEST), name="runner-backtest-0")
+            )
+        if self._handles_live:
+            loops.append(
+                asyncio.create_task(self._periodic_stale_live_reconcile(), name="runner-stale-live-reconcile")
+            )
+            for i in range(self._live_concurrency):
+                loops.append(asyncio.create_task(self._run_loop(JobType.LIVE), name=f"runner-live-{i}"))
+        logger.info(
+            "runner loops started role=%s handles_live=%s handles_backtest=%s live_concurrency=%d",
+            self._role, self._handles_live, self._handles_backtest, self._live_concurrency,
+        )
         await asyncio.gather(*loops)
 
     def _request_shutdown(self, sig: int | signal.Signals) -> None:

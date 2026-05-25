@@ -682,10 +682,12 @@ def create_app() -> FastAPI:
                 session_maker=session_maker,
                 poll_interval_ms=settings.runner_poll_interval_ms,
                 live_concurrency=settings.runner_live_concurrency,
+                role=settings.runner_role,
             )
             _runner_task = asyncio.create_task(_runner_worker.run_forever())
             _logger.info(
-                "Embedded runner started (live_concurrency=%d)",
+                "Embedded runner started (role=%s, live_concurrency=%d)",
+                settings.runner_role,
                 settings.runner_live_concurrency,
             )
 
