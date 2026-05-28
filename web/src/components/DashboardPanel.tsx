@@ -151,8 +151,9 @@ function MiniPieChart({ slices }: { slices: AllocationSlice[] }) {
 }
 
 function AumPanel() {
-  const { data, isLoading } = useSWR("portfolio-summary", getPortfolioSummary, {
+  const { data, isLoading, error } = useSWR("portfolio-summary", getPortfolioSummary, {
     refreshInterval: 30_000,
+    shouldRetryOnError: false,
   });
 
   const fmt = (v: number) =>
@@ -164,7 +165,14 @@ function AumPanel() {
       <div className="mb-6 flex h-24 animate-pulse items-center rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4" />
     );
   }
-  if (!data) return null;
+  if (error || !data) {
+    return (
+      <div className="mb-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-5 py-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-[#868993]">Total AUM</p>
+        <p className="mt-1 text-sm text-[#555]">백엔드 연결 대기 중 — 서버 실행 후 자동 갱신됩니다.</p>
+      </div>
+    );
+  }
   const pnlColor =
     data.total_unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
 
