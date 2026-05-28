@@ -165,7 +165,6 @@ function AumPanel() {
     );
   }
   if (!data) return null;
-
   const pnlColor =
     data.total_unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
 

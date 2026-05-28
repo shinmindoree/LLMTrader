@@ -90,6 +90,7 @@ const en = {
     backtest: "Backtest",
     settings: "Settings",
     strategies: "Strategies",
+    arbitrage: "Arbitrage",
     openMenu: "Open navigation menu",
     closeMenu: "Close navigation menu",
   },

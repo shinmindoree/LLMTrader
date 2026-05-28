@@ -10,6 +10,7 @@ const TABS = [
   { href: "/strategies", labelKey: "strategies" as const },
   { href: "/backtest", labelKey: "backtest" as const },
   { href: "/live", labelKey: "live" as const },
+  { href: "/arbitrage", labelKey: "arbitrage" as const },
 ];
 
 function isActive(pathname: string, href: string): boolean {

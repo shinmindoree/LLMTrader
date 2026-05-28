@@ -94,6 +94,7 @@ const ko: TranslationKeys = {
     backtest: "백테스트",
     settings: "설정",
     strategies: "전략",
+    arbitrage: "차익거래",
     openMenu: "내비게이션 메뉴 열기",
     closeMenu: "내비게이션 메뉴 닫기",
   },
