@@ -198,6 +198,47 @@ class BacktestContext:
             return
         self.sell(qty, reason=reason)
 
+    def flip_position(
+        self,
+        target_side: int,
+        close_reason: str | None = None,
+        entry_reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,  # noqa: ARG002 - backtest는 즉시 체결
+    ) -> None:
+        """현재 포지션을 ``target_side`` 방향으로 플립(청산 + 신규 진입).
+
+        백테스트는 주문이 동기로 즉시 체결되므로 ``close_position`` 후
+        ``enter_long``/``enter_short`` 를 순차 호출한다. 라이브와 동일한
+        세만틱(같은 봉에서 close + reverse)을 한 줄 호출로 표현한다.
+        """
+        if target_side not in (1, -1):
+            raise ValueError("target_side must be +1 (long) or -1 (short)")
+
+        current_size = float(self.position.size)
+        if current_size > 1e-12:
+            current_sign = 1
+        elif current_size < -1e-12:
+            current_sign = -1
+        else:
+            current_sign = 0
+
+        if current_sign == 0:
+            if target_side == 1:
+                self.enter_long(reason=entry_reason, entry_pct=entry_pct)
+            else:
+                self.enter_short(reason=entry_reason, entry_pct=entry_pct)
+            return
+
+        if current_sign == target_side:
+            return
+
+        self.close_position(reason=close_reason, exit_reason="FLIP")
+        if target_side == 1:
+            self.enter_long(reason=entry_reason, entry_pct=entry_pct)
+        else:
+            self.enter_short(reason=entry_reason, entry_pct=entry_pct)
+
     @property
     def pyramid_count(self) -> int:
         """현재 피라미딩 횟수 (최초 진입 제외)."""

@@ -118,6 +118,25 @@ class _SymbolTradingProxy:
         if qty > 0:
             self.sell(qty, reason=reason)
 
+    def flip_position(
+        self,
+        target_side: int,
+        close_reason: str | None = None,
+        entry_reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        # Pre-trade portfolio risk check should not block exits; for the
+        # entry leg we rely on the underlying ``LiveContext`` (which runs
+        # its own ``can_trade`` check inside ``buy``/``sell``).
+        self._ctx.flip_position(
+            target_side=target_side,
+            close_reason=close_reason,
+            entry_reason=entry_reason,
+            entry_pct=entry_pct,
+            use_chase=use_chase,
+        )
+
 
 class PortfolioContext:
     """멀티 심볼/멀티 타임프레임 전략을 위한 컨텍스트."""
@@ -212,6 +231,22 @@ class PortfolioContext:
 
     def enter_short(self, reason: str | None = None, entry_pct: float | None = None) -> None:
         self.for_symbol(self.primary_symbol).enter_short(reason=reason, entry_pct=entry_pct)
+
+    def flip_position(
+        self,
+        target_side: int,
+        close_reason: str | None = None,
+        entry_reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        self.for_symbol(self.primary_symbol).flip_position(
+            target_side=target_side,
+            close_reason=close_reason,
+            entry_reason=entry_reason,
+            entry_pct=entry_pct,
+            use_chase=use_chase,
+        )
 
     # ----- Multi-symbol API -----
     @property

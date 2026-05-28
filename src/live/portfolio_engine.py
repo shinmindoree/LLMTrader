@@ -112,6 +112,22 @@ class StreamBoundStrategyContext:
     def enter_short(self, reason: str | None = None, entry_pct: float | None = None) -> None:
         self._portfolio.for_symbol(self.symbol).enter_short(reason=reason, entry_pct=entry_pct)
 
+    def flip_position(
+        self,
+        target_side: int,
+        close_reason: str | None = None,
+        entry_reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        self._portfolio.for_symbol(self.symbol).flip_position(
+            target_side=target_side,
+            close_reason=close_reason,
+            entry_reason=entry_reason,
+            entry_pct=entry_pct,
+            use_chase=use_chase,
+        )
+
     def get_open_orders(self) -> list[dict[str, Any]]:
         return self._portfolio.for_symbol(self.symbol).get_open_orders()
 

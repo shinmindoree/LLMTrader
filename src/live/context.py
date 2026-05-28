@@ -80,6 +80,12 @@ class LiveContext:
 
         self._order_inflight: bool = False
         self._last_order_started_at: float = 0.0
+        # ``flip_position`` 등에서 "이번 주문이 체결된 직후 실행할 후속 동작"을
+        # 등록하기 위한 콜백 큐. 라이브에서 ``close_position`` 직후
+        # ``enter_short`` 같은 호출이 ``_order_inflight`` / ``position.size``
+        # 가드에 막혀 사라지지 않도록, 청산이 완전히 끝난 시점에
+        # 안전하게 호출되도록 한다.
+        self._pending_after_fill: list[Callable[[], None]] = []
         
         self._last_account_update_time: float = 0.0
         self._min_account_update_interval: float = 1.0
@@ -1124,15 +1130,53 @@ class LiveContext:
         try:
             result = task.result()
             after_task = asyncio.create_task(self._after_order_filled(result))
-            after_task.add_done_callback(lambda _t: self._release_order_inflight())
+            after_task.add_done_callback(self._on_after_order_settled)
         except Exception as e:
             # StopLoss cooldown은 이미 START/END 로그로 사용자에게 알려주므로,
             # 매 봉마다 진입 시도로 인해 "주문 실패" 로그가 폭증하는 것을 방지한다.
             if isinstance(e, ValueError) and "거래 불가: StopLoss cooldown" in str(e):
                 self._release_order_inflight()
+                self._drain_pending_after_fill(success=False)
                 return
             print(f"❌ 주문 실패: {e}")
             self._release_order_inflight()
+            self._drain_pending_after_fill(success=False)
+
+    def _on_after_order_settled(self, _task: asyncio.Task) -> None:
+        """``_after_order_filled`` 완료 후 호출되는 콜백.
+
+        1. inflight 락을 해제하고
+        2. 등록된 후속 콜백(예: flip_position 의 신규 진입)을 실행한다.
+
+        주의: 순서가 중요하다. 후속 콜백이 ``self.sell`` / ``self.buy`` 를
+        호출할 수 있는데, 락이 풀려있어야 새 주문이 정상적으로 발주된다.
+        """
+        self._release_order_inflight()
+        self._drain_pending_after_fill(success=True)
+
+    def _drain_pending_after_fill(self, *, success: bool) -> None:
+        """등록된 ``_pending_after_fill`` 콜백을 모두 실행/폐기한다.
+
+        - ``success=True``: 콜백을 모두 실행한다.
+        - ``success=False``: 콜백을 실행하지 않고 큐만 비운다. 청산이 실패한
+          상황에서 자동으로 반대 방향 진입을 발주하면 위험하기 때문이다.
+        """
+        if not self._pending_after_fill:
+            return
+        pending = self._pending_after_fill
+        self._pending_after_fill = []
+        if not success:
+            self._log_audit(
+                "FLIP_PENDING_DROPPED",
+                {"count": len(pending), "reason": "order failed"},
+            )
+            return
+        for fn in pending:
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                print(f"⚠️ pending after-fill 콜백 실패: {exc}")
+                self._log_audit("FLIP_PENDING_CB_ERROR", {"error": str(exc)})
 
     def _release_order_inflight(self) -> None:
         self._order_inflight = False
@@ -2236,6 +2280,86 @@ class LiveContext:
         if qty <= 0:
             return
         self.sell(qty, reason=reason, use_chase=use_chase)
+
+    def flip_position(
+        self,
+        target_side: int,
+        close_reason: str | None = None,
+        entry_reason: str | None = None,
+        entry_pct: float | None = None,
+        use_chase: bool | None = None,
+    ) -> None:
+        """현재 포지션을 ``target_side`` 방향으로 플립.
+
+        라이브에서는 ``close_position`` 직후 ``enter_short``/``enter_long``을
+        호출하면 ``_order_inflight`` 락과 ``position.size != 0`` 가드 때문에
+        신규 진입이 사라진다. 이 메서드는 청산을 먼저 발주하고, 청산이
+        완전히 체결되어 inflight 락이 풀리는 순간 자동으로 반대 방향
+        진입을 발주해 백테스트와 동일한 "같은 봉 내 close + reverse"
+        의도를 보존한다.
+        """
+        if target_side not in (1, -1):
+            raise ValueError("target_side must be +1 (long) or -1 (short)")
+
+        current_size = float(self.position.size)
+        if current_size > 1e-12:
+            current_sign = 1
+        elif current_size < -1e-12:
+            current_sign = -1
+        else:
+            current_sign = 0
+
+        # Flat → 단순 진입
+        if current_sign == 0:
+            if target_side == 1:
+                self.enter_long(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
+            else:
+                self.enter_short(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
+            return
+
+        # 이미 target 방향 → no-op
+        if current_sign == target_side:
+            return
+
+        # 반대 방향 → 청산 + 청산 체결 후 신규 진입을 큐잉
+        def _enter_after_close() -> None:
+            # 청산이 정상 체결되었다면 ``position.size`` 는 0 근처여야 한다.
+            # ``enter_long``/``enter_short`` 가 자체적으로 가드하므로 추가
+            # 체크는 불필요하다.
+            if target_side == 1:
+                self.enter_long(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
+            else:
+                self.enter_short(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
+
+        # 청산 발주가 가드(예: 이미 inflight, position 0 등)에 막혀
+        # 실제 주문이 나가지 않으면 콜백이 영원히 실행되지 않는다.
+        # ``_order_inflight`` 상태 변화로 발주 여부를 판정한다.
+        before_inflight = self._order_inflight
+        self.close_position(reason=close_reason, exit_reason="FLIP", use_chase=use_chase)
+        if self._order_inflight and not before_inflight:
+            # 정상적으로 청산 주문이 큐에 들어감 → 후속 진입을 등록
+            self._pending_after_fill.append(_enter_after_close)
+            self._log_audit(
+                "FLIP_SCHEDULED",
+                {
+                    "from_side": int(current_sign),
+                    "to_side": int(target_side),
+                    "close_reason": close_reason,
+                    "entry_reason": entry_reason,
+                },
+            )
+        else:
+            # 청산이 즉시 거부됨(예: 이미 inflight 인 다른 주문이 있음).
+            # 안전을 위해 후속 진입은 보내지 않는다. 다음 봉에서 전략의
+            # 자체 재시도/리컨실 로직이 처리하게 둔다.
+            self._log_audit(
+                "FLIP_REJECTED",
+                {
+                    "from_side": int(current_sign),
+                    "to_side": int(target_side),
+                    "reason": "close_position guarded (already inflight or no position)",
+                },
+            )
 
     @property
     def pyramid_count(self) -> int:

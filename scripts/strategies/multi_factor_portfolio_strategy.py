@@ -1962,34 +1962,92 @@ class MultiFactorPortfolioStrategy(Strategy):
         cur = self._committed_side
         if target == cur:
             return
-        # Flatten if currently in opposite-or-neutral target.
-        if cur != 0 and target != cur:
-            # Distinguish FLIP (will re-enter opposite direction below) from
-            # FLAT (majority became neutral, no re-entry). Distinct close
-            # reasons make the trade history unambiguous.
-            if target == 0:
-                close_reason = f"MFP: net flat ({long_count}={short_count})"
-                close_kind = "flat"
+
+        # Case A: FLIP (long <-> short). Live must close AND re-enter the
+        # opposite direction in this same bar. The legacy "close_position
+        # then enter_*" sequence silently dropped the entry in live because
+        # ``close_position`` leaves the position non-zero and sets
+        # ``_order_inflight`` until the close fill arrives, so the
+        # immediately-following ``enter_short``/``enter_long`` was rejected
+        # by the ``position.size != 0`` and ``_order_inflight`` guards.
+        # ``ctx.flip_position`` queues the entry to fire right after the
+        # close fill, restoring backtest semantics in live.
+        if cur != 0 and target != 0 and cur != target:
+            prev_label = "long" if cur > 0 else "short"
+            next_label = "long" if target > 0 else "short"
+            close_reason = (
+                f"MFP: net direction flip ({prev_label}->{next_label})"
+            )
+            if target == 1:
+                entry_reason = f"MFP: net long ({long_count}>{short_count})"
             else:
-                prev_label = "long" if cur > 0 else "short"
-                next_label = "long" if target > 0 else "short"
-                close_reason = (
-                    f"MFP: net direction flip ({prev_label}->{next_label})"
-                )
-                close_kind = "flip"
+                entry_reason = f"MFP: net short ({short_count}>{long_count})"
+
+            flip_fn = getattr(ctx, "flip_position", None)
+            if callable(flip_fn):
+                try:
+                    flip_fn(
+                        target_side=int(target),
+                        close_reason=close_reason,
+                        entry_reason=entry_reason,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                # Backward-compat for any context that hasn't been upgraded
+                # yet. Still suffers from the live race condition described
+                # above; included only so older callers don't crash.
+                try:
+                    ctx.close_position(reason=close_reason)
+                except Exception:  # noqa: BLE001
+                    pass
+                if target == 1:
+                    ctx.enter_long(reason=entry_reason)
+                else:
+                    ctx.enter_short(reason=entry_reason)
+
+            # Preserve the existing two-event shape so downstream consumers
+            # (logs, evaluators) don't need to learn a new event name.
+            self._emit_event(ctx, "MFP_FLAT", {
+                "ts": ts, "target": int(target), "prev_side": int(cur),
+                "committed_side": 0,
+                "long_legs": long_count, "short_legs": short_count,
+                "kind": "flip",
+            })
+            if target == 1:
+                self._committed_side = 1
+                self._emit_event(ctx, "MFP_ENTER_LONG", {
+                    "ts": ts, "target": 1, "prev_side": int(cur),
+                    "committed_side": 1,
+                    "long_legs": long_count, "short_legs": short_count,
+                })
+            else:
+                self._committed_side = -1
+                self._emit_event(ctx, "MFP_ENTER_SHORT", {
+                    "ts": ts, "target": -1, "prev_side": int(cur),
+                    "committed_side": -1,
+                    "long_legs": long_count, "short_legs": short_count,
+                })
+            return
+
+        # Case B: pure FLAT (close current position, no re-entry).
+        if cur != 0 and target == 0:
+            close_reason = f"MFP: net flat ({long_count}={short_count})"
             try:
                 ctx.close_position(reason=close_reason)
             except Exception:  # noqa: BLE001
                 pass
             self._committed_side = 0
             self._emit_event(ctx, "MFP_FLAT", {
-                "ts": ts, "target": int(target), "prev_side": int(cur),
+                "ts": ts, "target": 0, "prev_side": int(cur),
                 "committed_side": 0,
                 "long_legs": long_count, "short_legs": short_count,
-                "kind": close_kind,
+                "kind": "flat",
             })
-        # Open new position in target direction. Sizing is delegated entirely
-        # to the runner trade-settings (max_position/max_order); no per-strategy
+            return
+
+        # Case C: pure ENTRY from flat. Sizing is delegated entirely to the
+        # runner trade-settings (max_position/max_order); no per-strategy
         # entry_pct override.
         if target == 1:
             ctx.enter_long(reason=f"MFP: net long ({long_count}>{short_count})")
