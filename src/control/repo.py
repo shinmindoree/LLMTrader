@@ -108,6 +108,33 @@ async def get_user_by_stripe_customer_id(
     return result.scalar_one_or_none()
 
 
+async def update_user_auto_sweep_settings(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    enabled: bool,
+    min_usdt: float,
+    buffer_usdt: float,
+) -> None:
+    await session.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id)
+        .values(
+            auto_sweep_enabled=enabled,
+            auto_sweep_min_usdt=min_usdt,
+            auto_sweep_buffer_usdt=buffer_usdt,
+            updated_at=datetime.now(),
+        )
+    )
+
+
+async def list_auto_sweep_enabled_users(session: AsyncSession) -> list[UserProfile]:
+    result = await session.execute(
+        select(UserProfile).where(UserProfile.auto_sweep_enabled.is_(True))
+    )
+    return list(result.scalars().all())
+
+
 # ---------------------------------------------------------------------------
 # StrategyMeta
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -35,6 +35,16 @@ class UserProfile(Base):
     binance_api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     binance_base_url: Mapped[str] = mapped_column(
         String(256), nullable=False, default="https://testnet.binancefuture.com"
+    )
+
+    auto_sweep_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    auto_sweep_min_usdt: Mapped[float] = mapped_column(
+        Float, nullable=False, default=100.0, server_default="100"
+    )
+    auto_sweep_buffer_usdt: Mapped[float] = mapped_column(
+        Float, nullable=False, default=50.0, server_default="50"
     )
 
     created_at: Mapped[datetime] = mapped_column(

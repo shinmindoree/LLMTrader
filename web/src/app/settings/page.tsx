@@ -8,8 +8,10 @@ import {
   getBinanceKeysStatus,
   setBinanceKeys,
   deleteBinanceKeys,
+  getAutoSweepSettings,
+  setAutoSweepSettings,
 } from "@/lib/api";
-import type { UserProfile, BinanceKeysStatus } from "@/lib/types";
+import type { UserProfile, BinanceKeysStatus, AutoSweepSettings } from "@/lib/types";
 
 type FormState = "idle" | "saving" | "deleting";
 
@@ -254,22 +256,67 @@ export default function SettingsPage() {
 
 function AutoSweepSection() {
   const { t } = useI18n();
-  const [enabled, setEnabled] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("autoSweepEnabled") === "true";
-  });
+  const { data, isLoading, mutate } = useSWR<AutoSweepSettings>(
+    "autoSweepSettings",
+    () => getAutoSweepSettings(),
+  );
 
-  const toggle = () => {
-    const next = !enabled;
-    setEnabled(next);
-    localStorage.setItem("autoSweepEnabled", String(next));
+  const [enabled, setEnabled] = useState(false);
+  const [minIdle, setMinIdle] = useState<string>("100");
+  const [buffer, setBuffer] = useState<string>("50");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+
+  if (data && !hydrated) {
+    setEnabled(data.enabled);
+    setMinIdle(String(data.min_idle_usdt));
+    setBuffer(String(data.buffer_usdt));
+    setHydrated(true);
+  }
+
+  const mainnetRequired = data?.mainnet_required ?? false;
+  const keysConfigured = data?.keys_configured ?? false;
+  const blocked = mainnetRequired || !keysConfigured;
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const min = Number.parseFloat(minIdle);
+      const buf = Number.parseFloat(buffer);
+      if (!Number.isFinite(min) || !Number.isFinite(buf) || min < 0 || buf < 0) {
+        throw new Error("Invalid number");
+      }
+      const result = await setAutoSweepSettings({
+        enabled,
+        min_idle_usdt: min,
+        buffer_usdt: buf,
+      });
+      await mutate(result, { revalidate: false });
+      setMessage({ type: "success", text: t.settingsPage.autoSweepSaved });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessage({ type: "error", text: `${t.settingsPage.autoSweepSaveFailed}: ${msg}` });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const statusLabel = (action: string | null | undefined): string => {
+    if (action === "subscribed") return t.settingsPage.autoSweepStatusSubscribed;
+    if (action === "redeemed") return t.settingsPage.autoSweepStatusRedeemed;
+    if (action === "noop") return t.settingsPage.autoSweepStatusNoop;
+    if (action === "error") return t.settingsPage.autoSweepStatusError;
+    return action ?? "—";
   };
 
   return (
     <section className="mt-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
       <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">{t.settingsPage.automationSection}</h2>
+
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="flex-1">
           <p className="text-sm font-medium text-[#d1d4dc]">{t.settingsPage.autoSweepLabel}</p>
           <p className="mt-1 text-xs text-[#868993] max-w-md">{t.settingsPage.autoSweepDesc}</p>
           <p className={`mt-2 text-xs font-medium ${enabled ? "text-[#f0b90b]" : "text-[#555]"}`}>
@@ -280,9 +327,11 @@ function AutoSweepSection() {
           type="button"
           role="switch"
           aria-checked={enabled}
-          onClick={toggle}
+          onClick={() => !blocked && setEnabled((v) => !v)}
+          disabled={blocked}
           className={[
             "relative mt-1 inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2962ff]",
+            blocked ? "cursor-not-allowed opacity-40" : "",
             enabled ? "bg-[#f0b90b]" : "bg-[#2a2e39]",
           ].join(" ")}
         >
@@ -294,6 +343,89 @@ function AutoSweepSection() {
           />
         </button>
       </div>
+
+      {mainnetRequired && (
+        <p className="mt-3 rounded border border-[#5a3a1a] bg-[#2a1a0a] px-3 py-2 text-xs text-[#f0b90b]">
+          {t.settingsPage.autoSweepMainnetRequired}
+        </p>
+      )}
+      {!mainnetRequired && !keysConfigured && (
+        <p className="mt-3 rounded border border-[#5a3a1a] bg-[#2a1a0a] px-3 py-2 text-xs text-[#f0b90b]">
+          {t.settingsPage.autoSweepKeysRequired}
+        </p>
+      )}
+
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="block text-xs text-[#868993]">
+          {t.settingsPage.autoSweepMinIdle}
+          <input
+            type="number"
+            min={0}
+            step="1"
+            value={minIdle}
+            onChange={(e) => setMinIdle(e.target.value)}
+            disabled={blocked}
+            className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] disabled:opacity-50"
+          />
+        </label>
+        <label className="block text-xs text-[#868993]">
+          {t.settingsPage.autoSweepBuffer}
+          <input
+            type="number"
+            min={0}
+            step="1"
+            value={buffer}
+            onChange={(e) => setBuffer(e.target.value)}
+            disabled={blocked}
+            className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] disabled:opacity-50"
+          />
+        </label>
+      </div>
+
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || isLoading}
+          className="rounded bg-[#2962ff] px-4 py-1.5 text-sm font-medium text-white hover:bg-[#2456e6] disabled:opacity-50"
+        >
+          {saving ? t.settingsPage.autoSweepSaving : t.settingsPage.autoSweepSave}
+        </button>
+        {message && (
+          <span className={`text-xs ${message.type === "success" ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
+            {message.text}
+          </span>
+        )}
+      </div>
+
+      {data && (data.last_run_at || data.spot_usdt !== null || data.earn_usdt !== null) && (
+        <div className="mt-5 grid grid-cols-2 gap-3 rounded border border-[#2a2e39] bg-[#131722] p-3 text-xs sm:grid-cols-4">
+          <div>
+            <div className="text-[#868993]">{t.settingsPage.autoSweepSpotBalance}</div>
+            <div className="mt-0.5 text-[#d1d4dc]">{data.spot_usdt?.toFixed(2) ?? "—"}</div>
+          </div>
+          <div>
+            <div className="text-[#868993]">{t.settingsPage.autoSweepEarnBalance}</div>
+            <div className="mt-0.5 text-[#d1d4dc]">{data.earn_usdt?.toFixed(2) ?? "—"}</div>
+          </div>
+          <div>
+            <div className="text-[#868993]">{t.settingsPage.autoSweepLastRun}</div>
+            <div className="mt-0.5 text-[#d1d4dc]">
+              {data.last_run_at ? new Date(data.last_run_at).toLocaleString() : "—"}
+            </div>
+          </div>
+          <div>
+            <div className="text-[#868993]">{t.settingsPage.autoSweepLastAction}</div>
+            <div className="mt-0.5 text-[#d1d4dc]">{statusLabel(data.last_action)}</div>
+          </div>
+          {data.last_error && (
+            <div className="col-span-2 sm:col-span-4">
+              <div className="text-[#868993]">Error</div>
+              <div className="mt-0.5 text-[#ef5350]">{data.last_error}</div>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

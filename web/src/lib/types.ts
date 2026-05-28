@@ -304,6 +304,25 @@ export type BinanceKeysStatus = {
   base_url?: string;
 };
 
+export type AutoSweepSettings = {
+  enabled: boolean;
+  min_idle_usdt: number;
+  buffer_usdt: number;
+  mainnet_required: boolean;
+  keys_configured: boolean;
+  spot_usdt: number | null;
+  earn_usdt: number | null;
+  last_run_at: string | null;
+  last_action: string | null;
+  last_error: string | null;
+};
+
+export type AutoSweepSettingsInput = {
+  enabled: boolean;
+  min_idle_usdt: number;
+  buffer_usdt: number;
+};
+
 export type BillingStatus = {
   plan: string;
   limits: {

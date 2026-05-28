@@ -132,6 +132,8 @@ from api.schemas import (
     StrategyModuleStatus,
     FundingArbitrageParams,
     FundingArbitrageStatusResponse,
+    AutoSweepSettingsRequest,
+    AutoSweepStatusResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 from api.strategy_params import (
@@ -698,9 +700,23 @@ def create_app() -> FastAPI:
                 settings.runner_live_concurrency,
             )
 
+        if settings.auto_sweep_enabled:
+            try:
+                from live.auto_sweep_engine import start_engine as _start_auto_sweep
+
+                await _start_auto_sweep(session_maker)
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("Auto-sweep engine failed to start: %s", exc)
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         nonlocal _keepalive_task, _runner_task, _runner_worker
+        try:
+            from live.auto_sweep_engine import stop_engine as _stop_auto_sweep
+
+            await _stop_auto_sweep()
+        except Exception:  # noqa: BLE001
+            pass
         if _runner_worker is not None:
             _runner_worker._shutting_down.set()
             _logger.info("Embedded runner shutdown requested")
@@ -2363,6 +2379,109 @@ def create_app() -> FastAPI:
         )
         await session.commit()
         return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # /api/me/auto-sweep — Idle USDT → Binance Simple Earn (Flexible)
+    # ------------------------------------------------------------------
+
+    def _is_testnet_url(url: str | None) -> bool:
+        return bool(url and "testnet" in url.lower())
+
+    @app.get("/api/me/auto-sweep", response_model=AutoSweepStatusResponse)
+    async def get_auto_sweep(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> AutoSweepStatusResponse:
+        from control.repo import get_user_profile
+        from live.auto_sweep_engine import get_user_status
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        snap = await get_user_status(session, user_id=user.user_id)
+        last_run_at: datetime | None = None
+        if snap and snap.get("last_run_at"):
+            try:
+                last_run_at = datetime.fromisoformat(str(snap["last_run_at"]))
+            except Exception:  # noqa: BLE001
+                last_run_at = None
+
+        return AutoSweepStatusResponse(
+            enabled=bool(profile.auto_sweep_enabled),
+            min_idle_usdt=float(profile.auto_sweep_min_usdt),
+            buffer_usdt=float(profile.auto_sweep_buffer_usdt),
+            mainnet_required=_is_testnet_url(profile.binance_base_url),
+            keys_configured=bool(profile.binance_api_key_enc and profile.binance_api_secret_enc),
+            spot_usdt=(snap or {}).get("spot_usdt"),
+            earn_usdt=(snap or {}).get("earn_usdt"),
+            last_run_at=last_run_at,
+            last_action=(snap or {}).get("last_action"),
+            last_error=(snap or {}).get("last_error"),
+        )
+
+    @app.put("/api/me/auto-sweep", response_model=AutoSweepStatusResponse)
+    async def set_auto_sweep(
+        body: AutoSweepSettingsRequest,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> AutoSweepStatusResponse:
+        from control.repo import (
+            get_user_profile,
+            update_user_auto_sweep_settings,
+        )
+        from live.auto_sweep_engine import get_user_status
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        if body.enabled:
+            if _is_testnet_url(profile.binance_base_url):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Auto-sweep requires mainnet keys (Simple Earn is not available on testnet)",
+                )
+            if not (profile.binance_api_key_enc and profile.binance_api_secret_enc):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Configure Binance API keys before enabling auto-sweep",
+                )
+        if body.buffer_usdt > body.min_idle_usdt:
+            raise HTTPException(
+                status_code=422,
+                detail="buffer_usdt must be <= min_idle_usdt",
+            )
+
+        await update_user_auto_sweep_settings(
+            session,
+            user_id=user.user_id,
+            enabled=body.enabled,
+            min_usdt=body.min_idle_usdt,
+            buffer_usdt=body.buffer_usdt,
+        )
+        await session.commit()
+
+        snap = await get_user_status(session, user_id=user.user_id)
+        last_run_at: datetime | None = None
+        if snap and snap.get("last_run_at"):
+            try:
+                last_run_at = datetime.fromisoformat(str(snap["last_run_at"]))
+            except Exception:  # noqa: BLE001
+                last_run_at = None
+
+        return AutoSweepStatusResponse(
+            enabled=body.enabled,
+            min_idle_usdt=body.min_idle_usdt,
+            buffer_usdt=body.buffer_usdt,
+            mainnet_required=_is_testnet_url(profile.binance_base_url),
+            keys_configured=bool(profile.binance_api_key_enc and profile.binance_api_secret_enc),
+            spot_usdt=(snap or {}).get("spot_usdt"),
+            earn_usdt=(snap or {}).get("earn_usdt"),
+            last_run_at=last_run_at,
+            last_action=(snap or {}).get("last_action"),
+            last_error=(snap or {}).get("last_error"),
+        )
 
     # ------------------------------------------------------------------
     # /api/billing — Stripe 결제

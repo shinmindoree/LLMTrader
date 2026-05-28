@@ -32,6 +32,8 @@ import type {
   Trade,
   UserProfile,
   AdminUsersResponse,
+  AutoSweepSettings,
+  AutoSweepSettingsInput,
 } from "@/lib/types";
 
 const CHAT_USER_ID_STORAGE_KEY = "llmtrader.chat_user_id";
@@ -818,6 +820,19 @@ export async function setBinanceKeys(body: {
 
 export async function deleteBinanceKeys(): Promise<{ ok: boolean }> {
   return json("/api/backend/api/me/binance-keys", { method: "DELETE" });
+}
+
+export async function getAutoSweepSettings(): Promise<AutoSweepSettings> {
+  return json<AutoSweepSettings>("/api/backend/api/me/auto-sweep");
+}
+
+export async function setAutoSweepSettings(
+  body: AutoSweepSettingsInput,
+): Promise<AutoSweepSettings> {
+  return json<AutoSweepSettings>("/api/backend/api/me/auto-sweep", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 }
 
 export async function getBillingStatus(): Promise<BillingStatus> {

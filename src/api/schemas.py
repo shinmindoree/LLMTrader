@@ -389,6 +389,25 @@ class StrategyModuleCatalogResponse(BaseModel):
     modules: list[StrategyModuleStatus]
 
 
+class AutoSweepSettingsRequest(BaseModel):
+    enabled: bool
+    min_idle_usdt: float = Field(default=100.0, ge=0)
+    buffer_usdt: float = Field(default=50.0, ge=0)
+
+
+class AutoSweepStatusResponse(BaseModel):
+    enabled: bool
+    min_idle_usdt: float
+    buffer_usdt: float
+    mainnet_required: bool
+    keys_configured: bool
+    spot_usdt: float | None = None
+    earn_usdt: float | None = None
+    last_run_at: datetime | None = None
+    last_action: str | None = None
+    last_error: str | None = None
+
+
 class FundingArbitrageParams(BaseModel):
     symbol: str = "BTCUSDT"
     allocated_usdt: float = Field(default=1000.0, gt=0, description="할당 시드 (USDT)")
