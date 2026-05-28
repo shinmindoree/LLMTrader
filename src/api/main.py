@@ -1039,6 +1039,9 @@ def create_app() -> FastAPI:
         from live.funding_arbitrage_engine import stop_engine, get_engine_status
         await stop_engine()
         return get_engine_status()
+
+    @app.get(
+        "/api/binance/futures/symbols",
         response_model=list[str],
         dependencies=[Depends(require_auth)],
     )
