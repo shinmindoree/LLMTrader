@@ -665,6 +665,39 @@ export async function getBinanceAccountSummary(): Promise<BinanceAccountSummary>
   return json<BinanceAccountSummary>("/api/backend/api/binance/account/summary");
 }
 
+export async function getPortfolioSummary(): Promise<
+  import("@/lib/types").PortfolioSummaryResponse
+> {
+  return json("/api/backend/api/portfolio/summary");
+}
+
+export async function getStrategyModuleCatalog(): Promise<
+  import("@/lib/types").StrategyModuleCatalogResponse
+> {
+  return json("/api/backend/api/strategy-modules");
+}
+
+export async function getFundingArbStatus(): Promise<
+  import("@/lib/types").FundingArbitrageStatusResponse
+> {
+  return json("/api/backend/api/funding-arb/status");
+}
+
+export async function startFundingArb(
+  params: import("@/lib/types").FundingArbitrageParams,
+): Promise<import("@/lib/types").FundingArbitrageStatusResponse> {
+  return json("/api/backend/api/funding-arb/start", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function stopFundingArb(): Promise<
+  import("@/lib/types").FundingArbitrageStatusResponse
+> {
+  return json("/api/backend/api/funding-arb/stop", { method: "POST" });
+}
+
 export async function listFuturesSymbols(): Promise<string[]> {
   return json<string[]>("/api/backend/api/binance/futures/symbols");
 }

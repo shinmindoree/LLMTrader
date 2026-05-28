@@ -6,8 +6,14 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
 import type { Locale } from "@/lib/i18n/translations";
-import { getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies } from "@/lib/api";
-import type { JobSummary, QuickBacktestEquityPoint } from "@/lib/types";
+import {
+  getBinanceKeysStatus,
+  getJobCounts,
+  listJobSummaries,
+  listStrategies,
+  getPortfolioSummary,
+} from "@/lib/api";
+import type { JobSummary, QuickBacktestEquityPoint, AllocationSlice } from "@/lib/types";
 import { useLiveJobStream } from "@/lib/useLiveJobStream";
 import { AssetOverviewPanel } from "@/components/AssetOverviewPanel";
 import { FuturesWatchlistRail } from "@/components/FuturesWatchlistRail";
@@ -95,6 +101,110 @@ function StatBadge({ label, value, color = "text-[#868993]" }: { label: string; 
       {label && <span className="text-[#555]">{label}</span>}
       {value}
     </span>
+  );
+}
+
+// ── Allocation category config ──────────────────────────────
+const ALLOC_COLORS: Record<string, string> = {
+  Directional_Alpha: "#2962ff",
+  Market_Neutral_Arbitrage: "#26a69a",
+  Yield_Earn: "#f0b90b",
+  Cash: "#555",
+};
+const ALLOC_LABELS: Record<string, string> = {
+  Directional_Alpha: "Alpha",
+  Market_Neutral_Arbitrage: "Arbitrage",
+  Yield_Earn: "Earn",
+  Cash: "Cash",
+};
+
+function MiniPieChart({ slices }: { slices: AllocationSlice[] }) {
+  const size = 80;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = 30;
+
+  let cumPct = 0;
+  const paths = slices.map((s) => {
+    const startAngle = (cumPct / 100) * 2 * Math.PI - Math.PI / 2;
+    cumPct += s.pct;
+    const endAngle = (cumPct / 100) * 2 * Math.PI - Math.PI / 2;
+    const x1 = cx + r * Math.cos(startAngle);
+    const y1 = cy + r * Math.sin(startAngle);
+    const x2 = cx + r * Math.cos(endAngle);
+    const y2 = cy + r * Math.sin(endAngle);
+    const large = s.pct > 50 ? 1 : 0;
+    const d =
+      s.pct >= 99.9
+        ? `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r} Z`
+        : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
+    return { d, color: ALLOC_COLORS[s.category] ?? "#555", key: s.category };
+  });
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
+      {paths.map((p) => (
+        <path key={p.key} d={p.d} fill={p.color} />
+      ))}
+    </svg>
+  );
+}
+
+function AumPanel() {
+  const { data, isLoading } = useSWR("portfolio-summary", getPortfolioSummary, {
+    refreshInterval: 30_000,
+  });
+
+  const fmt = (v: number) =>
+    v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtSigned = (v: number) => (v >= 0 ? `+$${fmt(v)}` : `-$${fmt(Math.abs(v))}`);
+
+  if (isLoading && !data) {
+    return (
+      <div className="mb-6 flex h-24 animate-pulse items-center rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4" />
+    );
+  }
+  if (!data) return null;
+
+  const pnlColor =
+    data.total_unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
+
+  return (
+    <div className="mb-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        {/* AUM + PnL */}
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-[#868993]">Total AUM</p>
+          <p className="mt-0.5 text-2xl font-bold text-[#d1d4dc]">
+            ${fmt(data.total_aum_usdt)}
+          </p>
+          <p className={`mt-1 text-sm font-medium ${pnlColor}`}>
+            {fmtSigned(data.total_unrealized_pnl)}{" "}
+            <span className="text-xs text-[#868993]">Unrealized</span>
+          </p>
+        </div>
+
+        {/* Allocation pie + legend */}
+        <div className="flex items-center gap-4">
+          <MiniPieChart slices={data.allocation} />
+          <div className="flex flex-col gap-1.5">
+            {data.allocation.map((s) => (
+              <div key={s.category} className="flex items-center gap-2 text-xs">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ background: ALLOC_COLORS[s.category] ?? "#555" }}
+                />
+                <span className="text-[#868993]">{ALLOC_LABELS[s.category] ?? s.category}</span>
+                <span className="font-mono font-medium text-[#d1d4dc]">
+                  ${fmt(s.allocated_usdt)}
+                </span>
+                <span className="text-[#555]">{s.pct.toFixed(1)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -350,6 +460,8 @@ export function DashboardPanel() {
             </p>
           ) : null}
         </header>
+
+        <AumPanel />
 
         <div className="flex flex-col gap-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2 text-sm">

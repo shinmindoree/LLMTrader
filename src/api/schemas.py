@@ -349,6 +349,68 @@ class BinanceAccountSummaryResponse(BaseModel):
     error: str | None = None
 
 
+# ── Portfolio Summary (Quant Asset Management Platform) ────
+
+class WalletSnapshot(BaseModel):
+    wallet: Literal["futures", "spot", "earn"]
+    balance_usdt: float
+    unrealized_pnl: float = 0.0
+
+
+class AllocationSlice(BaseModel):
+    category: Literal["Directional_Alpha", "Market_Neutral_Arbitrage", "Yield_Earn", "Cash"]
+    allocated_usdt: float
+    pct: float  # 0–100
+
+
+class PortfolioSummaryResponse(BaseModel):
+    total_aum_usdt: float
+    total_unrealized_pnl: float
+    total_realized_pnl_today: float
+    wallets: list[WalletSnapshot]
+    allocation: list[AllocationSlice]
+    as_of: datetime
+
+
+class StrategyModuleStatus(BaseModel):
+    module_id: str
+    name: str
+    category: Literal["Directional_Alpha", "Market_Neutral_Arbitrage", "Yield_Earn"]
+    enabled: bool
+    allocated_usdt: float
+    running_job_ids: list[str] = Field(default_factory=list)
+    unrealized_pnl: float | None = None
+    realized_pnl_today: float | None = None
+    status: Literal["running", "idle", "error", "stopped"] = "idle"
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyModuleCatalogResponse(BaseModel):
+    modules: list[StrategyModuleStatus]
+
+
+class FundingArbitrageParams(BaseModel):
+    symbol: str = "BTCUSDT"
+    allocated_usdt: float = Field(default=1000.0, gt=0, description="할당 시드 (USDT)")
+    entry_deadband_pct: float = Field(default=0.15, gt=0, le=1.0, description="진입 임계치 (왕복 수수료+슬리피지 합계 %)")
+    exit_deadband_pct: float = Field(default=0.05, gt=0, le=1.0, description="청산 임계치 (이 이하로 펀딩비 하락 시 언와인딩)")
+    margin_alert_ratio: float = Field(default=0.80, gt=0, lt=1.0, description="마진 비율 위험 수위 (0–1)")
+    rebalance_transfer_pct: float = Field(default=0.20, gt=0, lt=1.0, description="리밸런싱 시 현물→선물 이체 비율")
+
+
+class FundingArbitrageStatusResponse(BaseModel):
+    running: bool
+    symbol: str | None = None
+    spot_qty: float | None = None
+    futures_short_qty: float | None = None
+    current_funding_rate: float | None = None
+    annualized_funding_pct: float | None = None
+    unrealized_pnl: float | None = None
+    accumulated_funding_income: float
+    last_funding_ts: datetime | None = None
+    params: FundingArbitrageParams | None = None
+
+
 # ── Quick Backtest ──────────────────────────────────────────
 
 

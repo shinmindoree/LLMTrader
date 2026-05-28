@@ -365,3 +365,71 @@ export type BinanceAccountSummary = {
   positions: BinancePositionSummary[];
   error: string | null;
 };
+
+// ── Portfolio Summary (Quant Asset Management Platform) ────
+
+export type WalletSnapshot = {
+  wallet: "futures" | "spot" | "earn";
+  balance_usdt: number;
+  unrealized_pnl: number;
+};
+
+export type AllocationCategory =
+  | "Directional_Alpha"
+  | "Market_Neutral_Arbitrage"
+  | "Yield_Earn"
+  | "Cash";
+
+export type AllocationSlice = {
+  category: AllocationCategory;
+  allocated_usdt: number;
+  pct: number;
+};
+
+export type PortfolioSummaryResponse = {
+  total_aum_usdt: number;
+  total_unrealized_pnl: number;
+  total_realized_pnl_today: number;
+  wallets: WalletSnapshot[];
+  allocation: AllocationSlice[];
+  as_of: string;
+};
+
+export type StrategyModuleStatus = {
+  module_id: string;
+  name: string;
+  category: "Directional_Alpha" | "Market_Neutral_Arbitrage" | "Yield_Earn";
+  enabled: boolean;
+  allocated_usdt: number;
+  running_job_ids: string[];
+  unrealized_pnl: number | null;
+  realized_pnl_today: number | null;
+  status: "running" | "idle" | "error" | "stopped";
+  params: Record<string, unknown>;
+};
+
+export type StrategyModuleCatalogResponse = {
+  modules: StrategyModuleStatus[];
+};
+
+export type FundingArbitrageParams = {
+  symbol: string;
+  allocated_usdt: number;
+  entry_deadband_pct: number;
+  exit_deadband_pct: number;
+  margin_alert_ratio: number;
+  rebalance_transfer_pct: number;
+};
+
+export type FundingArbitrageStatusResponse = {
+  running: boolean;
+  symbol: string | null;
+  spot_qty: number | null;
+  futures_short_qty: number | null;
+  current_funding_rate: number | null;
+  annualized_funding_pct: number | null;
+  unrealized_pnl: number | null;
+  accumulated_funding_income: number;
+  last_funding_ts: string | null;
+  params: FundingArbitrageParams | null;
+};

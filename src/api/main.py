@@ -125,6 +125,13 @@ from api.schemas import (
     BinanceAccountSummaryResponse,
     QuickBacktestRequest,
     QuickBacktestResponse,
+    PortfolioSummaryResponse,
+    WalletSnapshot,
+    AllocationSlice,
+    StrategyModuleCatalogResponse,
+    StrategyModuleStatus,
+    FundingArbitrageParams,
+    FundingArbitrageStatusResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 from api.strategy_params import (
@@ -871,8 +878,151 @@ def create_app() -> FastAPI:
             error=data.get("error"),
         )
 
-    @app.get(
-        "/api/binance/futures/symbols",
+    @app.get("/api/portfolio/summary", response_model=PortfolioSummaryResponse)
+    async def portfolio_summary(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> PortfolioSummaryResponse:
+        """전체 AUM + 전략 카테고리별 자산 배분 요약."""
+        from control.repo import get_user_profile
+        from datetime import date
+
+        now = datetime.now(timezone.utc)
+        futures_balance = 0.0
+        futures_unrealized = 0.0
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if profile and profile.binance_api_key_enc and profile.binance_api_secret_enc:
+            snapshot = await get_account_snapshot(session, user_id=user.user_id)
+            if snapshot and isinstance(snapshot.data, dict):
+                d = snapshot.data
+                futures_balance = float(d.get("total_wallet_balance") or 0)
+                futures_unrealized = float(d.get("total_unrealized_profit") or 0)
+
+        # Running live jobs → Directional_Alpha allocated capital estimate
+        running_jobs = await list_jobs(
+            session,
+            user_id=user.user_id,
+            job_type=JobType.LIVE,
+            status=JobStatus.RUNNING,
+            limit=64,
+        )
+        directional_alloc = sum(
+            float((j.config or {}).get("initial_balance") or 0) for j in running_jobs
+        )
+
+        total_aum = futures_balance
+        realized_today = 0.0
+
+        cash = max(0.0, futures_balance - directional_alloc)
+        slices: list[AllocationSlice] = []
+        if total_aum > 0:
+            if directional_alloc > 0:
+                slices.append(AllocationSlice(
+                    category="Directional_Alpha",
+                    allocated_usdt=directional_alloc,
+                    pct=round(directional_alloc / total_aum * 100, 1),
+                ))
+            if cash > 0:
+                slices.append(AllocationSlice(
+                    category="Cash",
+                    allocated_usdt=cash,
+                    pct=round(cash / total_aum * 100, 1),
+                ))
+        else:
+            slices.append(AllocationSlice(category="Cash", allocated_usdt=0.0, pct=100.0))
+
+        return PortfolioSummaryResponse(
+            total_aum_usdt=total_aum,
+            total_unrealized_pnl=futures_unrealized,
+            total_realized_pnl_today=realized_today,
+            wallets=[WalletSnapshot(wallet="futures", balance_usdt=futures_balance, unrealized_pnl=futures_unrealized)],
+            allocation=slices,
+            as_of=now,
+        )
+
+    @app.get("/api/strategy-modules", response_model=StrategyModuleCatalogResponse)
+    async def strategy_module_catalog(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StrategyModuleCatalogResponse:
+        """앱스토어형 전략 모듈 카탈로그 (현재 실행 상태 포함)."""
+        running_jobs = await list_jobs(
+            session,
+            user_id=user.user_id,
+            job_type=JobType.LIVE,
+            status=JobStatus.RUNNING,
+            limit=64,
+        )
+        running_ids = [str(j.job_id) for j in running_jobs]
+        directional_alloc = sum(
+            float((j.config or {}).get("initial_balance") or 0) for j in running_jobs
+        )
+        modules = [
+            StrategyModuleStatus(
+                module_id="directional_alpha",
+                name="Directional Alpha",
+                category="Directional_Alpha",
+                enabled=len(running_ids) > 0,
+                allocated_usdt=directional_alloc,
+                running_job_ids=running_ids,
+                status="running" if running_ids else "idle",
+            ),
+            StrategyModuleStatus(
+                module_id="funding_arbitrage",
+                name="Funding Rate Arbitrage",
+                category="Market_Neutral_Arbitrage",
+                enabled=False,
+                allocated_usdt=0.0,
+                status="idle",
+            ),
+            StrategyModuleStatus(
+                module_id="simple_earn",
+                name="Simple Earn Auto-Deposit",
+                category="Yield_Earn",
+                enabled=False,
+                allocated_usdt=0.0,
+                status="idle",
+            ),
+        ]
+        return StrategyModuleCatalogResponse(modules=modules)
+
+    @app.get("/api/funding-arb/status", response_model=FundingArbitrageStatusResponse)
+    async def funding_arb_status(
+        _user: AuthenticatedUser = Depends(require_auth),
+    ) -> FundingArbitrageStatusResponse:
+        """펀딩비 차익거래 봇 현재 상태."""
+        from live.funding_arbitrage_engine import get_engine_status
+        return get_engine_status()
+
+    @app.post("/api/funding-arb/start", response_model=FundingArbitrageStatusResponse)
+    async def funding_arb_start(
+        params: FundingArbitrageParams,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> FundingArbitrageStatusResponse:
+        """펀딩비 차익거래 봇 시작."""
+        from control.repo import get_user_profile
+        from live.funding_arbitrage_engine import start_engine, get_engine_status
+        from common import crypto
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
+            raise HTTPException(status_code=400, detail="Binance API 키가 설정되지 않았습니다.")
+        api_key = crypto.decrypt(profile.binance_api_key_enc)
+        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
+        base_url = profile.binance_base_url or "https://fapi.binance.com"
+        await start_engine(params=params, api_key=api_key, api_secret=api_secret, base_url=base_url)
+        return get_engine_status()
+
+    @app.post("/api/funding-arb/stop", response_model=FundingArbitrageStatusResponse)
+    async def funding_arb_stop(
+        _user: AuthenticatedUser = Depends(require_auth),
+    ) -> FundingArbitrageStatusResponse:
+        """펀딩비 차익거래 봇 정지."""
+        from live.funding_arbitrage_engine import stop_engine, get_engine_status
+        await stop_engine()
+        return get_engine_status()
         response_model=list[str],
         dependencies=[Depends(require_auth)],
     )
