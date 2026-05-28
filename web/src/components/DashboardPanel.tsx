@@ -155,6 +155,7 @@ function AumPanel() {
     refreshInterval: 30_000,
     shouldRetryOnError: false,
   });
+  const { t } = useI18n();
 
   const fmt = (v: number) =>
     v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -176,6 +177,30 @@ function AumPanel() {
   const pnlColor =
     data.total_unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
 
+  // Margin health from wallets
+  const futuresWallet = data.wallets?.find((w) => w.wallet === "futures");
+  const marginRatio: number | null =
+    "margin_ratio" in data && typeof (data as Record<string, unknown>).margin_ratio === "number"
+      ? (data as Record<string, unknown>).margin_ratio as number
+      : null;
+
+  const marginLevel =
+    marginRatio === null
+      ? "nodata"
+      : marginRatio < 0.5
+        ? "safe"
+        : marginRatio < 0.75
+          ? "warning"
+          : "danger";
+
+  const marginColors = {
+    safe: { dot: "bg-[#26a69a]", text: "text-[#26a69a]", label: t.dashboard.marginSafe },
+    warning: { dot: "bg-[#f0b90b]", text: "text-[#f0b90b]", label: t.dashboard.marginWarning },
+    danger: { dot: "bg-[#ef5350]", text: "text-[#ef5350]", label: t.dashboard.marginDanger },
+    nodata: { dot: "bg-[#555]", text: "text-[#555]", label: t.dashboard.marginNoData },
+  };
+  const mc = marginColors[marginLevel];
+
   return (
     <div className="mb-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-5 py-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -189,6 +214,20 @@ function AumPanel() {
             {fmtSigned(data.total_unrealized_pnl)}{" "}
             <span className="text-xs text-[#868993]">Unrealized</span>
           </p>
+        </div>
+
+        {/* Margin Health */}
+        <div className="flex flex-col items-center gap-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-[#868993]">
+            {t.dashboard.marginHealth}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <span className={`inline-block h-2.5 w-2.5 rounded-full ${mc.dot}`} />
+            <span className={`text-sm font-semibold ${mc.text}`}>{mc.label}</span>
+          </div>
+          {marginRatio !== null && (
+            <span className="text-[11px] text-[#555]">{(marginRatio * 100).toFixed(1)}%</span>
+          )}
         </div>
 
         {/* Allocation pie + legend */}
@@ -210,6 +249,109 @@ function AumPanel() {
             ))}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Treasury Allocator ──────────────────────────────────────
+function TreasuryAllocator() {
+  const { t } = useI18n();
+  const [saved, setSaved] = useState(false);
+
+  const loadAlloc = () => {
+    if (typeof window === "undefined") return { alpha: 50, arbitrage: 30, yield: 20 };
+    try {
+      const raw = localStorage.getItem("treasuryAlloc");
+      if (raw) return JSON.parse(raw) as { alpha: number; arbitrage: number; yield: number };
+    } catch {
+      // ignore
+    }
+    return { alpha: 50, arbitrage: 30, yield: 20 };
+  };
+
+  const [alloc, setAlloc] = useState(loadAlloc);
+
+  const setSlice = (key: "alpha" | "arbitrage" | "yield", val: number) => {
+    setSaved(false);
+    setAlloc((prev) => {
+      const others = (["alpha", "arbitrage", "yield"] as const).filter((k) => k !== key);
+      const remaining = 100 - val;
+      const sumOthers = prev[others[0]] + prev[others[1]];
+      if (sumOthers === 0) {
+        return { ...prev, [key]: val, [others[0]]: remaining / 2, [others[1]]: remaining / 2 };
+      }
+      const scale = remaining / sumOthers;
+      return {
+        ...prev,
+        [key]: val,
+        [others[0]]: Math.round(prev[others[0]] * scale),
+        [others[1]]: remaining - Math.round(prev[others[0]] * scale),
+      };
+    });
+  };
+
+  const apply = () => {
+    localStorage.setItem("treasuryAlloc", JSON.stringify(alloc));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  const SLICES = [
+    { key: "alpha" as const, label: t.dashboard.allocatorAlpha ?? "Alpha", color: "#ef5350" },
+    { key: "arbitrage" as const, label: t.dashboard.allocatorArbitrage ?? "Arbitrage", color: "#26a69a" },
+    { key: "yield" as const, label: t.dashboard.allocatorYield ?? "Yield", color: "#f0b90b" },
+  ];
+
+  return (
+    <div className="mb-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-5 py-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-[#868993]">
+            {t.dashboard.allocatorTitle}
+          </p>
+          <p className="mt-0.5 text-xs text-[#555]">{t.dashboard.allocatorSubtitle}</p>
+        </div>
+        <button
+          type="button"
+          onClick={apply}
+          className="rounded border border-[#2a2e39] px-3 py-1 text-xs font-medium text-[#d1d4dc] transition-colors hover:border-[#2962ff] hover:bg-[#2962ff]/10"
+        >
+          {saved ? (t.dashboard.allocatorSaved ?? "Saved ✓") : t.dashboard.allocatorApply}
+        </button>
+      </div>
+      <div className="flex flex-col gap-3">
+        {SLICES.map(({ key, label, color }) => (
+          <div key={key} className="flex items-center gap-3">
+            <span
+              className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+              style={{ background: color }}
+            />
+            <span className="w-20 shrink-0 text-xs text-[#868993]">{label}</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={alloc[key]}
+              onChange={(e) => setSlice(key, Number(e.target.value))}
+              className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-[#2a2e39] accent-[#2962ff]"
+            />
+            <span className="w-10 shrink-0 text-right text-xs font-mono font-medium text-[#d1d4dc]">
+              {alloc[key]}%
+            </span>
+          </div>
+        ))}
+      </div>
+      {/* Visual bar */}
+      <div className="mt-3 flex h-2 overflow-hidden rounded-full">
+        {SLICES.map(({ key, color }) => (
+          <div
+            key={key}
+            className="transition-all duration-300"
+            style={{ width: `${alloc[key]}%`, background: color }}
+          />
+        ))}
       </div>
     </div>
   );
@@ -469,6 +611,7 @@ export function DashboardPanel() {
         </header>
 
         <AumPanel />
+        <TreasuryAllocator />
 
         <div className="flex flex-col gap-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2 text-sm">

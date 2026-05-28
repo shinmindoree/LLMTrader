@@ -246,6 +246,54 @@ export default function SettingsPage() {
           </ul>
         </div>
       </section>
+
+      <AutoSweepSection />
     </main>
+  );
+}
+
+function AutoSweepSection() {
+  const { t } = useI18n();
+  const [enabled, setEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("autoSweepEnabled") === "true";
+  });
+
+  const toggle = () => {
+    const next = !enabled;
+    setEnabled(next);
+    localStorage.setItem("autoSweepEnabled", String(next));
+  };
+
+  return (
+    <section className="mt-6 rounded-lg border border-[#2a2e39] bg-[#1e222d] p-6">
+      <h2 className="text-lg font-semibold text-[#d1d4dc] mb-4">{t.settingsPage.automationSection}</h2>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-[#d1d4dc]">{t.settingsPage.autoSweepLabel}</p>
+          <p className="mt-1 text-xs text-[#868993] max-w-md">{t.settingsPage.autoSweepDesc}</p>
+          <p className={`mt-2 text-xs font-medium ${enabled ? "text-[#f0b90b]" : "text-[#555]"}`}>
+            {enabled ? t.settingsPage.autoSweepOn : t.settingsPage.autoSweepOff}
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          onClick={toggle}
+          className={[
+            "relative mt-1 inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2962ff]",
+            enabled ? "bg-[#f0b90b]" : "bg-[#2a2e39]",
+          ].join(" ")}
+        >
+          <span
+            className={[
+              "inline-block h-5 w-5 rounded-full bg-white shadow transition-transform duration-200",
+              enabled ? "translate-x-5" : "translate-x-0",
+            ].join(" ")}
+          />
+        </button>
+      </div>
+    </section>
   );
 }
