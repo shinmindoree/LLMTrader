@@ -2832,15 +2832,32 @@ def create_app() -> FastAPI:
                 upbit = _get_upbit_client_for_user(profile, crypto)
                 try:
                     wd = await upbit.get_withdrawal(transfer.src_withdrawal_id)
-                    state = str(wd.get("state", ""))
-                    if state == "done":
+                    state = str(wd.get("state", "")).upper()
+                    txid = str(wd.get("txid") or "") or transfer.dst_txid or ""
+                    if state == "DONE":
                         new_status = "CONFIRMING"
-                        update_kwargs["dst_txid"] = str(wd.get("txid") or "")
-                    elif state in ("rejected", "canceled"):
+                        if txid:
+                            update_kwargs["dst_txid"] = txid
+                    elif state in ("REJECTED", "CANCELLED", "CANCELED", "FAILED"):
                         new_status = "FAILED"
                         update_kwargs["error_message"] = f"Upbit withdrawal {state}"
                 finally:
                     await upbit.aclose()
+
+                # Destination side: check Binance deposit history for credit
+                if new_status in ("CONFIRMING", "WITHDRAWING") and (update_kwargs.get("dst_txid") or transfer.dst_txid):
+                    binance = _get_binance_earn_client_for_user(profile, crypto)
+                    try:
+                        check_txid = update_kwargs.get("dst_txid") or transfer.dst_txid
+                        deposits = await binance.get_deposit_history(coin="USDT", txid=check_txid, limit=10)
+                        for item in (deposits if isinstance(deposits, list) else []):
+                            if str(item.get("txId") or "") == check_txid:
+                                if int(item.get("status", -1)) == 1:
+                                    new_status = "COMPLETED"
+                                    update_kwargs["actual_usdt"] = float(item.get("amount") or 0)
+                                break
+                    finally:
+                        await binance.aclose()
 
             elif transfer.direction == "BINANCE_TO_UPBIT" and transfer.src_withdrawal_id:
                 from binance.earn_client import BinanceEarnClient
@@ -2860,6 +2877,22 @@ def create_app() -> FastAPI:
                             break
                 finally:
                     await binance.aclose()
+
+                # Destination side: check Upbit deposit history
+                if new_status in ("CONFIRMING", "WITHDRAWING") and (update_kwargs.get("dst_txid") or transfer.dst_txid):
+                    upbit = _get_upbit_client_for_user(profile, crypto)
+                    try:
+                        check_txid = update_kwargs.get("dst_txid") or transfer.dst_txid
+                        dep = await upbit.get_deposit(check_txid)
+                        if isinstance(dep, dict) and str(dep.get("state", "")).upper() == "ACCEPTED":
+                            new_status = "COMPLETED"
+                            amt = dep.get("amount")
+                            if amt is not None:
+                                update_kwargs["actual_usdt"] = float(amt)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    finally:
+                        await upbit.aclose()
         except Exception as exc:  # noqa: BLE001
             _log.warning("sync_transfer_status error for %s: %s", transfer_id, exc)
 
