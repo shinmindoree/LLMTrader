@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.enums import EventKind, JobStatus, JobType
 from control.models import (
     AccountSnapshot,
+    BridgeTransfer,
     Job,
     JobEvent,
     Order,
@@ -1099,3 +1100,100 @@ async def get_account_snapshot(
         select(AccountSnapshot).where(AccountSnapshot.key == key)
     )
     return result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# Upbit keys
+# ---------------------------------------------------------------------------
+
+
+async def update_user_upbit_keys(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    api_key_enc: str | None,
+    api_secret_enc: str | None,
+) -> None:
+    await session.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id)
+        .values(
+            upbit_api_key_enc=api_key_enc,
+            upbit_api_secret_enc=api_secret_enc,
+            updated_at=datetime.now(),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bridge transfers
+# ---------------------------------------------------------------------------
+
+
+async def create_bridge_transfer(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    direction: str,
+    network: str,
+    requested_usdt: float,
+    dst_deposit_address: str | None = None,
+    krw_amount: float | None = None,
+) -> BridgeTransfer:
+    record = BridgeTransfer(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        direction=direction,
+        status="PENDING",
+        network=network,
+        requested_usdt=requested_usdt,
+        dst_deposit_address=dst_deposit_address,
+        krw_amount=krw_amount,
+    )
+    session.add(record)
+    await session.flush()
+    return record
+
+
+async def get_bridge_transfer(
+    session: AsyncSession,
+    *,
+    transfer_id: uuid.UUID,
+    user_id: str,
+) -> BridgeTransfer | None:
+    result = await session.execute(
+        select(BridgeTransfer).where(
+            BridgeTransfer.id == transfer_id,
+            BridgeTransfer.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_bridge_transfers(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    limit: int = 50,
+) -> list[BridgeTransfer]:
+    result = await session.execute(
+        select(BridgeTransfer)
+        .where(BridgeTransfer.user_id == user_id)
+        .order_by(BridgeTransfer.initiated_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def update_bridge_transfer(
+    session: AsyncSession,
+    *,
+    transfer_id: uuid.UUID,
+    **kwargs: Any,
+) -> None:
+    kwargs["updated_at"] = datetime.now()
+    await session.execute(
+        update(BridgeTransfer)
+        .where(BridgeTransfer.id == transfer_id)
+        .values(**kwargs)
+    )

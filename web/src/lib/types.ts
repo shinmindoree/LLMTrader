@@ -323,6 +323,21 @@ export type AutoSweepSettingsInput = {
   sweep_threshold_usdt: number;
 };
 
+export type WalletBalance = {
+  wallet: string;
+  label: string;
+  balance_usdt: number;
+  unrealized_pnl: number;
+  pct: number;
+};
+
+export type WalletOverview = {
+  total_usdt: number;
+  wallets: WalletBalance[];
+  as_of: string;
+  error: string | null;
+};
+
 export type BillingStatus = {
   plan: string;
   limits: {

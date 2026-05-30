@@ -34,6 +34,7 @@ import type {
   AdminUsersResponse,
   AutoSweepSettings,
   AutoSweepSettingsInput,
+  WalletOverview,
 } from "@/lib/types";
 
 const CHAT_USER_ID_STORAGE_KEY = "llmtrader.chat_user_id";
@@ -835,6 +836,10 @@ export async function setAutoSweepSettings(
   });
 }
 
+export async function getWalletOverview(): Promise<WalletOverview> {
+  return json<WalletOverview>("/api/backend/api/binance/wallet/overview");
+}
+
 export async function getBillingStatus(): Promise<BillingStatus> {
   return json<BillingStatus>("/api/backend/api/billing/status");
 }
@@ -855,4 +860,95 @@ export async function testLlmEndpoint(input: string): Promise<{ output: string }
     method: "POST",
     body: JSON.stringify({ input: (input || "").trim() || "Hello" }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Upbit / Bridge transfer API
+// ---------------------------------------------------------------------------
+
+export interface UpbitBalanceItem {
+  currency: string;
+  balance: number;
+  locked: number;
+}
+
+export interface UpbitAccount {
+  balances: UpbitBalanceItem[];
+  krw_usdt_price: number;
+}
+
+export interface UpbitKeysStatus {
+  configured: boolean;
+  access_key_masked?: string;
+}
+
+export interface BridgeTransfer {
+  id: string;
+  direction: "UPBIT_TO_BINANCE" | "BINANCE_TO_UPBIT";
+  status: "PENDING" | "CONVERTING" | "WITHDRAWING" | "CONFIRMING" | "COMPLETED" | "FAILED";
+  network: string;
+  requested_usdt: number;
+  actual_usdt: number | null;
+  krw_amount: number | null;
+  fee_usdt: number | null;
+  src_withdrawal_id: string | null;
+  dst_deposit_address: string | null;
+  dst_txid: string | null;
+  error_message: string | null;
+  initiated_at: string;
+  completed_at: string | null;
+  updated_at: string;
+}
+
+export async function getUpbitKeysStatus(): Promise<UpbitKeysStatus> {
+  return json<UpbitKeysStatus>("/api/backend/api/me/upbit-keys");
+}
+
+export async function setUpbitKeys(body: {
+  access_key: string;
+  secret_key: string;
+}): Promise<{ ok: boolean; access_key_masked: string }> {
+  return json("/api/backend/api/me/upbit-keys", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteUpbitKeys(): Promise<{ ok: boolean }> {
+  return json("/api/backend/api/me/upbit-keys", { method: "DELETE" });
+}
+
+export async function getUpbitAccount(): Promise<UpbitAccount> {
+  return json<UpbitAccount>("/api/backend/api/upbit/account");
+}
+
+export async function startOnramp(body: {
+  usdt_amount: number;
+  network?: string;
+  convert_from_krw?: boolean;
+}): Promise<{ id: string; status: string; withdrawal_uuid: string; deposit_address: string }> {
+  return json("/api/backend/api/bridge/onramp", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function startOfframp(body: {
+  usdt_amount: number;
+  network?: string;
+  sell_to_krw?: boolean;
+  redeem_from_earn?: boolean;
+}): Promise<{ id: string; status: string; withdrawal_id: string; deposit_address: string }> {
+  return json("/api/backend/api/bridge/offramp", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listBridgeTransfers(): Promise<{ transfers: BridgeTransfer[] }> {
+  return json<{ transfers: BridgeTransfer[] }>("/api/backend/api/bridge/transfers");
+}
+
+export async function syncTransferStatus(id: string): Promise<{ id: string; status: string; changed: boolean }> {
+  return json(`/api/backend/api/bridge/transfers/${id}/sync`, { method: "POST" });
 }

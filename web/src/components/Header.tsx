@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { href: "/strategies", labelKey: "strategies" as const },
   { href: "/backtest", labelKey: "backtest" as const },
   { href: "/live", labelKey: "live" as const },
+  { href: "/transfers", labelKey: "transfers" as const },
 ];
 
 export function Header() {

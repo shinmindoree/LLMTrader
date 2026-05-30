@@ -181,3 +181,73 @@ class BinanceEarnClient:
     async def redeem(self, amount: float, product_id: str) -> dict[str, Any]:
         payload = {"productId": product_id, "amount": f"{amount:.2f}"}
         return await self._signed("POST", "/sapi/v1/simple-earn/flexible/redeem", payload)
+
+    # ── Deposits & Withdrawals ─────────────────────────────
+
+    async def get_deposit_address(self, coin: str, network: str) -> dict[str, Any]:
+        """Get deposit address for a coin+network on Binance Spot."""
+        params = {"coin": coin, "network": network}
+        return await self._signed("GET", "/sapi/v1/capital/deposit/address", params)
+
+    async def withdraw(
+        self,
+        *,
+        coin: str,
+        address: str,
+        amount: float,
+        network: str,
+        address_tag: str | None = None,
+        withdraw_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Submit a crypto withdrawal from Binance Spot wallet.
+
+        Returns: {"id": "withdrawal_id"}
+        """
+        params: dict[str, Any] = {
+            "coin": coin,
+            "address": address,
+            "amount": f"{amount:.6f}",
+            "network": network,
+        }
+        if address_tag:
+            params["addressTag"] = address_tag
+        if withdraw_order_id:
+            params["withdrawOrderId"] = withdraw_order_id
+        return await self._signed("POST", "/sapi/v1/capital/withdraw/apply", params)
+
+    async def get_withdrawal_history(
+        self,
+        *,
+        coin: str | None = None,
+        withdraw_order_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Get withdrawal history from Binance.
+
+        status: 0=Email Sent, 1=Cancelled, 2=Awaiting Approval,
+                3=Rejected, 4=Processing, 5=Failure, 6=Completed
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if coin:
+            params["coin"] = coin
+        if withdraw_order_id:
+            params["withdrawOrderId"] = withdraw_order_id
+        return await self._signed("GET", "/sapi/v1/capital/withdraw/history", params)
+
+    async def get_deposit_history(
+        self,
+        *,
+        coin: str | None = None,
+        txid: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Get deposit history from Binance.
+
+        status: 0=Pending, 6=Credited but cannot withdraw, 1=Success
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if coin:
+            params["coin"] = coin
+        if txid:
+            params["txId"] = txid
+        return await self._signed("GET", "/sapi/v1/capital/deposit/hisrec", params)

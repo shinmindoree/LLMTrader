@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import { Header } from "@/components/Header";
+import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { Providers } from "@/components/Providers";
 
 const geistSans = Geist({
@@ -55,6 +56,7 @@ export default function RootLayout({
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <NextTopLoader color="#2962ff" height={3} showSpinner={false} />
         <Providers>
+        <MaintenanceBanner />
         <Header />
         <AppShell>{children}</AppShell>
         <Toaster

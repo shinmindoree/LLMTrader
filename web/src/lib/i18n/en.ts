@@ -92,6 +92,7 @@ const en = {
     strategies: "Strategies",
     arbitrage: "Arbitrage",
     modules: "Modules",
+    transfers: "Transfers",
     openMenu: "Open navigation menu",
     closeMenu: "Close navigation menu",
   },
@@ -243,6 +244,19 @@ const en = {
     title: "Binance Futures Account",
     subtitle:
       "Balances and positions below. Connection status is shown at the top of the dashboard. Auto-refresh every 15s.",
+  },
+  walletOverview: {
+    title: "Account Overview",
+    subtitle: "USDT balance across all connected Binance accounts",
+    totalLabel: "Total",
+    futures: "USD-M Futures",
+    spot: "Spot",
+    earn: "Simple Earn",
+    allocationLabel: "Allocation",
+    notConfigured: "Binance API keys not configured.",
+    refresh: "Refresh",
+    refreshing: "Refreshing...",
+    lastUpdated: "Last updated",
   },
   runHistory: {
     date: "Date",

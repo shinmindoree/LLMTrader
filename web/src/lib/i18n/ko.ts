@@ -96,6 +96,7 @@ const ko: TranslationKeys = {
     strategies: "전략",
     arbitrage: "차익거래",
     modules: "전략 모듈",
+    transfers: "이체",
     openMenu: "내비게이션 메뉴 열기",
     closeMenu: "내비게이션 메뉴 닫기",
   },
@@ -246,6 +247,19 @@ const ko: TranslationKeys = {
     title: "바이낸스 선물 계정",
     subtitle:
       "아래는 잔고·포지션입니다. 연결 상태는 대시보드 상단에서 확인하세요. 15초마다 자동 새로고침됩니다.",
+  },
+  walletOverview: {
+    title: "계정 전체 현황",
+    subtitle: "연동된 모든 바이낸스 계정의 USDT 잔고",
+    totalLabel: "합계",
+    futures: "USD-M 선물",
+    spot: "현물",
+    earn: "Simple Earn",
+    allocationLabel: "비중",
+    notConfigured: "바이낸스 API 키가 설정되지 않았습니다.",
+    refresh: "새로고침",
+    refreshing: "새로고침 중...",
+    lastUpdated: "마지막 갱신",
   },
   runHistory: {
     date: "날짜",

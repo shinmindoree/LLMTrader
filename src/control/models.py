@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 from typing import Any
@@ -9,6 +10,20 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from control.enums import EventKind, JobStatus, JobType
+
+
+class BridgeDirection(str, enum.Enum):
+    UPBIT_TO_BINANCE = "UPBIT_TO_BINANCE"
+    BINANCE_TO_UPBIT = "BINANCE_TO_UPBIT"
+
+
+class BridgeStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    CONVERTING = "CONVERTING"
+    WITHDRAWING = "WITHDRAWING"
+    CONFIRMING = "CONFIRMING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
 
 
 class Base(DeclarativeBase):
@@ -36,6 +51,9 @@ class UserProfile(Base):
     binance_base_url: Mapped[str] = mapped_column(
         String(256), nullable=False, default="https://testnet.binancefuture.com"
     )
+
+    upbit_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    upbit_api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     auto_sweep_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
@@ -251,6 +269,42 @@ class StrategyMeta(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BridgeTransfer(Base):
+    """Cross-exchange transfer record (Upbit ↔ Binance)."""
+
+    __tablename__ = "bridge_transfers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True
+    )
+    direction: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=BridgeStatus.PENDING)
+    network: Mapped[str] = mapped_column(String(16), nullable=False, default="TRC20")
+
+    requested_usdt: Mapped[float] = mapped_column(Float, nullable=False)
+    actual_usdt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    krw_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fee_usdt: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Source-side IDs
+    src_order_uuid: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    src_withdrawal_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+    # Destination-side IDs
+    dst_deposit_address: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    dst_txid: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    initiated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

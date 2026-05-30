@@ -134,6 +134,8 @@ from api.schemas import (
     FundingArbitrageStatusResponse,
     AutoSweepSettingsRequest,
     AutoSweepStatusResponse,
+    WalletBalance,
+    WalletOverviewResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 from api.strategy_params import (
@@ -2384,6 +2386,485 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     # ------------------------------------------------------------------
+    # /api/me/upbit-keys — Upbit Open API credentials
+    # ------------------------------------------------------------------
+
+    @app.put("/api/me/upbit-keys")
+    async def set_upbit_keys(
+        body: dict[str, Any],
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        access_key = str(body.get("access_key") or "").strip()
+        secret_key = str(body.get("secret_key") or "").strip()
+        if not access_key or not secret_key:
+            raise HTTPException(status_code=422, detail="access_key and secret_key are required")
+
+        from upbit.client import UpbitClient, UpbitClientError
+        test_client = UpbitClient(access_key=access_key, secret_key=secret_key, timeout=10.0)
+        try:
+            balances = await test_client.fetch_balances()
+            if not isinstance(balances, list):
+                raise HTTPException(status_code=400, detail="Upbit API connection test failed: unexpected response")
+        except HTTPException:
+            raise
+        except UpbitClientError as exc:
+            raise HTTPException(status_code=400, detail=f"Upbit API connection test failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Upbit API connection test failed: {exc}") from exc
+        finally:
+            await test_client.aclose()
+
+        from common.crypto import get_crypto_service
+        crypto = get_crypto_service()
+        key_enc = crypto.encrypt(access_key)
+        secret_enc = crypto.encrypt(secret_key)
+
+        from control.repo import update_user_upbit_keys
+        await update_user_upbit_keys(session, user_id=user.user_id, api_key_enc=key_enc, api_secret_enc=secret_enc)
+        await session.commit()
+        return {"ok": True, "access_key_masked": _mask_key(access_key)}
+
+    @app.get("/api/me/upbit-keys")
+    async def get_upbit_keys(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.repo import get_user_profile
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not profile.upbit_api_key_enc:
+            return {"configured": False}
+
+        from common.crypto import get_crypto_service
+        crypto = get_crypto_service()
+        try:
+            raw_key = crypto.decrypt(profile.upbit_api_key_enc)
+        except Exception:  # noqa: BLE001
+            return {"configured": True, "access_key_masked": "***decryption_error***"}
+
+        return {"configured": True, "access_key_masked": _mask_key(raw_key)}
+
+    @app.delete("/api/me/upbit-keys")
+    async def delete_upbit_keys(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, bool]:
+        from control.repo import update_user_upbit_keys
+        await update_user_upbit_keys(session, user_id=user.user_id, api_key_enc=None, api_secret_enc=None)
+        await session.commit()
+        return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # /api/upbit/account — Upbit account info
+    # ------------------------------------------------------------------
+
+    @app.get("/api/upbit/account")
+    async def get_upbit_account(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.repo import get_user_profile
+        from upbit.client import UpbitClient, UpbitClientError
+        from common.crypto import get_crypto_service
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
+            raise HTTPException(status_code=404, detail="Upbit API keys not configured")
+
+        crypto = get_crypto_service()
+        access_key = crypto.decrypt(profile.upbit_api_key_enc)
+        secret_key = crypto.decrypt(profile.upbit_api_secret_enc)
+
+        client = UpbitClient(access_key=access_key, secret_key=secret_key)
+        try:
+            balances_raw = await client.fetch_balances()
+            krw_usdt_price = await client.get_krw_usdt_price()
+        except UpbitClientError as exc:
+            raise HTTPException(status_code=502, detail=f"Upbit API error: {exc}") from exc
+        finally:
+            await client.aclose()
+
+        balances = [
+            {
+                "currency": b.get("currency", ""),
+                "balance": float(b.get("balance", 0)),
+                "locked": float(b.get("locked", 0)),
+            }
+            for b in balances_raw
+            if float(b.get("balance", 0)) + float(b.get("locked", 0)) > 0
+        ]
+        return {"balances": balances, "krw_usdt_price": krw_usdt_price}
+
+    # ------------------------------------------------------------------
+    # /api/bridge — Cross-exchange transfer (Upbit ↔ Binance)
+    # ------------------------------------------------------------------
+
+    def _get_upbit_client_for_user(profile: Any, crypto: Any) -> Any:
+        from upbit.client import UpbitClient
+        access_key = crypto.decrypt(profile.upbit_api_key_enc)
+        secret_key = crypto.decrypt(profile.upbit_api_secret_enc)
+        return UpbitClient(access_key=access_key, secret_key=secret_key)
+
+    def _get_binance_earn_client_for_user(profile: Any, crypto: Any) -> Any:
+        from binance.earn_client import BinanceEarnClient
+        api_key = crypto.decrypt(profile.binance_api_key_enc)
+        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
+        return BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+
+    @app.post("/api/bridge/onramp")
+    async def bridge_onramp(
+        body: dict[str, Any],
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        """Upbit → Binance transfer.
+
+        Steps:
+          1. (optional) Buy USDT on Upbit with KRW
+          2. Get Binance deposit address
+          3. Withdraw USDT from Upbit to Binance
+          4. Record transfer in DB
+        """
+        from control.repo import create_bridge_transfer, get_user_profile, update_bridge_transfer
+        from upbit.client import UpbitClient, UpbitClientError
+        from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
+        from common.crypto import get_crypto_service
+        import uuid as _uuid
+
+        usdt_amount = float(body.get("usdt_amount") or 0)
+        network = str(body.get("network") or "TRC20").upper()
+        convert_from_krw: bool = bool(body.get("convert_from_krw", False))
+
+        if usdt_amount <= 0:
+            raise HTTPException(status_code=422, detail="usdt_amount must be positive")
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        if not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
+            raise HTTPException(status_code=400, detail="Upbit API keys not configured")
+        if not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
+            raise HTTPException(status_code=400, detail="Binance API keys not configured")
+        if _is_testnet_url(profile.binance_base_url):
+            raise HTTPException(status_code=400, detail="Bridge transfers require Binance mainnet keys")
+
+        crypto = get_crypto_service()
+        upbit = _get_upbit_client_for_user(profile, crypto)
+        binance = _get_binance_earn_client_for_user(profile, crypto)
+
+        order_uuid: str | None = None
+        krw_spent: float | None = None
+
+        try:
+            # Step 1: Buy USDT with KRW if requested
+            if convert_from_krw:
+                krw_price = await upbit.get_krw_usdt_price()
+                if krw_price <= 0:
+                    raise HTTPException(status_code=502, detail="Failed to get KRW-USDT price")
+                krw_to_spend = round(usdt_amount * krw_price * 1.005)  # +0.5% slippage buffer
+                order = await upbit.place_market_buy_krw("KRW-USDT", krw_to_spend)
+                order_uuid = str(order.get("uuid", ""))
+                krw_spent = float(order.get("price") or krw_to_spend)
+
+            # Step 2: Get Binance deposit address
+            deposit_info = await binance.get_deposit_address("USDT", network)
+            deposit_address = str(deposit_info.get("address", ""))
+            if not deposit_address:
+                raise HTTPException(status_code=502, detail="Failed to get Binance deposit address")
+
+            # Step 3: Withdraw from Upbit
+            withdrawal = await upbit.withdraw_crypto(
+                currency="USDT",
+                amount=usdt_amount,
+                address=deposit_address,
+                net_type=network,
+            )
+            withdrawal_uuid = str(withdrawal.get("uuid", ""))
+
+        except HTTPException:
+            raise
+        except (UpbitClientError, BinanceEarnClientError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            await upbit.aclose()
+            await binance.aclose()
+
+        # Step 4: Record in DB
+        transfer = await create_bridge_transfer(
+            session,
+            user_id=user.user_id,
+            direction="UPBIT_TO_BINANCE",
+            network=network,
+            requested_usdt=usdt_amount,
+            dst_deposit_address=deposit_address,
+            krw_amount=krw_spent,
+        )
+        await update_bridge_transfer(
+            session,
+            transfer_id=transfer.id,
+            status="WITHDRAWING",
+            src_order_uuid=order_uuid,
+            src_withdrawal_id=withdrawal_uuid,
+        )
+        await session.commit()
+
+        return {
+            "id": str(transfer.id),
+            "status": "WITHDRAWING",
+            "direction": "UPBIT_TO_BINANCE",
+            "requested_usdt": usdt_amount,
+            "withdrawal_uuid": withdrawal_uuid,
+            "deposit_address": deposit_address,
+        }
+
+    @app.post("/api/bridge/offramp")
+    async def bridge_offramp(
+        body: dict[str, Any],
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        """Binance → Upbit transfer.
+
+        Steps:
+          1. (optional) Redeem from Simple Earn + transfer Futures→Spot
+          2. Get Upbit deposit address
+          3. Withdraw USDT from Binance to Upbit
+          4. Record transfer in DB
+        """
+        from control.repo import create_bridge_transfer, get_user_profile, update_bridge_transfer
+        from upbit.client import UpbitClient, UpbitClientError
+        from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
+        from common.crypto import get_crypto_service
+
+        usdt_amount = float(body.get("usdt_amount") or 0)
+        network = str(body.get("network") or "TRC20").upper()
+        sell_to_krw: bool = bool(body.get("sell_to_krw", False))
+        redeem_from_earn: bool = bool(body.get("redeem_from_earn", True))
+
+        if usdt_amount <= 0:
+            raise HTTPException(status_code=422, detail="usdt_amount must be positive")
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        if not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
+            raise HTTPException(status_code=400, detail="Upbit API keys not configured")
+        if not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
+            raise HTTPException(status_code=400, detail="Binance API keys not configured")
+        if _is_testnet_url(profile.binance_base_url):
+            raise HTTPException(status_code=400, detail="Bridge transfers require Binance mainnet keys")
+
+        crypto = get_crypto_service()
+        upbit = _get_upbit_client_for_user(profile, crypto)
+        binance = _get_binance_earn_client_for_user(profile, crypto)
+
+        withdrawal_id: str | None = None
+        deposit_address: str | None = None
+
+        try:
+            # Step 1: Redeem from Earn + consolidate to Spot
+            if redeem_from_earn:
+                earn_balance = await binance.fetch_flexible_position_usdt()
+                if earn_balance > 0:
+                    product_id = await binance.get_usdt_flexible_product_id()
+                    if product_id:
+                        redeem_amount = min(earn_balance, usdt_amount)
+                        await binance.redeem(redeem_amount, product_id)
+
+            # Step 2: Get Upbit USDT deposit address
+            deposit_info = await upbit.get_deposit_address("USDT", network)
+            deposit_address = str(deposit_info.get("deposit_address", ""))
+            if not deposit_address:
+                raise HTTPException(status_code=502, detail="Failed to get Upbit deposit address")
+
+            # Step 3: Withdraw from Binance
+            result = await binance.withdraw(
+                coin="USDT",
+                address=deposit_address,
+                amount=usdt_amount,
+                network=network,
+            )
+            withdrawal_id = str(result.get("id", ""))
+
+        except HTTPException:
+            raise
+        except (UpbitClientError, BinanceEarnClientError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            await upbit.aclose()
+            await binance.aclose()
+
+        # Step 4: Record in DB
+        transfer = await create_bridge_transfer(
+            session,
+            user_id=user.user_id,
+            direction="BINANCE_TO_UPBIT",
+            network=network,
+            requested_usdt=usdt_amount,
+            dst_deposit_address=deposit_address,
+        )
+        await update_bridge_transfer(
+            session,
+            transfer_id=transfer.id,
+            status="WITHDRAWING",
+            src_withdrawal_id=withdrawal_id,
+        )
+        await session.commit()
+
+        return {
+            "id": str(transfer.id),
+            "status": "WITHDRAWING",
+            "direction": "BINANCE_TO_UPBIT",
+            "requested_usdt": usdt_amount,
+            "withdrawal_id": withdrawal_id,
+            "deposit_address": deposit_address,
+        }
+
+    @app.get("/api/bridge/transfers")
+    async def list_transfers(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        from control.repo import list_bridge_transfers
+        transfers = await list_bridge_transfers(session, user_id=user.user_id)
+        return {
+            "transfers": [
+                {
+                    "id": str(t.id),
+                    "direction": t.direction,
+                    "status": t.status,
+                    "network": t.network,
+                    "requested_usdt": t.requested_usdt,
+                    "actual_usdt": t.actual_usdt,
+                    "krw_amount": t.krw_amount,
+                    "fee_usdt": t.fee_usdt,
+                    "src_withdrawal_id": t.src_withdrawal_id,
+                    "dst_deposit_address": t.dst_deposit_address,
+                    "dst_txid": t.dst_txid,
+                    "error_message": t.error_message,
+                    "initiated_at": t.initiated_at.isoformat(),
+                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                    "updated_at": t.updated_at.isoformat(),
+                }
+                for t in transfers
+            ]
+        }
+
+    @app.get("/api/bridge/transfers/{transfer_id}")
+    async def get_transfer(
+        transfer_id: str,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        import uuid as _uuid
+        from control.repo import get_bridge_transfer
+        try:
+            tid = _uuid.UUID(transfer_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid transfer ID")
+
+        transfer = await get_bridge_transfer(session, transfer_id=tid, user_id=user.user_id)
+        if not transfer:
+            raise HTTPException(status_code=404, detail="Transfer not found")
+
+        return {
+            "id": str(transfer.id),
+            "direction": transfer.direction,
+            "status": transfer.status,
+            "network": transfer.network,
+            "requested_usdt": transfer.requested_usdt,
+            "actual_usdt": transfer.actual_usdt,
+            "krw_amount": transfer.krw_amount,
+            "fee_usdt": transfer.fee_usdt,
+            "src_order_uuid": transfer.src_order_uuid,
+            "src_withdrawal_id": transfer.src_withdrawal_id,
+            "dst_deposit_address": transfer.dst_deposit_address,
+            "dst_txid": transfer.dst_txid,
+            "error_message": transfer.error_message,
+            "initiated_at": transfer.initiated_at.isoformat(),
+            "completed_at": transfer.completed_at.isoformat() if transfer.completed_at else None,
+            "updated_at": transfer.updated_at.isoformat(),
+        }
+
+    @app.post("/api/bridge/transfers/{transfer_id}/sync")
+    async def sync_transfer_status(
+        transfer_id: str,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> dict[str, Any]:
+        """Poll withdrawal status from the source exchange and update DB."""
+        import uuid as _uuid
+        from control.repo import get_bridge_transfer, get_user_profile, update_bridge_transfer
+        from common.crypto import get_crypto_service
+
+        try:
+            tid = _uuid.UUID(transfer_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid transfer ID")
+
+        transfer = await get_bridge_transfer(session, transfer_id=tid, user_id=user.user_id)
+        if not transfer:
+            raise HTTPException(status_code=404, detail="Transfer not found")
+
+        if transfer.status in ("COMPLETED", "FAILED"):
+            return {"id": transfer_id, "status": transfer.status, "changed": False}
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        crypto = get_crypto_service()
+        new_status = transfer.status
+        update_kwargs: dict[str, Any] = {}
+
+        try:
+            if transfer.direction == "UPBIT_TO_BINANCE" and transfer.src_withdrawal_id:
+                from upbit.client import UpbitClient
+                upbit = _get_upbit_client_for_user(profile, crypto)
+                try:
+                    wd = await upbit.get_withdrawal(transfer.src_withdrawal_id)
+                    state = str(wd.get("state", ""))
+                    if state == "done":
+                        new_status = "CONFIRMING"
+                        update_kwargs["dst_txid"] = str(wd.get("txid") or "")
+                    elif state in ("rejected", "canceled"):
+                        new_status = "FAILED"
+                        update_kwargs["error_message"] = f"Upbit withdrawal {state}"
+                finally:
+                    await upbit.aclose()
+
+            elif transfer.direction == "BINANCE_TO_UPBIT" and transfer.src_withdrawal_id:
+                from binance.earn_client import BinanceEarnClient
+                binance = _get_binance_earn_client_for_user(profile, crypto)
+                try:
+                    history = await binance.get_withdrawal_history(withdraw_order_id=transfer.src_withdrawal_id)
+                    for item in history:
+                        if str(item.get("id")) == transfer.src_withdrawal_id or str(item.get("withdrawOrderId")) == transfer.src_withdrawal_id:
+                            status_code = int(item.get("status", -1))
+                            if status_code == 6:  # Completed
+                                new_status = "CONFIRMING"
+                                update_kwargs["dst_txid"] = str(item.get("txId") or "")
+                                update_kwargs["fee_usdt"] = float(item.get("transactionFee") or 0)
+                            elif status_code in (1, 3, 5):  # Cancelled / Rejected / Failure
+                                new_status = "FAILED"
+                                update_kwargs["error_message"] = f"Binance withdrawal status={status_code}"
+                            break
+                finally:
+                    await binance.aclose()
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("sync_transfer_status error for %s: %s", transfer_id, exc)
+
+        changed = new_status != transfer.status
+        if changed:
+            update_kwargs["status"] = new_status
+            if new_status == "COMPLETED":
+                update_kwargs["completed_at"] = datetime.now(timezone.utc)
+            await update_bridge_transfer(session, transfer_id=tid, **update_kwargs)
+            await session.commit()
+
+        return {"id": transfer_id, "status": new_status, "changed": changed}
+
+    # ------------------------------------------------------------------
     # /api/me/auto-sweep — Idle USDT → Binance Simple Earn (Flexible)
     # ------------------------------------------------------------------
 
@@ -2479,6 +2960,69 @@ def create_app() -> FastAPI:
             last_run_at=last_run_at,
             last_action=(snap or {}).get("last_action"),
             last_error=(snap or {}).get("last_error"),
+        )
+
+    # ------------------------------------------------------------------
+    # /api/binance/wallet/overview — Multi-wallet balance snapshot
+    # ------------------------------------------------------------------
+
+    @app.get("/api/binance/wallet/overview", response_model=WalletOverviewResponse)
+    async def get_wallet_overview(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> WalletOverviewResponse:
+        """Return Futures + Spot + Earn USDT balances in a single call."""
+        import asyncio
+        from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
+        from common.crypto import get_crypto_service
+        from control.repo import get_user_profile
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not (profile.binance_api_key_enc and profile.binance_api_secret_enc):
+            return WalletOverviewResponse(
+                total_usdt=0.0,
+                wallets=[],
+                as_of=datetime.now(timezone.utc),
+                error="Binance API keys not configured",
+            )
+
+        crypto = get_crypto_service()
+        api_key = crypto.decrypt(profile.binance_api_key_enc)
+        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
+
+        client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+        try:
+            futures_bal, spot_bal, earn_bal = await asyncio.gather(
+                client.fetch_futures_available_balance(),
+                client.fetch_spot_usdt_balance(),
+                client.fetch_flexible_position_usdt(),
+                return_exceptions=True,
+            )
+        finally:
+            await client.aclose()
+
+        def _coerce(v: object) -> float:
+            if isinstance(v, BaseException):
+                return 0.0
+            return float(v)  # type: ignore[arg-type]
+
+        f = _coerce(futures_bal)
+        s = _coerce(spot_bal)
+        e = _coerce(earn_bal)
+        total = f + s + e
+
+        def _pct(v: float) -> float:
+            return round(v / total * 100, 1) if total > 0 else 0.0
+
+        wallets = [
+            WalletBalance(wallet="futures", label="USD-M Futures", balance_usdt=f, pct=_pct(f)),
+            WalletBalance(wallet="spot", label="Spot", balance_usdt=s, pct=_pct(s)),
+            WalletBalance(wallet="earn", label="Simple Earn", balance_usdt=e, pct=_pct(e)),
+        ]
+        return WalletOverviewResponse(
+            total_usdt=total,
+            wallets=wallets,
+            as_of=datetime.now(timezone.utc),
         )
 
     # ------------------------------------------------------------------

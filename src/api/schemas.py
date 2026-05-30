@@ -408,6 +408,21 @@ class AutoSweepStatusResponse(BaseModel):
     last_error: str | None = None
 
 
+class WalletBalance(BaseModel):
+    wallet: str
+    label: str
+    balance_usdt: float
+    unrealized_pnl: float = 0.0
+    pct: float
+
+
+class WalletOverviewResponse(BaseModel):
+    total_usdt: float
+    wallets: list[WalletBalance]
+    as_of: datetime
+    error: str | None = None
+
+
 class FundingArbitrageParams(BaseModel):
     symbol: str = "BTCUSDT"
     allocated_usdt: float = Field(default=1000.0, gt=0, description="할당 시드 (USDT)")
@@ -485,3 +500,51 @@ class QuickBacktestResponse(BaseModel):
     duration_ms: int = 0
     quota_remaining: int | None = None
     quota_reset_at: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Upbit / Bridge transfer schemas
+# ---------------------------------------------------------------------------
+
+
+class UpbitBalanceItem(BaseModel):
+    currency: str
+    balance: float
+    locked: float
+
+
+class UpbitAccountResponse(BaseModel):
+    balances: list[UpbitBalanceItem]
+    krw_usdt_price: float
+
+
+class BridgeOnrampRequest(BaseModel):
+    usdt_amount: float = Field(gt=0)
+    network: str = "TRC20"
+    convert_from_krw: bool = False
+
+
+class BridgeOfframpRequest(BaseModel):
+    usdt_amount: float = Field(gt=0)
+    network: str = "TRC20"
+    sell_to_krw: bool = False
+    redeem_from_earn: bool = True
+
+
+class BridgeTransferResponse(BaseModel):
+    id: str
+    direction: str
+    status: str
+    network: str
+    requested_usdt: float
+    actual_usdt: float | None = None
+    krw_amount: float | None = None
+    fee_usdt: float | None = None
+    src_order_uuid: str | None = None
+    src_withdrawal_id: str | None = None
+    dst_deposit_address: str | None = None
+    dst_txid: str | None = None
+    error_message: str | None = None
+    initiated_at: datetime
+    completed_at: datetime | None = None
+    updated_at: datetime

@@ -1,6 +1,7 @@
 "use client";
 
 import { BinanceAccountPanel } from "@/components/BinanceAccountPanel";
+import { WalletOverviewPanel } from "@/components/WalletOverviewPanel";
 import { useI18n } from "@/lib/i18n";
 
 export function AssetOverviewPanel() {
@@ -17,6 +18,10 @@ export function AssetOverviewPanel() {
       <p className="mt-1 max-w-2xl text-xs text-[#868993]">{t.assetOverview.subtitle}</p>
 
       <div className="mt-4">
+        <WalletOverviewPanel />
+      </div>
+
+      <div className="mt-6">
         <BinanceAccountPanel embedded />
       </div>
     </section>
