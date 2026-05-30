@@ -2511,6 +2511,15 @@ def create_app() -> FastAPI:
         api_secret = crypto.decrypt(profile.binance_api_secret_enc)
         return BinanceEarnClient(api_key=api_key, api_secret=api_secret)
 
+    _NETWORK_BINANCE_MAP = {"TRC20": "TRX", "ERC20": "ETH", "BEP20": "BSC"}
+    _NETWORK_UPBIT_MAP = {"TRC20": "TRX", "ERC20": "ETH", "BEP20": "BSC"}
+
+    def _binance_network(code: str) -> str:
+        return _NETWORK_BINANCE_MAP.get(code.upper(), code.upper())
+
+    def _upbit_network(code: str) -> str:
+        return _NETWORK_UPBIT_MAP.get(code.upper(), code.upper())
+
     @app.post("/api/bridge/onramp")
     async def bridge_onramp(
         body: dict[str, Any],
@@ -2567,7 +2576,7 @@ def create_app() -> FastAPI:
                 krw_spent = float(order.get("price") or krw_to_spend)
 
             # Step 2: Get Binance deposit address
-            deposit_info = await binance.get_deposit_address("USDT", network)
+            deposit_info = await binance.get_deposit_address("USDT", _binance_network(network))
             deposit_address = str(deposit_info.get("address", ""))
             if not deposit_address:
                 raise HTTPException(status_code=502, detail="Failed to get Binance deposit address")
@@ -2577,7 +2586,7 @@ def create_app() -> FastAPI:
                 currency="USDT",
                 amount=usdt_amount,
                 address=deposit_address,
-                net_type=network,
+                net_type=_upbit_network(network),
             )
             withdrawal_uuid = str(withdrawal.get("uuid", ""))
 
@@ -2672,7 +2681,7 @@ def create_app() -> FastAPI:
                         await binance.redeem(redeem_amount, product_id)
 
             # Step 2: Get Upbit USDT deposit address
-            deposit_info = await upbit.get_deposit_address("USDT", network)
+            deposit_info = await upbit.get_deposit_address("USDT", _upbit_network(network))
             deposit_address = str(deposit_info.get("deposit_address", ""))
             if not deposit_address:
                 raise HTTPException(status_code=502, detail="Failed to get Upbit deposit address")
@@ -2682,7 +2691,7 @@ def create_app() -> FastAPI:
                 coin="USDT",
                 address=deposit_address,
                 amount=usdt_amount,
-                network=network,
+                network=_binance_network(network),
             )
             withdrawal_id = str(result.get("id", ""))
 
