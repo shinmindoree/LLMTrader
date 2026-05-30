@@ -46,6 +46,12 @@ class UserProfile(Base):
     auto_sweep_buffer_usdt: Mapped[float] = mapped_column(
         Float, nullable=False, default=50.0, server_default="50"
     )
+    auto_sweep_futures_buffer_usdt: Mapped[float] = mapped_column(
+        Float, nullable=False, default=200.0, server_default="200"
+    )
+    auto_sweep_sweep_threshold_usdt: Mapped[float] = mapped_column(
+        Float, nullable=False, default=50.0, server_default="50"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

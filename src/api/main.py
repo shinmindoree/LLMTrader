@@ -2412,11 +2412,11 @@ def create_app() -> FastAPI:
 
         return AutoSweepStatusResponse(
             enabled=bool(profile.auto_sweep_enabled),
-            min_idle_usdt=float(profile.auto_sweep_min_usdt),
-            buffer_usdt=float(profile.auto_sweep_buffer_usdt),
+            futures_buffer_usdt=float(profile.auto_sweep_futures_buffer_usdt),
+            sweep_threshold_usdt=float(profile.auto_sweep_sweep_threshold_usdt),
             mainnet_required=_is_testnet_url(profile.binance_base_url),
             keys_configured=bool(profile.binance_api_key_enc and profile.binance_api_secret_enc),
-            spot_usdt=(snap or {}).get("spot_usdt"),
+            futures_usdt=(snap or {}).get("futures_usdt"),
             earn_usdt=(snap or {}).get("earn_usdt"),
             last_run_at=last_run_at,
             last_action=(snap or {}).get("last_action"),
@@ -2450,18 +2450,13 @@ def create_app() -> FastAPI:
                     status_code=422,
                     detail="Configure Binance API keys before enabling auto-sweep",
                 )
-        if body.buffer_usdt > body.min_idle_usdt:
-            raise HTTPException(
-                status_code=422,
-                detail="buffer_usdt must be <= min_idle_usdt",
-            )
 
         await update_user_auto_sweep_settings(
             session,
             user_id=user.user_id,
             enabled=body.enabled,
-            min_usdt=body.min_idle_usdt,
-            buffer_usdt=body.buffer_usdt,
+            futures_buffer_usdt=body.futures_buffer_usdt,
+            sweep_threshold_usdt=body.sweep_threshold_usdt,
         )
         await session.commit()
 
@@ -2475,11 +2470,11 @@ def create_app() -> FastAPI:
 
         return AutoSweepStatusResponse(
             enabled=body.enabled,
-            min_idle_usdt=body.min_idle_usdt,
-            buffer_usdt=body.buffer_usdt,
+            futures_buffer_usdt=body.futures_buffer_usdt,
+            sweep_threshold_usdt=body.sweep_threshold_usdt,
             mainnet_required=_is_testnet_url(profile.binance_base_url),
             keys_configured=bool(profile.binance_api_key_enc and profile.binance_api_secret_enc),
-            spot_usdt=(snap or {}).get("spot_usdt"),
+            futures_usdt=(snap or {}).get("futures_usdt"),
             earn_usdt=(snap or {}).get("earn_usdt"),
             last_run_at=last_run_at,
             last_action=(snap or {}).get("last_action"),

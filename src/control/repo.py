@@ -113,16 +113,16 @@ async def update_user_auto_sweep_settings(
     *,
     user_id: str,
     enabled: bool,
-    min_usdt: float,
-    buffer_usdt: float,
+    futures_buffer_usdt: float,
+    sweep_threshold_usdt: float,
 ) -> None:
     await session.execute(
         update(UserProfile)
         .where(UserProfile.user_id == user_id)
         .values(
             auto_sweep_enabled=enabled,
-            auto_sweep_min_usdt=min_usdt,
-            auto_sweep_buffer_usdt=buffer_usdt,
+            auto_sweep_futures_buffer_usdt=futures_buffer_usdt,
+            auto_sweep_sweep_threshold_usdt=sweep_threshold_usdt,
             updated_at=datetime.now(),
         )
     )

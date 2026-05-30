@@ -306,11 +306,11 @@ export type BinanceKeysStatus = {
 
 export type AutoSweepSettings = {
   enabled: boolean;
-  min_idle_usdt: number;
-  buffer_usdt: number;
+  futures_buffer_usdt: number;
+  sweep_threshold_usdt: number;
   mainnet_required: boolean;
   keys_configured: boolean;
-  spot_usdt: number | null;
+  futures_usdt: number | null;
   earn_usdt: number | null;
   last_run_at: string | null;
   last_action: string | null;
@@ -319,8 +319,8 @@ export type AutoSweepSettings = {
 
 export type AutoSweepSettingsInput = {
   enabled: boolean;
-  min_idle_usdt: number;
-  buffer_usdt: number;
+  futures_buffer_usdt: number;
+  sweep_threshold_usdt: number;
 };
 
 export type BillingStatus = {

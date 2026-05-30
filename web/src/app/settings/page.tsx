@@ -262,16 +262,16 @@ function AutoSweepSection() {
   );
 
   const [enabled, setEnabled] = useState(false);
-  const [minIdle, setMinIdle] = useState<string>("100");
-  const [buffer, setBuffer] = useState<string>("50");
+  const [futuresBuffer, setFuturesBuffer] = useState<string>("200");
+  const [sweepThreshold, setSweepThreshold] = useState<string>("50");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   if (data && !hydrated) {
     setEnabled(data.enabled);
-    setMinIdle(String(data.min_idle_usdt));
-    setBuffer(String(data.buffer_usdt));
+    setFuturesBuffer(String(data.futures_buffer_usdt));
+    setSweepThreshold(String(data.sweep_threshold_usdt));
     setHydrated(true);
   }
 
@@ -283,15 +283,15 @@ function AutoSweepSection() {
     setSaving(true);
     setMessage(null);
     try {
-      const min = Number.parseFloat(minIdle);
-      const buf = Number.parseFloat(buffer);
-      if (!Number.isFinite(min) || !Number.isFinite(buf) || min < 0 || buf < 0) {
+      const buf = Number.parseFloat(futuresBuffer);
+      const thr = Number.parseFloat(sweepThreshold);
+      if (!Number.isFinite(buf) || !Number.isFinite(thr) || buf < 0 || thr < 0) {
         throw new Error("Invalid number");
       }
       const result = await setAutoSweepSettings({
         enabled,
-        min_idle_usdt: min,
-        buffer_usdt: buf,
+        futures_buffer_usdt: buf,
+        sweep_threshold_usdt: thr,
       });
       await mutate(result, { revalidate: false });
       setMessage({ type: "success", text: t.settingsPage.autoSweepSaved });
@@ -357,25 +357,25 @@ function AutoSweepSection() {
 
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block text-xs text-[#868993]">
-          {t.settingsPage.autoSweepMinIdle}
+          {t.settingsPage.autoSweepFuturesBuffer}
           <input
             type="number"
             min={0}
             step="1"
-            value={minIdle}
-            onChange={(e) => setMinIdle(e.target.value)}
+            value={futuresBuffer}
+            onChange={(e) => setFuturesBuffer(e.target.value)}
             disabled={blocked}
             className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] disabled:opacity-50"
           />
         </label>
         <label className="block text-xs text-[#868993]">
-          {t.settingsPage.autoSweepBuffer}
+          {t.settingsPage.autoSweepSweepThreshold}
           <input
             type="number"
             min={0}
             step="1"
-            value={buffer}
-            onChange={(e) => setBuffer(e.target.value)}
+            value={sweepThreshold}
+            onChange={(e) => setSweepThreshold(e.target.value)}
             disabled={blocked}
             className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] disabled:opacity-50"
           />
@@ -398,11 +398,11 @@ function AutoSweepSection() {
         )}
       </div>
 
-      {data && (data.last_run_at || data.spot_usdt !== null || data.earn_usdt !== null) && (
+      {data && (data.last_run_at || data.futures_usdt !== null || data.earn_usdt !== null) && (
         <div className="mt-5 grid grid-cols-2 gap-3 rounded border border-[#2a2e39] bg-[#131722] p-3 text-xs sm:grid-cols-4">
           <div>
-            <div className="text-[#868993]">{t.settingsPage.autoSweepSpotBalance}</div>
-            <div className="mt-0.5 text-[#d1d4dc]">{data.spot_usdt?.toFixed(2) ?? "—"}</div>
+            <div className="text-[#868993]">{t.settingsPage.autoSweepFuturesBalance}</div>
+            <div className="mt-0.5 text-[#d1d4dc]">{data.futures_usdt?.toFixed(2) ?? "—"}</div>
           </div>
           <div>
             <div className="text-[#868993]">{t.settingsPage.autoSweepEarnBalance}</div>

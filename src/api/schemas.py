@@ -391,17 +391,17 @@ class StrategyModuleCatalogResponse(BaseModel):
 
 class AutoSweepSettingsRequest(BaseModel):
     enabled: bool
-    min_idle_usdt: float = Field(default=100.0, ge=0)
-    buffer_usdt: float = Field(default=50.0, ge=0)
+    futures_buffer_usdt: float = Field(default=200.0, ge=0)
+    sweep_threshold_usdt: float = Field(default=50.0, ge=0)
 
 
 class AutoSweepStatusResponse(BaseModel):
     enabled: bool
-    min_idle_usdt: float
-    buffer_usdt: float
+    futures_buffer_usdt: float
+    sweep_threshold_usdt: float
     mainnet_required: bool
     keys_configured: bool
-    spot_usdt: float | None = None
+    futures_usdt: float | None = None
     earn_usdt: float | None = None
     last_run_at: datetime | None = None
     last_action: str | None = None

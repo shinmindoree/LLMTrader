@@ -1,15 +1,17 @@
-"""Auto-Sweep background engine.
+"""Auto-Sweep background engine — Futures-wallet based.
 
-Periodically (every 5 min):
+Every 5 minutes:
   1. List all users with `auto_sweep_enabled = true`
   2. For each user (isolated via try/except):
      - Decrypt mainnet Binance keys (skip testnet)
-     - Fetch Spot USDT balance + current Simple Earn (Flexible) position
+     - Fetch Futures available_balance + current Simple Earn position
      - Decide:
-         spot > min_idle + buffer  → subscribe (deposit excess)
-         spot < buffer             → redeem (top up Spot)
-         otherwise                 → noop
-     - Persist outcome to `account_snapshots["auto_sweep:{user_id}"]`
+         futures > futures_buffer + sweep_threshold
+             → transfer excess Futures → Spot, then subscribe to Simple Earn
+         futures < futures_buffer and earn > 0
+             → redeem from Simple Earn, then transfer Spot → Futures to top up
+         otherwise → noop
+     - Persist outcome to account_snapshots["auto_sweep:{user_id}"]
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from control.repo import (
 _log = logging.getLogger("llmtrader.auto_sweep")
 
 _POLL_INTERVAL_SEC = 300  # 5 minutes
-_MIN_TXN_USDT = 0.10  # don't subscribe/redeem < 0.10 USDT
+_MIN_TXN_USDT = 1.0  # minimum transaction size to avoid dust transfers
 TESTNET_HOST_HINTS = ("testnet",)
 
 
@@ -141,57 +143,66 @@ async def _process_user(
         await _record_error(session_maker, user.user_id, f"Key decryption failed: {exc}")
         return
 
+    futures_buffer = float(user.auto_sweep_futures_buffer_usdt)
+    sweep_threshold = float(user.auto_sweep_sweep_threshold_usdt)
+
     client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
     try:
-        spot_usdt = await client.fetch_spot_usdt_balance()
+        futures_usdt = await client.fetch_futures_available_balance()
         earn_usdt = 0.0
         try:
             earn_usdt = await client.fetch_flexible_position_usdt()
         except BinanceEarnClientError as exc:
             _log.warning("flex position fetch failed user=%s: %s", user.user_id, exc)
 
-        min_idle = float(user.auto_sweep_min_usdt)
-        buffer = float(user.auto_sweep_buffer_usdt)
-
         action = "noop"
         detail: dict[str, Any] = {}
 
-        if spot_usdt > min_idle + buffer:
-            excess = spot_usdt - (min_idle + buffer)
-            if excess >= _MIN_TXN_USDT:
+        if futures_usdt > futures_buffer + sweep_threshold:
+            # Sweep excess: Futures → Spot → Simple Earn
+            transfer_amount = futures_usdt - futures_buffer
+            if transfer_amount >= _MIN_TXN_USDT:
+                await client.transfer_futures_to_spot(transfer_amount)
+                _log.info(
+                    "transferred Futures→Spot user=%s amount=%.2f",
+                    user.user_id, transfer_amount,
+                )
                 product_id = await client.get_usdt_flexible_product_id()
                 if not product_id:
                     raise BinanceEarnClientError("No USDT Flexible product available")
-                detail = await client.subscribe(excess, product_id)
+                detail = await client.subscribe(transfer_amount, product_id)
                 action = "subscribed"
                 _log.info(
                     "subscribed user=%s amount=%.2f product=%s",
-                    user.user_id,
-                    excess,
-                    product_id,
+                    user.user_id, transfer_amount, product_id,
                 )
-        elif spot_usdt < buffer and earn_usdt > 0:
-            need = min(buffer - spot_usdt, earn_usdt)
+
+        elif futures_usdt < futures_buffer and earn_usdt > 0:
+            # Top up: Simple Earn → Spot → Futures
+            need = min(futures_buffer - futures_usdt, earn_usdt)
             if need >= _MIN_TXN_USDT:
                 product_id = await client.get_usdt_flexible_product_id()
                 if not product_id:
                     raise BinanceEarnClientError("No USDT Flexible product available")
                 detail = await client.redeem(need, product_id)
-                action = "redeemed"
                 _log.info(
                     "redeemed user=%s amount=%.2f product=%s",
-                    user.user_id,
-                    need,
-                    product_id,
+                    user.user_id, need, product_id,
                 )
+                await client.transfer_spot_to_futures(need)
+                _log.info(
+                    "transferred Spot→Futures user=%s amount=%.2f",
+                    user.user_id, need,
+                )
+                action = "redeemed"
 
         await _record_success(
             session_maker,
             user.user_id,
-            spot_usdt=spot_usdt,
+            futures_usdt=futures_usdt,
             earn_usdt=earn_usdt,
-            min_idle_usdt=min_idle,
-            buffer_usdt=buffer,
+            futures_buffer_usdt=futures_buffer,
+            sweep_threshold_usdt=sweep_threshold,
             action=action,
             detail=detail,
         )
@@ -206,19 +217,19 @@ async def _record_success(
     session_maker: async_sessionmaker[AsyncSession],
     user_id: str,
     *,
-    spot_usdt: float,
+    futures_usdt: float,
     earn_usdt: float,
-    min_idle_usdt: float,
-    buffer_usdt: float,
+    futures_buffer_usdt: float,
+    sweep_threshold_usdt: float,
     action: str,
     detail: dict[str, Any],
 ) -> None:
     payload = {
         "last_run_at": datetime.now(timezone.utc).isoformat(),
-        "spot_usdt": spot_usdt,
+        "futures_usdt": futures_usdt,
         "earn_usdt": earn_usdt,
-        "min_idle_usdt": min_idle_usdt,
-        "buffer_usdt": buffer_usdt,
+        "futures_buffer_usdt": futures_buffer_usdt,
+        "sweep_threshold_usdt": sweep_threshold_usdt,
         "last_action": action,
         "last_error": None,
         "detail": detail,

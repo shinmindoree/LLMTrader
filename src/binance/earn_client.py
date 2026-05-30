@@ -1,9 +1,13 @@
-"""Binance Spot REST client for Simple Earn (Flexible).
+"""Binance Spot REST client for Simple Earn (Flexible) + Futures Universal Transfer.
 
-Mainnet-only client (`https://api.binance.com`) used exclusively by the
-Auto-Sweep engine to read Spot USDT balance and subscribe/redeem the
-USDT Flexible product. Kept separate from `BinanceHTTPClient` because
-that client is hardcoded to futures (`fapi.binance.com`).
+Mainnet-only client used by the Auto-Sweep engine to:
+  - Read Spot USDT balance
+  - Read Futures available balance
+  - Subscribe/redeem USDT Flexible product
+  - Transfer USDT between Futures ↔ Spot wallets (Universal Transfer)
+
+Kept separate from BinanceHTTPClient because that client targets fapi.binance.com
+whereas Simple Earn and Universal Transfer live on api.binance.com (sapi).
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import httpx
 _log = logging.getLogger("llmtrader.binance.earn")
 
 SPOT_MAINNET_BASE = "https://api.binance.com"
+FUTURES_MAINNET_BASE = "https://fapi.binance.com"
 
 
 class BinanceEarnClientError(RuntimeError):
@@ -33,6 +38,7 @@ class BinanceEarnClient:
         api_key: str,
         api_secret: str,
         base_url: str = SPOT_MAINNET_BASE,
+        futures_base_url: str = FUTURES_MAINNET_BASE,
         timeout: float = 10.0,
     ) -> None:
         if not api_key or not api_secret:
@@ -44,6 +50,11 @@ class BinanceEarnClient:
             timeout=timeout,
             headers={"X-MBX-APIKEY": api_key},
         )
+        self._futures_client = httpx.AsyncClient(
+            base_url=futures_base_url,
+            timeout=timeout,
+            headers={"X-MBX-APIKEY": api_key},
+        )
         self._time_offset_ms: int = 0
         self._last_sync_ts: float = 0.0
         self._sync_interval_sec: float = 300.0
@@ -51,6 +62,7 @@ class BinanceEarnClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+        await self._futures_client.aclose()
 
     # ── time sync ──────────────────────────────────────────
 
@@ -91,7 +103,19 @@ class BinanceEarnClient:
             raise BinanceEarnClientError(f"{method} {path} -> {r.status_code}: {data}")
         return r.json()
 
-    # ── public methods ─────────────────────────────────────
+    async def _signed_futures(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        await self._maybe_sync_time()
+        signed = self._sign(dict(params or {}))
+        r = await self._futures_client.request(method, path, params=signed)
+        if r.status_code >= 400:
+            try:
+                data = r.json()
+            except Exception:  # noqa: BLE001
+                data = {"raw": r.text}
+            raise BinanceEarnClientError(f"{method} {path} -> {r.status_code}: {data}")
+        return r.json()
+
+    # ── Spot balance ───────────────────────────────────────
 
     async def fetch_spot_usdt_balance(self) -> float:
         data = await self._signed("GET", "/api/v3/account")
@@ -99,6 +123,30 @@ class BinanceEarnClient:
             if bal.get("asset") == "USDT":
                 return float(bal.get("free", 0.0))
         return 0.0
+
+    # ── Futures balance ────────────────────────────────────
+
+    async def fetch_futures_available_balance(self) -> float:
+        """Return USDT available balance in the USD-M Futures wallet."""
+        data = await self._signed_futures("GET", "/fapi/v2/balance")
+        for item in (data if isinstance(data, list) else []):
+            if item.get("asset") == "USDT":
+                return float(item.get("availableBalance", 0.0))
+        return 0.0
+
+    # ── Universal Transfer (Futures ↔ Spot) ───────────────
+
+    async def transfer_futures_to_spot(self, amount: float) -> dict[str, Any]:
+        """Move USDT from USD-M Futures wallet to Spot wallet."""
+        payload = {"type": "UMFUTURE_MAIN", "asset": "USDT", "amount": f"{amount:.2f}"}
+        return await self._signed("POST", "/sapi/v1/asset/transfer", payload)
+
+    async def transfer_spot_to_futures(self, amount: float) -> dict[str, Any]:
+        """Move USDT from Spot wallet to USD-M Futures wallet."""
+        payload = {"type": "MAIN_UMFUTURE", "asset": "USDT", "amount": f"{amount:.2f}"}
+        return await self._signed("POST", "/sapi/v1/asset/transfer", payload)
+
+    # ── Simple Earn ────────────────────────────────────────
 
     async def get_usdt_flexible_product_id(self) -> str | None:
         if self._cached_product_id:
@@ -127,7 +175,6 @@ class BinanceEarnClient:
         return total
 
     async def subscribe(self, amount: float, product_id: str) -> dict[str, Any]:
-        # Binance requires amount as string with sufficient precision.
         payload = {"productId": product_id, "amount": f"{amount:.2f}"}
         return await self._signed("POST", "/sapi/v1/simple-earn/flexible/subscribe", payload)
 
