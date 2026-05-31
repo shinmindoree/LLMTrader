@@ -35,7 +35,7 @@ from control.repo import (
 
 _log = logging.getLogger("llmtrader.auto_sweep")
 
-_POLL_INTERVAL_SEC = 300  # 5 minutes
+_POLL_INTERVAL_SEC = 60  # 1 minute
 _MIN_TXN_USDT = 1.0  # minimum transaction size to avoid dust transfers
 TESTNET_HOST_HINTS = ("testnet",)
 
@@ -90,6 +90,28 @@ async def get_user_status(session: AsyncSession, *, user_id: str) -> dict[str, A
     if not snap:
         return None
     return snap.data_json
+
+
+async def trigger_user_sweep(
+    session_maker: async_sessionmaker[AsyncSession], *, user_id: str
+) -> None:
+    """Run a single auto-sweep cycle immediately for one user.
+
+    Used after a user saves/enables their auto-sweep settings so the change
+    takes effect right away instead of waiting for the next polling cycle.
+    Isolated via try/except so API responses are never blocked by failures.
+    """
+    from control.repo import get_user_profile
+
+    try:
+        async with session_maker() as session:
+            user = await get_user_profile(session, user_id=user_id)
+        if user is None or not user.auto_sweep_enabled:
+            return
+        await _process_user(session_maker, user)
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("immediate auto-sweep failed for user=%s: %s", user_id, exc)
+        await _record_error(session_maker, user_id, str(exc))
 
 
 # ── Loop ───────────────────────────────────────────────────

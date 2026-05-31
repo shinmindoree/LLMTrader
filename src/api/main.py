@@ -2997,6 +2997,11 @@ def create_app() -> FastAPI:
         )
         await session.commit()
 
+        if body.enabled:
+            from live.auto_sweep_engine import trigger_user_sweep
+
+            await trigger_user_sweep(session_maker, user_id=user.user_id)
+
         snap = await get_user_status(session, user_id=user.user_id)
         last_run_at: datetime | None = None
         if snap and snap.get("last_run_at"):
