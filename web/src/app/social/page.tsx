@@ -1,28 +1,17 @@
 "use client";
 
-import { ArbitrageConfigPanel } from "@/components/ArbitrageConfigPanel";
 import { HubHeader, StrategyCard } from "@/components/StrategyHub";
 import { useI18n } from "@/lib/i18n";
 
-export default function ArbitragePage() {
+export default function SocialPage() {
   const { t } = useI18n();
-  const h = t.hubs.arbitrage;
+  const h = t.hubs.social;
 
   return (
     <div className="w-full max-w-3xl px-4 py-6">
       <HubHeader title={h.title} subtitle={h.subtitle} />
       <div className="space-y-4">
-        <StrategyCard
-          name={h.funding.name}
-          badge={h.funding.badge}
-          desc={h.funding.desc}
-          active
-          statusLabel={t.hubs.statusActive}
-        >
-          <ArbitrageConfigPanel />
-        </StrategyCard>
-
-        {[h.basis, h.statistical, h.triangular, h.optionsDelta].map((item) => (
+        {[h.fundMgmt, h.referral, h.signal].map((item) => (
           <StrategyCard
             key={item.name}
             name={item.name}

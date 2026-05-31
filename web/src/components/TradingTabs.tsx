@@ -7,10 +7,12 @@ import { useI18n } from "@/lib/i18n";
 const TABS = [
   { href: "/chart", labelKey: "chart" as const },
   { href: "/dashboard", labelKey: "dashboard" as const },
-  { href: "/modules", labelKey: "modules" as const },
   { href: "/strategies", labelKey: "strategies" as const },
   { href: "/backtest", labelKey: "backtest" as const },
   { href: "/live", labelKey: "live" as const },
+  { href: "/arbitrage", labelKey: "arbitrage" as const },
+  { href: "/yield", labelKey: "yield" as const },
+  { href: "/social", labelKey: "social" as const },
 ];
 
 function isActive(pathname: string, href: string): boolean {

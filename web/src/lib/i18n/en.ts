@@ -86,11 +86,13 @@ const en = {
     chart: "Chart",
     features: "Features",
     dashboard: "Dashboard",
-    live: "Live",
+    live: "Directional Alpha",
     backtest: "Backtest",
     settings: "Settings",
     strategies: "Strategies",
     arbitrage: "Arbitrage",
+    yield: "Yield & Treasury",
+    social: "Social & Copy",
     modules: "Modules",
     transfers: "Transfers",
     openMenu: "Open navigation menu",
@@ -752,6 +754,73 @@ const en = {
     annRate: "Ann. Rate",
     pnlLabel: "Unrealized PnL",
     income: "Funding Income",
+  },
+  hubs: {
+    statusActive: "Active",
+    statusPlanned: "Planned",
+    plannedNote: "In development — configuration and execution coming soon.",
+    arbitrage: {
+      title: "Arbitrage",
+      subtitle: "Market-neutral strategies that capture pricing inefficiencies across funding, spreads, and venues.",
+      funding: {
+        name: "Funding Rate Arbitrage",
+        badge: "Market Neutral",
+        desc: "Spot long + perpetual short delta-neutral position that harvests funding payments automatically.",
+      },
+      basis: {
+        name: "Basis & Calendar Spread",
+        badge: "Term Structure",
+        desc: "Trade the spread between spot and futures, or between quarterly contracts, as the basis converges.",
+      },
+      statistical: {
+        name: "Statistical Arbitrage",
+        badge: "Mean Reversion",
+        desc: "Pairs and cointegration trading on correlated assets, entering when spreads diverge from the mean.",
+      },
+      triangular: {
+        name: "Triangular Arbitrage",
+        badge: "Intra-Exchange",
+        desc: "Exploit price discrepancies across three trading pairs in a single closed currency loop.",
+      },
+      optionsDelta: {
+        name: "Options Delta-Neutral",
+        badge: "Volatility",
+        desc: "Delta-hedged options structures that monetize volatility and theta while staying directionally neutral.",
+      },
+    },
+    yield: {
+      title: "Yield & Treasury",
+      subtitle: "Put idle and surplus capital to work with low-risk earning and farming strategies.",
+      simpleEarn: {
+        name: "Simple Earn",
+        badge: "Low Risk",
+        desc: "Automatically sweep idle USDT and assets into Binance Simple Earn for passive interest.",
+      },
+      airdrop: {
+        name: "Airdrop & Launchpool Farming",
+        badge: "Incentives",
+        desc: "Stake eligible assets to farm new-token launchpool rewards and qualify for airdrops.",
+      },
+    },
+    social: {
+      title: "Social & Copy Trading",
+      subtitle: "Turn the AlphaWeaver engine into a managed product: lead portfolios, rebates, and signal subscriptions.",
+      fundMgmt: {
+        name: "Fund Management (Lead Trading)",
+        badge: "Lead Trading",
+        desc: "Connect the engine to a Binance copy-trading lead portfolio and collect 10–20% of follower profits.",
+      },
+      referral: {
+        name: "Referral & Volume Mining",
+        badge: "Rebate Optimization",
+        desc: "Optimize VIP tier and affiliate commissions to recycle arbitrage trading fees back as rebates.",
+      },
+      signal: {
+        name: "Signal Providing (SaaS)",
+        badge: "Signal as a Service",
+        desc: "Push captured alpha signals to Telegram, TradingView, or 3Commas as a paid subscription via webhook.",
+      },
+    },
   },
 };
 

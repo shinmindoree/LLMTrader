@@ -90,11 +90,13 @@ const ko: TranslationKeys = {
     chart: "차트",
     features: "기능",
     dashboard: "대시보드",
-    live: "라이브",
+    live: "디렉셔널 알파",
     backtest: "백테스트",
     settings: "설정",
     strategies: "전략",
     arbitrage: "차익거래",
+    yield: "일드&잉여자금 운용",
+    social: "소셜&카피트레이딩",
     modules: "전략 모듈",
     transfers: "이체",
     openMenu: "내비게이션 메뉴 열기",
@@ -755,6 +757,73 @@ const ko: TranslationKeys = {
     annRate: "연환산",
     pnlLabel: "미실현 손익",
     income: "펀딩 수익",
+  },
+  hubs: {
+    statusActive: "운영 중",
+    statusPlanned: "개발 예정",
+    plannedNote: "개발 중입니다 — 설정 및 실행 기능을 곧 제공합니다.",
+    arbitrage: {
+      title: "차익거래",
+      subtitle: "펀딩비, 스프레드, 거래소 간 가격 비효율을 포착하는 시장 중립 전략을 운용합니다.",
+      funding: {
+        name: "펀딩비 차익거래",
+        badge: "시장 중립",
+        desc: "현물 롱 + 무기한 선물 숏 델타 중립 포지션으로 펀딩비를 자동 수취합니다.",
+      },
+      basis: {
+        name: "베이시스 & 캘린더 스프레드",
+        badge: "만기 구조",
+        desc: "현물-선물 또는 분기 선물 간 스프레드가 수렴하는 흐름을 이용해 매매합니다.",
+      },
+      statistical: {
+        name: "통계적 차익거래",
+        badge: "평균 회귀",
+        desc: "상관 자산의 페어·공적분 매매로, 스프레드가 평균에서 벌어질 때 진입합니다.",
+      },
+      triangular: {
+        name: "삼각 차익거래",
+        badge: "거래소 내",
+        desc: "세 개의 거래쌍이 이루는 폐루프에서 발생하는 가격 불일치를 포착합니다.",
+      },
+      optionsDelta: {
+        name: "옵션 델타 중립",
+        badge: "변동성",
+        desc: "델타 헤지된 옵션 구조로 방향성은 중립을 유지하며 변동성과 세타를 수익화합니다.",
+      },
+    },
+    yield: {
+      title: "일드 & 잉여자금 운용",
+      subtitle: "유휴·잉여 자금을 저위험 수익화 및 파밍 전략으로 운용합니다.",
+      simpleEarn: {
+        name: "Simple Earn",
+        badge: "저위험",
+        desc: "유휴 USDT와 자산을 바이낸스 Simple Earn에 자동 예치해 이자를 수취합니다.",
+      },
+      airdrop: {
+        name: "에어드랍 & 런치풀 파밍",
+        badge: "인센티브",
+        desc: "대상 자산을 스테이킹해 신규 토큰 런치풀 보상을 파밍하고 에어드랍 자격을 확보합니다.",
+      },
+    },
+    social: {
+      title: "소셜 & 카피트레이딩",
+      subtitle: "AlphaWeaver 엔진을 리드 포트폴리오·리베이트·시그널 구독 등 매니지드 상품으로 전환합니다.",
+      fundMgmt: {
+        name: "펀드 매니지먼트 (리드 트레이딩)",
+        badge: "리드 트레이딩",
+        desc: "엔진을 바이낸스 카피 트레이딩 리드 포트폴리오에 연결하고 팔로워 수익의 10~20%를 징수합니다.",
+      },
+      referral: {
+        name: "레퍼럴 & 거래량 마이닝",
+        badge: "리베이트 최적화",
+        desc: "VIP 등급과 어필리에이트 커미션을 최적화해 차익거래 수수료를 리베이트로 되돌려 받습니다.",
+      },
+      signal: {
+        name: "시그널 프로바이딩 (SaaS)",
+        badge: "Signal as a Service",
+        desc: "포착한 알파 시그널을 웹훅으로 텔레그램·TradingView·3Commas에 유료 구독 형태로 전송합니다.",
+      },
+    },
   },
 };
 
