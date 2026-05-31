@@ -179,7 +179,11 @@ class BinanceEarnClient:
         return await self._signed("POST", "/sapi/v1/simple-earn/flexible/subscribe", payload)
 
     async def redeem(self, amount: float, product_id: str) -> dict[str, Any]:
-        payload = {"productId": product_id, "amount": f"{amount:.2f}"}
+        payload = {
+            "productId": product_id,
+            "amount": f"{amount:.2f}",
+            "destAccount": "SPOT",
+        }
         return await self._signed("POST", "/sapi/v1/simple-earn/flexible/redeem", payload)
 
     # ── Deposits & Withdrawals ─────────────────────────────

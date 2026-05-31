@@ -42,8 +42,13 @@ def _parse_interval_seconds(interval: str) -> int:
 async def _resolve_binance_client(
     user_id: str,
     session_maker: Any,
-) -> BinanceHTTPClient:
-    """사용자별 암호화된 키를 복호화하여 BinanceHTTPClient를 생성한다."""
+) -> tuple[BinanceHTTPClient, "Any | None"]:
+    """사용자별 암호화된 키를 복호화하여 BinanceHTTPClient를 생성한다.
+
+    메인넷 키인 경우 Simple Earn 기반 JIT 증거금 복원을 위한
+    ``BinanceEarnClient`` 도 함께 생성해 ``(client, earn_client)`` 로 반환한다.
+    테스트넷이면 earn_client 는 ``None`` (Simple Earn 미지원).
+    """
     from control.repo import get_user_profile
 
     async with session_maker() as session:
@@ -55,7 +60,12 @@ async def _resolve_binance_client(
         api_key = crypto.decrypt(profile.binance_api_key_enc)
         api_secret = crypto.decrypt(profile.binance_api_secret_enc)
         base_url = profile.binance_base_url or "https://testnet.binancefuture.com"
-        return BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
+        client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
+        earn_client = None
+        if "testnet" not in base_url.lower():
+            from binance.earn_client import BinanceEarnClient
+            earn_client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+        return client, earn_client
 
     raise ValueError(
         f"No Binance API keys configured for user {user_id}. "
@@ -78,7 +88,7 @@ async def run_live(
     settings = get_settings()
     if not session_maker:
         raise ValueError("session_maker is required for live trading")
-    client = await _resolve_binance_client(user_id, session_maker)
+    client, earn_client = await _resolve_binance_client(user_id, session_maker)
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
     strategy_code_snapshot = config.get("_strategy_code")
@@ -166,6 +176,7 @@ async def run_live(
             audit_hook=sink.audit_hook,
             trade_backfill_hook=sink.backfill_trades,
             job_id=job_id,
+            earn_client=earn_client,
         )
         trade_contexts[sym] = ctx
 
@@ -383,3 +394,8 @@ async def run_live(
         if cleanup_strategy_file:
             strategy_file.unlink(missing_ok=True)
         await client.aclose()
+        if earn_client is not None:
+            try:
+                await earn_client.aclose()
+            except Exception:  # noqa: BLE001
+                pass

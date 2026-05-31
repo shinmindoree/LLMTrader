@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 import math
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from binance.client import BinanceHTTPClient
 from binance.user_stream import BinanceUserStream
@@ -14,6 +14,14 @@ from indicators.builtin import compute as compute_builtin_indicator
 from live.risk import LiveRiskManager
 from live.logger import get_logger
 from notifications.slack import SlackNotifier
+
+if TYPE_CHECKING:
+    from binance.earn_client import BinanceEarnClient
+
+# JIT margin restore (Auto-Sweep aware live entry) tuning
+_MIN_RESTORE_USDT = 1.0  # skip dust-sized restores
+_RESTORE_SETTLE_RETRIES = 5  # poll spot balance after redeem before transfer
+_RESTORE_SETTLE_DELAY_SEC = 0.2
 
 
 class LivePosition:
@@ -43,6 +51,7 @@ class LiveContext:
         audit_hook: Callable[[str, dict[str, Any]], None] | None = None,
         trade_backfill_hook: Callable[..., Any] | None = None,
         job_id: Any | None = None,
+        earn_client: "BinanceEarnClient | None" = None,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -61,6 +70,12 @@ class LiveContext:
         self.leverage = leverage
         self.env = env
         self.notifier = notifier
+        # Optional Simple Earn (mainnet-only) client used to pull idle USDT
+        # back from Earn into the Futures wallet right before an entry, so
+        # Auto-Sweep can keep almost the entire balance earning yield while
+        # still allowing full-size entries when a signal fires.
+        self._earn_client: "BinanceEarnClient | None" = earn_client
+        self._margin_restore_inflight: bool = False
         self._logger = get_logger("llmtrader.live")
         self.strategy_name: str | None = None
         self.strategy_meta: dict[str, Any] = {}
@@ -2262,10 +2277,15 @@ class LiveContext:
         """시스템 리스크 설정 기반으로 롱 진입."""
         if abs(self.position.size) > 1e-12:
             return
-        qty = self.calc_entry_quantity(entry_pct=entry_pct)
-        if qty <= 0:
+        if self._earn_client is None:
+            qty = self.calc_entry_quantity(entry_pct=entry_pct)
+            if qty <= 0:
+                return
+            self.buy(qty, reason=reason, use_chase=use_chase)
             return
-        self.buy(qty, reason=reason, use_chase=use_chase)
+        self._begin_margin_restore_entry(
+            side=1, reason=reason, entry_pct=entry_pct, use_chase=use_chase
+        )
 
     def enter_short(
         self,
@@ -2276,10 +2296,122 @@ class LiveContext:
         """시스템 리스크 설정 기반으로 숏 진입."""
         if abs(self.position.size) > 1e-12:
             return
+        if self._earn_client is None:
+            qty = self.calc_entry_quantity(entry_pct=entry_pct)
+            if qty <= 0:
+                return
+            self.sell(qty, reason=reason, use_chase=use_chase)
+            return
+        self._begin_margin_restore_entry(
+            side=-1, reason=reason, entry_pct=entry_pct, use_chase=use_chase
+        )
+
+    # ── JIT margin restore (Auto-Sweep aware entry) ────────────
+
+    def _begin_margin_restore_entry(
+        self,
+        *,
+        side: int,
+        reason: str | None,
+        entry_pct: float | None,
+        use_chase: bool | None,
+    ) -> None:
+        """진입 시그널 직후 Earn→Futures 증거금 복원을 먼저 수행한 뒤 진입한다.
+
+        ``enter_long``/``enter_short`` 는 동기 함수이므로, 비동기 redeem→
+        transfer→잔고 재조회를 백그라운드 태스크로 돌리고 그 안에서 수량을
+        다시 계산해 ``buy``/``sell`` 을 호출한다. 복원이 끝나기 전 같은 봉에서
+        중복 진입이 발생하지 않도록 ``_margin_restore_inflight`` 가드를 둔다.
+        """
+        if self._margin_restore_inflight or self._order_inflight:
+            return
+        self._margin_restore_inflight = True
+        task = asyncio.create_task(
+            self._restore_then_enter(
+                side=side, reason=reason, entry_pct=entry_pct, use_chase=use_chase
+            )
+        )
+        task.add_done_callback(self._handle_restore_result)
+
+    async def _restore_then_enter(
+        self,
+        *,
+        side: int,
+        reason: str | None,
+        entry_pct: float | None,
+        use_chase: bool | None,
+    ) -> None:
+        try:
+            await self._restore_margin_from_earn()
+        except Exception as exc:  # noqa: BLE001
+            # Best-effort: a failed restore must never block trading. Proceed
+            # with whatever margin currently sits in the Futures wallet.
+            print(f"⚠️ JIT margin restore failed: {exc}")
+            self._log_audit("JIT_MARGIN_RESTORE_FAILED", {"error": str(exc)})
+
+        # 복원 대기 중 포지션/락 상태가 바뀌었을 수 있으므로 재검증
+        if abs(self.position.size) > 1e-12:
+            return
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty <= 0:
             return
-        self.sell(qty, reason=reason, use_chase=use_chase)
+        if side == 1:
+            self.buy(qty, reason=reason, use_chase=use_chase)
+        else:
+            self.sell(qty, reason=reason, use_chase=use_chase)
+
+    def _handle_restore_result(self, task: asyncio.Task) -> None:
+        # buy()/sell() 가 이미 _order_inflight 를 세팅한 뒤 태스크가 종료되므로,
+        # 여기서 restore 가드를 풀어도 진입~체결 사이에 락 공백이 생기지 않는다.
+        self._margin_restore_inflight = False
+        try:
+            task.result()
+        except Exception as exc:  # noqa: BLE001
+            print(f"❌ JIT margin restore/entry task failed: {exc}")
+            self._log_audit("JIT_MARGIN_TASK_ERROR", {"error": str(exc)})
+
+    async def _restore_margin_from_earn(self) -> None:
+        """Simple Earn(Flexible)에 예치된 USDT 전액을 Futures 지갑으로 복원한다.
+
+        흐름: Earn 포지션 조회 → 전액 redeem(→SPOT) → Spot 정산 대기 →
+        Spot→Futures 이체 → REST 로 Futures 가용잔고를 재조회해 ``balance`` 를
+        결정적으로 덮어쓴다. 이렇게 하면 이후 ``calc_entry_quantity`` 가 복원된
+        잔고를 기준으로 수량을 산출한다.
+        """
+        earn = self._earn_client
+        if earn is None:
+            return
+        position = await earn.fetch_flexible_position_usdt()
+        if position < _MIN_RESTORE_USDT:
+            return
+        product_id = await earn.get_usdt_flexible_product_id()
+        if not product_id:
+            self._log_audit("JIT_MARGIN_NO_PRODUCT", {})
+            return
+
+        await earn.redeem(position, product_id)
+        self._log_audit("JIT_MARGIN_REDEEM", {"amount": position})
+
+        # Fast redemption 은 거의 즉시지만 Spot 반영이 원자적이지 않으므로
+        # 짧게 폴링한다. Standard 로 처리되면 자금이 늦게 도착하므로 이체를
+        # 건너뛰고(아래 transfer 가드), 잔고 재조회 결과대로 안전하게 진행한다.
+        spot = 0.0
+        for _ in range(_RESTORE_SETTLE_RETRIES):
+            spot = await earn.fetch_spot_usdt_balance()
+            if spot >= min(position, _MIN_RESTORE_USDT):
+                break
+            await asyncio.sleep(_RESTORE_SETTLE_DELAY_SEC)
+
+        transfer_amount = min(position, spot)
+        if transfer_amount >= _MIN_RESTORE_USDT:
+            await earn.transfer_spot_to_futures(transfer_amount)
+            self._log_audit("JIT_MARGIN_TRANSFER", {"amount": transfer_amount})
+
+        fresh = await earn.fetch_futures_available_balance()
+        self.balance = fresh
+        self.available_balance = fresh
+        self._log_audit("JIT_MARGIN_RESTORED", {"futures_balance": fresh})
+
 
     def flip_position(
         self,
