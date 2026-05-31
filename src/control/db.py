@@ -8,9 +8,12 @@ from control.models import Base
 
 
 def create_async_engine(database_url: str) -> AsyncEngine:
-    # PgBouncer transaction mode requires disabling prepared statements
-    connect_args: dict[str, object] = {}
+    # Bound the asyncpg connection establishment so an unreachable DB (e.g. a
+    # firewalled / private-only endpoint) fails fast instead of hanging on the
+    # OS TCP timeout. Keeps startup/health/keep-alive paths responsive.
+    connect_args: dict[str, object] = {"timeout": 15}
     if ":6432" in database_url or "pgbouncer=true" in database_url.lower():
+        # PgBouncer transaction mode requires disabling prepared statements
         connect_args["prepared_statement_cache_size"] = 0
 
     return _cae(

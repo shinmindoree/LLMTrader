@@ -630,6 +630,9 @@ def create_app() -> FastAPI:
     _keepalive_task: asyncio.Task[None] | None = None
     _runner_task: asyncio.Task[None] | None = None
     _runner_worker: Any = None
+    _db_init_task: asyncio.Task[None] | None = None
+
+    app.state.db_ready = False
 
     async def _db_keepalive(interval: int = 60) -> None:
         """Periodically send SELECT 1 to prevent idle DB connection termination."""
@@ -641,49 +644,57 @@ def create_app() -> FastAPI:
             except Exception as exc:
                 _logger.warning("DB keep-alive ping failed: %s", exc)
 
-    @app.on_event("startup")
-    async def _startup() -> None:
-        nonlocal _keepalive_task, _runner_task, _runner_worker
+    async def _db_init_loop(
+        base_delay: float = 5.0,
+        max_delay: float = 60.0,
+        attempt_timeout: float = 45.0,
+    ) -> None:
+        """Apply alembic upgrade + init_db off the startup critical path.
 
-        async def _try_db_init(max_attempts: int = 6, base_delay: float = 5.0) -> bool:
-            """Try alembic upgrade + init_db with bounded retries.
-
-            Returns True on success, False if all attempts fail. Failure does
-            NOT raise — the API still starts so the liveness probe can succeed
-            and DB-dependent endpoints surface 503 via middleware until PG
-            comes back. Total budget ~ 6 * (5 + 10 + 15 + 20 + 25 + 30) =
-            ~10s..30s per attempt with linear backoff, ~105s worst-case.
-            """
-            for attempt in range(1, max_attempts + 1):
-                try:
+        Runs as a background task so uvicorn can finish startup immediately and
+        serve the liveness/startup probes even when PG is unreachable (otherwise
+        a blocking init would stall startup, fail the probes, and trigger a
+        Container Apps crash loop). Retries indefinitely with capped backoff so
+        the API self-heals once PG becomes reachable again. DB-dependent
+        endpoints surface 503 via middleware until ``app.state.db_ready`` is set.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                async with asyncio.timeout(attempt_timeout):
                     if settings.auto_alembic_upgrade:
                         _logger.info(
-                            "Applying database migrations (alembic upgrade head, attempt %d/%d)...",
+                            "Applying database migrations (alembic upgrade head, attempt %d)...",
                             attempt,
-                            max_attempts,
                         )
                         await asyncio.to_thread(run_alembic_upgrade_head)
                     await init_db(engine)
-                    return True
-                except Exception as exc:  # noqa: BLE001
-                    _logger.warning(
-                        "Startup DB init failed (attempt %d/%d): %s",
-                        attempt,
-                        max_attempts,
-                        exc,
-                    )
-                    if attempt < max_attempts:
-                        delay = base_delay * attempt
-                        await asyncio.sleep(delay)
-            _logger.error(
-                "Startup DB init exhausted retries; continuing without migrations. "
-                "API will return 503 from DB-dependent endpoints until PG is reachable."
-            )
-            return False
+                app.state.db_ready = True
+                _logger.info("Database init complete (attempt %d); db_ready=True", attempt)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                delay = min(base_delay * attempt, max_delay)
+                _logger.warning(
+                    "Background DB init failed (attempt %d): %s; retrying in %.0fs",
+                    attempt,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
 
-        db_ready = await _try_db_init()
+    @app.on_event("startup")
+    async def _startup() -> None:
+        nonlocal _keepalive_task, _runner_task, _runner_worker, _db_init_task
+
+        # Kick off DB migrations/init in the background so a slow or unreachable
+        # DB does not block uvicorn startup (which would fail the liveness/startup
+        # probes and cause a crash loop). The loop self-heals when PG recovers.
+        _db_init_task = asyncio.create_task(_db_init_loop())
         _keepalive_task = asyncio.create_task(_db_keepalive())
-        _logger.info("DB keep-alive task started (interval=60s, db_ready=%s)", db_ready)
+        _logger.info("DB init + keep-alive background tasks started (non-blocking startup)")
 
         if settings.embedded_runner:
             from runner.worker import RunnerWorker
@@ -712,7 +723,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        nonlocal _keepalive_task, _runner_task, _runner_worker
+        nonlocal _keepalive_task, _runner_task, _runner_worker, _db_init_task
         try:
             from live.auto_sweep_engine import stop_engine as _stop_auto_sweep
 
@@ -725,6 +736,9 @@ def create_app() -> FastAPI:
         if _runner_task is not None:
             _runner_task.cancel()
             _logger.info("Embedded runner task cancelled")
+        if _db_init_task is not None:
+            _db_init_task.cancel()
+            _logger.info("DB init task cancelled")
         if _keepalive_task:
             _keepalive_task.cancel()
             _logger.info("DB keep-alive task stopped")
