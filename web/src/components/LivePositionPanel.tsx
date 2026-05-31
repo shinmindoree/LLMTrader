@@ -58,6 +58,9 @@ export function PositionRow({
 }) {
   const pnlColor = position.unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
   const sideColor = position.side === "LONG" ? "text-[#26a69a]" : "text-[#ef5350]";
+  const entryTime = position.entry_time
+    ? new Date(position.entry_time).toLocaleString()
+    : null;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs">
       <span className="text-[#d1d4dc] font-medium">{position.symbol}</span>
@@ -85,6 +88,12 @@ export function PositionRow({
         {t.live.posUnrealizedPnl}{" "}
         <span className={pnlColor}>{formatSigned(position.unrealized_pnl, "USDT")}</span>
       </span>
+      {entryTime && (
+        <span className="text-[#868993]">
+          {t.live.posEntryTime}{" "}
+          <span className="text-[#d1d4dc]">{entryTime}</span>
+        </span>
+      )}
     </div>
   );
 }

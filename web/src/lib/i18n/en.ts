@@ -387,6 +387,7 @@ const en = {
     posNotional: "Notional",
     posLeverage: "Leverage",
     posUnrealizedPnl: "Unrealized PnL",
+    posEntryTime: "Entry Time",
   },
   form: {
     strategy: "Strategy",

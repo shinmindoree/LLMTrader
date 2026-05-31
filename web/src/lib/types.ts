@@ -380,6 +380,7 @@ export type BinancePositionSummary = {
   notional: number;
   leverage: number;
   isolated: boolean;
+  entry_time: string | null;
 };
 
 export type BinanceAccountSummary = {

@@ -113,6 +113,13 @@ async def _fetch_snapshot(
                 break_even_price = _safe_float(raw_position.get("breakEvenPrice"), entry_price)
                 leverage = max(1, _safe_int(raw_position.get("leverage"), 1))
 
+                update_ms = _safe_int(raw_position.get("updateTime"), 0)
+                entry_time = (
+                    datetime.fromtimestamp(update_ms / 1000, tz=timezone.utc).isoformat()
+                    if update_ms > 0
+                    else None
+                )
+
                 positions.append({
                     "symbol": symbol,
                     "side": "LONG" if position_amt >= 0 else "SHORT",
@@ -123,6 +130,7 @@ async def _fetch_snapshot(
                     "notional": notional,
                     "leverage": leverage,
                     "isolated": bool(raw_position.get("isolated", False)),
+                    "entry_time": entry_time,
                 })
         positions.sort(key=lambda item: abs(item["notional"]), reverse=True)
 

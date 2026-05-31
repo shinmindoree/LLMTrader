@@ -329,6 +329,7 @@ class BinancePositionSummary(BaseModel):
     notional: float
     leverage: int
     isolated: bool
+    entry_time: datetime | None = None
 
 
 class BinanceAccountSummaryResponse(BaseModel):

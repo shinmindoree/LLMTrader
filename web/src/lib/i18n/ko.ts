@@ -390,6 +390,7 @@ const ko: TranslationKeys = {
     posNotional: "포지션 금액",
     posLeverage: "레버리지",
     posUnrealizedPnl: "미실현 손익",
+    posEntryTime: "진입 시점",
   },
   form: {
     strategy: "트레이딩 전략",
