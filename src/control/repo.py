@@ -843,15 +843,29 @@ async def insert_trade(
     commission: float | None,
     raw_json: dict[str, Any] | None = None,
 ) -> None:
-    stmt = (
-        insert(Trade)
-        .values(
-            job_id=job_id, symbol=symbol, trade_id=trade_id, order_id=order_id,
-            quantity=quantity, price=price, realized_pnl=realized_pnl,
-            commission=commission, raw_json=raw_json,
-        )
-        .on_conflict_do_nothing(index_elements=[Trade.job_id, Trade.trade_id])
+    has_reason = isinstance(raw_json, dict) and bool(
+        raw_json.get("reason") or raw_json.get("exit_reason")
     )
+    base = insert(Trade).values(
+        job_id=job_id, symbol=symbol, trade_id=trade_id, order_id=order_id,
+        quantity=quantity, price=price, realized_pnl=realized_pnl,
+        commission=commission, raw_json=raw_json,
+    )
+    if has_reason:
+        # reason을 가진 체결이 나중에 도착하면, reason 없이 먼저 적재된
+        # 동일 체결 행의 raw_json을 보정한다(Maker 비동기 체결 레이스 대비).
+        stmt = base.on_conflict_do_update(
+            index_elements=[Trade.job_id, Trade.trade_id],
+            set_={"raw_json": base.excluded.raw_json},
+            where=or_(
+                Trade.raw_json.is_(None),
+                ~Trade.raw_json.has_key("reason"),
+            ),
+        )
+    else:
+        stmt = base.on_conflict_do_nothing(
+            index_elements=[Trade.job_id, Trade.trade_id]
+        )
     await session.execute(stmt)
 
 

@@ -130,6 +130,11 @@ class LiveContext:
         # 전략(이 LiveContext)이 직접 발주한 모든 Binance orderId 집합.
         # 사용자가 Binance에서 수동으로 청산한 주문을 구분하기 위해 사용.
         self._placed_order_ids: set[int] = set()
+        # 전략 발주 orderId -> (reason, exit_reason) 매핑.
+        # Maker(체이스) 주문이 비동기로 나중에 체결될 때, REST 백필 경로가
+        # 전략 reason을 알 수 없어 거래내역 reason이 비는 문제를 막기 위해
+        # 발주 시점의 reason을 보관해 두었다가 백필 시 복원한다.
+        self._order_reasons: dict[int, tuple[str | None, str | None]] = {}
         self._chase_order_ids: list[int] = []
         # 외부(수동) 청산 감지 시 즉시 REST 거래 백필을 트리거하기 위한 락
         self._external_close_fetch_inflight: set[int] = set()
@@ -1745,8 +1750,8 @@ class LiveContext:
 
             order_id = response.get("orderId")
             if order_id:
-                # 전략 발주 orderId 등록 (외부 수동 청산 구분용)
-                self._record_placed_order_id(order_id)
+                # 전략 발주 orderId 등록 (외부 수동 청산 구분 + reason 복원용)
+                self._record_placed_order_id(order_id, reason, exit_reason)
                 self.pending_orders[order_id] = {
                     "order_id": order_id,
                     "side": side,
@@ -1942,8 +1947,8 @@ class LiveContext:
                 order_status = response.get("status")
                 
                 if order_id:
-                    # 전략 발주 orderId 등록 (외부 수동 청산 구분용)
-                    self._record_placed_order_id(order_id)
+                    # 전략 발주 orderId 등록 (외부 수동 청산 구분 + reason 복원용)
+                    self._record_placed_order_id(order_id, reason, exit_reason)
                     chase_order_ids.append(order_id)
                     chase_fills.append({
                         "order_id": order_id,
@@ -2669,10 +2674,18 @@ class LiveContext:
     # 외부(수동) 청산 감지: 전략이 직접 발주하지 않은 주문/체결을 식별한다.
     # ------------------------------------------------------------------
 
-    def _record_placed_order_id(self, order_id: Any) -> None:
+    def _record_placed_order_id(
+        self,
+        order_id: Any,
+        reason: str | None = None,
+        exit_reason: str | None = None,
+    ) -> None:
         """전략이 직접 발주한 orderId를 기록한다.
 
         이 집합에 없는 orderId의 체결은 사용자가 Binance에서 수동으로 발주/청산한 것으로 간주한다.
+
+        ``reason``/``exit_reason``이 주어지면 orderId -> reason 매핑도 함께 저장해,
+        나중에 REST 백필로 체결이 들어와도 전략 reason을 복원할 수 있게 한다.
         """
         if order_id is None:
             return
@@ -2681,10 +2694,26 @@ class LiveContext:
         except (TypeError, ValueError):
             return
         self._placed_order_ids.add(oid)
+        if reason is not None or exit_reason is not None:
+            self._order_reasons[oid] = (reason, exit_reason)
+            if len(self._order_reasons) > 20000:
+                # 메모리 누수 방지: 오래된 orderId 매핑은 잘라낸다.
+                for stale in sorted(self._order_reasons)[:10000]:
+                    self._order_reasons.pop(stale, None)
         if len(self._placed_order_ids) > 20000:
             # 메모리 누수 방지: 오래된 orderId는 잘라낸다.
             sorted_ids = sorted(self._placed_order_ids)
             self._placed_order_ids = set(sorted_ids[-10000:])
+
+    def _lookup_strategy_reason(self, order_id: Any) -> tuple[str | None, str | None]:
+        """발주 시 저장해 둔 전략 reason 매핑에서 (reason, exit_reason)을 조회한다."""
+        if order_id is None:
+            return None, None
+        try:
+            oid = int(order_id)
+        except (TypeError, ValueError):
+            return None, None
+        return self._order_reasons.get(oid, (None, None))
 
     def _is_external_order_id(self, order_id: Any) -> bool:
         """orderId가 전략이 발주한 것이 아닌지 여부."""
@@ -2711,7 +2740,12 @@ class LiveContext:
         self,
         trades: list[dict[str, Any]],
     ) -> None:
-        """외부 체결로 분류되는 거래에 reason/exit_reason 필드를 채워준다.
+        """거래 dict에 reason/exit_reason 필드를 채워준다.
+
+        - 전략 발주 체결: 발주 시 저장해 둔 orderId -> reason 매핑에서 복원한다.
+          (Maker 주문이 비동기로 나중에 체결되어 REST 백필로만 들어올 때 reason이
+          비는 문제를 막는다.)
+        - 외부(수동) 청산 체결: "Manual close on Binance" 라벨을 부여한다.
 
         이 거래 dict는 그대로 DB raw_json에 저장되므로 웹에서 그대로 표시된다.
         """
@@ -2719,6 +2753,9 @@ class LiveContext:
             if not isinstance(trade, dict):
                 continue
             reason, exit_reason = self._classify_external_trade(trade)
+            if reason is None and exit_reason is None:
+                # 전략 발주 체결 — 발주 시점에 보관한 reason을 복원한다.
+                reason, exit_reason = self._lookup_strategy_reason(trade.get("orderId"))
             if reason and not trade.get("reason"):
                 trade["reason"] = reason
             if exit_reason and not trade.get("exit_reason"):
