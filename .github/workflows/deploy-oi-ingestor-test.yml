@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - scripts/oi_ingestor.py
+      - scripts/refresh_oi_parquet.py
+      - scripts/refresh_funding_parquet.py
+      - scripts/compute_funding_stats.py
       - src/**
       - pyproject.toml
       - uv.lock
@@ -85,4 +88,12 @@ jobs:
               OI_BACKFILL_HOURS=720 \
               OI_GAPFILL_INTERVAL_SECONDS=1800 \
               OI_GAPFILL_WINDOW_HOURS=168 \
-              OI_COVERAGE_LOG_HOURS=24
+              OI_COVERAGE_LOG_HOURS=24 \
+              AZURE_BLOB_ACCOUNT_URL="${OI_BLOB_ACCOUNT_URL:-https://teststrategies.blob.core.windows.net}" \
+              OI_PARQUET_BLOB_CONTAINER="${OI_PARQUET_BLOB_CONTAINER:-market-data}" \
+              FUNDING_REFRESH_HOURS=24 \
+              FUNDING_STATS_INTERVAL_HOURS=168 \
+              FUNDING_TOP_N=50 \
+              FUNDING_BLOB_CONTAINER=market-data \
+              FUNDING_BLOB_PREFIX=funding-rates/version=1 \
+              FUNDING_MIN_SAMPLES=50

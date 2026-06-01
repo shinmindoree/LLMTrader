@@ -73,6 +73,22 @@ except Exception as _exc:  # noqa: BLE001
 else:
     _REFRESH_IMPORT_ERR = None
 
+# Funding-rate data lake + stats (Step 1-3). Optional; gated by env so the
+# OI ingestor keeps working even if these imports fail.
+try:
+    from refresh_funding_parquet import (  # type: ignore[import-not-found]
+        select_universe as _funding_select_universe,
+        refresh_symbol as _funding_refresh_symbol,
+        _blob_container_client as _funding_blob_client,
+        DEFAULT_BLOB_PREFIX as _FUNDING_DEFAULT_PREFIX,
+    )
+    from compute_funding_stats import run as _funding_compute_stats
+except Exception as _fexc:  # noqa: BLE001
+    _funding_select_universe = None  # type: ignore[assignment]
+    _FUNDING_IMPORT_ERR = _fexc
+else:
+    _FUNDING_IMPORT_ERR = None
+
 logger = logging.getLogger("oi_ingestor")
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -304,6 +320,45 @@ def loop_once(rd, http: httpx.Client, symbol: str, trim_hours: int) -> int:
     return n
 
 
+def funding_refresh_once(http: httpx.Client, *, top_n: int, blob_container: str,
+                         blob_prefix: str, base_url: str) -> list[str]:
+    """Refresh funding-rate parquet for the top-N USDT-PERP universe.
+
+    Runs inside the OI ingestor container so it reuses the managed identity's
+    blob access (the storage account is firewalled to the VNet, so a GitHub
+    Actions runner cannot reach it).
+    """
+    container = _funding_blob_client(blob_container)
+    symbols = _funding_select_universe(http, top_n=top_n, base_url=base_url)
+    ok = 0
+    for sym in symbols:
+        if _shutdown:
+            break
+        try:
+            _funding_refresh_symbol(
+                symbol=sym, container=container, blob_prefix=blob_prefix,
+                http=http, binance_base_url=base_url,
+            )
+            ok += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.error("funding refresh failed for %s: %s", sym, exc)
+    logger.info("funding refresh: %d/%d symbols ok", ok, len(symbols))
+    return symbols
+
+
+def funding_stats_once(rd, *, blob_container: str, blob_prefix: str,
+                       min_samples: int) -> dict:
+    """Compute AR(1)/OU half-life stats and cache to Redis (reusing ``rd``)."""
+    container = _funding_blob_client(blob_container)
+    result = _funding_compute_stats(
+        container=container, blob_prefix=blob_prefix,
+        redis_client=rd, min_samples=min_samples,
+    )
+    logger.info("funding stats: computed=%d skipped=%d",
+                result.get("computed"), result.get("skipped"))
+    return result
+
+
 def main() -> int:
     redis_url = os.environ.get("REDIS_URL", "").strip()
     redis_host = os.environ.get("REDIS_HOST", "").strip()
@@ -337,6 +392,37 @@ def main() -> int:
         )
     else:
         logger.info("parquet refresh disabled")
+
+    # ── Funding-rate data lake + stats (Step 1-3) ──────────────
+    funding_refresh_hours = float(os.environ.get("FUNDING_REFRESH_HOURS", "24"))
+    funding_stats_hours = float(os.environ.get("FUNDING_STATS_INTERVAL_HOURS", "168"))
+    funding_top_n = int(os.environ.get("FUNDING_TOP_N", "50"))
+    funding_blob_container = os.environ.get(
+        "FUNDING_BLOB_CONTAINER", blob_container or "market-data"
+    ).strip()
+    funding_blob_prefix = os.environ.get(
+        "FUNDING_BLOB_PREFIX", _FUNDING_DEFAULT_PREFIX if _FUNDING_IMPORT_ERR is None else "funding-rates/version=1"
+    ).strip()
+    funding_min_samples = int(os.environ.get("FUNDING_MIN_SAMPLES", "50"))
+    funding_enabled = (
+        funding_refresh_hours > 0
+        and bool(funding_blob_container)
+        and _FUNDING_IMPORT_ERR is None
+    )
+    if funding_refresh_hours > 0 and _FUNDING_IMPORT_ERR is not None:
+        logger.warning(
+            "FUNDING_REFRESH_HOURS set but funding modules import failed: %s",
+            _FUNDING_IMPORT_ERR,
+        )
+    if funding_enabled:
+        logger.info(
+            "funding pipeline enabled: refresh every %.1fh, stats every %.1fh, "
+            "top_n=%d -> blob %s/%s",
+            funding_refresh_hours, funding_stats_hours, funding_top_n,
+            funding_blob_container, funding_blob_prefix,
+        )
+    else:
+        logger.info("funding pipeline disabled")
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
@@ -402,6 +488,16 @@ def main() -> int:
         # Gap-fill runs shortly after the first poll to give the deep
         # backfill above a head-start.
         next_gapfill = time.time() + gapfill_interval
+        # Funding refresh starts ~2 min after startup; stats follow the first
+        # refresh so the data lake is warm before computing half-lives.
+        next_funding_refresh = (
+            time.time() + 120.0 if funding_enabled else float("inf")
+        )
+        next_funding_stats = (
+            time.time() + 600.0
+            if (funding_enabled and funding_stats_hours > 0)
+            else float("inf")
+        )
         while not _shutdown:
             for sym in symbols:
                 try:
@@ -456,6 +552,37 @@ def main() -> int:
                     except Exception as exc:  # noqa: BLE001
                         logger.error("parquet refresh failed for %s: %s", sym, exc)
                 next_parquet_refresh = time.time() + refresh_hours * 3600.0
+
+            # Funding-rate data lake refresh (best-effort; never aborts poll).
+            if funding_enabled and time.time() >= next_funding_refresh:
+                try:
+                    funding_refresh_once(
+                        http,
+                        top_n=funding_top_n,
+                        blob_container=funding_blob_container,
+                        blob_prefix=funding_blob_prefix,
+                        base_url=BINANCE_FAPI,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("funding refresh cycle failed: %s", exc)
+                next_funding_refresh = time.time() + funding_refresh_hours * 3600.0
+
+            # Funding stats -> Redis (weekly by default).
+            if (
+                funding_enabled
+                and funding_stats_hours > 0
+                and time.time() >= next_funding_stats
+            ):
+                try:
+                    funding_stats_once(
+                        rd,
+                        blob_container=funding_blob_container,
+                        blob_prefix=funding_blob_prefix,
+                        min_samples=funding_min_samples,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("funding stats cycle failed: %s", exc)
+                next_funding_stats = time.time() + funding_stats_hours * 3600.0
 
             next_run += poll_seconds
             sleep_for = max(1.0, next_run - time.time())

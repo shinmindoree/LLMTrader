@@ -236,6 +236,7 @@ def run(
     local_dir: Optional[Path] = None,
     min_samples: int = 50,
     use_redis: bool = True,
+    redis_client=None,
     ttl_seconds: int = 14 * 24 * 3600,
 ) -> dict:
     if container is not None:
@@ -245,7 +246,12 @@ def run(
     else:
         raise ValueError("Provide container or local_dir.")
 
-    rd = _connect_redis() if use_redis else None
+    if redis_client is not None:
+        rd = redis_client
+    elif use_redis:
+        rd = _connect_redis()
+    else:
+        rd = None
 
     stats_by_symbol: dict[str, dict] = {}
     skipped = 0

@@ -9,6 +9,8 @@ COPY pyproject.toml uv.lock README.md /app/
 COPY src /app/src
 COPY scripts/oi_ingestor.py /app/scripts/oi_ingestor.py
 COPY scripts/refresh_oi_parquet.py /app/scripts/refresh_oi_parquet.py
+COPY scripts/refresh_funding_parquet.py /app/scripts/refresh_funding_parquet.py
+COPY scripts/compute_funding_stats.py /app/scripts/compute_funding_stats.py
 
 ENV PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1
