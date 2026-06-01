@@ -36,6 +36,7 @@ import type {
   AutoSweepSettings,
   AutoSweepSettingsInput,
   WalletOverview,
+  LivePositionsResponse,
 } from "@/lib/types";
 
 const CHAT_USER_ID_STORAGE_KEY = "llmtrader.chat_user_id";
@@ -847,6 +848,10 @@ export async function setAutoSweepSettings(
 
 export async function getWalletOverview(): Promise<WalletOverview> {
   return json<WalletOverview>("/api/backend/api/binance/wallet/overview");
+}
+
+export async function getLivePositions(): Promise<LivePositionsResponse> {
+  return json<LivePositionsResponse>("/api/backend/api/live/positions");
 }
 
 export async function getBillingStatus(): Promise<BillingStatus> {

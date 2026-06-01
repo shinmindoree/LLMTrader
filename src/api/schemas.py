@@ -424,6 +424,36 @@ class WalletOverviewResponse(BaseModel):
     error: str | None = None
 
 
+# ── Live Positions Board (multi-strategy open positions) ───
+
+class LiveStrategyPositions(BaseModel):
+    job_id: str
+    strategy_path: str
+    strategy_name: str
+    status: str
+    symbols: list[str] = Field(default_factory=list)
+    allocated_usdt: float = 0.0
+    positions: list[BinancePositionSummary] = Field(default_factory=list)
+    position_count: int = 0
+    total_notional: float = 0.0
+    total_unrealized_pnl: float = 0.0
+
+
+class LivePositionsTotals(BaseModel):
+    strategy_count: int = 0
+    open_position_count: int = 0
+    total_notional: float = 0.0
+    total_unrealized_pnl: float = 0.0
+
+
+class LivePositionsResponse(BaseModel):
+    strategies: list[LiveStrategyPositions] = Field(default_factory=list)
+    unattributed: list[BinancePositionSummary] = Field(default_factory=list)
+    totals: LivePositionsTotals = Field(default_factory=LivePositionsTotals)
+    as_of: datetime
+    error: str | None = None
+
+
 class BinanceCredentialStatus(BaseModel):
     env: str
     configured: bool

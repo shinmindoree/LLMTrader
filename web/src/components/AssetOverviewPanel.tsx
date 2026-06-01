@@ -2,6 +2,7 @@
 
 import { BinanceAccountPanel } from "@/components/BinanceAccountPanel";
 import { WalletOverviewPanel } from "@/components/WalletOverviewPanel";
+import { LivePositionsBoard } from "@/components/LivePositionsBoard";
 import { useI18n } from "@/lib/i18n";
 
 export function AssetOverviewPanel() {
@@ -19,6 +20,10 @@ export function AssetOverviewPanel() {
 
       <div className="mt-4">
         <WalletOverviewPanel />
+      </div>
+
+      <div className="mt-6">
+        <LivePositionsBoard />
       </div>
 
       <div className="mt-6">

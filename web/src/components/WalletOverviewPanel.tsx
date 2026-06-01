@@ -30,6 +30,8 @@ const WALLET_TEXT: Record<string, string> = {
 const fmt = (v: number) =>
   v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+const fmtSigned = (v: number) => `${v >= 0 ? "+" : "-"}$${fmt(Math.abs(v))}`;
+
 function BarSegment({ pct, color }: { pct: number; color: string }) {
   return (
     <div
@@ -39,10 +41,12 @@ function BarSegment({ pct, color }: { pct: number; color: string }) {
   );
 }
 
-function WalletRow({ item }: { item: WalletBalance }) {
+function WalletRow({ item, unrealizedLabel }: { item: WalletBalance; unrealizedLabel: string }) {
   const color = WALLET_COLORS[item.wallet] ?? "#868993";
   const bgClass = WALLET_BG[item.wallet] ?? "bg-[#2a2e39]";
   const textClass = WALLET_TEXT[item.wallet] ?? "text-[#868993]";
+  const hasUnrealized = Math.abs(item.unrealized_pnl) >= 0.01;
+  const pnlClass = item.unrealized_pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
 
   return (
     <div className="flex items-center gap-3 py-2.5 border-b border-[#2a2e39] last:border-0">
@@ -60,7 +64,13 @@ function WalletRow({ item }: { item: WalletBalance }) {
       </div>
       <div className="text-right shrink-0">
         <div className="text-sm font-semibold text-[#d1d4dc]">${fmt(item.balance_usdt)}</div>
-        <div className="text-xs text-[#868993]">{item.pct.toFixed(1)}%</div>
+        {hasUnrealized ? (
+          <div className="text-xs text-[#868993]">
+            {item.pct.toFixed(1)}% · <span className={pnlClass}>{unrealizedLabel} {fmtSigned(item.unrealized_pnl)}</span>
+          </div>
+        ) : (
+          <div className="text-xs text-[#868993]">{item.pct.toFixed(1)}%</div>
+        )}
       </div>
     </div>
   );
@@ -144,9 +154,10 @@ export function WalletOverviewPanel() {
           {/* Wallet rows */}
           <div className="mt-3">
             {data.wallets.map((w) => (
-              <WalletRow key={w.wallet} item={w} />
+              <WalletRow key={w.wallet} item={w} unrealizedLabel={wo.unrealizedLabel} />
             ))}
           </div>
+          <p className="mt-2 text-[11px] text-[#5d6573]">{wo.includesPositions}</p>
         </>
       )}
     </div>

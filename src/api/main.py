@@ -137,6 +137,9 @@ from api.schemas import (
     AutoSweepStatusResponse,
     WalletBalance,
     WalletOverviewResponse,
+    LiveStrategyPositions,
+    LivePositionsTotals,
+    LivePositionsResponse,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 from api.strategy_params import (
@@ -3110,8 +3113,8 @@ def create_app() -> FastAPI:
 
         client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
         try:
-            futures_bal, spot_bal, earn_bal = await asyncio.gather(
-                client.fetch_futures_available_balance(),
+            futures_res, spot_bal, earn_bal = await asyncio.gather(
+                client.fetch_futures_wallet_balance(),
                 client.fetch_spot_usdt_balance(),
                 client.fetch_flexible_position_usdt(),
                 return_exceptions=True,
@@ -3124,7 +3127,12 @@ def create_app() -> FastAPI:
                 return 0.0
             return float(v)  # type: ignore[arg-type]
 
-        f = _coerce(futures_bal)
+        # Futures equity = wallet balance (incl. position margin) + unrealized PnL
+        if isinstance(futures_res, BaseException):
+            f_wallet, f_unrealized = 0.0, 0.0
+        else:
+            f_wallet, f_unrealized = futures_res
+        f = f_wallet + f_unrealized
         s = _coerce(spot_bal)
         e = _coerce(earn_bal)
         total = f + s + e
@@ -3133,7 +3141,13 @@ def create_app() -> FastAPI:
             return round(v / total * 100, 1) if total > 0 else 0.0
 
         wallets = [
-            WalletBalance(wallet="futures", label="USD-M Futures", balance_usdt=f, pct=_pct(f)),
+            WalletBalance(
+                wallet="futures",
+                label="USD-M Futures",
+                balance_usdt=f,
+                unrealized_pnl=f_unrealized,
+                pct=_pct(f),
+            ),
             WalletBalance(wallet="spot", label="Spot", balance_usdt=s, pct=_pct(s)),
             WalletBalance(wallet="earn", label="Simple Earn", balance_usdt=e, pct=_pct(e)),
         ]
@@ -3141,6 +3155,145 @@ def create_app() -> FastAPI:
             total_usdt=total,
             wallets=wallets,
             as_of=datetime.now(timezone.utc),
+        )
+
+    # ------------------------------------------------------------------
+    # /api/live/positions — Multi-strategy live position board
+    # ------------------------------------------------------------------
+
+    @app.get("/api/live/positions", response_model=LivePositionsResponse)
+    async def get_live_positions(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> LivePositionsResponse:
+        """Group open futures positions by running LIVE strategy.
+
+        Matches account snapshot positions to running LIVE jobs via the
+        symbols configured on each job. Positions not owned by any running
+        strategy are returned in ``unattributed``.
+        """
+        from common.crypto import get_crypto_service
+        from control.repo import get_binance_credential
+        from runner.account_snapshot import _fetch_snapshot
+
+        now = datetime.now(timezone.utc)
+
+        cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
+        if not cred:
+            return LivePositionsResponse(
+                strategies=[],
+                unattributed=[],
+                totals=LivePositionsTotals(),
+                as_of=now,
+                error="Binance mainnet API keys not configured",
+            )
+
+        try:
+            crypto = get_crypto_service()
+            api_key = crypto.decrypt(cred.api_key_enc)
+            api_secret = crypto.decrypt(cred.api_secret_enc)
+        except Exception as exc:  # noqa: BLE001
+            return LivePositionsResponse(
+                strategies=[],
+                unattributed=[],
+                totals=LivePositionsTotals(),
+                as_of=now,
+                error=f"Failed to decrypt keys: {type(exc).__name__}",
+            )
+
+        data = await _fetch_snapshot(
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url="https://fapi.binance.com",
+        )
+        if not data.get("connected"):
+            return LivePositionsResponse(
+                strategies=[],
+                unattributed=[],
+                totals=LivePositionsTotals(),
+                as_of=now,
+                error=data.get("error") or "Failed to connect to Binance",
+            )
+
+        all_positions = [BinancePositionSummary(**p) for p in data.get("positions", [])]
+
+        def _job_symbols(config: dict[str, Any] | None) -> list[str]:
+            if not isinstance(config, dict):
+                return []
+            syms: list[str] = []
+            streams = config.get("streams")
+            if isinstance(streams, list):
+                for raw in streams:
+                    if isinstance(raw, dict):
+                        sym = str(raw.get("symbol") or "").strip().upper()
+                        if sym:
+                            syms.append(sym)
+            if not syms:
+                sym = str(config.get("symbol") or "").strip().upper()
+                if sym:
+                    syms.append(sym)
+            # de-dupe, preserve order
+            seen: set[str] = set()
+            out: list[str] = []
+            for s in syms:
+                if s not in seen:
+                    seen.add(s)
+                    out.append(s)
+            return out
+
+        active_jobs = [
+            j
+            for j in await list_jobs(
+                session, user_id=user.user_id, job_type=JobType.LIVE, limit=128
+            )
+            if j.status in (JobStatus.RUNNING, JobStatus.STOP_REQUESTED)
+        ]
+
+        claimed: set[str] = set()  # "SYMBOL-SIDE" already attributed
+        strategies: list[LiveStrategyPositions] = []
+
+        for job in active_jobs:
+            config = job.config if isinstance(job.config, dict) else {}
+            symbols = _job_symbols(config)
+            matched: list[BinancePositionSummary] = []
+            for pos in all_positions:
+                key = f"{pos.symbol}-{pos.side}"
+                if pos.symbol.upper() in symbols and key not in claimed:
+                    matched.append(pos)
+                    claimed.add(key)
+            strategy_name = Path(job.strategy_path).stem if job.strategy_path else job.job_id
+            allocated = float(config.get("initial_balance") or 0.0)
+            strategies.append(
+                LiveStrategyPositions(
+                    job_id=job.job_id,
+                    strategy_path=job.strategy_path or "",
+                    strategy_name=strategy_name,
+                    status=str(job.status),
+                    symbols=symbols,
+                    allocated_usdt=allocated,
+                    positions=matched,
+                    position_count=len(matched),
+                    total_notional=sum(abs(p.notional) for p in matched),
+                    total_unrealized_pnl=sum(p.unrealized_pnl for p in matched),
+                )
+            )
+
+        unattributed = [
+            p for p in all_positions if f"{p.symbol}-{p.side}" not in claimed
+        ]
+
+        totals = LivePositionsTotals(
+            strategy_count=len(strategies),
+            open_position_count=len(all_positions),
+            total_notional=sum(abs(p.notional) for p in all_positions),
+            total_unrealized_pnl=sum(p.unrealized_pnl for p in all_positions),
+        )
+
+        return LivePositionsResponse(
+            strategies=strategies,
+            unattributed=unattributed,
+            totals=totals,
+            as_of=now,
         )
 
     # ------------------------------------------------------------------

@@ -346,6 +346,34 @@ export type WalletOverview = {
   error: string | null;
 };
 
+export type LiveStrategyPositions = {
+  job_id: string;
+  strategy_path: string;
+  strategy_name: string;
+  status: string;
+  symbols: string[];
+  allocated_usdt: number;
+  positions: BinancePositionSummary[];
+  position_count: number;
+  total_notional: number;
+  total_unrealized_pnl: number;
+};
+
+export type LivePositionsTotals = {
+  strategy_count: number;
+  open_position_count: number;
+  total_notional: number;
+  total_unrealized_pnl: number;
+};
+
+export type LivePositionsResponse = {
+  strategies: LiveStrategyPositions[];
+  unattributed: BinancePositionSummary[];
+  totals: LivePositionsTotals;
+  as_of: string;
+  error: string | null;
+};
+
 export type BillingStatus = {
   plan: string;
   limits: {

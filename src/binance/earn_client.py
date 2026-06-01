@@ -134,6 +134,21 @@ class BinanceEarnClient:
                 return float(item.get("availableBalance", 0.0))
         return 0.0
 
+    async def fetch_futures_wallet_balance(self) -> tuple[float, float]:
+        """Return USD-M Futures USDT (wallet_balance, unrealized_pnl).
+
+        Unlike :meth:`fetch_futures_available_balance`, ``wallet_balance``
+        includes margin locked in open positions, so ``wallet_balance +
+        unrealized_pnl`` represents the true futures equity (AUM).
+        """
+        data = await self._signed_futures("GET", "/fapi/v2/balance")
+        for item in (data if isinstance(data, list) else []):
+            if item.get("asset") == "USDT":
+                wallet = float(item.get("balance", 0.0))
+                unrealized = float(item.get("crossUnPnl", 0.0))
+                return wallet, unrealized
+        return 0.0, 0.0
+
     # ── Universal Transfer (Futures ↔ Spot) ───────────────
 
     async def transfer_futures_to_spot(self, amount: float) -> dict[str, Any]:
