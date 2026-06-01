@@ -486,6 +486,7 @@ export type StrategyModuleCatalogResponse = {
 export type FundingArbitrageParams = {
   symbol: string;
   allocated_usdt: number;
+  hold_days?: number | null;
   entry_deadband_pct: number;
   exit_deadband_pct: number;
   margin_alert_ratio: number;
@@ -504,4 +505,22 @@ export type FundingArbitrageStatusResponse = {
   accumulated_funding_income: number;
   last_funding_ts: string | null;
   params: FundingArbitrageParams | null;
+};
+
+export type FundingScreenerItem = {
+  symbol: string;
+  current_rate_pct: number;   // 마지막 정산 펀딩비 (%)
+  annualized_pct: number;     // 연환산 (%)
+  half_life_settlements: number;
+  entry_threshold_pct: number;
+  score: number;              // >1 = 수익 가능
+  avg_rate_pct: number;
+  n_samples: number;
+};
+
+export type FundingScreenerResponse = {
+  items: FundingScreenerItem[];
+  roundtrip_cost_pct: number;
+  error: string | null;
+  as_of: string;
 };

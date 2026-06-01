@@ -703,6 +703,12 @@ export async function stopFundingArb(): Promise<
   return json("/api/backend/api/funding-arb/stop", { method: "POST" });
 }
 
+export async function getFundingScreener(
+  topN = 5,
+): Promise<import("@/lib/types").FundingScreenerResponse> {
+  return json(`/api/backend/api/funding-arb/screener?top_n=${topN}`);
+}
+
 export async function listFuturesSymbols(): Promise<string[]> {
   return json<string[]>("/api/backend/api/binance/futures/symbols");
 }

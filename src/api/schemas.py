@@ -464,10 +464,38 @@ class FundingArbitrageParams(BaseModel):
     symbol: str = "BTCUSDT"
     env: Literal["mainnet", "testnet"] = "testnet"
     allocated_usdt: float = Field(default=1000.0, gt=0, description="할당 시드 (USDT)")
-    entry_deadband_pct: float = Field(default=0.15, gt=0, le=1.0, description="진입 임계치 (왕복 수수료+슬리피지 합계 %)")
-    exit_deadband_pct: float = Field(default=0.05, gt=0, le=1.0, description="청산 임계치 (이 이하로 펀딩비 하락 시 언와인딩)")
+    hold_days: int | None = Field(
+        default=None, ge=1, le=7,
+        description="목표 유지 기간(일). 설정 시 진입·청산 임계치를 AR(1) half-life 통계로 자동 계산."
+    )
+    entry_deadband_pct: float = Field(
+        default=0.15, gt=0, le=1.0,
+        description="진입 임계치 (%/정산 기준). hold_days 설정 시 자동 계산됨."
+    )
+    exit_deadband_pct: float = Field(
+        default=0.05, gt=0, le=1.0,
+        description="청산 임계치 (%/정산 기준). hold_days 설정 시 자동 계산됨."
+    )
     margin_alert_ratio: float = Field(default=0.80, gt=0, lt=1.0, description="마진 비율 위험 수위 (0–1)")
     rebalance_transfer_pct: float = Field(default=0.20, gt=0, lt=1.0, description="리밸런싱 시 현물→선물 이체 비율")
+
+
+class FundingScreenerItem(BaseModel):
+    symbol: str
+    current_rate_pct: float        # 마지막 정산 펀딩비 (%)
+    annualized_pct: float          # 연환산 펀딩비 (%)
+    half_life_settlements: float   # AR(1)/OU half-life (정산 횟수 단위)
+    entry_threshold_pct: float     # 최소 진입 임계치 (%/정산)
+    score: float                   # current_rate / entry_threshold (> 1 = 수익 가능)
+    avg_rate_pct: float            # 과거 평균 펀딩비 (%)
+    n_samples: int                 # 통계 산출에 사용된 데이터 포인트 수
+
+
+class FundingScreenerResponse(BaseModel):
+    items: list[FundingScreenerItem]
+    roundtrip_cost_pct: float      # 연산에 사용된 왕복 수수료 가정치 (%)
+    error: str | None = None
+    as_of: datetime
 
 
 class FundingArbitrageStatusResponse(BaseModel):

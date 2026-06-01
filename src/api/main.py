@@ -133,6 +133,8 @@ from api.schemas import (
     StrategyModuleStatus,
     FundingArbitrageParams,
     FundingArbitrageStatusResponse,
+    FundingScreenerItem,
+    FundingScreenerResponse,
     AutoSweepSettingsRequest,
     AutoSweepStatusResponse,
     WalletBalance,
@@ -149,6 +151,65 @@ from api.strategy_params import (
 )
 
 INTERNAL_JOB_CONFIG_KEYS = {"_strategy_code"}
+
+# ── Funding-arb helpers ─────────────────────────────────────────────────────
+
+# VIP0 conservative roundtrip: spot taker 0.10% + futures taker 2×0.05% = 0.20%
+_FUNDING_ROUNDTRIP_COST = 0.0020
+# hold_days → exit threshold ratio (fraction of entry to exit at)
+_FUNDING_EXIT_RATIOS: dict[int, float] = {1: 0.50, 3: 0.25}
+
+
+def _make_funding_redis() -> Any | None:
+    """Synchronous Redis client for reading funding stats (uses API server env vars)."""
+    import os
+
+    from common.redis_client import (
+        create_redis_client,
+        create_redis_client_from_parts,
+        create_redis_client_with_aad,
+    )
+
+    host = os.environ.get("REDIS_HOST", "")
+    username = os.environ.get("REDIS_USERNAME", "")
+    password = os.environ.get("REDIS_PASSWORD", "")
+    url = os.environ.get("REDIS_URL", "")
+    port = int(os.environ.get("REDIS_PORT", "6380"))
+    ssl_flag = os.environ.get("REDIS_SSL", "true").strip().lower() != "false"
+
+    if host and username:
+        return create_redis_client_with_aad(host=host, username=username, port=port, ssl=ssl_flag)
+    if host and password:
+        return create_redis_client_from_parts(host=host, port=port, password=password, ssl=ssl_flag)
+    if url:
+        return create_redis_client(url)
+    return None
+
+
+def _resolve_funding_deadband(symbol: str, hold_days: int) -> tuple[float, float] | None:
+    """Compute (entry_pct, exit_pct) per settlement from Redis AR(1)/OU stats.
+
+    Returns None when stats are unavailable or half-life is invalid.
+    """
+    import json as _json
+
+    rd = _make_funding_redis()
+    if rd is None:
+        return None
+    try:
+        raw = rd.get(f"funding:stats:{symbol}")
+        if not raw:
+            return None
+        stat = _json.loads(raw)
+        hl = float(stat.get("half_life_settlements") or 0)
+        if hl <= 0:
+            return None
+        entry_pct = _FUNDING_ROUNDTRIP_COST / hl
+        exit_ratio = _FUNDING_EXIT_RATIOS.get(hold_days, 0.30)
+        return entry_pct, entry_pct * exit_ratio
+    except Exception:
+        _log.warning("Failed to resolve deadband for %s hold_days=%s", symbol, hold_days, exc_info=True)
+        return None
 
 
 def _public_job_config(config: Any) -> dict[str, Any]:
@@ -1036,6 +1097,110 @@ def create_app() -> FastAPI:
         from live.funding_arbitrage_engine import get_engine_status
         return get_engine_status(user.user_id)
 
+    @app.get("/api/funding-arb/screener", response_model=FundingScreenerResponse)
+    async def funding_arb_screener(
+        top_n: int = 5,
+        user: AuthenticatedUser = Depends(require_auth),  # noqa: ARG001
+    ) -> FundingScreenerResponse:
+        """현재 펀딩비가 높고 통계적으로 유리한 종목 Top-N 스크리너.
+
+        Redis에 캐시된 AR(1)/OU half-life 통계를 읽고, Binance /fapi/v1/premiumIndex로
+        실시간 펀딩비를 조회하여 score = current_rate / entry_threshold 기준으로 정렬.
+        """
+        import json as _json
+        from datetime import timezone
+
+        ROUNDTRIP = _FUNDING_ROUNDTRIP_COST
+        DEFAULT_INTERVAL_H = 8.0
+        PPY = (365 * 24) / DEFAULT_INTERVAL_H  # 1095 (정산 횟수/년)
+
+        rd = _make_funding_redis()
+        if rd is None:
+            return FundingScreenerResponse(
+                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
+                error="Redis가 구성되지 않았습니다.",
+                as_of=datetime.now(timezone.utc),
+            )
+
+        try:
+            univ_raw = rd.get("funding:stats:_universe")
+            if not univ_raw:
+                return FundingScreenerResponse(
+                    items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
+                    error="펀딩 통계 데이터가 아직 없습니다. oi-ingestor가 첫 수집을 완료할 때까지 기다려 주세요.",
+                    as_of=datetime.now(timezone.utc),
+                )
+            universe: list[str] = _json.loads(univ_raw)
+        except Exception as exc:
+            return FundingScreenerResponse(
+                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
+                error=str(exc), as_of=datetime.now(timezone.utc),
+            )
+
+        # Redis MGET로 모든 종목 통계를 한 번에 읽기
+        keys = [f"funding:stats:{sym}" for sym in universe]
+        try:
+            raw_vals = rd.mget(keys)
+        except Exception as exc:
+            return FundingScreenerResponse(
+                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
+                error=str(exc), as_of=datetime.now(timezone.utc),
+            )
+
+        stats_map: dict[str, dict] = {}
+        for sym, raw in zip(universe, raw_vals):
+            if raw:
+                try:
+                    stats_map[sym] = _json.loads(raw)
+                except Exception:
+                    pass
+
+        # Binance /fapi/v1/premiumIndex (인수 없이 호출 시 전체 종목 반환)
+        try:
+            async with httpx.AsyncClient(
+                base_url="https://fapi.binance.com", timeout=10.0
+            ) as client:
+                resp = await client.get("/fapi/v1/premiumIndex")
+                resp.raise_for_status()
+                rates: dict[str, float] = {
+                    row["symbol"]: float(row.get("lastFundingRate", 0))
+                    for row in resp.json()
+                    if isinstance(row, dict)
+                }
+        except Exception as exc:
+            return FundingScreenerResponse(
+                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
+                error=f"Binance API 오류: {exc}", as_of=datetime.now(timezone.utc),
+            )
+
+        items: list[FundingScreenerItem] = []
+        for sym, stat in stats_map.items():
+            hl = float(stat.get("half_life_settlements") or 0)
+            if hl <= 0:
+                continue
+            current_rate = rates.get(sym, 0.0)
+            if current_rate <= 0:
+                continue
+            entry_threshold_pct = (ROUNDTRIP / hl) * 100
+            score = (current_rate * 100) / entry_threshold_pct
+            items.append(FundingScreenerItem(
+                symbol=sym,
+                current_rate_pct=round(current_rate * 100, 5),
+                annualized_pct=round(current_rate * PPY * 100, 2),
+                half_life_settlements=round(hl, 2),
+                entry_threshold_pct=round(entry_threshold_pct, 5),
+                score=round(score, 2),
+                avg_rate_pct=round(float(stat.get("avg_rate", 0.0)), 5),
+                n_samples=int(stat.get("n_samples", 0)),
+            ))
+
+        items.sort(key=lambda x: x.score, reverse=True)
+        return FundingScreenerResponse(
+            items=items[:top_n],
+            roundtrip_cost_pct=round(ROUNDTRIP * 100, 2),
+            as_of=datetime.now(timezone.utc),
+        )
+
     @app.post("/api/funding-arb/start", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_start(
         params: FundingArbitrageParams,
@@ -1066,6 +1231,24 @@ def create_app() -> FastAPI:
         futures_api_secret = crypto.decrypt(fut_cred.api_secret_enc)
         spot_api_key = crypto.decrypt(spot_cred.api_key_enc)
         spot_api_secret = crypto.decrypt(spot_cred.api_secret_enc)
+
+        # hold_days가 설정된 경우 Redis AR(1)/OU 통계로 deadband를 자동 계산
+        if params.hold_days is not None:
+            resolved = _resolve_funding_deadband(params.symbol, params.hold_days)
+            if resolved is not None:
+                entry_pct, exit_pct = resolved
+                params = params.model_copy(update={
+                    "entry_deadband_pct": entry_pct,
+                    "exit_deadband_pct": exit_pct,
+                })
+                logging.getLogger("api").info(
+                    "Dynamic deadband resolved for %s hold_days=%d: entry=%.5f%% exit=%.5f%%",
+                    params.symbol, params.hold_days, entry_pct, exit_pct,
+                )
+            else:
+                logging.getLogger("api").warning(
+                    "No Redis stats for %s — using provided deadband values", params.symbol
+                )
 
         await start_engine(
             user_id=user.user_id,
