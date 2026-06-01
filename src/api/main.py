@@ -1130,7 +1130,11 @@ def create_app() -> FastAPI:
                     error="펀딩 통계 데이터가 아직 없습니다. oi-ingestor가 첫 수집을 완료할 때까지 기다려 주세요.",
                     as_of=datetime.now(timezone.utc),
                 )
-            universe: list[str] = _json.loads(univ_raw)
+            parsed = _json.loads(univ_raw)
+            if isinstance(parsed, dict):
+                universe: list[str] = list(parsed.get("symbols", []))
+            else:
+                universe = list(parsed)
         except Exception as exc:
             return FundingScreenerResponse(
                 items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
