@@ -1021,11 +1021,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/funding-arb/status", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_status(
-        _user: AuthenticatedUser = Depends(require_auth),
+        user: AuthenticatedUser = Depends(require_auth),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 현재 상태."""
         from live.funding_arbitrage_engine import get_engine_status
-        return get_engine_status()
+        return get_engine_status(user.user_id)
 
     @app.post("/api/funding-arb/start", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_start(
@@ -1043,18 +1043,25 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Binance API 키가 설정되지 않았습니다.")
         api_key = crypto.decrypt(profile.binance_api_key_enc)
         api_secret = crypto.decrypt(profile.binance_api_secret_enc)
-        base_url = profile.binance_base_url or "https://fapi.binance.com"
-        await start_engine(params=params, api_key=api_key, api_secret=api_secret, base_url=base_url)
-        return get_engine_status()
+        base_url = profile.binance_base_url
+        await start_engine(
+            user_id=user.user_id,
+            params=params,
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=base_url,
+            session_maker=session_maker,
+        )
+        return get_engine_status(user.user_id)
 
     @app.post("/api/funding-arb/stop", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_stop(
-        _user: AuthenticatedUser = Depends(require_auth),
+        user: AuthenticatedUser = Depends(require_auth),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 정지."""
         from live.funding_arbitrage_engine import stop_engine, get_engine_status
-        await stop_engine()
-        return get_engine_status()
+        await stop_engine(user.user_id)
+        return get_engine_status(user.user_id)
 
     @app.get(
         "/api/binance/futures/symbols",
