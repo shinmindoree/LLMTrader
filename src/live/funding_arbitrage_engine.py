@@ -184,9 +184,14 @@ async def stop_engine(user_id: str) -> None:
 
 
 def _bases_for_env(is_testnet: bool) -> tuple[str, str]:
-    """(spot_base, futures_base)를 반환."""
+    """(spot_base, futures_base)를 반환.
+
+    testnet은 Binance Demo Trading 환경을 사용한다. Demo 키 한 쌍이
+    선물(testnet.binancefuture.com)과 현물(demo-api.binance.com) 양쪽에서
+    모두 인증된다.
+    """
     if is_testnet:
-        return "https://testnet.binance.vision", "https://testnet.binancefuture.com"
+        return "https://demo-api.binance.com", "https://testnet.binancefuture.com"
     return "https://api.binance.com", "https://fapi.binance.com"
 
 

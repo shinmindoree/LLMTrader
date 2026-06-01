@@ -85,7 +85,7 @@ async def update_user_plan(
 # BinanceApiCredential
 # ---------------------------------------------------------------------------
 
-_VALID_ENVS = frozenset({"mainnet", "testnet_futures", "testnet_spot"})
+_VALID_ENVS = frozenset({"mainnet", "testnet"})
 
 
 async def get_binance_credential(

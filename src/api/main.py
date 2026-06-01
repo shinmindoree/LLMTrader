@@ -1050,12 +1050,10 @@ def create_app() -> FastAPI:
         crypto = get_crypto_service()
 
         if params.env == "testnet":
-            fut_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet_futures")
-            spot_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet_spot")
+            fut_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet")
+            spot_cred = fut_cred
             if not fut_cred:
-                raise HTTPException(status_code=400, detail="Testnet Futures API 키가 설정되지 않았습니다.")
-            if not spot_cred:
-                raise HTTPException(status_code=400, detail="Testnet Spot API 키가 설정되지 않았습니다.")
+                raise HTTPException(status_code=400, detail="Testnet(Demo) API 키가 설정되지 않았습니다.")
             is_testnet = True
         else:
             fut_cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
@@ -2356,8 +2354,7 @@ def create_app() -> FastAPI:
 
     _BINANCE_CRED_ENVS = {
         "mainnet": "https://fapi.binance.com",
-        "testnet_futures": "https://testnet.binancefuture.com",
-        "testnet_spot": "https://testnet.binance.vision",
+        "testnet": "https://testnet.binancefuture.com",
     }
 
     @app.get("/api/me/binance-keys", response_model=list[BinanceCredentialStatus])
@@ -2371,7 +2368,7 @@ def create_app() -> FastAPI:
         cred_map = {c.env: c for c in creds}
         crypto = get_crypto_service()
         result = []
-        for env in ("mainnet", "testnet_futures", "testnet_spot"):
+        for env in ("mainnet", "testnet"):
             cred = cred_map.get(env)
             if not cred:
                 result.append(BinanceCredentialStatus(env=env, configured=False))
@@ -2400,40 +2397,18 @@ def create_app() -> FastAPI:
 
         base_url = _BINANCE_CRED_ENVS[env]
 
-        if env == "testnet_spot":
-            import httpx as _httpx
-            import hashlib as _hashlib
-            import hmac as _hmac
-            import time as _time
-            ts = int(_time.time() * 1000)
-            query = f"timestamp={ts}&recvWindow=5000"
-            sig = _hmac.new(api_secret.encode(), query.encode(), _hashlib.sha256).hexdigest()
-            try:
-                async with _httpx.AsyncClient(base_url=base_url, timeout=10.0) as tc:
-                    resp = await tc.get(
-                        "/api/v3/account",
-                        headers={"X-MBX-APIKEY": api_key},
-                        params={"timestamp": ts, "recvWindow": 5000, "signature": sig},
-                    )
-                    if resp.status_code not in (200, 201):
-                        raise HTTPException(status_code=400, detail=f"Binance API connection test failed: HTTP {resp.status_code}")
-            except HTTPException:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
-        else:
-            from binance.client import BinanceHTTPClient
-            test_client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0)
-            try:
-                account_info = await test_client.fetch_account_info()
-                if not account_info:
-                    raise HTTPException(status_code=400, detail="Binance API connection test failed: empty response")
-            except HTTPException:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
-            finally:
-                await test_client.aclose()
+        from binance.client import BinanceHTTPClient
+        test_client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0)
+        try:
+            account_info = await test_client.fetch_account_info()
+            if not account_info:
+                raise HTTPException(status_code=400, detail="Binance API connection test failed: empty response")
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
+        finally:
+            await test_client.aclose()
 
         from common.crypto import get_crypto_service
         crypto = get_crypto_service()
@@ -3253,7 +3228,7 @@ def create_app() -> FastAPI:
         strategies: list[LiveStrategyPositions] = []
 
         for job in active_jobs:
-            config = job.config if isinstance(job.config, dict) else {}
+            config = job.config_json if isinstance(job.config_json, dict) else {}
             symbols = _job_symbols(config)
             matched: list[BinancePositionSummary] = []
             for pos in all_positions:
@@ -3265,7 +3240,7 @@ def create_app() -> FastAPI:
             allocated = float(config.get("initial_balance") or 0.0)
             strategies.append(
                 LiveStrategyPositions(
-                    job_id=job.job_id,
+                    job_id=str(job.job_id),
                     strategy_path=job.strategy_path or "",
                     strategy_name=strategy_name,
                     status=str(job.status),

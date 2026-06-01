@@ -49,7 +49,7 @@ async def _resolve_binance_client(
 
     _ENV_FUTURES_URLS = {
         "mainnet": "https://fapi.binance.com",
-        "testnet_futures": "https://testnet.binancefuture.com",
+        "testnet": "https://testnet.binancefuture.com",
     }
 
     async with session_maker() as session:

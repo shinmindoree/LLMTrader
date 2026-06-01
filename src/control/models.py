@@ -276,7 +276,7 @@ class BinanceApiCredential(Base):
     user_id: Mapped[str] = mapped_column(
         String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True
     )
-    env: Mapped[str] = mapped_column(String(32), nullable=False)  # 'mainnet' | 'testnet_futures' | 'testnet_spot'
+    env: Mapped[str] = mapped_column(String(32), nullable=False)  # 'mainnet' | 'testnet' (Demo Mode)
     api_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
     api_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
