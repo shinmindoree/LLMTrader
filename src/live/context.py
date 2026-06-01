@@ -2320,6 +2320,7 @@ class LiveContext:
         reason: str | None,
         entry_pct: float | None,
         use_chase: bool | None,
+        pre_trade_check: Callable[[float], None] | None = None,
     ) -> None:
         """진입 시그널 직후 Earn→Futures 증거금 복원을 먼저 수행한 뒤 진입한다.
 
@@ -2327,13 +2328,21 @@ class LiveContext:
         transfer→잔고 재조회를 백그라운드 태스크로 돌리고 그 안에서 수량을
         다시 계산해 ``buy``/``sell`` 을 호출한다. 복원이 끝나기 전 같은 봉에서
         중복 진입이 발생하지 않도록 ``_margin_restore_inflight`` 가드를 둔다.
+
+        ``pre_trade_check`` 가 주어지면(포트폴리오 경로) 복원·재사이징이 끝난
+        직후, 실제 발주 직전에 복원된 수량으로 한 번 더 검사한다. 이렇게 해야
+        포트폴리오 리스크 검사가 0 잔고가 아닌 복원된 잔고를 기준으로 통과한다.
         """
         if self._margin_restore_inflight or self._order_inflight:
             return
         self._margin_restore_inflight = True
         task = asyncio.create_task(
             self._restore_then_enter(
-                side=side, reason=reason, entry_pct=entry_pct, use_chase=use_chase
+                side=side,
+                reason=reason,
+                entry_pct=entry_pct,
+                use_chase=use_chase,
+                pre_trade_check=pre_trade_check,
             )
         )
         task.add_done_callback(self._handle_restore_result)
@@ -2345,6 +2354,7 @@ class LiveContext:
         reason: str | None,
         entry_pct: float | None,
         use_chase: bool | None,
+        pre_trade_check: Callable[[float], None] | None = None,
     ) -> None:
         try:
             await self._restore_margin_from_earn()
@@ -2360,6 +2370,17 @@ class LiveContext:
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty <= 0:
             return
+        # 포트폴리오 경로: 복원된 잔고 기준 수량으로 리스크 검사를 수행한다.
+        # 검사 실패(예: 진짜 주문 크기 초과)는 발주를 건너뛰고 감사 로그만 남긴다.
+        if pre_trade_check is not None:
+            try:
+                pre_trade_check(qty)
+            except Exception as exc:  # noqa: BLE001
+                self._log_audit(
+                    "PORTFOLIO_PRE_TRADE_REJECTED",
+                    {"side": side, "qty": qty, "error": str(exc)},
+                )
+                return
         if side == 1:
             self.buy(qty, reason=reason, use_chase=use_chase)
         else:
