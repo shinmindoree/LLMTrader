@@ -66,6 +66,7 @@ export function LiveForm({
   const { t } = useI18n();
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
   const [symbol, setSymbol] = useState(defaults.symbol);
+  const [env, setEnv] = useState<"mainnet" | "testnet_futures">("mainnet");
   const [interval, setInterval] = useState(defaults.interval);
   const [leverage, setLeverage] = useState<number | string>(1);
   const [maxPositionPct, setMaxPositionPct] = useState<number | string>(50);
@@ -130,6 +131,7 @@ export function LiveForm({
       if (Object.keys(strategyParams).length > 0) {
         config.strategy_params = strategyParams;
       }
+      config.env = env;
 
       const preflight = await preflightJob({ type: "LIVE", config });
       if (!preflight.ok) {
@@ -177,6 +179,7 @@ export function LiveForm({
 
       <div className="mb-4 flex flex-wrap gap-2">
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
+        <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{env === "mainnet" ? "Mainnet" : "Testnet"}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">Pos {maxPositionPct}%</span>
@@ -238,6 +241,17 @@ export function LiveForm({
                 {s.name}
               </option>
             ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <div className="mb-1 text-xs text-[#868993]">환경 (Environment)</div>
+          <select
+            className={inputCls}
+            value={env}
+            onChange={(e) => setEnv(e.target.value as "mainnet" | "testnet_futures")}
+          >
+            <option value="mainnet" className="bg-[#131722]">Mainnet (실거래)</option>
+            <option value="testnet_futures" className="bg-[#131722]">Testnet Futures (테스트)</option>
           </select>
         </label>
         <label className="text-sm">

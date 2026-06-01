@@ -46,12 +46,6 @@ class UserProfile(Base):
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     email_verification_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    binance_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
-    binance_api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
-    binance_base_url: Mapped[str] = mapped_column(
-        String(256), nullable=False, default="https://testnet.binancefuture.com"
-    )
-
     upbit_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     upbit_api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -266,6 +260,25 @@ class StrategyMeta(Base):
     strategy_name: Mapped[str] = mapped_column(String(200), nullable=False)
     blob_path: Mapped[str] = mapped_column(String(512), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BinanceApiCredential(Base):
+    __tablename__ = "binance_api_credentials"
+    __table_args__ = (UniqueConstraint("user_id", "env", name="uq_binance_cred_user_env"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True
+    )
+    env: Mapped[str] = mapped_column(String(32), nullable=False)  # 'mainnet' | 'testnet_futures' | 'testnet_spot'
+    api_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    api_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

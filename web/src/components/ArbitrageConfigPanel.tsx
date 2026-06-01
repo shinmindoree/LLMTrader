@@ -9,6 +9,7 @@ const REFRESH_MS = 15_000;
 
 const DEFAULT_PARAMS: FundingArbitrageParams = {
   symbol: "BTCUSDT",
+  env: "testnet",
   allocated_usdt: 1000,
   entry_deadband_pct: 0.15,
   exit_deadband_pct: 0.05,
@@ -162,6 +163,20 @@ export function ArbitrageConfigPanel() {
               value={params.symbol}
               onChange={(e) => set("symbol", e.target.value.toUpperCase())}
             />
+          </Field>
+
+          <Field
+            label="환경 (Environment)"
+            description="사용할 API 키 환경. Testnet은 테스트넷 선물+현물 키를 함께 사용합니다."
+          >
+            <select
+              className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+              value={params.env}
+              onChange={(e) => set("env", e.target.value as "mainnet" | "testnet")}
+            >
+              <option value="testnet">Testnet (Futures + Spot 테스트넷)</option>
+              <option value="mainnet">Mainnet (실거래)</option>
+            </select>
           </Field>
 
           <Field

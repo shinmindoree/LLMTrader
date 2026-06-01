@@ -1,6 +1,7 @@
 import type {
   BillingStatus,
   BinanceAccountSummary,
+  BinanceCredential,
   BinanceKeysStatus,
   CheckoutResponse,
   DeleteAllResponse,
@@ -804,23 +805,31 @@ export async function getUserProfile(): Promise<UserProfile> {
   return json<UserProfile>("/api/backend/api/me");
 }
 
-export async function getBinanceKeysStatus(): Promise<BinanceKeysStatus> {
-  return json<BinanceKeysStatus>("/api/backend/api/me/binance-keys");
+export async function listBinanceCredentials(): Promise<BinanceCredential[]> {
+  return json<BinanceCredential[]>("/api/backend/api/me/binance-keys");
 }
 
-export async function setBinanceKeys(body: {
-  api_key: string;
-  api_secret: string;
-  base_url?: string;
-}): Promise<{ ok: boolean; api_key_masked: string; base_url: string }> {
-  return json("/api/backend/api/me/binance-keys", {
+export async function setBinanceCredential(
+  env: string,
+  body: { api_key: string; api_secret: string },
+): Promise<BinanceCredential> {
+  return json<BinanceCredential>(`/api/backend/api/me/binance-keys/${env}`, {
     method: "PUT",
     body: JSON.stringify(body),
   });
 }
 
-export async function deleteBinanceKeys(): Promise<{ ok: boolean }> {
-  return json("/api/backend/api/me/binance-keys", { method: "DELETE" });
+export async function deleteBinanceCredential(env: string): Promise<{ ok: boolean }> {
+  return json(`/api/backend/api/me/binance-keys/${env}`, { method: "DELETE" });
+}
+
+/**
+ * Backward-compatible helper: reports whether the user has ANY Binance
+ * credential configured. Derived from the new per-env credential list endpoint.
+ */
+export async function getBinanceKeysStatus(): Promise<BinanceKeysStatus> {
+  const creds = await listBinanceCredentials();
+  return { configured: creds.some((c) => c.configured) };
 }
 
 export async function getAutoSweepSettings(): Promise<AutoSweepSettings> {

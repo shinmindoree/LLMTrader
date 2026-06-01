@@ -42,35 +42,36 @@ def _parse_interval_seconds(interval: str) -> int:
 async def _resolve_binance_client(
     user_id: str,
     session_maker: Any,
+    env: str = "mainnet",
 ) -> tuple[BinanceHTTPClient, "Any | None"]:
-    """사용자별 암호화된 키를 복호화하여 BinanceHTTPClient를 생성한다.
+    """사용자별 환경별 암호화된 키를 복호화하여 BinanceHTTPClient를 생성한다."""
+    from control.repo import get_binance_credential
 
-    메인넷 키인 경우 Simple Earn 기반 JIT 증거금 복원을 위한
-    ``BinanceEarnClient`` 도 함께 생성해 ``(client, earn_client)`` 로 반환한다.
-    테스트넷이면 earn_client 는 ``None`` (Simple Earn 미지원).
-    """
-    from control.repo import get_user_profile
+    _ENV_FUTURES_URLS = {
+        "mainnet": "https://fapi.binance.com",
+        "testnet_futures": "https://testnet.binancefuture.com",
+    }
 
     async with session_maker() as session:
-        profile = await get_user_profile(session, user_id=user_id)
+        cred = await get_binance_credential(session, user_id=user_id, env=env)
 
-    if profile and profile.binance_api_key_enc and profile.binance_api_secret_enc:
-        from common.crypto import get_crypto_service
-        crypto = get_crypto_service()
-        api_key = crypto.decrypt(profile.binance_api_key_enc)
-        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
-        base_url = profile.binance_base_url or "https://testnet.binancefuture.com"
-        client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
-        earn_client = None
-        if "testnet" not in base_url.lower():
-            from binance.earn_client import BinanceEarnClient
-            earn_client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
-        return client, earn_client
+    if not cred:
+        raise ValueError(
+            f"No Binance API keys configured for user {user_id} (env={env}). "
+            "Please configure your keys in Settings before starting a live trade."
+        )
 
-    raise ValueError(
-        f"No Binance API keys configured for user {user_id}. "
-        "Please configure your keys in Settings before starting a live trade."
-    )
+    from common.crypto import get_crypto_service
+    crypto = get_crypto_service()
+    api_key = crypto.decrypt(cred.api_key_enc)
+    api_secret = crypto.decrypt(cred.api_secret_enc)
+    base_url = _ENV_FUTURES_URLS.get(env, "https://testnet.binancefuture.com")
+    client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url)
+    earn_client = None
+    if env == "mainnet":
+        from binance.earn_client import BinanceEarnClient
+        earn_client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+    return client, earn_client
 
 
 async def run_live(
@@ -88,7 +89,8 @@ async def run_live(
     settings = get_settings()
     if not session_maker:
         raise ValueError("session_maker is required for live trading")
-    client, earn_client = await _resolve_binance_client(user_id, session_maker)
+    env = str(config.get("env") or "mainnet")
+    client, earn_client = await _resolve_binance_client(user_id, session_maker, env)
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
     strategy_code_snapshot = config.get("_strategy_code")

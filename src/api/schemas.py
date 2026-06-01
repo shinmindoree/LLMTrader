@@ -424,8 +424,15 @@ class WalletOverviewResponse(BaseModel):
     error: str | None = None
 
 
+class BinanceCredentialStatus(BaseModel):
+    env: str
+    configured: bool
+    api_key_masked: str | None = None
+
+
 class FundingArbitrageParams(BaseModel):
     symbol: str = "BTCUSDT"
+    env: Literal["mainnet", "testnet"] = "testnet"
     allocated_usdt: float = Field(default=1000.0, gt=0, description="할당 시드 (USDT)")
     entry_deadband_pct: float = Field(default=0.15, gt=0, le=1.0, description="진입 임계치 (왕복 수수료+슬리피지 합계 %)")
     exit_deadband_pct: float = Field(default=0.05, gt=0, le=1.0, description="청산 임계치 (이 이하로 펀딩비 하락 시 언와인딩)")

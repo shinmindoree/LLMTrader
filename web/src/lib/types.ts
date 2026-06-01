@@ -273,13 +273,21 @@ export type Trade = {
   raw: Record<string, unknown> | null;
 };
 
+export type BinanceCredentialEnv = "mainnet" | "testnet_futures" | "testnet_spot";
+
+export type BinanceCredential = {
+  env: BinanceCredentialEnv;
+  configured: boolean;
+  api_key_masked?: string;
+};
+
 export type UserProfile = {
   user_id: string;
   email: string;
   display_name: string;
   plan: string;
   has_binance_keys: boolean;
-  binance_base_url: string | null;
+  binance_configured_envs: BinanceCredentialEnv[];
   plan_expires_at: string | null;
   created_at: string;
 };
@@ -454,6 +462,7 @@ export type FundingArbitrageParams = {
   exit_deadband_pct: number;
   margin_alert_ratio: number;
   rebalance_transfer_pct: number;
+  env: "mainnet" | "testnet";
 };
 
 export type FundingArbitrageStatusResponse = {

@@ -121,6 +121,7 @@ from api.schemas import (
     AdminUsersResponse,
     TradeResponse,
     BinanceAssetBalance,
+    BinanceCredentialStatus,
     BinancePositionSummary,
     BinanceAccountSummaryResponse,
     QuickBacktestRequest,
@@ -854,30 +855,33 @@ def create_app() -> FastAPI:
         from control.repo import get_user_profile
 
         profile = await get_user_profile(session, user_id=user.user_id)
-        if not profile or not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
+        from control.repo import get_binance_credential
+
+        cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
+        if not cred:
             return BinanceAccountSummaryResponse(
                 configured=False,
                 connected=False,
-                mode="testnet",
+                mode="mainnet",
                 base_url="",
-                error="Binance API keys are not configured. Go to Settings to set up your keys.",
+                error="Binance mainnet API keys are not configured. Go to Settings to set up your keys.",
             )
 
         from common.crypto import get_crypto_service
         try:
             crypto = get_crypto_service()
-            api_key = crypto.decrypt(profile.binance_api_key_enc)
-            api_secret = crypto.decrypt(profile.binance_api_secret_enc)
+            api_key = crypto.decrypt(cred.api_key_enc)
+            api_secret = crypto.decrypt(cred.api_secret_enc)
         except Exception as exc:  # noqa: BLE001
             return BinanceAccountSummaryResponse(
                 configured=True,
                 connected=False,
-                mode="testnet",
-                base_url=profile.binance_base_url,
+                mode="mainnet",
+                base_url="https://fapi.binance.com",
                 error=f"Failed to decrypt keys: {type(exc).__name__}",
             )
 
-        base_url = profile.binance_base_url or "https://testnet.binancefuture.com"
+        base_url = "https://fapi.binance.com"
 
         from runner.account_snapshot import _fetch_snapshot
         data = await _fetch_snapshot(api_key=api_key, api_secret=api_secret, base_url=base_url)
@@ -924,7 +928,9 @@ def create_app() -> FastAPI:
         futures_unrealized = 0.0
 
         profile = await get_user_profile(session, user_id=user.user_id)
-        if profile and profile.binance_api_key_enc and profile.binance_api_secret_enc:
+        from control.repo import get_binance_credential
+        mainnet_cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet") if profile else None
+        if mainnet_cred:
             snapshot = await get_account_snapshot(session, user_id=user.user_id)
             if snapshot and isinstance(snapshot.data, dict):
                 d = snapshot.data
@@ -1034,22 +1040,40 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 시작."""
-        from control.repo import get_user_profile
+        from control.repo import get_binance_credential
         from live.funding_arbitrage_engine import start_engine, get_engine_status
-        from common import crypto
+        from common.crypto import get_crypto_service
 
-        profile = await get_user_profile(session, user_id=user.user_id)
-        if not profile or not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
-            raise HTTPException(status_code=400, detail="Binance API 키가 설정되지 않았습니다.")
-        api_key = crypto.decrypt(profile.binance_api_key_enc)
-        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
-        base_url = profile.binance_base_url
+        crypto = get_crypto_service()
+
+        if params.env == "testnet":
+            fut_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet_futures")
+            spot_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet_spot")
+            if not fut_cred:
+                raise HTTPException(status_code=400, detail="Testnet Futures API 키가 설정되지 않았습니다.")
+            if not spot_cred:
+                raise HTTPException(status_code=400, detail="Testnet Spot API 키가 설정되지 않았습니다.")
+            is_testnet = True
+        else:
+            fut_cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
+            spot_cred = fut_cred
+            if not fut_cred:
+                raise HTTPException(status_code=400, detail="Mainnet API 키가 설정되지 않았습니다.")
+            is_testnet = False
+
+        futures_api_key = crypto.decrypt(fut_cred.api_key_enc)
+        futures_api_secret = crypto.decrypt(fut_cred.api_secret_enc)
+        spot_api_key = crypto.decrypt(spot_cred.api_key_enc)
+        spot_api_secret = crypto.decrypt(spot_cred.api_secret_enc)
+
         await start_engine(
             user_id=user.user_id,
             params=params,
-            api_key=api_key,
-            api_secret=api_secret,
-            base_url=base_url,
+            futures_api_key=futures_api_key,
+            futures_api_secret=futures_api_secret,
+            spot_api_key=spot_api_key,
+            spot_api_secret=spot_api_secret,
+            is_testnet=is_testnet,
             session_maker=session_maker,
         )
         return get_engine_status(user.user_id)
@@ -2306,18 +2330,19 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
-        from control.repo import get_user_profile
+        from control.repo import get_user_profile, list_binance_credentials
         profile = await get_user_profile(session, user_id=user.user_id)
         if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
-        has_binance_keys = bool(profile.binance_api_key_enc)
+        creds = await list_binance_credentials(session, user_id=user.user_id)
+        configured_envs = [c.env for c in creds]
         return {
             "user_id": profile.user_id,
             "email": profile.email,
             "display_name": profile.display_name,
             "plan": profile.plan,
-            "has_binance_keys": has_binance_keys,
-            "binance_base_url": profile.binance_base_url,
+            "has_binance_keys": bool(configured_envs),
+            "binance_configured_envs": configured_envs,
             "created_at": profile.created_at.isoformat() if profile.created_at else None,
         }
 
@@ -2326,83 +2351,113 @@ def create_app() -> FastAPI:
             return "***"
         return key[:4] + "***" + key[-4:]
 
-    @app.put("/api/me/binance-keys")
-    async def set_binance_keys(
+    _BINANCE_CRED_ENVS = {
+        "mainnet": "https://fapi.binance.com",
+        "testnet_futures": "https://testnet.binancefuture.com",
+        "testnet_spot": "https://testnet.binance.vision",
+    }
+
+    @app.get("/api/me/binance-keys", response_model=list[BinanceCredentialStatus])
+    async def get_binance_keys(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[BinanceCredentialStatus]:
+        from control.repo import list_binance_credentials
+        from common.crypto import get_crypto_service
+        creds = await list_binance_credentials(session, user_id=user.user_id)
+        cred_map = {c.env: c for c in creds}
+        crypto = get_crypto_service()
+        result = []
+        for env in ("mainnet", "testnet_futures", "testnet_spot"):
+            cred = cred_map.get(env)
+            if not cred:
+                result.append(BinanceCredentialStatus(env=env, configured=False))
+            else:
+                try:
+                    raw_key = crypto.decrypt(cred.api_key_enc)
+                    masked = _mask_key(raw_key)
+                except Exception:  # noqa: BLE001
+                    masked = "***decryption_error***"
+                result.append(BinanceCredentialStatus(env=env, configured=True, api_key_masked=masked))
+        return result
+
+    @app.put("/api/me/binance-keys/{env}", response_model=BinanceCredentialStatus)
+    async def set_binance_key(
+        env: str,
         body: dict[str, Any],
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
-    ) -> dict[str, Any]:
+    ) -> BinanceCredentialStatus:
+        if env not in _BINANCE_CRED_ENVS:
+            raise HTTPException(status_code=422, detail=f"Invalid env. Must be one of: {list(_BINANCE_CRED_ENVS)}")
         api_key = str(body.get("api_key") or "").strip()
         api_secret = str(body.get("api_secret") or "").strip()
-        base_url = str(body.get("base_url") or "https://testnet.binancefuture.com").strip()
         if not api_key or not api_secret:
             raise HTTPException(status_code=422, detail="api_key and api_secret are required")
 
-        from binance.client import BinanceHTTPClient
-        test_client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0)
-        try:
-            account_info = await test_client.fetch_account_info()
-            if not account_info:
-                raise HTTPException(status_code=400, detail="Binance API connection test failed: empty response")
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
-        finally:
-            await test_client.aclose()
+        base_url = _BINANCE_CRED_ENVS[env]
+
+        if env == "testnet_spot":
+            import httpx as _httpx
+            import hashlib as _hashlib
+            import hmac as _hmac
+            import time as _time
+            ts = int(_time.time() * 1000)
+            query = f"timestamp={ts}&recvWindow=5000"
+            sig = _hmac.new(api_secret.encode(), query.encode(), _hashlib.sha256).hexdigest()
+            try:
+                async with _httpx.AsyncClient(base_url=base_url, timeout=10.0) as tc:
+                    resp = await tc.get(
+                        "/api/v3/account",
+                        headers={"X-MBX-APIKEY": api_key},
+                        params={"timestamp": ts, "recvWindow": 5000, "signature": sig},
+                    )
+                    if resp.status_code not in (200, 201):
+                        raise HTTPException(status_code=400, detail=f"Binance API connection test failed: HTTP {resp.status_code}")
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
+        else:
+            from binance.client import BinanceHTTPClient
+            test_client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0)
+            try:
+                account_info = await test_client.fetch_account_info()
+                if not account_info:
+                    raise HTTPException(status_code=400, detail="Binance API connection test failed: empty response")
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
+            finally:
+                await test_client.aclose()
 
         from common.crypto import get_crypto_service
         crypto = get_crypto_service()
         api_key_enc = crypto.encrypt(api_key)
         api_secret_enc = crypto.encrypt(api_secret)
 
-        from control.repo import update_user_binance_keys
-        await update_user_binance_keys(
+        from control.repo import upsert_binance_credential
+        await upsert_binance_credential(
             session,
             user_id=user.user_id,
+            env=env,
             api_key_enc=api_key_enc,
             api_secret_enc=api_secret_enc,
-            base_url=base_url,
         )
         await session.commit()
-        return {"ok": True, "api_key_masked": _mask_key(api_key), "base_url": base_url}
+        return BinanceCredentialStatus(env=env, configured=True, api_key_masked=_mask_key(api_key))
 
-    @app.get("/api/me/binance-keys")
-    async def get_binance_keys(
-        user: AuthenticatedUser = Depends(require_auth),
-        session: AsyncSession = Depends(_db_session),
-    ) -> dict[str, Any]:
-        from control.repo import get_user_profile
-        profile = await get_user_profile(session, user_id=user.user_id)
-        if not profile or not profile.binance_api_key_enc:
-            return {"configured": False}
-
-        from common.crypto import get_crypto_service
-        crypto = get_crypto_service()
-        try:
-            raw_key = crypto.decrypt(profile.binance_api_key_enc)
-        except Exception:  # noqa: BLE001
-            return {"configured": True, "api_key_masked": "***decryption_error***", "base_url": profile.binance_base_url}
-
-        return {
-            "configured": True,
-            "api_key_masked": _mask_key(raw_key),
-            "base_url": profile.binance_base_url,
-        }
-
-    @app.delete("/api/me/binance-keys")
-    async def delete_binance_keys(
+    @app.delete("/api/me/binance-keys/{env}")
+    async def delete_binance_key(
+        env: str,
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, bool]:
-        from control.repo import update_user_binance_keys
-        await update_user_binance_keys(
-            session,
-            user_id=user.user_id,
-            api_key_enc=None,
-            api_secret_enc=None,
-            base_url="https://testnet.binancefuture.com",
-        )
+        if env not in _BINANCE_CRED_ENVS:
+            raise HTTPException(status_code=422, detail=f"Invalid env. Must be one of: {list(_BINANCE_CRED_ENVS)}")
+        from control.repo import delete_binance_credential
+        await delete_binance_credential(session, user_id=user.user_id, env=env)
         await session.commit()
         return {"ok": True}
 
@@ -2526,12 +2581,6 @@ def create_app() -> FastAPI:
         secret_key = crypto.decrypt(profile.upbit_api_secret_enc)
         return UpbitClient(access_key=access_key, secret_key=secret_key)
 
-    def _get_binance_earn_client_for_user(profile: Any, crypto: Any) -> Any:
-        from binance.earn_client import BinanceEarnClient
-        api_key = crypto.decrypt(profile.binance_api_key_enc)
-        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
-        return BinanceEarnClient(api_key=api_key, api_secret=api_secret)
-
     _NETWORK_BINANCE_MAP = {"TRC20": "TRX", "ERC20": "ETH", "BEP20": "BSC"}
     _NETWORK_UPBIT_MAP = {"TRC20": "TRX", "ERC20": "ETH", "BEP20": "BSC"}
 
@@ -2573,17 +2622,18 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="User profile not found")
         if not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
             raise HTTPException(status_code=400, detail="Upbit API keys not configured")
-        if not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
-            raise HTTPException(status_code=400, detail="Binance API keys not configured")
-        if _is_testnet_url(profile.binance_base_url):
-            raise HTTPException(status_code=400, detail="Bridge transfers require Binance mainnet keys")
+        from control.repo import get_binance_credential as _get_binance_cred_onramp
+        binance_cred_onramp = await _get_binance_cred_onramp(session, user_id=user.user_id, env="mainnet")
+        if not binance_cred_onramp:
+            raise HTTPException(status_code=400, detail="Binance mainnet API keys not configured")
 
         crypto = get_crypto_service()
         upbit = _get_upbit_client_for_user(profile, crypto)
-        binance = _get_binance_earn_client_for_user(profile, crypto)
-
-        order_uuid: str | None = None
-        krw_spent: float | None = None
+        from binance.earn_client import BinanceEarnClient as _BECOnramp
+        binance = _BECOnramp(
+            api_key=crypto.decrypt(binance_cred_onramp.api_key_enc),
+            api_secret=crypto.decrypt(binance_cred_onramp.api_secret_enc),
+        )
 
         try:
             # Step 1: Buy USDT with KRW if requested
@@ -2679,14 +2729,18 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="User profile not found")
         if not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
             raise HTTPException(status_code=400, detail="Upbit API keys not configured")
-        if not profile.binance_api_key_enc or not profile.binance_api_secret_enc:
-            raise HTTPException(status_code=400, detail="Binance API keys not configured")
-        if _is_testnet_url(profile.binance_base_url):
-            raise HTTPException(status_code=400, detail="Bridge transfers require Binance mainnet keys")
+        from control.repo import get_binance_credential as _get_binance_cred_offramp
+        binance_cred_offramp = await _get_binance_cred_offramp(session, user_id=user.user_id, env="mainnet")
+        if not binance_cred_offramp:
+            raise HTTPException(status_code=400, detail="Binance mainnet API keys not configured")
 
         crypto = get_crypto_service()
         upbit = _get_upbit_client_for_user(profile, crypto)
-        binance = _get_binance_earn_client_for_user(profile, crypto)
+        from binance.earn_client import BinanceEarnClient as _BECOfframp
+        binance = _BECOfframp(
+            api_key=crypto.decrypt(binance_cred_offramp.api_key_enc),
+            api_secret=crypto.decrypt(binance_cred_offramp.api_secret_enc),
+        )
 
         withdrawal_id: str | None = None
         deposit_address: str | None = None
@@ -2931,20 +2985,19 @@ def create_app() -> FastAPI:
     # /api/me/auto-sweep — Idle USDT → Binance Simple Earn (Flexible)
     # ------------------------------------------------------------------
 
-    def _is_testnet_url(url: str | None) -> bool:
-        return bool(url and "testnet" in url.lower())
-
     @app.get("/api/me/auto-sweep", response_model=AutoSweepStatusResponse)
     async def get_auto_sweep(
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> AutoSweepStatusResponse:
-        from control.repo import get_user_profile
+        from control.repo import get_user_profile, get_binance_credential
         from live.auto_sweep_engine import get_user_status
 
         profile = await get_user_profile(session, user_id=user.user_id)
         if not profile:
             raise HTTPException(status_code=404, detail="User profile not found")
+
+        mainnet_cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
 
         snap = await get_user_status(session, user_id=user.user_id)
         last_run_at: datetime | None = None
@@ -2958,8 +3011,8 @@ def create_app() -> FastAPI:
             enabled=bool(profile.auto_sweep_enabled),
             futures_buffer_usdt=float(profile.auto_sweep_futures_buffer_usdt),
             sweep_threshold_usdt=float(profile.auto_sweep_sweep_threshold_usdt),
-            mainnet_required=_is_testnet_url(profile.binance_base_url),
-            keys_configured=bool(profile.binance_api_key_enc and profile.binance_api_secret_enc),
+            mainnet_required=mainnet_cred is None,
+            keys_configured=mainnet_cred is not None,
             futures_usdt=(snap or {}).get("futures_usdt"),
             earn_usdt=(snap or {}).get("earn_usdt"),
             last_run_at=last_run_at,
@@ -2984,15 +3037,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="User profile not found")
 
         if body.enabled:
-            if _is_testnet_url(profile.binance_base_url):
+            from control.repo import get_binance_credential as _get_sweep_cred
+            mainnet_cred_sweep = await _get_sweep_cred(session, user_id=user.user_id, env="mainnet")
+            if not mainnet_cred_sweep:
                 raise HTTPException(
                     status_code=422,
                     detail="Auto-sweep requires mainnet keys (Simple Earn is not available on testnet)",
-                )
-            if not (profile.binance_api_key_enc and profile.binance_api_secret_enc):
-                raise HTTPException(
-                    status_code=422,
-                    detail="Configure Binance API keys before enabling auto-sweep",
                 )
 
         await update_user_auto_sweep_settings(
@@ -3021,8 +3071,8 @@ def create_app() -> FastAPI:
             enabled=body.enabled,
             futures_buffer_usdt=body.futures_buffer_usdt,
             sweep_threshold_usdt=body.sweep_threshold_usdt,
-            mainnet_required=_is_testnet_url(profile.binance_base_url),
-            keys_configured=bool(profile.binance_api_key_enc and profile.binance_api_secret_enc),
+            mainnet_required=not body.enabled,
+            keys_configured=body.enabled,
             futures_usdt=(snap or {}).get("futures_usdt"),
             earn_usdt=(snap or {}).get("earn_usdt"),
             last_run_at=last_run_at,
@@ -3043,20 +3093,20 @@ def create_app() -> FastAPI:
         import asyncio
         from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
         from common.crypto import get_crypto_service
-        from control.repo import get_user_profile
+        from control.repo import get_binance_credential
 
-        profile = await get_user_profile(session, user_id=user.user_id)
-        if not profile or not (profile.binance_api_key_enc and profile.binance_api_secret_enc):
+        mainnet_cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
+        if not mainnet_cred:
             return WalletOverviewResponse(
                 total_usdt=0.0,
                 wallets=[],
                 as_of=datetime.now(timezone.utc),
-                error="Binance API keys not configured",
+                error="Binance mainnet API keys not configured",
             )
 
         crypto = get_crypto_service()
-        api_key = crypto.decrypt(profile.binance_api_key_enc)
-        api_secret = crypto.decrypt(profile.binance_api_secret_enc)
+        api_key = crypto.decrypt(mainnet_cred.api_key_enc)
+        api_secret = crypto.decrypt(mainnet_cred.api_secret_enc)
 
         client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
         try:

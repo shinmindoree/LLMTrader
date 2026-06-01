@@ -37,13 +37,6 @@ _log = logging.getLogger("llmtrader.auto_sweep")
 
 _POLL_INTERVAL_SEC = 60  # 1 minute
 _MIN_TXN_USDT = 1.0  # minimum transaction size to avoid dust transfers
-TESTNET_HOST_HINTS = ("testnet",)
-
-
-def _is_testnet(base_url: str | None) -> bool:
-    if not base_url:
-        return False
-    return any(h in base_url.lower() for h in TESTNET_HOST_HINTS)
 
 
 def snapshot_key(user_id: str) -> str:
@@ -148,19 +141,20 @@ async def _run_cycle(session_maker: async_sessionmaker[AsyncSession]) -> None:
 async def _process_user(
     session_maker: async_sessionmaker[AsyncSession], user: UserProfile
 ) -> None:
-    if _is_testnet(user.binance_base_url):
+    from control.repo import get_binance_credential
+
+    async with session_maker() as session:
+        cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
+    if not cred:
         await _record_error(
             session_maker, user.user_id, "Auto-sweep disabled: mainnet keys required"
         )
         return
-    if not user.binance_api_key_enc or not user.binance_api_secret_enc:
-        await _record_error(session_maker, user.user_id, "No Binance keys configured")
-        return
 
     crypto = get_crypto_service()
     try:
-        api_key = crypto.decrypt(user.binance_api_key_enc)
-        api_secret = crypto.decrypt(user.binance_api_secret_enc)
+        api_key = crypto.decrypt(cred.api_key_enc)
+        api_secret = crypto.decrypt(cred.api_secret_enc)
     except Exception as exc:  # noqa: BLE001
         await _record_error(session_maker, user.user_id, f"Key decryption failed: {exc}")
         return

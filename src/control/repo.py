@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.enums import EventKind, JobStatus, JobType
 from control.models import (
     AccountSnapshot,
+    BinanceApiCredential,
     BridgeTransfer,
     Job,
     JobEvent,
@@ -80,22 +81,68 @@ async def update_user_plan(
     await session.execute(update(UserProfile).where(UserProfile.user_id == user_id).values(**values))
 
 
-async def update_user_binance_keys(
+# ---------------------------------------------------------------------------
+# BinanceApiCredential
+# ---------------------------------------------------------------------------
+
+_VALID_ENVS = frozenset({"mainnet", "testnet_futures", "testnet_spot"})
+
+
+async def get_binance_credential(
+    session: AsyncSession, *, user_id: str, env: str
+) -> BinanceApiCredential | None:
+    result = await session.execute(
+        select(BinanceApiCredential).where(
+            BinanceApiCredential.user_id == user_id,
+            BinanceApiCredential.env == env,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_binance_credentials(
+    session: AsyncSession, *, user_id: str
+) -> list[BinanceApiCredential]:
+    result = await session.execute(
+        select(BinanceApiCredential).where(BinanceApiCredential.user_id == user_id)
+    )
+    return list(result.scalars().all())
+
+
+async def upsert_binance_credential(
     session: AsyncSession,
     *,
     user_id: str,
-    api_key_enc: str | None,
-    api_secret_enc: str | None,
-    base_url: str,
+    env: str,
+    api_key_enc: str,
+    api_secret_enc: str,
+) -> None:
+    now = datetime.now()
+    stmt = (
+        insert(BinanceApiCredential)
+        .values(
+            user_id=user_id,
+            env=env,
+            api_key_enc=api_key_enc,
+            api_secret_enc=api_secret_enc,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            constraint="uq_binance_cred_user_env",
+            set_={"api_key_enc": api_key_enc, "api_secret_enc": api_secret_enc, "updated_at": now},
+        )
+    )
+    await session.execute(stmt)
+
+
+async def delete_binance_credential(
+    session: AsyncSession, *, user_id: str, env: str
 ) -> None:
     await session.execute(
-        update(UserProfile)
-        .where(UserProfile.user_id == user_id)
-        .values(
-            binance_api_key_enc=api_key_enc,
-            binance_api_secret_enc=api_secret_enc,
-            binance_base_url=base_url,
-            updated_at=datetime.now(),
+        delete(BinanceApiCredential).where(
+            BinanceApiCredential.user_id == user_id,
+            BinanceApiCredential.env == env,
         )
     )
 

@@ -82,8 +82,10 @@ class _EngineState:
     accumulated_funding_income: float = 0.0
     last_funding_ts: datetime | None = None
     params: FundingArbitrageParams | None = None
-    api_key: str = ""
-    api_secret: str = ""
+    api_key: str = ""          # futures api key
+    api_secret: str = ""       # futures api secret
+    spot_api_key: str = ""     # spot api key (differs from futures on testnet)
+    spot_api_secret: str = ""  # spot api secret (differs from futures on testnet)
     spot_base: str = "https://api.binance.com"
     futures_base: str = "https://fapi.binance.com"
     is_testnet: bool = False
@@ -125,9 +127,11 @@ async def start_engine(
     *,
     user_id: str,
     params: FundingArbitrageParams,
-    api_key: str,
-    api_secret: str,
-    base_url: str | None,
+    futures_api_key: str,
+    futures_api_secret: str,
+    spot_api_key: str,
+    spot_api_secret: str,
+    is_testnet: bool,
     session_maker: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     existing = _engines.get(user_id)
@@ -135,14 +139,16 @@ async def start_engine(
         _log.warning("Engine already running for user=%s — ignoring start", user_id)
         return
 
-    spot_base, futures_base, is_testnet = _derive_bases(base_url)
+    spot_base, futures_base = _bases_for_env(is_testnet)
     st = _EngineState(
         user_id=user_id,
         running=True,
         symbol=params.symbol,
         params=params,
-        api_key=api_key,
-        api_secret=api_secret,
+        api_key=futures_api_key,
+        api_secret=futures_api_secret,
+        spot_api_key=spot_api_key,
+        spot_api_secret=spot_api_secret,
         spot_base=spot_base,
         futures_base=futures_base,
         is_testnet=is_testnet,
@@ -177,12 +183,11 @@ async def stop_engine(user_id: str) -> None:
 # ── base URL 도출 ──────────────────────────────────────────
 
 
-def _derive_bases(base_url: str | None) -> tuple[str, str, bool]:
-    """프로필 base_url로부터 (spot_base, futures_base, is_testnet)를 도출."""
-    is_testnet = bool(base_url and "testnet" in base_url.lower())
+def _bases_for_env(is_testnet: bool) -> tuple[str, str]:
+    """(spot_base, futures_base)를 반환."""
     if is_testnet:
-        return "https://testnet.binance.vision", "https://testnet.binancefuture.com", True
-    return "https://api.binance.com", "https://fapi.binance.com", False
+        return "https://testnet.binance.vision", "https://testnet.binancefuture.com"
+    return "https://api.binance.com", "https://fapi.binance.com"
 
 
 # ── 영속화 ─────────────────────────────────────────────────
@@ -436,10 +441,11 @@ async def _check_margin_and_rebalance(  # noqa: PLR0911
         st.user_id,
     )
     try:
+        spot_headers = _auth_headers(st.spot_api_key)
         spot_resp = await spot_client.get(
             "/api/v3/account",
-            headers=headers,
-            params=_signed_params(st.api_secret, {}),
+            headers=spot_headers,
+            params=_signed_params(st.spot_api_secret, {}),
         )
         spot_resp.raise_for_status()
         balances: list[dict[str, Any]] = spot_resp.json().get("balances", [])
@@ -458,8 +464,8 @@ async def _check_margin_and_rebalance(  # noqa: PLR0911
     try:
         await _universal_transfer(
             spot_client=spot_client,
-            api_key=st.api_key,
-            api_secret=st.api_secret,
+            api_key=st.spot_api_key,
+            api_secret=st.spot_api_secret,
             transfer_type="MAIN_UMFUTURE",
             asset="USDT",
             amount=transfer_amt,
@@ -514,8 +520,8 @@ async def _enter_position(
     try:
         spot_order = await _place_spot_order(
             client=spot_client,
-            api_key=st.api_key,
-            api_secret=st.api_secret,
+            api_key=st.spot_api_key,
+            api_secret=st.spot_api_secret,
             symbol=params.symbol,
             side="BUY",
             qty_str=qty_str,
@@ -561,8 +567,8 @@ async def _rollback_spot_leg(
     try:
         await _place_spot_order(
             client=spot_client,
-            api_key=st.api_key,
-            api_secret=st.api_secret,
+            api_key=st.spot_api_key,
+            api_secret=st.spot_api_secret,
             symbol=params.symbol,
             side="SELL",
             qty_str=qty_str,
@@ -610,8 +616,8 @@ async def _unwind_position(
             if spot_qty > 0:
                 await _place_spot_order(
                     client=spot_client,
-                    api_key=st.api_key,
-                    api_secret=st.api_secret,
+                    api_key=st.spot_api_key,
+                    api_secret=st.spot_api_secret,
                     symbol=params.symbol,
                     side="SELL",
                     qty_str=_fmt_qty(spot_qty, spot_flt.step_size),
