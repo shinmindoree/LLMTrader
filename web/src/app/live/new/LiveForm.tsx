@@ -66,7 +66,7 @@ export function LiveForm({
   const { t } = useI18n();
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
   const [symbol, setSymbol] = useState(defaults.symbol);
-  const [env, setEnv] = useState<"mainnet" | "testnet_futures">("mainnet");
+  const [env, setEnv] = useState<"mainnet" | "testnet">("mainnet");
   const [interval, setInterval] = useState(defaults.interval);
   const [leverage, setLeverage] = useState<number | string>(1);
   const [maxPositionPct, setMaxPositionPct] = useState<number | string>(50);
@@ -248,10 +248,10 @@ export function LiveForm({
           <select
             className={inputCls}
             value={env}
-            onChange={(e) => setEnv(e.target.value as "mainnet" | "testnet_futures")}
+            onChange={(e) => setEnv(e.target.value as "mainnet" | "testnet")}
           >
             <option value="mainnet" className="bg-[#131722]">Mainnet (실거래)</option>
-            <option value="testnet_futures" className="bg-[#131722]">Testnet Futures (테스트)</option>
+            <option value="testnet" className="bg-[#131722]">Testnet (Demo Trading)</option>
           </select>
         </label>
         <label className="text-sm">

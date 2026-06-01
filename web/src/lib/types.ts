@@ -273,7 +273,7 @@ export type Trade = {
   raw: Record<string, unknown> | null;
 };
 
-export type BinanceCredentialEnv = "mainnet" | "testnet_futures" | "testnet_spot";
+export type BinanceCredentialEnv = "mainnet" | "testnet";
 
 export type BinanceCredential = {
   env: BinanceCredentialEnv;

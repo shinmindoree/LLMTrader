@@ -167,14 +167,14 @@ export function ArbitrageConfigPanel() {
 
           <Field
             label="환경 (Environment)"
-            description="사용할 API 키 환경. Testnet은 테스트넷 선물+현물 키를 함께 사용합니다."
+            description="사용할 API 키 환경. Testnet은 바이낸스 데모 트레이딩 키(선물+현물 공용)를 사용합니다."
           >
             <select
               className="w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
               value={params.env}
               onChange={(e) => set("env", e.target.value as "mainnet" | "testnet")}
             >
-              <option value="testnet">Testnet (Futures + Spot 테스트넷)</option>
+              <option value="testnet">Testnet (Demo Trading)</option>
               <option value="mainnet">Mainnet (실거래)</option>
             </select>
           </Field>

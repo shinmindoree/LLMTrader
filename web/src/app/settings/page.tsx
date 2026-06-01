@@ -11,20 +11,16 @@ import {
 } from "@/lib/api";
 import type { UserProfile, BinanceCredential, BinanceCredentialEnv } from "@/lib/types";
 
-const ENV_ORDER: BinanceCredentialEnv[] = ["mainnet", "testnet_futures", "testnet_spot"];
+const ENV_ORDER: BinanceCredentialEnv[] = ["mainnet", "testnet"];
 
 const ENV_LABELS: Record<BinanceCredentialEnv, { title: string; desc: string }> = {
   mainnet: {
     title: "Mainnet",
     desc: "실제 바이낸스 (fapi.binance.com / api.binance.com). 선물·현물·Earn 등 모든 실거래 전략에서 공통으로 사용됩니다.",
   },
-  testnet_futures: {
-    title: "Testnet Futures",
-    desc: "테스트넷 선물 (testnet.binancefuture.com). 디렉셔널 알파 전략의 테스트넷 거래에 사용됩니다.",
-  },
-  testnet_spot: {
-    title: "Testnet Spot",
-    desc: "테스트넷 현물 (testnet.binance.vision). 차익거래 전략의 테스트넷 현물 레그에 사용됩니다.",
+  testnet: {
+    title: "Testnet (Demo Trading)",
+    desc: "바이낸스 데모 트레이딩 (demo.binance.com 발급). 키 한 쌍으로 선물(testnet.binancefuture.com)·현물(demo-api.binance.com)을 모두 사용하므로, 디렉셔널 알파와 차익거래 테스트넷 거래에 공통으로 쓰입니다.",
   },
 };
 
