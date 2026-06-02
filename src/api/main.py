@@ -3122,42 +3122,90 @@ def create_app() -> FastAPI:
         new_status = transfer.status
         update_kwargs: dict[str, Any] = {}
 
+        async def _make_binance_client() -> Any:
+            """Build a Binance Earn client from the user's mainnet credential."""
+            from control.repo import get_binance_credential as _get_binance_cred
+            from binance.earn_client import BinanceEarnClient
+
+            cred = await _get_binance_cred(session, user_id=user.user_id, env="mainnet")
+            if not cred:
+                return None
+            return BinanceEarnClient(
+                api_key=crypto.decrypt(cred.api_key_enc),
+                api_secret=crypto.decrypt(cred.api_secret_enc),
+            )
+
+        def _match_binance_deposit(deposits: Any, check_txid: str) -> dict[str, Any] | None:
+            """Find a credited Binance deposit for this transfer.
+
+            Matches by exact txid when available, otherwise falls back to
+            matching the destination deposit address and requested amount so a
+            credit is still detected when the source txid was never recorded.
+            """
+            check_txid = (check_txid or "").lower()
+            dst_addr = (transfer.dst_deposit_address or "").lower()
+            want_amt = float(transfer.requested_usdt or 0)
+            for item in (deposits if isinstance(deposits, list) else []):
+                if int(item.get("status", -1)) != 1:  # 1 = Success/credited
+                    continue
+                item_txid = str(item.get("txId") or "")
+                item_addr = str(item.get("address") or "").lower()
+                item_amt = float(item.get("amount") or 0)
+                match_txid = bool(check_txid) and item_txid.lower() == check_txid
+                match_addr_amt = (
+                    bool(dst_addr)
+                    and item_addr == dst_addr
+                    and want_amt > 0
+                    and abs(item_amt - want_amt) <= max(1.0, want_amt * 0.02)
+                )
+                if match_txid or match_addr_amt:
+                    return item
+            return None
+
         try:
             if transfer.direction == "UPBIT_TO_BINANCE" and transfer.src_withdrawal_id:
-                from upbit.client import UpbitClient
-                upbit = _get_upbit_client_for_user(profile, crypto)
+                # Source side: poll Upbit withdrawal state. A failure here must
+                # not block the destination-side credit check below.
                 try:
-                    wd = await upbit.get_withdrawal(transfer.src_withdrawal_id)
-                    state = str(wd.get("state", "")).upper()
-                    txid = str(wd.get("txid") or "") or transfer.dst_txid or ""
-                    if state == "DONE":
-                        new_status = "CONFIRMING"
-                        if txid:
-                            update_kwargs["dst_txid"] = txid
-                    elif state in ("REJECTED", "CANCELLED", "CANCELED", "FAILED"):
-                        new_status = "FAILED"
-                        update_kwargs["error_message"] = f"Upbit withdrawal {state}"
-                finally:
-                    await upbit.aclose()
-
-                # Destination side: check Binance deposit history for credit
-                if new_status in ("CONFIRMING", "WITHDRAWING") and (update_kwargs.get("dst_txid") or transfer.dst_txid):
-                    binance = _get_binance_earn_client_for_user(profile, crypto)
+                    upbit = _get_upbit_client_for_user(profile, crypto)
                     try:
-                        check_txid = update_kwargs.get("dst_txid") or transfer.dst_txid
-                        deposits = await binance.get_deposit_history(coin="USDT", txid=check_txid, limit=10)
-                        for item in (deposits if isinstance(deposits, list) else []):
-                            if str(item.get("txId") or "") == check_txid:
-                                if int(item.get("status", -1)) == 1:
-                                    new_status = "COMPLETED"
-                                    update_kwargs["actual_usdt"] = float(item.get("amount") or 0)
-                                break
+                        wd = await upbit.get_withdrawal(transfer.src_withdrawal_id)
+                        state = str(wd.get("state", "")).upper()
+                        txid = str(wd.get("txid") or "") or transfer.dst_txid or ""
+                        if state == "DONE":
+                            if new_status == "WITHDRAWING":
+                                new_status = "CONFIRMING"
+                            if txid and not transfer.dst_txid:
+                                update_kwargs["dst_txid"] = txid
+                        elif state in ("REJECTED", "CANCELLED", "CANCELED", "FAILED"):
+                            new_status = "FAILED"
+                            update_kwargs["error_message"] = f"Upbit withdrawal {state}"
                     finally:
-                        await binance.aclose()
+                        await upbit.aclose()
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("sync upbit withdrawal lookup failed for %s: %s", transfer_id, exc)
+
+                # Destination side: check Binance deposit history for credit.
+                if new_status in ("CONFIRMING", "WITHDRAWING"):
+                    binance = await _make_binance_client()
+                    if binance is not None:
+                        try:
+                            deposits = await binance.get_deposit_history(coin="USDT", limit=50)
+                            check_txid = update_kwargs.get("dst_txid") or transfer.dst_txid or ""
+                            matched = _match_binance_deposit(deposits, check_txid)
+                            if matched is not None:
+                                new_status = "COMPLETED"
+                                update_kwargs["actual_usdt"] = float(matched.get("amount") or 0)
+                                matched_txid = str(matched.get("txId") or "")
+                                if matched_txid and not transfer.dst_txid:
+                                    update_kwargs["dst_txid"] = matched_txid
+                        finally:
+                            await binance.aclose()
 
             elif transfer.direction == "BINANCE_TO_UPBIT" and transfer.src_withdrawal_id:
-                from binance.earn_client import BinanceEarnClient
-                binance = _get_binance_earn_client_for_user(profile, crypto)
+                binance = await _make_binance_client()
+                if binance is None:
+                    raise HTTPException(status_code=400, detail="Binance mainnet API keys not configured")
                 try:
                     history = await binance.get_withdrawal_history(withdraw_order_id=transfer.src_withdrawal_id)
                     for item in history:
