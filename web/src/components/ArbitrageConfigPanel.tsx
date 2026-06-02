@@ -64,6 +64,13 @@ export function ArbitrageConfigPanel() {
   const running = status?.running ?? false;
   const deadband = selected ? computeDeadband(selected, holdDays) : null;
 
+  const screenerItems = screener?.items ?? [];
+  const hasScreenerItems = screenerItems.length > 0;
+  const profitableCount = screenerItems.filter((i) => i.score >= 1).length;
+  const noProfitable = hasScreenerItems && profitableCount === 0;
+  const selectedBelowThreshold = selected != null && selected.score < 1;
+  const awaitingEntry = running && !status?.spot_qty;
+
   const annPct = status?.annualized_funding_pct;
   const pnlColor = (status?.unrealized_pnl ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
   const fundingColor = annPct != null && annPct > 0 ? "text-[#26a69a]" : "text-[#ef5350]";
@@ -129,7 +136,9 @@ export function ArbitrageConfigPanel() {
             {running && status?.symbol ? (
               <>
                 <span className="font-mono font-semibold text-[#d1d4dc]">{status.symbol}</span>
-                {" · 현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"}
+                {awaitingEntry
+                  ? " · 진입 대기 중 (펀딩비가 임계치 초과 시 자동 체결)"
+                  : " · 현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"}
               </>
             ) : (
               "현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"
@@ -170,9 +179,17 @@ export function ArbitrageConfigPanel() {
           <Stat label="Funding Income" value={`$${fmt2(status.accumulated_funding_income)}`} valueClass="text-[#26a69a]" />
           <Stat
             label="Position"
-            value={status.spot_qty ? `${status.spot_qty.toFixed(5)} ${status.symbol ?? ""}` : "—"}
+            value={status.spot_qty ? `${status.spot_qty.toFixed(5)} ${status.symbol ?? ""}` : "대기 중"}
           />
         </div>
+      )}
+
+      {awaitingEntry && (
+        <p className="mt-3 rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-xs text-[#f0b90b]">
+          ⏳ 봇이 정상 가동 중이며 진입 신호를 대기하고 있습니다. 현재 펀딩비가 최소 진입 임계치
+          {annPct != null ? ` (현재 연환산 ${fmtPct(annPct)})` : ""}를 넘지 않아 수수료 휩소를 피하기 위해
+          포지션을 열지 않습니다. 임계치를 넘으면 자동으로 현물 롱 + 선물 숏을 체결합니다.
+        </p>
       )}
 
       {/* ── Idle: Screener + Config ── */}
@@ -191,6 +208,12 @@ export function ArbitrageConfigPanel() {
 
             {screenerLoading && !screener && (
               <p className="py-4 text-center text-xs text-[#868993]">데이터 로딩 중…</p>
+            )}
+            {noProfitable && (
+              <p className="mb-2 rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#f0b90b]">
+                ℹ 현재 모든 종목의 펀딩비가 최소 진입 임계치(score 1.0×) 아래입니다. 지금 시작하면 봇은
+                포지션을 열지 않고 임계치를 넘을 때까지 대기합니다. score ≥ 1.0× 종목이 나타나면 즉시 진입합니다.
+              </p>
             )}
             {screener?.error && (
               <p className="rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-xs text-[#f0b90b]">
@@ -248,7 +271,18 @@ export function ArbitrageConfigPanel() {
                             {item.half_life_settlements.toFixed(1)}회
                           </td>
                           <td className="px-3 py-2.5">
-                            <ScoreBar score={item.score} />
+                            <div className="flex items-center gap-2">
+                              <ScoreBar score={item.score} />
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${
+                                  item.score >= 1
+                                    ? "bg-[#26a69a]/15 text-[#26a69a]"
+                                    : "bg-[#2a2e39] text-[#868993]"
+                                }`}
+                              >
+                                {item.score >= 1 ? "진입 가능" : "대기"}
+                              </span>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -415,6 +449,12 @@ export function ArbitrageConfigPanel() {
               </div>
 
               {/* Start button */}
+              {selectedBelowThreshold && (
+                <p className="rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#f0b90b]">
+                  ⏳ 현재 {selected.symbol} 펀딩비(score {selected.score.toFixed(2)}×)가 진입 임계치 미만입니다.
+                  지금 시작해도 즉시 진입하지 않고, 펀딩비가 임계치를 넘을 때까지 대기합니다.
+                </p>
+              )}
               <button
                 type="button"
                 disabled={busy || !selected}
