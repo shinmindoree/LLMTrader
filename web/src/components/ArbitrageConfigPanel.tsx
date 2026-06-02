@@ -76,6 +76,7 @@ export function ArbitrageConfigPanel() {
   const awaitingEntry = running && !status?.spot_qty;
 
   const annPct = status?.annualized_funding_pct;
+  const baseAsset = (status?.symbol ?? "").replace(/USDT$/, "") || (status?.symbol ?? "");
   const pnlColor = (status?.unrealized_pnl ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
   const fundingColor = annPct != null && annPct > 0 ? "text-[#26a69a]" : "text-[#ef5350]";
 
@@ -509,11 +510,31 @@ export function ArbitrageConfigPanel() {
                   }
                   valueClass={pnlColor}
                 />
-                <Stat label="Funding Income" value={`$${fmt2(status.accumulated_funding_income)}`} valueClass="text-[#26a69a]" />
                 <Stat
-                  label="Position"
-                  value={status.spot_qty ? `${status.spot_qty.toFixed(5)} ${status.symbol ?? ""}` : "대기 중"}
+                  label="현물 롱 (Spot Long)"
+                  value={
+                    status.spot_qty
+                      ? `+${status.spot_qty.toFixed(5)} ${baseAsset}`
+                      : "대기 중"
+                  }
+                  valueClass={status.spot_qty ? "text-[#26a69a]" : "text-[#868993]"}
                 />
+                <Stat
+                  label="선물 숏 (Perp Short)"
+                  value={
+                    status.futures_short_qty
+                      ? `-${status.futures_short_qty.toFixed(5)} ${baseAsset}`
+                      : "대기 중"
+                  }
+                  valueClass={status.futures_short_qty ? "text-[#ef5350]" : "text-[#868993]"}
+                />
+                <div className="col-span-2">
+                  <Stat
+                    label="Funding Income"
+                    value={`$${fmt2(status.accumulated_funding_income)}`}
+                    valueClass="text-[#26a69a]"
+                  />
+                </div>
               </div>
 
               {status.last_error && (
