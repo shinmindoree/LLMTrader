@@ -1,0 +1,100 @@
+name: Cleanup Pending Column Drops
+
+# Performs the real DROP for columns queued via control.deferred_drops, but ONLY
+# when it is provably safe: every container (api, backtest runner, LIVE runner)
+# must be running the exact image of the current main HEAD. That is the same
+# signal as check-container-drift.yml — if the LIVE runner still lags, the drop
+# is postponed, so a column a lagging container still maps is never removed.
+#
+# When safe, it runs scripts/process_pending_column_drops.py *inside* the
+# backtest runner (which owns schema changes and has DB access) via
+# `az containerapp exec`. The script is idempotent.
+
+on:
+  schedule:
+    # 01:30 UTC daily (1h after the drift check).
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_TEST }}
+      APP_API: test-api
+      APP_LIVE: test-runner
+      APP_BACKTEST: test-runner-backtest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_TEST }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID_TEST }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_TEST }}
+
+      - name: Verify all containers are on main HEAD
+        id: gate
+        run: |
+          set -euo pipefail
+
+          image_of() {
+            az containerapp show \
+              --name "$1" \
+              --resource-group "${AZURE_RESOURCE_GROUP}" \
+              --query "properties.template.containers[0].image" \
+              --output tsv
+          }
+          tag_of() { echo "${1##*:}"; }
+
+          HEAD_SHA="${GITHUB_SHA}"
+          API_SHA="$(tag_of "$(image_of "${APP_API}")")"
+          LIVE_SHA="$(tag_of "$(image_of "${APP_LIVE}")")"
+          BACKTEST_SHA="$(tag_of "$(image_of "${APP_BACKTEST}")")"
+
+          echo "HEAD=${HEAD_SHA} api=${API_SHA} backtest=${BACKTEST_SHA} live=${LIVE_SHA}"
+
+          SAFE=true
+          for s in "${API_SHA}" "${LIVE_SHA}" "${BACKTEST_SHA}"; do
+            if [ "${s}" != "${HEAD_SHA}" ]; then
+              SAFE=false
+            fi
+          done
+
+          if [ "${SAFE}" = "true" ]; then
+            echo "safe=true" >> "${GITHUB_OUTPUT}"
+            echo "All containers on HEAD (${HEAD_SHA}); proceeding with cleanup." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "safe=false" >> "${GITHUB_OUTPUT}"
+            {
+              echo "Skipping cleanup — not all containers are on main HEAD."
+              echo ""
+              echo "| Target | SHA |"
+              echo "| --- | --- |"
+              echo "| main HEAD | \`${HEAD_SHA}\` |"
+              echo "| ${APP_API} | \`${API_SHA}\` |"
+              echo "| ${APP_BACKTEST} | \`${BACKTEST_SHA}\` |"
+              echo "| ${APP_LIVE} | \`${LIVE_SHA}\` |"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Process deferred drops inside backtest runner
+        if: steps.gate.outputs.safe == 'true'
+        run: |
+          set -euo pipefail
+          OUT="$(az containerapp exec \
+            --name "${APP_BACKTEST}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --command "uv run python scripts/process_pending_column_drops.py" 2>&1)" || true
+          echo "${OUT}"
+          if ! echo "${OUT}" | grep -q "PENDING_DROPS_DONE rc=0"; then
+            echo "Deferred-drop script did not report success." >&2
+            exit 1
+          fi
+          echo "Deferred-drop cleanup completed." >> "${GITHUB_STEP_SUMMARY}"

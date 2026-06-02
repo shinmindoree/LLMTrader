@@ -1,0 +1,38 @@
+name: CI Migration Guard
+
+# Blocks PRs that introduce destructive Alembic migrations (drop_column /
+# drop_table / column rename). Destructive schema changes break any container
+# still running the previous image — most dangerously the manually-deployed
+# LIVE runner — causing silent LIVE job failures. Migrations must be additive
+# (Expand/Contract); use control.deferred_drops.enqueue_column_drop() instead.
+
+on:
+  pull_request:
+    paths:
+      - "src/alembic/versions/**"
+      - "scripts/check_destructive_migrations.py"
+      - ".github/workflows/ci-migration-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check for destructive migrations
+        env:
+          BASE_REF: origin/${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.ref }}"
+          python scripts/check_destructive_migrations.py --base "${BASE_REF}"

@@ -1,0 +1,110 @@
+name: Check Container Drift
+
+# Schema-drift early-warning gate.
+#
+# Background: the LIVE runner (`test-runner`) is deployed by a **manual**
+# workflow, while `test-api` and `test-runner-backtest` auto-deploy on every
+# push to main and OWN the database schema (AUTO_ALEMBIC_UPGRADE=true). When a
+# destructive migration lands, the schema advances but the LIVE runner stays
+# frozen on an old image whose ORM still maps the now-deleted columns — every
+# profile read then raises UndefinedColumnError and LIVE jobs FAIL silently.
+#
+# This job compares the git-SHA image tags of all three containers. If the LIVE
+# runner has drifted behind the schema-owning containers, it fails loudly so an
+# operator redeploys the LIVE runner BEFORE the next destructive migration.
+#
+# It does NOT mutate anything; it only inspects and reports.
+
+on:
+  schedule:
+    # 00:30 UTC daily (~09:30 KST).
+    - cron: "30 0 * * *"
+  workflow_dispatch:
+  workflow_run:
+    # Re-check immediately after a schema-owning container redeploys.
+    workflows:
+      - "Deploy API (test)"
+      - "Deploy Runner (test, backtest)"
+      - "Deploy Runner (test, live)"
+    types:
+      - completed
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP_TEST }}
+      APP_API: test-api
+      APP_LIVE: test-runner
+      APP_BACKTEST: test-runner-backtest
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_TEST }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID_TEST }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_TEST }}
+
+      - name: Compare container image SHAs
+        run: |
+          set -euo pipefail
+
+          image_of() {
+            az containerapp show \
+              --name "$1" \
+              --resource-group "${AZURE_RESOURCE_GROUP}" \
+              --query "properties.template.containers[0].image" \
+              --output tsv
+          }
+
+          # Extract the part after the last ':' (the git-SHA tag).
+          tag_of() { echo "${1##*:}"; }
+
+          API_IMAGE="$(image_of "${APP_API}")"
+          LIVE_IMAGE="$(image_of "${APP_LIVE}")"
+          BACKTEST_IMAGE="$(image_of "${APP_BACKTEST}")"
+
+          API_SHA="$(tag_of "${API_IMAGE}")"
+          LIVE_SHA="$(tag_of "${LIVE_IMAGE}")"
+          BACKTEST_SHA="$(tag_of "${BACKTEST_IMAGE}")"
+
+          {
+            echo "### Container image drift report"
+            echo ""
+            echo "| Container | Role | Image SHA |"
+            echo "| --- | --- | --- |"
+            echo "| ${APP_API} | schema-owner (api) | \`${API_SHA}\` |"
+            echo "| ${APP_BACKTEST} | schema-owner (backtest, runs alembic) | \`${BACKTEST_SHA}\` |"
+            echo "| ${APP_LIVE} | LIVE runner (manual deploy) | \`${LIVE_SHA}\` |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          DRIFT=0
+          MSG=""
+
+          if [ "${API_SHA}" != "${BACKTEST_SHA}" ]; then
+            DRIFT=1
+            MSG="${MSG}\n- api (${API_SHA}) and backtest (${BACKTEST_SHA}) disagree — these auto-deploy together and should always match."
+          fi
+
+          if [ "${LIVE_SHA}" != "${BACKTEST_SHA}" ]; then
+            DRIFT=1
+            MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is behind the schema-owning containers (${BACKTEST_SHA})."
+            MSG="${MSG}\n  Redeploy it: \`gh workflow run deploy-runner-test-live.yml --ref main\` BEFORE merging any destructive migration."
+          fi
+
+          if [ "${DRIFT}" -eq 1 ]; then
+            {
+              echo ""
+              echo "#### ⚠️ DRIFT DETECTED"
+              echo -e "${MSG}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo -e "DRIFT DETECTED:${MSG}"
+            exit 1
+          fi
+
+          echo "All containers in sync at SHA ${BACKTEST_SHA}." >> "${GITHUB_STEP_SUMMARY}"
+          echo "All containers in sync at SHA ${BACKTEST_SHA}."
