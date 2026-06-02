@@ -183,6 +183,9 @@ function BalanceBar() {
 
 // ── TransferForm ──────────────────────────────────────────────────────────────
 
+// 백엔드 onramp는 `usdt_amount * price * 1.005`(슬리피지 0.5% 버퍼)만큼 KRW를 사용한다.
+const KRW_BUY_BUFFER = 1.005;
+
 function TransferForm({ onSuccess }: { onSuccess: () => void }) {
   const [direction, setDirection] = useState<"onramp" | "offramp">("onramp");
   const [usdtAmount, setUsdtAmount] = useState("");
@@ -193,11 +196,26 @@ function TransferForm({ onSuccess }: { onSuccess: () => void }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const { data: upbit } = useSWR<UpbitAccount>("upbitAccount", getUpbitAccount, {
+    refreshInterval: 30_000,
+  });
+  const upbitKrw = upbit?.balances.find((b) => b.currency === "KRW")?.balance ?? 0;
+  const krwUsdtPrice = upbit?.krw_usdt_price ?? 0;
+  const maxOrderableUsdt =
+    krwUsdtPrice > 0 ? Math.floor((upbitKrw / (krwUsdtPrice * KRW_BUY_BUFFER)) * 100) / 100 : 0;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const amount = parseFloat(usdtAmount);
     if (!amount || amount <= 0) {
       setMsg({ type: "error", text: "USDT 금액을 올바르게 입력하세요." });
+      return;
+    }
+    if (direction === "onramp" && convertKrw && maxOrderableUsdt > 0 && amount > maxOrderableUsdt) {
+      setMsg({
+        type: "error",
+        text: `KRW 잔액으로 매수 가능한 최대 금액은 ${fmtUsdt(maxOrderableUsdt)} 입니다.`,
+      });
       return;
     }
     setLoading(true);
@@ -255,6 +273,22 @@ function TransferForm({ onSuccess }: { onSuccess: () => void }) {
               placeholder="100"
               className="w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] placeholder-[#4a4f5e] focus:border-[#2962ff] focus:outline-none"
             />
+            {direction === "onramp" && convertKrw && krwUsdtPrice > 0 && (
+              <div className="mt-1 flex items-center gap-2 text-xs text-[#868993]">
+                <span>
+                  주문 가능: 약{" "}
+                  <span className="font-mono text-[#d1d4dc]">{fmtUsdt(maxOrderableUsdt)}</span>{" "}
+                  ({fmtKrw(upbitKrw)})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setUsdtAmount(maxOrderableUsdt > 0 ? String(maxOrderableUsdt) : "")}
+                  className="rounded bg-[#2962ff]/15 px-2 py-0.5 font-medium text-[#2962ff] hover:bg-[#2962ff]/25"
+                >
+                  MAX
+                </button>
+              </div>
+            )}
           </div>
           <div className="w-28">
             <label className="mb-1 block text-xs text-[#868993]">네트워크</label>
