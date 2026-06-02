@@ -83,6 +83,7 @@ class _EngineState:
     last_funding_ts: datetime | None = None
     params: FundingArbitrageParams | None = None
     last_error: str | None = None
+    futures_dual_side: bool | None = None  # None=미확인, True=헤지모드, False=원웨이모드
     api_key: str = ""          # futures api key
     api_secret: str = ""       # futures api secret
     spot_api_key: str = ""     # spot api key (differs from futures on testnet)
@@ -357,6 +358,41 @@ async def _fetch_funding_interval(client: httpx.AsyncClient, symbol: str) -> flo
     return _DEFAULT_FUNDING_INTERVAL_HOURS
 
 
+async def _resolve_position_side(
+    st: _EngineState, futures_client: httpx.AsyncClient
+) -> str:
+    """선물 계정의 포지션 모드를 감지해 주문에 쓸 positionSide를 반환.
+
+    - 헤지 모드(dualSidePosition=true): 숏 진입/청산에 ``"SHORT"``가 필요.
+    - 원웨이 모드(기본값, dualSidePosition=false): ``"BOTH"``를 사용해야 하며
+      ``"SHORT"``를 보내면 -4061 오류가 난다. (Binance 데모/testnet 기본값은 원웨이)
+
+    결과를 ``st.futures_dual_side``에 캐시하여 매 주문마다 조회하지 않는다.
+    조회 실패 시 안전하게 원웨이('BOTH')로 가정한다.
+    """
+    if st.futures_dual_side is None:
+        try:
+            params = _signed_params(st.api_secret, {})
+            resp = await futures_client.get(
+                "/fapi/v1/positionSide/dual",
+                headers=_auth_headers(st.api_key),
+                params=params,
+            )
+            resp.raise_for_status()
+            st.futures_dual_side = bool(resp.json().get("dualSidePosition"))
+            _log.info(
+                "Futures position mode for user=%s: %s",
+                st.user_id,
+                "HEDGE" if st.futures_dual_side else "ONE-WAY",
+            )
+        except Exception:
+            _log.warning(
+                "positionSide/dual fetch failed (user=%s) — assuming ONE-WAY", st.user_id
+            )
+            st.futures_dual_side = False
+    return "SHORT" if st.futures_dual_side else "BOTH"
+
+
 # ── 심볼 필터 (LOT_SIZE / minNotional) ─────────────────────
 
 
@@ -561,6 +597,7 @@ async def _enter_position(
     # 2) 선물 시장가 숏 — 현물 체결 수량을 step에 맞춰 재정렬
     fut_qty = _round_step(st.spot_qty, fut_flt.step_size or step)
     fut_qty_str = _fmt_qty(fut_qty, fut_flt.step_size or step)
+    position_side = await _resolve_position_side(st, futures_client)
     try:
         fut_order = await _place_futures_order(
             client=futures_client,
@@ -569,14 +606,19 @@ async def _enter_position(
             symbol=params.symbol,
             side="SELL",
             qty_str=fut_qty_str,
-            position_side="SHORT",
+            position_side=position_side,
         )
         st.futures_short_qty = float(fut_order.get("executedQty") or fut_qty)
         st.entry_mark_price = mark_price
         st.entry_ts_ms = int(time.time() * 1000)
+        st.last_error = None
         _log.info("Futures SHORT filled (user=%s): qty=%s", st.user_id, fut_qty_str)
         await _persist_state(st)
-    except Exception:
+    except Exception as exc:
+        st.last_error = (
+            f"선물 숏 주문 실패: {exc}. 선물 지갑 마진(USDT) 잔고와 포지션 모드를 확인하세요. "
+            "현물 레그는 롤백했습니다."
+        )
         _log.exception(
             "Futures SHORT failed (user=%s) — rolling back spot leg", st.user_id
         )
@@ -632,6 +674,7 @@ async def _unwind_position(
 
     spot_remaining = st.spot_qty
     fut_remaining = st.futures_short_qty
+    position_side = await _resolve_position_side(st, futures_client)
 
     for i in range(_UNWIND_SLICES):
         is_last = i == _UNWIND_SLICES - 1
@@ -656,7 +699,7 @@ async def _unwind_position(
                     symbol=params.symbol,
                     side="BUY",
                     qty_str=_fmt_qty(fut_qty, fut_flt.step_size),
-                    position_side="SHORT",
+                    position_side=position_side,
                 )
                 fut_remaining -= fut_qty
             _log.info("Unwind slice %d/%d done (user=%s)", i + 1, _UNWIND_SLICES, st.user_id)
