@@ -509,6 +509,7 @@ class FundingArbitrageStatusResponse(BaseModel):
     accumulated_funding_income: float
     last_funding_ts: datetime | None = None
     params: FundingArbitrageParams | None = None
+    last_error: str | None = None
 
 
 # ── Quick Backtest ──────────────────────────────────────────

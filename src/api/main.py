@@ -212,6 +212,43 @@ def _resolve_funding_deadband(symbol: str, hold_days: int) -> tuple[float, float
         return None
 
 
+# 펀딩 차익거래는 현물 롱 + 선물 숏 구조이므로 후보 심볼은 반드시 현물 시장에도 상장돼야 한다.
+# Binance 데모(testnet) 현물은 mainnet 현물 상장 목록을 그대로 미러링하므로, mainnet 현물
+# universe를 두 환경 공통 필터로 사용한다. exchangeInfo 페이로드가 크므로 1시간 캐시한다.
+_SPOT_SYMBOLS_CACHE: dict[str, Any] = {"symbols": set(), "ts": 0.0}
+_SPOT_SYMBOLS_TTL = 3600.0
+
+
+async def _fetch_tradable_spot_symbols() -> set[str]:
+    """현재 거래(TRADING) 가능한 현물 심볼 집합을 반환(1시간 캐시).
+
+    조회 실패 시 마지막으로 캐시된 집합(없으면 빈 집합)을 반환하여, 스크리너가
+    필터 때문에 전부 비는 일이 없도록 한다(빈 집합이면 호출 측에서 필터를 건너뜀).
+    """
+    import time as _time
+
+    now = _time.time()
+    cached = _SPOT_SYMBOLS_CACHE
+    if cached["symbols"] and (now - cached["ts"]) < _SPOT_SYMBOLS_TTL:
+        return cached["symbols"]
+    try:
+        async with httpx.AsyncClient(base_url="https://api.binance.com", timeout=10.0) as client:
+            resp = await client.get("/api/v3/exchangeInfo")
+            resp.raise_for_status()
+            syms = {
+                s["symbol"]
+                for s in resp.json().get("symbols", [])
+                if isinstance(s, dict) and s.get("status") == "TRADING"
+            }
+        if syms:
+            _SPOT_SYMBOLS_CACHE["symbols"] = syms
+            _SPOT_SYMBOLS_CACHE["ts"] = now
+        return syms
+    except Exception:
+        _log.warning("Failed to fetch spot symbols for screener filter", exc_info=True)
+        return cached["symbols"]
+
+
 def _public_job_config(config: Any) -> dict[str, Any]:
     if not isinstance(config, dict):
         return {}
@@ -1092,11 +1129,10 @@ def create_app() -> FastAPI:
     @app.get("/api/funding-arb/status", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_status(
         user: AuthenticatedUser = Depends(require_auth),
-        session: AsyncSession = Depends(_db_session),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 현재 상태."""
-        from live.funding_arbitrage_engine import get_engine_status_persisted
-        return await get_engine_status_persisted(session, user.user_id)
+        from live.funding_arbitrage_engine import get_engine_status
+        return get_engine_status(user.user_id)
 
     @app.get("/api/funding-arb/screener", response_model=FundingScreenerResponse)
     async def funding_arb_screener(
@@ -1178,6 +1214,9 @@ def create_app() -> FastAPI:
                 error=f"Binance API 오류: {exc}", as_of=datetime.now(timezone.utc),
             )
 
+        # 현물 시장에도 상장된 심볼만 후보로 사용 (현물 롱 + 선물 숏 모두 체결 가능해야 함).
+        spot_symbols = await _fetch_tradable_spot_symbols()
+
         items: list[FundingScreenerItem] = []
         for sym, stat in stats_map.items():
             hl = float(stat.get("half_life_settlements") or 0)
@@ -1185,6 +1224,9 @@ def create_app() -> FastAPI:
                 continue
             current_rate = rates.get(sym, 0.0)
             if current_rate <= 0:
+                continue
+            # 현물 미상장(선물 전용) 심볼은 차익거래 불가 → 제외. (필터 조회 실패 시 건너뜀)
+            if spot_symbols and sym not in spot_symbols:
                 continue
             entry_threshold_pct = (ROUNDTRIP / hl) * 100
             score = (current_rate * 100) / entry_threshold_pct
@@ -1214,21 +1256,10 @@ def create_app() -> FastAPI:
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 시작."""
         from control.repo import get_binance_credential
-        from live.funding_arbitrage_engine import (
-            start_engine,
-            get_engine_status_persisted,
-        )
+        from live.funding_arbitrage_engine import start_engine, get_engine_status
         from common.crypto import get_crypto_service
 
         crypto = get_crypto_service()
-
-        # 멀티-replica 중복 진입 방지: 이미 (다른 replica 포함) 실행 중이면 거부
-        current = await get_engine_status_persisted(session, user.user_id)
-        if current.running:
-            raise HTTPException(
-                status_code=409,
-                detail=f"이미 실행 중입니다 (symbol={current.symbol}). 먼저 정지해 주세요.",
-            )
 
         if params.env == "testnet":
             fut_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet")
@@ -1276,20 +1307,16 @@ def create_app() -> FastAPI:
             is_testnet=is_testnet,
             session_maker=session_maker,
         )
-        return await get_engine_status_persisted(session, user.user_id)
+        return get_engine_status(user.user_id)
 
     @app.post("/api/funding-arb/stop", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_stop(
         user: AuthenticatedUser = Depends(require_auth),
-        session: AsyncSession = Depends(_db_session),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 정지."""
-        from live.funding_arbitrage_engine import (
-            stop_engine,
-            get_engine_status_persisted,
-        )
-        await stop_engine(user.user_id, session_maker=session_maker)
-        return await get_engine_status_persisted(session, user.user_id)
+        from live.funding_arbitrage_engine import stop_engine, get_engine_status
+        await stop_engine(user.user_id)
+        return get_engine_status(user.user_id)
 
     @app.get(
         "/api/binance/futures/symbols",

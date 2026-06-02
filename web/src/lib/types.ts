@@ -505,6 +505,7 @@ export type FundingArbitrageStatusResponse = {
   accumulated_funding_income: number;
   last_funding_ts: string | null;
   params: FundingArbitrageParams | null;
+  last_error: string | null;
 };
 
 export type FundingScreenerItem = {

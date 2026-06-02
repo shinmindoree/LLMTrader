@@ -516,7 +516,13 @@ export function ArbitrageConfigPanel() {
                 />
               </div>
 
-              {awaitingEntry && (
+              {status.last_error && (
+                <p className="mt-3 rounded border border-[#ef5350]/40 bg-[#ef5350]/10 px-3 py-2 text-[11px] leading-relaxed text-[#ef5350]">
+                  ⚠ 진입 차단: {status.last_error}
+                </p>
+              )}
+
+              {awaitingEntry && !status.last_error && (
                 <p className="mt-3 rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#f0b90b]">
                   ⏳ 봇이 정상 가동 중이며 진입 신호를 대기하고 있습니다. 현재 펀딩비가 최소 진입 임계치
                   {annPct != null ? ` (현재 연환산 ${fmtPct(annPct)})` : ""}를 넘지 않아 수수료 휩소를 피하기 위해
