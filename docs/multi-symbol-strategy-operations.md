@@ -41,19 +41,19 @@ $env:PYTHONPATH = "$PWD/src"
 대상 심볼은 아래 5개 피드가 `data/perp_meta/` 에 있어야 한다:
 `<SYMBOL>_15m_klines.parquet`, `_oi_5m`, `_funding`, `_taker_5m`, `_lsr_5m`.
 
+oi / taker / LSR / funding 은 **Binance Vision 아카이브**(`data.binance.vision`)가
+**전체 이력**을 제공하므로 `backfill_vision.py` 한 번으로 과거 전체를 확보한다.
+(BTC가 6년치 데이터를 한 번에 확보한 경로와 동일.)
+
 ```powershell
-.\.venv\Scripts\python.exe scripts\ingest_perp_meta.py `
-    --symbol ETHUSDT `
-    --start 2023-04-01 --end 2026-04-29 `
-    --metrics funding,oi,lsr,taker `
-    --period 5m
+.\.venv\Scripts\python.exe scripts\backfill_vision.py --symbol ETHUSDT
 ```
 
-> ⚠️ **데이터 제약**: Binance는 OI / taker / LSR 을 **최근 ~30일**만 제공한다
-> (funding은 전체 이력 제공). 따라서 장기 백테스트용 과거 데이터는 인제스터를
-> **상시 가동하며 누적**해야 한다. 과거 구간이 비어 있으면 그만큼 OOS 윈도우가
-> 짧아진다. 운영 인제스터의 `MFP_SYMBOLS` / `OI_SYMBOLS` 환경변수에 신규 심볼을
-> 콤마로 추가해 두면 자동 누적된다.
+> ⚠️ **fapi 30일 함정**: `scripts\ingest_perp_meta.py` 는 fapi 기반이라 oi/taker/lsr
+> 을 **최근 ~30일**만 가져온다. 이것을 데이터 가용 한계로 오해하지 말 것. 과거
+> 전체 이력은 위 Vision 백필로 확보하고, fapi 인제스터는 **실시간 최신 tail
+> 누적**용으로만 쓴다. 운영 인제스터의 `MFP_SYMBOLS` / `OI_SYMBOLS` 환경변수에
+> 신규 심볼을 콤마로 추가하면 라이브 피드가 BTC와 동일하게 자동 누적된다.
 > (배포: `infra/docs/perp-meta-ingestor-deployment.md`, `oi-ingestor-deployment.md`)
 
 15m klines는 별도 백필이 필요할 수 있다 (BTC와 동일 방식).
@@ -112,6 +112,46 @@ $env:PYTHONPATH = "$PWD/src"
 
 (`--stop-loss-pct 0`은 전략이 leg별 intrabar SL을 직접 관리하도록 두는 설정)
 
+### ⑤ 라이브 배포 (피드 + 아티팩트 전달)
+
+라이브로 거래하려면 ㉠ 데이터 피드와 ㉡ promoted 아티팩트 두 가지가 클라우드
+러너에 닿아야 한다. **둘 다 심볼당 새 환경변수 없이** convention 기반으로 동작한다.
+
+**㉠ 데이터 피드** — 인제스터 심볼 리스트에만 추가:
+
+```bash
+az containerapp update -g <rg> -n <perp-meta-ingestor> \
+  --set-env-vars "MFP_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT"
+az containerapp update -g <rg> -n <oi-ingestor> \
+  --set-env-vars "OI_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT"
+```
+
+parquet blob 이름은 `OI_PARQUET_BLOB_PREFIX`(기본 `perp_meta`) + `<SYM>_oi_5m.parquet`
+관례로 **자동 해석**된다. 즉 `OI_PARQUET_BLOB_NAME_<SYM>` 같은 심볼별 env는 더
+이상 필요 없다(명시하면 우선 적용되는 하위호환은 유지). perp_meta(taker/lsr/funding/
+klines)도 동일하게 prefix 관례로 해석된다.
+
+**㉡ 아티팩트 전달** — promoted JSON을 공용 blob 컨테이너에 업로드하고, 러너에는
+**한 번만** 컨테이너를 알려준다:
+
+```bash
+# 러너에 1회 설정 (이후 모든 심볼에 재사용)
+az containerapp update -g <rg> -n <runner> \
+  --set-env-vars "STRATEGY_PARAMS_BLOB_CONTAINER=strategy-params" \
+                 "STRATEGY_PARAMS_BLOB_PREFIX=strategy_params"
+
+# 심볼 추가 때마다: 아티팩트 1개 업로드 (러너 무변경·무재배포)
+#   <container>/<prefix>/multi_factor_portfolio/<SYM>.json
+```
+
+`param_store` 는 `<prefix>/<strategy_id>/<SYMBOL>.json` 을 **런타임에 동적**으로
+조회하므로, 새 심볼은 JSON 업로드만으로 끝난다. 러너 env 추가도, 이미지 재빌드도
+필요 없다.
+
+> 💡 **확장 원칙**: 심볼 N→N+1 에 필요한 작업은 ① Vision 백필 ② discover+OOS
+> ③ promoted JSON blob 업로드 ④ 인제스터 심볼 리스트에 콤마 추가 — 이 4단계뿐.
+> 심볼당 새 환경변수나 코드/이미지 변경은 발생하지 않는다.
+
 ---
 
 ## 3. 무엇이 바뀌고 무엇이 고정되나
@@ -142,14 +182,18 @@ $env:PYTHONPATH = "$PWD/src"
 ## 5. 빠른 체크리스트
 
 ```
-[ ] 5개 parquet 피드 확보 (ingest_perp_meta + klines 백필)
+[ ] 5개 parquet 피드 확보 (backfill_vision.py 전체이력 + klines 백필)
 [ ] discover_mfp_params.py --symbol XXX  (validated)
 [ ] portfolio gate passed=True 확인
 [ ] leg별 TRAIN/TEST 수익·pf 검토
 [ ] --promote 또는 status 수동 변경 (promoted)
-[ ] 운영 인제스터에 심볼 추가 (MFP_SYMBOLS / OI_SYMBOLS)
+[ ] promoted JSON 을 공용 blob 컨테이너에 업로드 (convention 경로)
+[ ] 운영 인제스터 심볼 리스트에 추가 (MFP_SYMBOLS / OI_SYMBOLS 콤마 append)
 [ ] --symbol XXX 로 백테스트 → 라이브
 ```
+
+> 러너의 `STRATEGY_PARAMS_BLOB_CONTAINER` 와 인제스터의 parquet prefix 관례는
+> **최초 1회만** 설정하면 되며, 이후 심볼 추가 시 새 환경변수는 필요 없다.
 
 ---
 

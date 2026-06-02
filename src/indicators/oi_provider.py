@@ -62,6 +62,8 @@ def _resolve_parquet_path(symbol: str) -> Path:
       2. `<repo_root>/data/perp_meta/{symbol}_oi_5m.parquet`
       3. `OI_PARQUET_URL_{SYMBOL}` env var → download to /tmp cache
       4. `OI_PARQUET_BLOB_CONTAINER` + `OI_PARQUET_BLOB_NAME_{SYMBOL}` → blob
+         (if the per-symbol name is unset, falls back to
+         `<OI_PARQUET_BLOB_PREFIX or perp_meta>/{symbol}_oi_5m.parquet`)
 
     For (3) and (4) the cached file is re-downloaded once it is older than
     ``OI_PARQUET_CACHE_TTL_SEC`` (default 1800s), so backtests on a
@@ -103,6 +105,12 @@ def _resolve_parquet_path(symbol: str) -> Path:
     # Set OI_PARQUET_BLOB_CONTAINER + OI_PARQUET_BLOB_NAME_{SYMBOL}
     container_name = os.environ.get("OI_PARQUET_BLOB_CONTAINER", "").strip()
     blob_name = os.environ.get(f"OI_PARQUET_BLOB_NAME_{sym}", "").strip()
+    if container_name and not blob_name:
+        # Convention fallback: shared prefix + canonical filename so any symbol
+        # resolves without a per-symbol env var.
+        prefix = os.environ.get("OI_PARQUET_BLOB_PREFIX", "perp_meta").strip().rstrip("/")
+        fname = f"{sym}_oi_5m.parquet"
+        blob_name = f"{prefix}/{fname}" if prefix else fname
     if container_name and blob_name:
         cache_dir = Path(os.environ.get("OI_PARQUET_CACHE_DIR", "/tmp/oi_parquet"))
         cache_dir.mkdir(parents=True, exist_ok=True)

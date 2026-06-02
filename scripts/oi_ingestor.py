@@ -41,7 +41,10 @@ Env:
 Optional backtest-parquet refresh (off when blob env not set):
   OI_PARQUET_REFRESH_HOURS         default 6 (0 disables)
   OI_PARQUET_BLOB_CONTAINER        e.g. market-data
-  OI_PARQUET_BLOB_NAME_{SYMBOL}    e.g. perp_meta/BTCUSDT_oi_5m.parquet
+  OI_PARQUET_BLOB_NAME_{SYMBOL}    optional per-symbol override; if unset the
+                                   blob name defaults to
+                                   <OI_PARQUET_BLOB_PREFIX or perp_meta>/<SYM>_oi_5m.parquet
+  OI_PARQUET_BLOB_PREFIX           default perp_meta (convention fallback)
   AZURE_BLOB_ACCOUNT_URL or AZURE_BLOB_CONNECTION_STRING
 """
 from __future__ import annotations
@@ -537,11 +540,15 @@ def main() -> int:
                 for sym in symbols:
                     blob_name = os.environ.get(f"OI_PARQUET_BLOB_NAME_{sym}", "").strip()
                     if not blob_name:
-                        logger.warning(
-                            "parquet refresh skipped for %s: OI_PARQUET_BLOB_NAME_%s not set",
-                            sym, sym,
-                        )
-                        continue
+                        # Convention fallback: no per-symbol env required. New
+                        # symbols are picked up automatically via the shared
+                        # prefix + canonical filename, mirroring the BTC layout
+                        # (perp_meta/<SYM>_oi_5m.parquet).
+                        prefix = os.environ.get(
+                            "OI_PARQUET_BLOB_PREFIX", "perp_meta"
+                        ).strip().rstrip("/")
+                        fname = f"{sym}_oi_5m.parquet"
+                        blob_name = f"{prefix}/{fname}" if prefix else fname
                     try:
                         result = refresh_oi_parquet(  # type: ignore[misc]
                             symbol=sym,

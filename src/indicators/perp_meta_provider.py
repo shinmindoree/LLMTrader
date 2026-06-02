@@ -120,6 +120,8 @@ def _resolve_parquet_path(spec: _MetaSpec, symbol: str) -> Path:
       2. <repo>/data/perp_meta/<filename>
       3. {KIND}_PARQUET_URL_{SYMBOL} env (HTTP)
       4. {KIND}_PARQUET_BLOB_CONTAINER + {KIND}_PARQUET_BLOB_NAME_{SYMBOL}
+         (if the per-symbol name is unset, falls back to
+         {KIND}_PARQUET_BLOB_PREFIX or perp_meta joined with the filename)
     Cached files are refreshed when older than {KIND}_PARQUET_CACHE_TTL_SEC.
     """
     sym = symbol.upper()
@@ -163,6 +165,11 @@ def _resolve_parquet_path(spec: _MetaSpec, symbol: str) -> Path:
 
     container_name = os.environ.get(f"{kind_env}_PARQUET_BLOB_CONTAINER", "").strip()
     blob_name = os.environ.get(f"{kind_env}_PARQUET_BLOB_NAME_{sym}", "").strip()
+    if container_name and not blob_name:
+        # Convention fallback: shared prefix + canonical filename so any symbol
+        # resolves without a per-symbol env var.
+        prefix = os.environ.get(f"{kind_env}_PARQUET_BLOB_PREFIX", "perp_meta").strip().rstrip("/")
+        blob_name = f"{prefix}/{fname}" if prefix else fname
     if container_name and blob_name:
         if not (cache_path.exists() and _is_cache_fresh(cache_path, ttl_env)):
             logger.info("[%s] downloading parquet for %s from blob %s/%s",
