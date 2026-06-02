@@ -9,6 +9,9 @@ const REFRESH_MS = 15_000;
 const SCREENER_REFRESH_MS = 30_000;
 const ROUNDTRIP_COST_PCT = 0.20; // VIP0 conservative
 const EXIT_RATIOS: Record<number, number> = { 1: 0.50, 3: 0.25 };
+// 즉시 검증 모드: 진입 임계치를 사실상 0으로 낮춰 펀딩비가 양수이기만 하면 진입시킨다.
+const VERIFY_ENTRY_PCT = 0.0001;
+const VERIFY_EXIT_PCT = 0.00005;
 
 function computeDeadband(item: FundingScreenerItem, holdDays: number) {
   const entry = ROUNDTRIP_COST_PCT / item.half_life_settlements;
@@ -49,6 +52,7 @@ export function ArbitrageConfigPanel() {
   const [marginAlertRatio, setMarginAlertRatio] = useState(0.80);
   const [rebalancePct, setRebalancePct] = useState(0.20);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [verifyMode, setVerifyMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,9 +87,10 @@ export function ArbitrageConfigPanel() {
       symbol: selected.symbol,
       env,
       allocated_usdt: allocatedUsdt,
-      hold_days: holdDays,
-      entry_deadband_pct: deadband.entry,
-      exit_deadband_pct: deadband.exit,
+      // 검증 모드에서는 hold_days를 생략해 백엔드의 자동 임계치 덮어쓰기를 비활성화한다.
+      hold_days: verifyMode ? null : holdDays,
+      entry_deadband_pct: verifyMode ? VERIFY_ENTRY_PCT : deadband.entry,
+      exit_deadband_pct: verifyMode ? VERIFY_EXIT_PCT : deadband.exit,
       margin_alert_ratio: marginAlertRatio,
       rebalance_transfer_pct: rebalancePct,
     };
@@ -275,7 +280,8 @@ export function ArbitrageConfigPanel() {
                 </button>
               </div>
 
-              {/* Hold days selector */}
+              {/* Hold days selector (검증 모드에서는 숨김) */}
+              {!verifyMode && (
               <Field label="목표 유지 기간" description="기간에 따라 진입·청산 임계치가 자동 조정됩니다.">
                 <div className="flex gap-2">
                   {[1, 3].map((d) => (
@@ -294,9 +300,10 @@ export function ArbitrageConfigPanel() {
                   ))}
                 </div>
               </Field>
+              )}
 
-              {/* Auto-computed thresholds (read-only) */}
-              {deadband && (
+              {/* Auto-computed thresholds (read-only, 검증 모드에서는 숨김) */}
+              {!verifyMode && deadband && (
                 <div className="grid grid-cols-2 gap-2 rounded border border-[#2a2e39] bg-[#131722] p-3">
                   <div>
                     <p className="text-[10px] text-[#868993]">진입 임계치 (자동)</p>
@@ -352,6 +359,31 @@ export function ArbitrageConfigPanel() {
                 </Field>
               </div>
 
+              {/* 즉시 검증 모드 */}
+              <div className="rounded border border-[#f0b90b]/30 bg-[#f0b90b]/5 p-3">
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 accent-[#f0b90b]"
+                    checked={verifyMode}
+                    onChange={(e) => setVerifyMode(e.target.checked)}
+                  />
+                  <div>
+                    <p className="text-xs font-semibold text-[#f0b90b]">⚡ 즉시 검증 모드</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-[#9aa0ad]">
+                      진입 임계치를 사실상 0(={VERIFY_ENTRY_PCT}%)으로 낮추고 자동 임계치 계산(목표 유지 기간)을
+                      비활성화합니다. 펀딩비가 양수이기만 하면 다음 조회(≤10초)에 즉시 진입하여 현물 매수 +
+                      선물 숏 실행이 정상 동작하는지 검증할 수 있습니다.
+                    </p>
+                    {verifyMode && env === "mainnet" && (
+                      <p className="mt-2 rounded border border-[#ef5350]/40 bg-[#ef5350]/10 px-2 py-1.5 text-[11px] font-semibold text-[#ef5350]">
+                        ⚠ Mainnet에서는 실제 자금으로 즉시 진입합니다. 검증은 Testnet에서 진행하세요.
+                      </p>
+                    )}
+                  </div>
+                </label>
+              </div>
+
               {/* Advanced settings */}
               <div>
                 <button
@@ -401,7 +433,7 @@ export function ArbitrageConfigPanel() {
               </div>
 
               {/* Start button */}
-              {selectedBelowThreshold && (
+              {!verifyMode && selectedBelowThreshold && (
                 <p className="rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#f0b90b]">
                   ⏳ 현재 {selected.symbol} 펀딩비(score {selected.score.toFixed(2)}×)가 진입 임계치 미만입니다.
                   지금 시작해도 즉시 진입하지 않고, 펀딩비가 임계치를 넘을 때까지 대기합니다.
@@ -411,9 +443,19 @@ export function ArbitrageConfigPanel() {
                 type="button"
                 disabled={busy || !selected || running}
                 onClick={handleStart}
-                className="w-full rounded border border-[#26a69a]/50 bg-[#26a69a]/10 px-4 py-2.5 text-sm font-semibold text-[#26a69a] transition-colors hover:bg-[#26a69a]/20 disabled:opacity-50"
+                className={`w-full rounded border px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50 ${
+                  verifyMode
+                    ? "border-[#f0b90b]/50 bg-[#f0b90b]/10 text-[#f0b90b] hover:bg-[#f0b90b]/20"
+                    : "border-[#26a69a]/50 bg-[#26a69a]/10 text-[#26a69a] hover:bg-[#26a69a]/20"
+                }`}
               >
-                {running ? "이미 실행 중 (먼저 정지하세요)" : busy ? "시작 중…" : `▶ ${selected.symbol} 차익거래 시작`}
+                {running
+                  ? "이미 실행 중 (먼저 정지하세요)"
+                  : busy
+                    ? "시작 중…"
+                    : verifyMode
+                      ? `⚡ ${selected.symbol} 즉시 검증 진입`
+                      : `▶ ${selected.symbol} 차익거래 시작`}
               </button>
             </div>
           )}
