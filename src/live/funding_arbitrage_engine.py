@@ -39,6 +39,9 @@ _log = logging.getLogger("llmtrader.funding_arb")
 
 _DEFAULT_FUNDING_INTERVAL_HOURS = 8.0
 _HOURS_PER_YEAR = 365 * 24
+# 펀딩비/펀딩 주기는 시장 신호이므로 거래 환경과 무관하게 항상 메인넷에서 조회한다.
+# (testnet 펀딩비는 합성/임의 값이라 진입 판단에 사용할 수 없다 — 주문 체결만 환경별로 분리.)
+_MAINNET_FUTURES_BASE = "https://fapi.binance.com"
 _POLL_INTERVAL_SEC = 10
 _METRICS_REFRESH_EVERY_TICKS = 6  # ~60s
 _UNWIND_SLICES = 4
@@ -380,11 +383,12 @@ async def _engine_loop(st: _EngineState) -> None:
     async with (
         httpx.AsyncClient(base_url=st.futures_base, timeout=10.0) as futures_client,
         httpx.AsyncClient(base_url=st.spot_base, timeout=10.0) as spot_client,
+        httpx.AsyncClient(base_url=_MAINNET_FUTURES_BASE, timeout=10.0) as market_client,
     ):
-        # 펀딩 주기 1회 조회 (연환산 계수)
+        # 펀딩 주기 1회 조회 (연환산 계수) — 항상 메인넷 기준
         try:
             st.funding_interval_hours = await _fetch_funding_interval(
-                futures_client, st.symbol or ""
+                market_client, st.symbol or ""
             )
         except Exception:
             _log.warning(
@@ -394,7 +398,12 @@ async def _engine_loop(st: _EngineState) -> None:
         try:
             while st.running:
                 try:
-                    await _tick(st, futures_client=futures_client, spot_client=spot_client)
+                    await _tick(
+                        st,
+                        futures_client=futures_client,
+                        spot_client=spot_client,
+                        market_client=market_client,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -426,12 +435,19 @@ async def _tick(
     *,
     futures_client: httpx.AsyncClient,
     spot_client: httpx.AsyncClient,
+    market_client: httpx.AsyncClient,
 ) -> None:
     params = st.params
     assert params is not None
     st._tick_count += 1
 
-    funding_rate, mark_price = await _fetch_funding_rate(futures_client, params.symbol)
+    # 펀딩비(진입 신호)는 메인넷에서, 마크프라이스(체결/마진 계산)는 실거래 환경에서 조회한다.
+    funding_rate, mainnet_mark = await _fetch_funding_rate(market_client, params.symbol)
+    try:
+        _, mark_price = await _fetch_funding_rate(futures_client, params.symbol)
+    except Exception:
+        # 체결 환경(testnet)에 해당 심볼이 없거나 일시 오류면 메인넷 마크프라이스로 대체.
+        mark_price = mainnet_mark
     st.current_funding_rate = funding_rate
     st.last_funding_ts = datetime.now(UTC)
     ppy = _periods_per_year(st.funding_interval_hours)
