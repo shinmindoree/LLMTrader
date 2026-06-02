@@ -9,7 +9,7 @@ export default function ArbitragePage() {
   const h = t.hubs.arbitrage;
 
   return (
-    <div className="w-full max-w-3xl px-4 py-6">
+    <div className="w-full max-w-6xl px-4 py-6">
       <HubHeader title={h.title} subtitle={h.subtitle} />
       <div className="space-y-4">
         <StrategyCard

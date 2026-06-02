@@ -133,28 +133,9 @@ export function ArbitrageConfigPanel() {
             </span>
           </div>
           <p className="mt-0.5 text-xs text-[#868993]">
-            {running && status?.symbol ? (
-              <>
-                <span className="font-mono font-semibold text-[#d1d4dc]">{status.symbol}</span>
-                {awaitingEntry
-                  ? " · 진입 대기 중 (펀딩비가 임계치 초과 시 자동 체결)"
-                  : " · 현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"}
-              </>
-            ) : (
-              "현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"
-            )}
+            현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취
           </p>
         </div>
-        {running && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={handleStop}
-            className="rounded border border-[#ef5350]/50 bg-[#ef5350]/10 px-4 py-2 text-sm font-medium text-[#ef5350] transition-colors hover:bg-[#ef5350]/20 disabled:opacity-50"
-          >
-            {busy ? "..." : "Stop"}
-          </button>
-        )}
       </div>
 
       {error && (
@@ -163,40 +144,11 @@ export function ArbitrageConfigPanel() {
         </p>
       )}
 
-      {/* ── Running: live stats ── */}
-      {running && status && (
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat label="Funding Rate (Ann.)" value={fmtPct(annPct ?? null)} valueClass={fundingColor} />
-          <Stat
-            label="Unrealized PnL"
-            value={
-              status.unrealized_pnl != null
-                ? `${status.unrealized_pnl >= 0 ? "+" : ""}$${fmt2(status.unrealized_pnl)}`
-                : "—"
-            }
-            valueClass={pnlColor}
-          />
-          <Stat label="Funding Income" value={`$${fmt2(status.accumulated_funding_income)}`} valueClass="text-[#26a69a]" />
-          <Stat
-            label="Position"
-            value={status.spot_qty ? `${status.spot_qty.toFixed(5)} ${status.symbol ?? ""}` : "대기 중"}
-          />
-        </div>
-      )}
-
-      {awaitingEntry && (
-        <p className="mt-3 rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-xs text-[#f0b90b]">
-          ⏳ 봇이 정상 가동 중이며 진입 신호를 대기하고 있습니다. 현재 펀딩비가 최소 진입 임계치
-          {annPct != null ? ` (현재 연환산 ${fmtPct(annPct)})` : ""}를 넘지 않아 수수료 휩소를 피하기 위해
-          포지션을 열지 않습니다. 임계치를 넘으면 자동으로 현물 롱 + 선물 숏을 체결합니다.
-        </p>
-      )}
-
-      {/* ── Idle: Screener + Config ── */}
-      {!running && (
-        <>
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        {/* ── LEFT: 실시간 스크리너 + 설정 (항상 표시) ── */}
+        <div>
           {/* Screener */}
-          <div className="mt-5">
+          <div>
             <div className="mb-2 flex items-center justify-between">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#9aa0ad]">
                 🔍 실시간 스크리너 — Top 5
@@ -457,11 +409,11 @@ export function ArbitrageConfigPanel() {
               )}
               <button
                 type="button"
-                disabled={busy || !selected}
+                disabled={busy || !selected || running}
                 onClick={handleStart}
                 className="w-full rounded border border-[#26a69a]/50 bg-[#26a69a]/10 px-4 py-2.5 text-sm font-semibold text-[#26a69a] transition-colors hover:bg-[#26a69a]/20 disabled:opacity-50"
               >
-                {busy ? "시작 중…" : `▶ ${selected.symbol} 차익거래 시작`}
+                {running ? "이미 실행 중 (먼저 정지하세요)" : busy ? "시작 중…" : `▶ ${selected.symbol} 차익거래 시작`}
               </button>
             </div>
           )}
@@ -471,8 +423,75 @@ export function ArbitrageConfigPanel() {
               위 스크리너에서 종목을 클릭하면 자동으로 파라미터가 설정됩니다.
             </p>
           )}
-        </>
-      )}
+        </div>
+
+        {/* ── RIGHT: Running 중인 전략 ── */}
+        <div>
+          {running && status ? (
+            <div className="rounded-lg border border-[#26a69a]/30 bg-[#131722] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1 rounded bg-[#26a69a]/15 px-2 py-0.5 text-xs font-medium text-[#26a69a]">
+                      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[#26a69a]" />
+                      Running
+                    </span>
+                    <span className="truncate font-mono text-sm font-semibold text-[#d1d4dc]">
+                      {status.symbol}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-[#868993]">
+                    {awaitingEntry
+                      ? "진입 대기 중 · 펀딩비가 임계치 초과 시 자동 체결"
+                      : "현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handleStop}
+                  className="shrink-0 rounded border border-[#ef5350]/50 bg-[#ef5350]/10 px-4 py-2 text-sm font-medium text-[#ef5350] transition-colors hover:bg-[#ef5350]/20 disabled:opacity-50"
+                >
+                  {busy ? "..." : "Stop"}
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <Stat label="Funding Rate (Ann.)" value={fmtPct(annPct ?? null)} valueClass={fundingColor} />
+                <Stat
+                  label="Unrealized PnL"
+                  value={
+                    status.unrealized_pnl != null
+                      ? `${status.unrealized_pnl >= 0 ? "+" : ""}$${fmt2(status.unrealized_pnl)}`
+                      : "—"
+                  }
+                  valueClass={pnlColor}
+                />
+                <Stat label="Funding Income" value={`$${fmt2(status.accumulated_funding_income)}`} valueClass="text-[#26a69a]" />
+                <Stat
+                  label="Position"
+                  value={status.spot_qty ? `${status.spot_qty.toFixed(5)} ${status.symbol ?? ""}` : "대기 중"}
+                />
+              </div>
+
+              {awaitingEntry && (
+                <p className="mt-3 rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#f0b90b]">
+                  ⏳ 봇이 정상 가동 중이며 진입 신호를 대기하고 있습니다. 현재 펀딩비가 최소 진입 임계치
+                  {annPct != null ? ` (현재 연환산 ${fmtPct(annPct)})` : ""}를 넘지 않아 수수료 휩소를 피하기 위해
+                  포지션을 열지 않습니다. 임계치를 넘으면 자동으로 체결합니다.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="flex h-full min-h-[160px] flex-col items-center justify-center rounded-lg border border-dashed border-[#2a2e39] bg-[#131722]/40 p-6 text-center">
+              <p className="text-sm font-medium text-[#9aa0ad]">실행 중인 전략이 없습니다</p>
+              <p className="mt-1 text-xs text-[#555]">
+                좌측 스크리너에서 종목을 선택하고 시작하면 이곳에 실시간 현황이 표시됩니다.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
 
       <p className="mt-4 text-[11px] leading-relaxed text-[#555]">
         ⚠ 진입 전 Binance Hedge Mode 활성화 필요. 현물 지갑에 충분한 USDT가 있어야 합니다.
