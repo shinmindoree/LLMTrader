@@ -235,6 +235,105 @@ ALL_LEGS: list[dict[str, Any]] = _MEAN_REV_LEGS + _TREND_LEGS  # 17 legs total
 
 
 # ---------------------------------------------------------------------------
+# Per-symbol parameter resolution
+# ---------------------------------------------------------------------------
+# Symbol whose thresholds are baked into ALL_LEGS above (discovery origin).
+BASELINE_SYMBOL = "BTCUSDT"
+
+# Stable identifier used to key parameter artifacts in the param store.
+STRATEGY_ID = "multi_factor_portfolio"
+
+# Threshold fields that may be re-fitted per symbol. Structural fields
+# (interval_min, lookbacks, periods, use_* flags, side, ...) are deliberately
+# excluded: the leg STRUCTURE is fixed to the BTC-validated baseline and only
+# these volatility-sensitive thresholds are overridden per symbol.
+TUNABLE_FIELDS: frozenset[str] = frozenset({
+    "tp_pct", "sl_pct", "max_hold_h",
+    "z_long", "z_short",
+    "z_lsr_long", "z_lsr_short", "z_taker_long", "z_taker_short",
+    "lsr_z_long", "lsr_z_short",
+    "rsi_long", "rsi_short", "rsi_long_max", "rsi_short_min",
+    "atr_min_pct", "atr_max_pct", "atr_min_mult",
+    "taker_long_max", "taker_short_min",
+    "oi_drop", "oi_pop",
+    "bb_std",
+    "fund_long", "fund_short",
+    "oi_max_for_long", "oi_min_for_short",
+})
+
+
+def _apply_leg_overrides(
+    baseline: list[dict[str, Any]],
+    overrides: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a copy of ``baseline`` with per-leg threshold overrides applied.
+
+    Only fields in ``TUNABLE_FIELDS`` are overridden; structural keys in an
+    override are ignored (with a warning) so a re-fit can never alter the leg
+    structure. ``overrides`` must have one dict per baseline leg.
+    """
+    if len(overrides) != len(baseline):
+        raise ValueError(
+            f"leg_overrides length {len(overrides)} != baseline legs "
+            f"{len(baseline)}"
+        )
+    out: list[dict[str, Any]] = []
+    for i, (leg, ov) in enumerate(zip(baseline, overrides)):
+        cfg = dict(leg["config"])
+        for k, v in (ov or {}).items():
+            if k not in TUNABLE_FIELDS:
+                logger.warning(
+                    "[mfp] leg %d: ignoring non-tunable override field %r "
+                    "(structure is fixed to baseline)", i, k,
+                )
+                continue
+            if k not in cfg:
+                logger.warning(
+                    "[mfp] leg %d: override field %r not in baseline config; "
+                    "skipping", i, k,
+                )
+                continue
+            cfg[k] = v
+        out.append({"family": leg["family"], "config": cfg})
+    return out
+
+
+def _symbol_supported(symbol: str) -> bool:
+    """True if ``symbol`` can run: baseline symbol, or has a promoted artifact."""
+    sym = symbol.upper()
+    if sym == BASELINE_SYMBOL:
+        return True
+    try:
+        from strategy.param_store import has_promoted
+    except Exception:  # noqa: BLE001
+        return False
+    return has_promoted(STRATEGY_ID, sym)
+
+
+def resolve_legs(symbol: str) -> list[dict[str, Any]]:
+    """Resolve the leg list for ``symbol``.
+
+    - ``BASELINE_SYMBOL`` (BTCUSDT): returns ``ALL_LEGS`` unchanged so the
+      discovered BTC portfolio is reproduced byte-for-byte.
+    - Other symbols: requires a promoted param artifact and applies its
+      ``leg_overrides`` to the fixed baseline structure.
+    """
+    sym = symbol.upper()
+    if sym == BASELINE_SYMBOL:
+        return ALL_LEGS
+    from strategy.param_store import load_promoted
+
+    art = load_promoted(STRATEGY_ID, sym)
+    if art is None or not art.leg_overrides:
+        raise ValueError(
+            f"MultiFactorPortfolioStrategy: no promoted parameter artifact for "
+            f"{sym}. Run scripts/discover_mfp_params.py --symbol {sym} to "
+            f"sweep+OOS-validate thresholds, then promote the result."
+        )
+    return _apply_leg_overrides(ALL_LEGS, art.leg_overrides)
+
+
+# ---------------------------------------------------------------------------
 # Vectorised helpers (mirror scripts/_alpha_lab/strategies.py)
 # ---------------------------------------------------------------------------
 def _zscore(x: np.ndarray, lookback: int) -> np.ndarray:
@@ -1100,10 +1199,13 @@ class MultiFactorPortfolioStrategy(Strategy):
             )
         self.symbol = str(ctx_symbol).upper()
 
-        if self.symbol != "BTCUSDT":
+        if not _symbol_supported(self.symbol):
             raise ValueError(
-                f"This portfolio is BTCUSDT-only (was discovered on BTC perp data). "
-                f"got: {self.symbol}"
+                f"MultiFactorPortfolioStrategy: symbol {self.symbol} is not "
+                f"enabled. The leg structure is fixed to the BTC-validated "
+                f"baseline; per-symbol thresholds must be discovered and "
+                f"promoted first "
+                f"(scripts/discover_mfp_params.py --symbol {self.symbol})."
             )
 
         if mode == "live":
@@ -1158,7 +1260,7 @@ class MultiFactorPortfolioStrategy(Strategy):
                 )
 
         self._unified = unified
-        self._legs = [_LegState(leg, unified) for leg in ALL_LEGS]
+        self._legs = [_LegState(leg, unified) for leg in resolve_legs(self.symbol)]
         self._committed_side = 0
         self._last_bar_ts = 0
         self._tail_ts_15m = int(unified["ts"].iloc[-1]) if len(unified) else 0
@@ -1232,7 +1334,7 @@ class MultiFactorPortfolioStrategy(Strategy):
 
         # 6) Build legs.
         self._unified = unified
-        self._legs = [_LegState(leg, unified) for leg in ALL_LEGS]
+        self._legs = [_LegState(leg, unified) for leg in resolve_legs(self.symbol)]
         self._committed_side = 0
         self._last_bar_ts = 0
         self._tail_ts_15m = int(unified["ts"].iloc[-1])
