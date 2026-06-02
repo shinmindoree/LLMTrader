@@ -13,14 +13,24 @@ import { useI18n } from "@/lib/i18n";
 const NAV_LINKS = [
   { href: "/chart", labelKey: "chart" as const },
   { href: "/dashboard", labelKey: "dashboard" as const },
-  { href: "/strategies", labelKey: "strategies" as const },
-  { href: "/backtest", labelKey: "backtest" as const },
-  { href: "/live", labelKey: "live" as const },
+  {
+    href: "/strategies",
+    labelKey: "directionalAlpha" as const,
+    match: ["/strategies", "/backtest", "/live"],
+  },
   { href: "/arbitrage", labelKey: "arbitrage" as const },
   { href: "/yield", labelKey: "yield" as const },
   { href: "/social", labelKey: "social" as const },
   { href: "/transfers", labelKey: "transfers" as const },
 ];
+
+function isNavActive(
+  pathname: string,
+  link: { href: string; match?: string[] },
+): boolean {
+  const prefixes = link.match ?? [link.href];
+  return prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
 
 export function Header() {
   const pathname = usePathname();
@@ -60,7 +70,7 @@ export function Header() {
           </Link>
           <nav className="ml-4 hidden items-center gap-1 sm:flex" aria-label="Main">
             {NAV_LINKS.map((link) => {
-              const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
+              const active = isNavActive(pathname, link);
               return (
                 <Link
                   key={link.href}
@@ -118,7 +128,7 @@ export function Header() {
         >
           <ul className="flex flex-col gap-1">
             {NAV_LINKS.map((link) => {
-              const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
+              const active = isNavActive(pathname, link);
               return (
                 <li key={link.href}>
                   <Link

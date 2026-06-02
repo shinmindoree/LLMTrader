@@ -4,35 +4,32 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 
-const TABS = [
-  { href: "/chart", labelKey: "chart" as const },
-  { href: "/dashboard", labelKey: "dashboard" as const },
-  {
-    href: "/strategies",
-    labelKey: "directionalAlpha" as const,
-    match: ["/strategies", "/backtest", "/live"],
-  },
-  { href: "/arbitrage", labelKey: "arbitrage" as const },
-  { href: "/yield", labelKey: "yield" as const },
-  { href: "/social", labelKey: "social" as const },
+export const DIRECTIONAL_ALPHA_PATHS = ["/strategies", "/backtest", "/live"];
+
+const SUB_TABS = [
+  { href: "/strategies", labelKey: "strategies" as const },
+  { href: "/backtest", labelKey: "backtest" as const },
+  { href: "/live", labelKey: "live" as const },
 ];
 
-function isActive(
-  pathname: string,
-  tab: { href: string; match?: string[] },
-): boolean {
-  const prefixes = tab.match ?? [tab.href];
-  return prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+export function isDirectionalAlphaPath(pathname: string): boolean {
+  return DIRECTIONAL_ALPHA_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
 }
 
-export function TradingTabs() {
+function isActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function DirectionalAlphaTabs() {
   const pathname = usePathname();
   const { t } = useI18n();
 
   return (
     <div className="flex shrink-0 border-b border-[#2a2e39] bg-[#1e222d]">
-      {TABS.map((tab) => {
-        const active = isActive(pathname, tab);
+      {SUB_TABS.map((tab) => {
+        const active = isActive(pathname, tab.href);
         return (
           <Link
             key={tab.href}
