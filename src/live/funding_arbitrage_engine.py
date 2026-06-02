@@ -44,10 +44,31 @@ _METRICS_REFRESH_EVERY_TICKS = 6  # ~60s
 _UNWIND_SLICES = 4
 _UNWIND_INTERVAL_SEC = 3
 _MIN_TRANSFER_USDT = 1.0
+# 상태 스냅샷이 이 시간(초)보다 오래되면 엔진이 죽은 것으로 간주한다.
+# 멀티-replica 환경에서 엔진을 소유하지 않은 replica가 좀비 "Running"을
+# 보고하지 않도록 하는 heartbeat staleness 임계치. tick 주기(10s)의 배수.
+_STATUS_STALE_SECONDS = 60
 
 
 def _snapshot_key(user_id: str) -> str:
     return f"funding_arb:{user_id}"
+
+
+def _control_key(user_id: str) -> str:
+    """desired-state(원하는 실행 여부) 전용 제어 키.
+
+    상태(observed) 스냅샷과 분리하여, 엔진의 주기적 상태 영속화가
+    stop 의도를 덮어쓰지 않도록 한다.
+    """
+    return f"funding_arb_ctl:{user_id}"
+
+
+def _is_stale(updated: datetime | None) -> bool:
+    if updated is None:
+        return True
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - updated).total_seconds() > _STATUS_STALE_SECONDS
 
 
 def _periods_per_year(interval_hours: float) -> float:
@@ -123,6 +144,82 @@ def get_engine_status(user_id: str) -> FundingArbitrageStatusResponse:
     )
 
 
+async def _set_desired_running(
+    session_maker: async_sessionmaker[AsyncSession], user_id: str, value: bool
+) -> None:
+    async with session_maker() as session:
+        await upsert_account_snapshot(
+            session,
+            key=_control_key(user_id),
+            data_json={"desired_running": bool(value)},
+        )
+        await session.commit()
+
+
+async def _get_desired_running(
+    session_maker: async_sessionmaker[AsyncSession], user_id: str
+) -> bool:
+    async with session_maker() as session:
+        snap = await get_account_snapshot(session, key=_control_key(user_id))
+    if not snap or not snap.data_json:
+        return True
+    return bool(snap.data_json.get("desired_running", True))
+
+
+async def get_engine_status_persisted(
+    session: AsyncSession, user_id: str
+) -> FundingArbitrageStatusResponse:
+    """모든 replica에서 일관된 상태를 반환한다.
+
+    이 replica가 엔진을 메모리에 들고 있으면 라이브 상태를 우선 사용하고,
+    아니면 DB 스냅샷(heartbeat=updated_at)을 읽어 staleness/desired-state를
+    반영해 보고한다. 멀티-replica 깜빡임과 좀비 Running을 방지한다.
+    """
+    desired = True
+    ctl = await get_account_snapshot(session, key=_control_key(user_id))
+    if ctl and ctl.data_json:
+        desired = bool(ctl.data_json.get("desired_running", True))
+
+    st = _engines.get(user_id)
+    if st is not None and st.running and desired:
+        return get_engine_status(user_id)
+
+    snap = await get_account_snapshot(session, key=_snapshot_key(user_id))
+    if not snap or not snap.data_json:
+        return FundingArbitrageStatusResponse(running=False, accumulated_funding_income=0.0)
+
+    d = snap.data_json
+    running = bool(d.get("running")) and desired and not _is_stale(snap.updated_at)
+
+    params = None
+    if d.get("params"):
+        try:
+            params = FundingArbitrageParams(**d["params"])
+        except Exception:  # noqa: BLE001
+            params = None
+
+    last_dt = None
+    last_ts = d.get("last_funding_ts")
+    if last_ts:
+        try:
+            last_dt = datetime.fromisoformat(last_ts)
+        except Exception:  # noqa: BLE001
+            last_dt = None
+
+    return FundingArbitrageStatusResponse(
+        running=running,
+        symbol=d.get("symbol"),
+        spot_qty=(d.get("spot_qty") or None),
+        futures_short_qty=(d.get("futures_short_qty") or None),
+        current_funding_rate=d.get("current_funding_rate"),
+        annualized_funding_pct=d.get("annualized_funding_pct"),
+        unrealized_pnl=d.get("unrealized_pnl"),
+        accumulated_funding_income=float(d.get("accumulated_funding_income") or 0.0),
+        last_funding_ts=last_dt,
+        params=params,
+    )
+
+
 async def start_engine(
     *,
     user_id: str,
@@ -158,6 +255,12 @@ async def start_engine(
 
     if session_maker is not None:
         await _restore_state(st)
+        # 제어 키에 desired_running=True를 기록하고, 초기 상태 스냅샷(heartbeat)을
+        # 즉시 남겨 다른 replica가 곧바로 Running을 일관되게 보고하도록 한다.
+        with contextlib.suppress(Exception):
+            await _set_desired_running(session_maker, user_id, True)
+        with contextlib.suppress(Exception):
+            await _persist_state(st)
 
     st._task = asyncio.create_task(_engine_loop(st), name=f"funding_arb_{user_id}")
     _log.info(
@@ -168,16 +271,27 @@ async def start_engine(
     )
 
 
-async def stop_engine(user_id: str) -> None:
+async def stop_engine(
+    user_id: str,
+    *,
+    session_maker: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    # 1) 제어 키에 stop 의도를 기록 → 엔진이 다른 replica에 있어도 다음 tick에 자가 종료.
+    if session_maker is not None:
+        with contextlib.suppress(Exception):
+            await _set_desired_running(session_maker, user_id, False)
+
+    # 2) 이 replica가 엔진을 들고 있으면 즉시 로컬 종료.
     st = _engines.get(user_id)
-    if not st or not st.running:
-        return
-    st.running = False
-    if st._task and not st._task.done():
-        st._task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await st._task
-    _log.info("Funding arbitrage engine stopped: user=%s", user_id)
+    if st and st.running:
+        st.running = False
+        if st._task and not st._task.done():
+            st._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await st._task
+        _log.info("Funding arbitrage engine stopped (local): user=%s", user_id)
+    else:
+        _log.info("Funding arbitrage stop intent recorded (remote/idle): user=%s", user_id)
 
 
 # ── base URL 도출 ──────────────────────────────────────────
@@ -202,6 +316,11 @@ async def _persist_state(st: _EngineState) -> None:
     if st.session_maker is None:
         return
 
+    ann = (
+        st.current_funding_rate * _periods_per_year(st.funding_interval_hours) * 100
+        if st.current_funding_rate is not None
+        else None
+    )
     data = {
         "running": st.running,
         "symbol": st.symbol,
@@ -210,7 +329,11 @@ async def _persist_state(st: _EngineState) -> None:
         "entry_mark_price": st.entry_mark_price,
         "entry_ts_ms": st.entry_ts_ms,
         "funding_interval_hours": st.funding_interval_hours,
+        "current_funding_rate": st.current_funding_rate,
+        "annualized_funding_pct": ann,
+        "unrealized_pnl": st.unrealized_pnl,
         "accumulated_funding_income": st.accumulated_funding_income,
+        "last_funding_ts": st.last_funding_ts.isoformat() if st.last_funding_ts else None,
         "params": st.params.model_dump() if st.params else None,
     }
     try:
@@ -268,16 +391,34 @@ async def _engine_loop(st: _EngineState) -> None:
                 "fundingInfo fetch failed — defaulting to %sh", _DEFAULT_FUNDING_INTERVAL_HOURS
             )
 
-        while st.running:
-            try:
-                await _tick(st, futures_client=futures_client, spot_client=spot_client)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception(
-                    "Tick error (user=%s) — retry in %ds", st.user_id, _POLL_INTERVAL_SEC
-                )
-            await asyncio.sleep(_POLL_INTERVAL_SEC)
+        try:
+            while st.running:
+                try:
+                    await _tick(st, futures_client=futures_client, spot_client=spot_client)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception(
+                        "Tick error (user=%s) — retry in %ds", st.user_id, _POLL_INTERVAL_SEC
+                    )
+                # 다른 replica에서 내려진 stop 의도를 반영해 자가 종료
+                if st.session_maker is not None:
+                    try:
+                        if not await _get_desired_running(st.session_maker, st.user_id):
+                            _log.info(
+                                "Stop intent detected — stopping engine user=%s", st.user_id
+                            )
+                            st.running = False
+                            break
+                    except Exception:  # noqa: BLE001
+                        _log.warning("desired_running check failed (user=%s)", st.user_id)
+                await asyncio.sleep(_POLL_INTERVAL_SEC)
+        finally:
+            # 종료 시 DB 상태를 running=False로 확정 (좀비 Running 방지)
+            st.running = False
+            with contextlib.suppress(Exception):
+                await _persist_state(st)
+            _engines.pop(st.user_id, None)
 
 
 async def _tick(
@@ -330,6 +471,10 @@ async def _tick(
             exit_threshold_ann,
         )
         await _unwind_position(st, futures_client=futures_client, spot_client=spot_client)
+
+    # heartbeat: 포지션이 없어도 매 tick 상태를 영속화하여 updated_at을 갱신한다.
+    # (멀티-replica status 일관성 + 엔진 생존 확인의 기준)
+    await _persist_state(st)
 
 
 # ── 시세/펀딩 조회 ─────────────────────────────────────────

@@ -1092,10 +1092,11 @@ def create_app() -> FastAPI:
     @app.get("/api/funding-arb/status", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_status(
         user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 현재 상태."""
-        from live.funding_arbitrage_engine import get_engine_status
-        return get_engine_status(user.user_id)
+        from live.funding_arbitrage_engine import get_engine_status_persisted
+        return await get_engine_status_persisted(session, user.user_id)
 
     @app.get("/api/funding-arb/screener", response_model=FundingScreenerResponse)
     async def funding_arb_screener(
@@ -1213,10 +1214,21 @@ def create_app() -> FastAPI:
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 시작."""
         from control.repo import get_binance_credential
-        from live.funding_arbitrage_engine import start_engine, get_engine_status
+        from live.funding_arbitrage_engine import (
+            start_engine,
+            get_engine_status_persisted,
+        )
         from common.crypto import get_crypto_service
 
         crypto = get_crypto_service()
+
+        # 멀티-replica 중복 진입 방지: 이미 (다른 replica 포함) 실행 중이면 거부
+        current = await get_engine_status_persisted(session, user.user_id)
+        if current.running:
+            raise HTTPException(
+                status_code=409,
+                detail=f"이미 실행 중입니다 (symbol={current.symbol}). 먼저 정지해 주세요.",
+            )
 
         if params.env == "testnet":
             fut_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet")
@@ -1264,16 +1276,20 @@ def create_app() -> FastAPI:
             is_testnet=is_testnet,
             session_maker=session_maker,
         )
-        return get_engine_status(user.user_id)
+        return await get_engine_status_persisted(session, user.user_id)
 
     @app.post("/api/funding-arb/stop", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_stop(
         user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 정지."""
-        from live.funding_arbitrage_engine import stop_engine, get_engine_status
-        await stop_engine(user.user_id)
-        return get_engine_status(user.user_id)
+        from live.funding_arbitrage_engine import (
+            stop_engine,
+            get_engine_status_persisted,
+        )
+        await stop_engine(user.user_id, session_maker=session_maker)
+        return await get_engine_status_persisted(session, user.user_id)
 
     @app.get(
         "/api/binance/futures/symbols",

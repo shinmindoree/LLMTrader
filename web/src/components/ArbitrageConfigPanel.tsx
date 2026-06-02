@@ -125,7 +125,16 @@ export function ArbitrageConfigPanel() {
               {running ? "Running" : "Idle"}
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-[#868993]">현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취</p>
+          <p className="mt-0.5 text-xs text-[#868993]">
+            {running && status?.symbol ? (
+              <>
+                <span className="font-mono font-semibold text-[#d1d4dc]">{status.symbol}</span>
+                {" · 현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"}
+              </>
+            ) : (
+              "현물 롱 + 선물 숏 · Delta-Neutral 펀딩비 수취"
+            )}
+          </p>
         </div>
         {running && (
           <button
