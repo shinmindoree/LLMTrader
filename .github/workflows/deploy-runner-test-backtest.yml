@@ -22,6 +22,7 @@ on:
     paths:
       - src/**
       - scripts/strategies/**
+      - data/strategy_params/**
       - pyproject.toml
       - uv.lock
       - infra/Dockerfile.runner

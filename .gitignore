@@ -29,7 +29,14 @@ alpha_lab_pass*.json
 engine_on_parquet.json
 run_bb_oi_q1.json
 scripts/_alpha_lab/
-data/
+data/*
+
+# Track strategy param artifacts as config-as-code: small JSON files that are
+# baked into the runner image (param_store resolves the local file first, so no
+# blob/env/network is needed). Re-include only this subtree; everything else
+# under data/ (parquet feeds, scratch json) stays ignored.
+!data/strategy_params
+!data/strategy_params/**
 
 # Local scratch directory
 .tmp/

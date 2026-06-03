@@ -14,6 +14,10 @@ build/
 .git/
 .DS_Store
 data/
+# Strategy param artifacts are config-as-code and must ship inside the runner
+# image (param_store local-first resolution). Re-include only this subtree.
+!data/strategy_params
+!data/strategy_params/**
 test/
 *.log
 scripts/*.log
