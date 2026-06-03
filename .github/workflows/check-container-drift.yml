@@ -9,9 +9,14 @@ name: Check Container Drift
 # frozen on an old image whose ORM still maps the now-deleted columns — every
 # profile read then raises UndefinedColumnError and LIVE jobs FAIL silently.
 #
-# This job compares the git-SHA image tags of all three containers. If the LIVE
-# runner has drifted behind the schema-owning containers, it fails loudly so an
-# operator redeploys the LIVE runner BEFORE the next destructive migration.
+# This job reads the git-SHA image tags of all three containers and compares
+# them by ANCESTRY (not naive string equality). It fails loudly ONLY when the
+# LIVE runner is a strict ancestor of — i.e. genuinely OLDER than — a
+# schema-owning container, so an operator redeploys the LIVE runner BEFORE the
+# next destructive migration. A bare SHA mismatch is not drift: main can
+# legitimately advance past api/backtest via a commit their `paths:` filters
+# skip (e.g. a docs-only commit) while the unfiltered LIVE workflow deploys main
+# HEAD, leaving LIVE strictly AHEAD — which is safe.
 #
 # It does NOT mutate anything; it only inspects and reports.
 
@@ -42,6 +47,17 @@ jobs:
       APP_LIVE: test-runner
       APP_BACKTEST: test-runner-backtest
     steps:
+      # Full history is required so we can reason about ANCESTRY between the
+      # image SHAs rather than naive string inequality. A plain SHA mismatch is
+      # not drift: main can legitimately advance past the schema-owning
+      # containers via a commit their `paths:` filters skip (e.g. a docs-only
+      # commit), while the LIVE workflow — which has no path filter — deploys
+      # main HEAD. That leaves LIVE strictly AHEAD, which is safe.
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -64,6 +80,23 @@ jobs:
           # Extract the part after the last ':' (the git-SHA tag).
           tag_of() { echo "${1##*:}"; }
 
+          # Classify the git relationship of SHA $1 relative to SHA $2:
+          #   same     - identical commit
+          #   behind   - $1 is a strict ancestor of $2 ($1 is OLDER)
+          #   ahead    - $1 is a strict descendant of $2 ($1 is NEWER)
+          #   diverged - no ancestor relationship in either direction
+          #   unknown  - one of the SHAs is absent from local git history
+          relation() {
+            a="$1"; b="$2"
+            if [ "${a}" = "${b}" ]; then echo "same"; return; fi
+            if ! git cat-file -e "${a}^{commit}" 2>/dev/null || ! git cat-file -e "${b}^{commit}" 2>/dev/null; then
+              echo "unknown"; return
+            fi
+            if git merge-base --is-ancestor "${a}" "${b}"; then echo "behind"; return; fi
+            if git merge-base --is-ancestor "${b}" "${a}"; then echo "ahead"; return; fi
+            echo "diverged"
+          }
+
           API_IMAGE="$(image_of "${APP_API}")"
           LIVE_IMAGE="$(image_of "${APP_LIVE}")"
           BACKTEST_IMAGE="$(image_of "${APP_BACKTEST}")"
@@ -71,6 +104,10 @@ jobs:
           API_SHA="$(tag_of "${API_IMAGE}")"
           LIVE_SHA="$(tag_of "${LIVE_IMAGE}")"
           BACKTEST_SHA="$(tag_of "${BACKTEST_IMAGE}")"
+
+          LIVE_VS_BACKTEST="$(relation "${LIVE_SHA}" "${BACKTEST_SHA}")"
+          LIVE_VS_API="$(relation "${LIVE_SHA}" "${API_SHA}")"
+          API_VS_BACKTEST="$(relation "${API_SHA}" "${BACKTEST_SHA}")"
 
           {
             echo "### Container image drift report"
@@ -80,23 +117,40 @@ jobs:
             echo "| ${APP_API} | schema-owner (api) | \`${API_SHA}\` |"
             echo "| ${APP_BACKTEST} | schema-owner (backtest, runs alembic) | \`${BACKTEST_SHA}\` |"
             echo "| ${APP_LIVE} | LIVE runner (manual deploy) | \`${LIVE_SHA}\` |"
+            echo ""
+            echo "Relations: LIVE→backtest = \`${LIVE_VS_BACKTEST}\`, LIVE→api = \`${LIVE_VS_API}\`, api→backtest = \`${API_VS_BACKTEST}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
           DRIFT=0
           MSG=""
 
-          if [ "${API_SHA}" != "${BACKTEST_SHA}" ]; then
+          # The ONLY dangerous condition is the LIVE runner executing code that is
+          # strictly OLDER than a schema-owning container: a destructive migration
+          # owned by api/backtest can drop columns the stale LIVE ORM still maps,
+          # making every LIVE profile read raise UndefinedColumnError. LIVE being
+          # equal to — or AHEAD of — the schema owners is safe.
+          if [ "${LIVE_VS_BACKTEST}" = "behind" ]; then
             DRIFT=1
-            MSG="${MSG}\n- api (${API_SHA}) and backtest (${BACKTEST_SHA}) disagree — these auto-deploy together and should always match."
+            MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is BEHIND the alembic-owning backtest container (${BACKTEST_SHA})."
+          fi
+          if [ "${LIVE_VS_API}" = "behind" ]; then
+            DRIFT=1
+            MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is BEHIND the schema-owning api container (${API_SHA})."
           fi
 
-          if [ "${LIVE_SHA}" != "${BACKTEST_SHA}" ]; then
+          # Inconclusive ancestry must not silently pass — a missing or diverged
+          # SHA could mask a real drift, so surface it for manual inspection.
+          if [ "${LIVE_VS_BACKTEST}" = "unknown" ] || [ "${LIVE_VS_API}" = "unknown" ]; then
             DRIFT=1
-            MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is behind the schema-owning containers (${BACKTEST_SHA})."
-            MSG="${MSG}\n  Redeploy it: \`gh workflow run deploy-runner-test-live.yml --ref main\` BEFORE merging any destructive migration."
+            MSG="${MSG}\n- Could not resolve git ancestry for a LIVE/schema-owner SHA (not found in history). Inspect manually."
+          fi
+          if [ "${LIVE_VS_BACKTEST}" = "diverged" ] || [ "${LIVE_VS_API}" = "diverged" ]; then
+            DRIFT=1
+            MSG="${MSG}\n- LIVE runner SHA has diverged from a schema owner (no ancestor relationship). Inspect manually."
           fi
 
           if [ "${DRIFT}" -eq 1 ]; then
+            MSG="${MSG}\n  Redeploy the LIVE runner: \`gh workflow run deploy-runner-test-live.yml --ref main\` BEFORE merging any destructive migration."
             {
               echo ""
               echo "#### ⚠️ DRIFT DETECTED"
@@ -106,5 +160,11 @@ jobs:
             exit 1
           fi
 
-          echo "All containers in sync at SHA ${BACKTEST_SHA}." >> "${GITHUB_STEP_SUMMARY}"
-          echo "All containers in sync at SHA ${BACKTEST_SHA}."
+          # Note (informational only): api and backtest can legitimately differ
+          # because their `paths:` filters trigger on different file sets, so a
+          # mismatch here is NOT failed — only a LIVE-behind state is.
+          {
+            echo ""
+            echo "✅ LIVE runner is not behind any schema-owning container."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "OK: LIVE runner is not behind any schema-owning container (LIVE→backtest=${LIVE_VS_BACKTEST}, LIVE→api=${LIVE_VS_API})."
