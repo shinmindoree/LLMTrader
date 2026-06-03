@@ -1072,20 +1072,91 @@ async def _unwind_position(
     await _persist_state(st)
 
 
+async def _sync_qty_from_exchange(
+    st: _EngineState,
+    *,
+    futures_client: httpx.AsyncClient,
+    spot_client: httpx.AsyncClient,
+) -> None:
+    """청산 직전, 거래소 실제 보유분으로 메모리 수량을 보정한다.
+
+    진입 tick이 끝나기 전(주문은 체결됐지만 ``st.spot_qty``/``futures_short_qty``가
+    아직 0)에 STOP되면 task가 ``await`` 지점에서 취소되어 수량이 메모리에 반영되지
+    않는다. 그 상태로 ``_liquidate_all``을 호출하면 (0,0)으로 보고 청산을 건너뛰어
+    거래소에 고아 포지션이 남는다. 이를 막기 위해 선물 positionRisk·현물 account를
+    조회해 거래소 실제 보유분을 메모리값과 ``max``로 합산한다. 조회 실패 시 안전하게
+    메모리값을 유지한다.
+
+    현물 base asset 잔고 전량을 청산 대상으로 본다 — 이 전략은 전용 계정에서
+    동작한다고 가정한다(전략이 직접 매수한 현물 롱 레그를 닫는다).
+    """
+    params = st.params
+    if params is None:
+        return
+
+    # 선물 실제 숏 포지션
+    with contextlib.suppress(Exception):
+        resp = await futures_client.get(
+            "/fapi/v2/positionRisk",
+            headers=_auth_headers(st.api_key),
+            params=_signed_params(st.api_secret, {"symbol": params.symbol}),
+        )
+        resp.raise_for_status()
+        for p in resp.json():
+            if p.get("positionSide") in ("SHORT", "BOTH"):
+                amt = abs(float(p.get("positionAmt") or 0.0))
+                if amt > st.futures_short_qty:
+                    st.futures_short_qty = amt
+
+    # 현물 실제 base asset 보유분
+    with contextlib.suppress(Exception):
+        base_asset = (
+            params.symbol[:-4] if params.symbol.endswith("USDT") else params.symbol
+        )
+        resp = await spot_client.get(
+            "/api/v3/account",
+            headers=_auth_headers(st.spot_api_key),
+            params=_signed_params(st.spot_api_secret, {}),
+        )
+        resp.raise_for_status()
+        balances: list[dict[str, Any]] = resp.json().get("balances", [])
+        free_base = next(
+            (float(b["free"]) for b in balances if b.get("asset") == base_asset),
+            0.0,
+        )
+        if free_base > st.spot_qty:
+            spot_flt = await _get_filter(
+                spot_client, st.spot_base, params.symbol, is_futures=False
+            )
+            # step/min 미만 dust는 청산 대상에서 제외 (주문 거부 방지)
+            if free_base >= max(spot_flt.min_qty, spot_flt.step_size):
+                st.spot_qty = _round_step(free_base, spot_flt.step_size)
+
+
 async def _liquidate_all(st: _EngineState) -> None:
     """보유 중인 현물·선물 레그를 전량 청산해 거래소 포지션을 비운다.
 
     STOP 또는 다른 replica의 desired=false 자가정지 시 호출한다. 자체 httpx
-    클라이언트를 열어 ``_unwind_position``으로 분할 청산한다. 보유분이 없으면
-    즉시 반환한다. 베스트-에포트로, 실패해도 정지 흐름을 막지 않는다.
+    클라이언트를 열어 ``_unwind_position``으로 분할 청산한다. 베스트-에포트로,
+    실패해도 정지 흐름을 막지 않는다.
+
+    먼저 ``_sync_qty_from_exchange``로 거래소 실제 보유분을 조회·보정한다.
+    이렇게 하면 진입 도중 STOP되어 메모리 수량이 0이어도 거래소에 체결된
+    포지션을 정확히 청산한다.
     """
-    if st.spot_qty <= 0 and st.futures_short_qty <= 0:
-        return
     try:
         async with (
             httpx.AsyncClient(base_url=st.futures_base, timeout=10.0) as futures_client,
             httpx.AsyncClient(base_url=st.spot_base, timeout=10.0) as spot_client,
         ):
+            await _sync_qty_from_exchange(
+                st, futures_client=futures_client, spot_client=spot_client
+            )
+            if st.spot_qty <= 0 and st.futures_short_qty <= 0:
+                _log.info(
+                    "Liquidate on stop: nothing to close (user=%s)", st.user_id
+                )
+                return
             _log.info(
                 "Liquidating on stop (user=%s): spot=%.6f short=%.6f",
                 st.user_id,
