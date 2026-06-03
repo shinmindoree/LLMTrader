@@ -58,6 +58,54 @@ oi / taker / LSR / funding 은 **Binance Vision 아카이브**(`data.binance.vis
 
 15m klines는 별도 백필이 필요할 수 있다 (BTC와 동일 방식).
 
+### ①-B 클라우드 UI 백테스트용 블롭 시딩 (전체 이력) — **신규 심볼 필수**
+
+> ⚠️ **증상**: 신규 심볼을 UI에서 백테스트하면 테스트 기간을 길게 잡아도
+> Trades가 **최근 1~2개월부터만** 나온다 (예: ETH가 온보딩 시점 이후부터만).
+>
+> **원인**: 클라우드 UI 백테스트는 5개 피드를 **blob parquet**
+> (`market-data/perp_meta/<SYM>_*.parquet`)에서 읽고, MFP의 `_load_unified_dataset`
+> 가 5피드를 **inner-join** 한다. 신규 심볼은 라이브 인제스터가 온보딩 시점부터만
+> self-seed 했기 때문에 blob 커버리지가 ~30일뿐이고, 그래서 join 결과가 늦게
+> 시작한다. (BTC는 과거에 Vision 백필로 blob에 전체 이력을 한 번 채웠기 때문에
+> 전 구간이 나온다.)
+
+블롭 스토리지(`teststrategies`)는 `publicNetworkAccess=Disabled` 라서 로컬·CI·
+Cloud Shell에서는 업로드할 수 없고, **VNet 안의 컨테이너 앱에서만** 쓸 수 있다.
+백테스트 러너 아이덴티티에 `Storage Blob Data Contributor`가 있으므로, 거기서
+일회성 시더를 실행해 전체 이력을 blob에 채운다.
+
+`scripts/seed_symbol_history.py` 는 전략-비종속 일회성 시더로, 5개 피드
+(klines via fapi / oi·taker·lsr·funding via Vision) 전체 이력을 만들어
+`market-data/perp_meta/<SYM>_*.parquet` 관례 경로로 업로드한다.
+
+```bash
+# 백테스트 러너의 현재 활성 리비전 확인
+az containerapp revision list -n test-runner-backtest -g <rg> \
+  --query "[?properties.active].name" -o tsv
+
+# 컨테이너 안에서 실행 (venv python 필수 — 기본 python엔 pandas 없음)
+az containerapp exec -n test-runner-backtest -g <rg> \
+  --revision <active-revision> --command /bin/sh
+#   컨테이너 셸에서:
+cd /app
+nohup /app/.venv/bin/python -u scripts/seed_symbol_history.py \
+  --symbol ETHUSDT > /tmp/seed_eth.log 2>&1 &
+#   exec 세션은 명령 종료 시 자동 끊기므로 nohup 백그라운드 + 폴링(tail) 패턴 사용
+```
+
+완료 로그의 `[blob] ... <SYM>_*.parquet: N rows  <min> .. <max>` 에서 각 피드가
+전체 이력(klines 상장일, oi/taker/lsr 2021-12~, funding 상장월~)으로 커버되는지
+확인한다. 이후 UI 백테스트는 전 구간 Trades를 보여준다.
+
+> 📌 `seed_symbol_history.py` 는 `--skip-upload` 로 **로컬 피드만** 만들 수도 있어
+> 다음 단계(②)의 `discover_mfp_params.py` 입력 데이터로 바로 쓸 수 있다. 즉
+> 로컬 최적화용과 클라우드 백테스트용을 한 스크립트로 커버한다.
+>
+> 📌 이 스크립트는 운영 스크립트라 `scripts/**` 자동배포 트리거에 걸리지 않는다.
+> 새로 추가/수정했다면 `deploy-runner-test-backtest.yml` 을 **수동 dispatch** 해
+> 이미지에 굽고 나서 exec 한다.
+
 ### ② 재최적화 + OOS 검증 (먼저 `validated`로)
 
 `--promote` 없이 실행해 결과를 **먼저 눈으로 검토**하는 것을 권장한다.
@@ -183,6 +231,7 @@ az containerapp update -g <rg> -n <runner> \
 
 ```
 [ ] 5개 parquet 피드 확보 (backfill_vision.py 전체이력 + klines 백필)
+[ ] 클라우드 UI 백테스트 시: seed_symbol_history.py 로 blob 전체이력 시딩 (백테스트 러너 안 exec)
 [ ] discover_mfp_params.py --symbol XXX  (validated)
 [ ] portfolio gate passed=True 확인
 [ ] leg별 TRAIN/TEST 수익·pf 검토
@@ -203,6 +252,7 @@ az containerapp update -g <rg> -n <runner> \
 |------|------|
 | `src/strategy/param_store.py` | `(strategy_id, symbol)` 파라미터 아티팩트 스토어 (local / env / Azure Blob). |
 | `scripts/discover_mfp_params.py` | 심볼별 임계값 sweep + OOS 검증 + 아티팩트 emit 드라이버. |
+| `scripts/seed_symbol_history.py` | 전략-비종속 일회성 전체이력 시더. 5피드(klines/oi/taker/lsr/funding)를 만들어 blob 관례경로로 업로드 (`--skip-upload`=로컬만, `--skip-local`=blob만). 클라우드 UI 백테스트 전체이력 확보용. 백테스트 러너 안에서 exec. |
 | `scripts/strategies/multi_factor_portfolio_strategy.py` | `resolve_legs` / `_symbol_supported` / `TUNABLE_FIELDS` / `_apply_leg_overrides`. |
 | `scripts/ingest_perp_meta.py` | OI/funding/taker/LSR parquet 인제스터. |
 | `data/strategy_params/<strategy_id>/<SYMBOL>.json` | 저장된 파라미터 아티팩트. |
