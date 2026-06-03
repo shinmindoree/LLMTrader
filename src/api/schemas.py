@@ -508,6 +508,8 @@ class FundingArbitrageStatusResponse(BaseModel):
     next_funding_time: datetime | None = None
     unrealized_pnl: float | None = None
     accumulated_funding_income: float
+    entry_fee: float | None = None  # 진입 누적 수수료(USDT)
+    exit_fee: float | None = None   # 청산 누적 수수료(USDT)
     last_funding_ts: datetime | None = None
     params: FundingArbitrageParams | None = None
     last_error: str | None = None

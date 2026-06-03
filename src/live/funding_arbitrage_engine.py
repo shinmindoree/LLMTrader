@@ -109,6 +109,8 @@ class _EngineState:
     next_funding_time_ms: int | None = None
     unrealized_pnl: float | None = None
     accumulated_funding_income: float = 0.0
+    entry_fee_usdt: float = 0.0  # 진입(현물 매수+선물 숏) 누적 수수료(USDT)
+    exit_fee_usdt: float = 0.0   # 청산(현물 매도+선물 매수) 누적 수수료(USDT)
     last_funding_ts: datetime | None = None
     params: FundingArbitrageParams | None = None
     last_error: str | None = None
@@ -161,6 +163,8 @@ def get_engine_status(user_id: str) -> FundingArbitrageStatusResponse:
         next_funding_time=_ms_to_dt(st.next_funding_time_ms),
         unrealized_pnl=st.unrealized_pnl,
         accumulated_funding_income=st.accumulated_funding_income,
+        entry_fee=st.entry_fee_usdt or None,
+        exit_fee=st.exit_fee_usdt or None,
         last_funding_ts=st.last_funding_ts,
         params=st.params,
         last_error=st.last_error,
@@ -276,6 +280,8 @@ async def get_engine_status_persisted(
         next_funding_time=_ms_to_dt(d.get("next_funding_time_ms")),
         unrealized_pnl=d.get("unrealized_pnl"),
         accumulated_funding_income=float(d.get("accumulated_funding_income") or 0.0),
+        entry_fee=(d.get("entry_fee_usdt") or None),
+        exit_fee=(d.get("exit_fee_usdt") or None),
         last_funding_ts=last_dt,
         params=params,
         last_error=d.get("last_error"),
@@ -447,6 +453,8 @@ async def _persist_state(st: _EngineState) -> None:
         "annualized_funding_pct": ann,
         "unrealized_pnl": st.unrealized_pnl,
         "accumulated_funding_income": st.accumulated_funding_income,
+        "entry_fee_usdt": st.entry_fee_usdt,
+        "exit_fee_usdt": st.exit_fee_usdt,
         "last_funding_ts": st.last_funding_ts.isoformat() if st.last_funding_ts else None,
         "last_error": st.last_error,
         "params": st.params.model_dump() if st.params else None,
@@ -479,6 +487,8 @@ async def _restore_state(st: _EngineState) -> None:
         st.entry_mark_price = float(data.get("entry_mark_price") or 0.0)
         st.entry_ts_ms = data.get("entry_ts_ms")
         st.accumulated_funding_income = float(data.get("accumulated_funding_income") or 0.0)
+        st.entry_fee_usdt = float(data.get("entry_fee_usdt") or 0.0)
+        st.exit_fee_usdt = float(data.get("exit_fee_usdt") or 0.0)
         if st.spot_qty or st.futures_short_qty:
             _log.info(
                 "Restored open position user=%s spot=%.6f short=%.6f",
@@ -941,6 +951,7 @@ async def _enter_position(
         )
         filled = _resolved_filled_qty(spot_order, qty)
         st.spot_qty = filled
+        st.entry_fee_usdt += _spot_commission_usdt(spot_order, params.symbol)
         st.last_error = None
         _log.info("Spot BUY filled (user=%s): qty=%s", st.user_id, qty_str)
     except Exception as exc:
@@ -963,6 +974,9 @@ async def _enter_position(
             position_side=position_side,
         )
         st.futures_short_qty = _resolved_filled_qty(fut_order, fut_qty)
+        st.entry_fee_usdt += await _fetch_futures_commission_usdt(
+            futures_client, st=st, symbol=params.symbol, order=fut_order
+        )
         st.entry_mark_price = mark_price
         st.entry_ts_ms = int(time.time() * 1000)
         st.last_error = None
@@ -986,7 +1000,7 @@ async def _rollback_spot_leg(
     params = st.params
     assert params is not None
     try:
-        await _place_spot_order(
+        rb_order = await _place_spot_order(
             client=spot_client,
             api_key=st.spot_api_key,
             api_secret=st.spot_api_secret,
@@ -994,6 +1008,7 @@ async def _rollback_spot_leg(
             side="SELL",
             qty_str=qty_str,
         )
+        st.exit_fee_usdt += _spot_commission_usdt(rb_order, params.symbol)
         _log.info("Rolled back orphaned spot leg (user=%s): qty=%s", st.user_id, qty_str)
     except Exception:
         _log.exception(
@@ -1036,7 +1051,7 @@ async def _unwind_position(
         fut_qty = fut_remaining if is_last else min(fut_slice, fut_remaining)
         try:
             if spot_qty > 0:
-                await _place_spot_order(
+                spot_order = await _place_spot_order(
                     client=spot_client,
                     api_key=st.spot_api_key,
                     api_secret=st.spot_api_secret,
@@ -1044,9 +1059,10 @@ async def _unwind_position(
                     side="SELL",
                     qty_str=_fmt_qty(spot_qty, spot_flt.step_size),
                 )
+                st.exit_fee_usdt += _spot_commission_usdt(spot_order, params.symbol)
                 spot_remaining -= spot_qty
             if fut_qty > 0:
-                await _place_futures_order(
+                fut_order = await _place_futures_order(
                     client=futures_client,
                     api_key=st.api_key,
                     api_secret=st.api_secret,
@@ -1054,6 +1070,9 @@ async def _unwind_position(
                     side="BUY",
                     qty_str=_fmt_qty(fut_qty, fut_flt.step_size),
                     position_side=position_side,
+                )
+                st.exit_fee_usdt += await _fetch_futures_commission_usdt(
+                    futures_client, st=st, symbol=params.symbol, order=fut_order
                 )
                 fut_remaining -= fut_qty
             _log.info("Unwind slice %d/%d done (user=%s)", i + 1, _UNWIND_SLICES, st.user_id)
@@ -1267,7 +1286,7 @@ async def _place_spot_order(
             "side": side,
             "type": "MARKET",
             "quantity": qty_str,
-            "newOrderRespType": "RESULT",
+            "newOrderRespType": "FULL",
         },
     )
     resp = await client.post("/api/v3/order", headers=_auth_headers(api_key), data=params)
@@ -1299,6 +1318,70 @@ async def _place_futures_order(
     resp = await client.post("/fapi/v1/order", headers=_auth_headers(api_key), data=params)
     resp.raise_for_status()
     return resp.json()  # type: ignore[no-any-return]
+
+
+# ── 수수료(커미션) 산출 ────────────────────────────────────
+
+
+def _base_quote(symbol: str) -> tuple[str, str]:
+    """심볼에서 (base, quote) 자산을 도출. 본 전략은 USDT 마켓을 가정한다."""
+    if symbol.endswith("USDT"):
+        return symbol[:-4], "USDT"
+    if symbol.endswith("USDC"):
+        return symbol[:-4], "USDC"
+    return symbol, "USDT"
+
+
+def _spot_commission_usdt(order: dict[str, Any], symbol: str) -> float:
+    """현물 주문 FULL 응답의 fills에서 수수료 합계를 USDT로 환산한다.
+
+    - 수수료 자산이 quote(USDT)면 그대로 합산
+    - base 자산(시장가 매수 시 흔함)이면 체결가를 곱해 USDT 환산
+    - 그 외(예: BNB 차감)는 신뢰 환산 불가 → 0으로 처리(베스트-에포트)
+    """
+    base, quote = _base_quote(symbol)
+    total = 0.0
+    for f in order.get("fills") or []:
+        comm = float(f.get("commission") or 0.0)
+        if comm <= 0:
+            continue
+        asset = f.get("commissionAsset")
+        if asset == quote:
+            total += comm
+        elif asset == base:
+            total += comm * float(f.get("price") or 0.0)
+    return total
+
+
+async def _fetch_futures_commission_usdt(
+    client: httpx.AsyncClient,
+    *,
+    st: _EngineState,
+    symbol: str,
+    order: dict[str, Any],
+) -> float:
+    """선물 주문 체결 수수료를 userTrades(orderId)로 조회한다.
+
+    선물 주문 응답에는 수수료가 없다. USDT-마진 계약은 commission이 USDT로
+    표기되므로 그대로 합산한다. 조회 실패 시 0을 반환(베스트-에포트).
+    """
+    order_id = order.get("orderId")
+    if order_id is None:
+        return 0.0
+    try:
+        resp = await client.get(
+            "/fapi/v1/userTrades",
+            headers=_auth_headers(st.api_key),
+            params=_signed_params(st.api_secret, {"symbol": symbol, "orderId": order_id}),
+        )
+        resp.raise_for_status()
+        trades: list[dict[str, Any]] = resp.json()
+        return sum(abs(float(t.get("commission") or 0.0)) for t in trades)
+    except Exception:
+        _log.warning(
+            "Failed to fetch futures commission (user=%s order=%s)", st.user_id, order_id
+        )
+        return 0.0
 
 
 async def _universal_transfer(

@@ -562,6 +562,26 @@ export function ArbitrageConfigPanel() {
                     }
                   />
                 </div>
+                <Stat
+                  label="진입 수수료 (Entry Fee)"
+                  value={status.entry_fee != null ? `-$${fmt2(status.entry_fee)}` : "—"}
+                  valueClass={status.entry_fee ? "text-[#ef5350]" : "text-[#868993]"}
+                  hint="현물 매수 + 선물 숏 체결 수수료 합"
+                />
+                <Stat
+                  label="청산 수수료 (Exit Fee)"
+                  value={status.exit_fee != null ? `-$${fmt2(status.exit_fee)}` : "—"}
+                  valueClass={status.exit_fee ? "text-[#ef5350]" : "text-[#868993]"}
+                  hint="현물 매도 + 선물 매수 체결 수수료 합"
+                />
+                <div className="col-span-2">
+                  <Stat
+                    label="총 수수료 (Total Fees)"
+                    value={`-$${fmt2((status.entry_fee ?? 0) + (status.exit_fee ?? 0))}`}
+                    valueClass="text-[#d1d4dc]"
+                    hint="진입 + 청산 수수료 합 · 펀딩 수익에서 차감되는 실비용"
+                  />
+                </div>
               </div>
 
               {status.last_error && (

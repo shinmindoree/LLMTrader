@@ -504,6 +504,8 @@ export type FundingArbitrageStatusResponse = {
   next_funding_time: string | null;
   unrealized_pnl: number | null;
   accumulated_funding_income: number;
+  entry_fee: number | null;
+  exit_fee: number | null;
   last_funding_ts: string | null;
   params: FundingArbitrageParams | null;
   last_error: string | null;
