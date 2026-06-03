@@ -80,7 +80,7 @@ jobs:
               REDIS_PORT=6380 \
               REDIS_SSL=true \
               REDIS_USERNAME="${REDIS_AAD_USERNAME}" \
-              MFP_SYMBOLS=BTCUSDT \
+              MFP_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT \
               MFP_INDICATORS=funding,taker,lsr \
               MFP_POLL_SECONDS=300 \
               MFP_FUNDING_POLL_SECONDS=1800 \

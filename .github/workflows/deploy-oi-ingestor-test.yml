@@ -82,7 +82,7 @@ jobs:
               REDIS_PORT=6380 \
               REDIS_SSL=true \
               REDIS_USERNAME="${REDIS_AAD_USERNAME}" \
-              OI_SYMBOLS=BTCUSDT \
+              OI_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT \
               OI_POLL_SECONDS=300 \
               OI_TRIM_HOURS=720 \
               OI_BACKFILL_HOURS=720 \
