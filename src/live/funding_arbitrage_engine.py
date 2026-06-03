@@ -383,9 +383,10 @@ async def stop_engine(
             await _set_desired_running(session_maker, user_id, False)
 
     st = _engines.get(user_id)
-    if not st or not st.running:
-        # 로컬에 없더라도 desired=false는 위에서 기록됨 → 소유 replica가 자가 정지.
-        # 마지막으로 관측 스냅샷의 running을 내려 즉시 일관성을 확보한다.
+    if st is None:
+        # 로컬에 엔진이 없다 → 다른 replica가 소유 중. desired=false는 위에서
+        # 기록됐으므로 소유 replica가 자가 정지·청산한다. 마지막으로 관측
+        # 스냅샷의 running을 내려 즉시 일관성을 확보한다.
         if session_maker is not None:
             with contextlib.suppress(Exception):
                 async with session_maker() as session:
@@ -398,14 +399,20 @@ async def stop_engine(
                         )
                         await session.commit()
         return
+
+    # 로컬 엔진 존재 → 루프 task를 멈추고 최종 청산을 보장한다. 루프가 이미
+    # self-stop 경로로 running=false를 만들고 청산 도중이었더라도, 그 청산은
+    # 아래 task.cancel()로 잘릴 수 있으므로 여기서 거래소 동기화+스윕을 다시
+    # 수행해 완전 청산을 보장한다(_liquidate_all은 멱등적).
     st.running = False
     if st._task and not st._task.done():
         st._task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await st._task
-    # 거래소 포지션 청산: 현물 SELL + 선물 BUY로 델타 노출 해소
+    # 거래소 포지션 청산: 현물 SELL + 선물 BUY로 델타 노출 해소.
+    # asyncio.shield로 감싸 HTTP 요청이 취소돼도 청산이 중도에 잘리지 않게 한다.
     with contextlib.suppress(Exception):
-        await _liquidate_all(st)
+        await asyncio.shield(_liquidate_all(st))
     with contextlib.suppress(Exception):
         await _persist_state(st)
     _log.info("Funding arbitrage engine stopped: user=%s replica=%s", user_id, _REPLICA_ID)
@@ -605,13 +612,10 @@ async def _engine_loop(st: _EngineState) -> None:
                             ctl_instance,
                         )
                         st.running = False
-                        # 거래소 포지션 청산(현재 루프의 클라이언트 재사용)
+                        # 거래소 포지션 청산 — _liquidate_all은 거래소 실제 잔량을
+                        # 동기화하고 최종 스윕까지 수행해 완전 청산을 보장한다.
                         with contextlib.suppress(Exception):
-                            await _unwind_position(
-                                st,
-                                futures_client=futures_client,
-                                spot_client=spot_client,
-                            )
+                            await _liquidate_all(st)
                         # 좀비가 교체된 경우 관측 스냅샷을 덮어쓰지 않는다(새 엔진이
                         # 이미 자신의 상태를 기록 중). desired=false로 멈춘 경우에만 기록.
                         if not superseded:
@@ -1078,17 +1082,121 @@ async def _unwind_position(
             _log.info("Unwind slice %d/%d done (user=%s)", i + 1, _UNWIND_SLICES, st.user_id)
         except Exception:
             _log.exception("Unwind slice %d failed (user=%s)", i + 1, st.user_id)
+        # 매 슬라이스 후 남은 수량을 상태에 반영·저장한다. 청산이 도중에 취소돼도
+        # st 수량이 거래소 실제 잔량과 어긋나지 않도록 한다.
+        st.spot_qty = max(spot_remaining, 0.0)
+        st.futures_short_qty = max(fut_remaining, 0.0)
+        with contextlib.suppress(Exception):
+            await _persist_state(st)
         if not is_last:
             await asyncio.sleep(_UNWIND_INTERVAL_SEC)
 
-    st.spot_qty = max(spot_remaining, 0.0)
-    st.futures_short_qty = max(fut_remaining, 0.0)
-    if st.spot_qty == 0.0 and st.futures_short_qty == 0.0:
+    # 분할 청산이 부분 실패·취소·반올림 잔여로 포지션을 남길 수 있다. 거래소 실제
+    # 잔량을 다시 조회해 한 번에 강제 정리(스윕)하여 완전 청산을 보장한다.
+    await _sweep_residual(st, futures_client=futures_client, spot_client=spot_client)
+
+    if st.spot_qty <= 0.0 and st.futures_short_qty <= 0.0:
+        st.spot_qty = 0.0
+        st.futures_short_qty = 0.0
         st.entry_mark_price = 0.0
         st.entry_ts_ms = None
         st.unrealized_pnl = None
         _log.info("Position fully unwound (user=%s)", st.user_id)
     await _persist_state(st)
+
+
+async def _sweep_residual(
+    st: _EngineState,
+    *,
+    futures_client: httpx.AsyncClient,
+    spot_client: httpx.AsyncClient,
+) -> None:
+    """거래소 실제 잔량을 조회해 남은 양 레그를 한 번에 강제 청산한다.
+
+    분할 청산(_unwind_position)이 부분 실패·취소·반올림으로 포지션을 남길 수
+    있으므로, 최종적으로 거래소 실제 보유분을 단일 시장가 주문으로 정리해
+    완전 청산을 보장한다. 멱등하다 — 잔량이 없으면 아무것도 하지 않는다.
+    베스트-에포트로 동작하며, 실패해도 예외를 전파하지 않는다.
+    """
+    params = st.params
+    if params is None:
+        return
+    base, _quote = _base_quote(params.symbol)
+
+    # 1) 선물 잔여 숏 강제 청산 (reduceOnly 시장가 BUY)
+    with contextlib.suppress(Exception):
+        resp = await futures_client.get(
+            "/fapi/v2/positionRisk",
+            headers=_auth_headers(st.api_key),
+            params=_signed_params(st.api_secret, {"symbol": params.symbol}),
+        )
+        resp.raise_for_status()
+        residual_short = 0.0
+        for p in resp.json():
+            if p.get("positionSide") in ("SHORT", "BOTH"):
+                residual_short = max(residual_short, abs(float(p.get("positionAmt") or 0.0)))
+        if residual_short > 0:
+            fut_flt = await _get_filter(
+                futures_client, st.futures_base, params.symbol, is_futures=True
+            )
+            qty = _round_step(residual_short, fut_flt.step_size)
+            if qty >= max(fut_flt.min_qty, fut_flt.step_size):
+                position_side = await _resolve_position_side(st, futures_client)
+                _log.info(
+                    "Sweep: force-closing residual futures short %.6f (user=%s)",
+                    qty,
+                    st.user_id,
+                )
+                fut_order = await _place_futures_order(
+                    client=futures_client,
+                    api_key=st.api_key,
+                    api_secret=st.api_secret,
+                    symbol=params.symbol,
+                    side="BUY",
+                    qty_str=_fmt_qty(qty, fut_flt.step_size),
+                    position_side=position_side,
+                    reduce_only=True,
+                )
+                st.exit_fee_usdt += await _fetch_futures_commission_usdt(
+                    futures_client, st=st, symbol=params.symbol, order=fut_order
+                )
+                st.futures_short_qty = 0.0
+
+    # 2) 현물 잔여 base 자산 강제 매도
+    with contextlib.suppress(Exception):
+        resp = await spot_client.get(
+            "/api/v3/account",
+            headers=_auth_headers(st.spot_api_key),
+            params=_signed_params(st.spot_api_secret, {}),
+        )
+        resp.raise_for_status()
+        balances: list[dict[str, Any]] = resp.json().get("balances", [])
+        free_base = next(
+            (float(b["free"]) for b in balances if b.get("asset") == base),
+            0.0,
+        )
+        if free_base > 0:
+            spot_flt = await _get_filter(
+                spot_client, st.spot_base, params.symbol, is_futures=False
+            )
+            qty = _round_step(free_base, spot_flt.step_size)
+            if qty >= max(spot_flt.min_qty, spot_flt.step_size):
+                _log.info(
+                    "Sweep: force-selling residual spot %.6f %s (user=%s)",
+                    qty,
+                    base,
+                    st.user_id,
+                )
+                spot_order = await _place_spot_order(
+                    client=spot_client,
+                    api_key=st.spot_api_key,
+                    api_secret=st.spot_api_secret,
+                    symbol=params.symbol,
+                    side="SELL",
+                    qty_str=_fmt_qty(qty, spot_flt.step_size),
+                )
+                st.exit_fee_usdt += _spot_commission_usdt(spot_order, params.symbol)
+                st.spot_qty = 0.0
 
 
 async def _sync_qty_from_exchange(
@@ -1303,18 +1411,21 @@ async def _place_futures_order(
     side: str,
     qty_str: str,
     position_side: str = "BOTH",
+    reduce_only: bool = False,
 ) -> dict[str, Any]:
-    params = _signed_params(
-        api_secret,
-        {
-            "symbol": symbol,
-            "side": side,
-            "positionSide": position_side,
-            "type": "MARKET",
-            "quantity": qty_str,
-            "newOrderRespType": "RESULT",
-        },
-    )
+    order_params: dict[str, Any] = {
+        "symbol": symbol,
+        "side": side,
+        "positionSide": position_side,
+        "type": "MARKET",
+        "quantity": qty_str,
+        "newOrderRespType": "RESULT",
+    }
+    # reduceOnly는 원웨이('BOTH') 모드에서만 허용된다. 헤지 모드에서 positionSide와
+    # 함께 보내면 -1106 오류가 나므로 BOTH일 때만 추가한다.
+    if reduce_only and position_side == "BOTH":
+        order_params["reduceOnly"] = "true"
+    params = _signed_params(api_secret, order_params)
     resp = await client.post("/fapi/v1/order", headers=_auth_headers(api_key), data=params)
     resp.raise_for_status()
     return resp.json()  # type: ignore[no-any-return]
