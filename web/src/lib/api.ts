@@ -705,8 +705,9 @@ export async function stopFundingArb(): Promise<
 
 export async function getFundingScreener(
   topN = 5,
+  env: "mainnet" | "testnet" = "mainnet",
 ): Promise<import("@/lib/types").FundingScreenerResponse> {
-  return json(`/api/backend/api/funding-arb/screener?top_n=${topN}`);
+  return json(`/api/backend/api/funding-arb/screener?top_n=${topN}&env=${env}`);
 }
 
 export async function listFuturesSymbols(): Promise<string[]> {

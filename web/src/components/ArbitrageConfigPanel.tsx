@@ -77,8 +77,8 @@ export function ArbitrageConfigPanel() {
     refreshInterval: (latest) => (latest?.running ? REFRESH_MS_RUNNING : REFRESH_MS),
   });
   const { data: screener, isLoading: screenerLoading } = useSWR(
-    "funding-arb-screener",
-    () => getFundingScreener(5),
+    ["funding-arb-screener", env],
+    () => getFundingScreener(5, env),
     { refreshInterval: SCREENER_REFRESH_MS },
   );
 

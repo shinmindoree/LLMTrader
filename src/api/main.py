@@ -215,24 +215,29 @@ def _resolve_funding_deadband(symbol: str, hold_days: int) -> tuple[float, float
 # 펀딩 차익거래는 현물 롱 + 선물 숏 구조이므로 후보 심볼은 반드시 현물 시장에도 상장돼야 한다.
 # Binance 데모(testnet) 현물은 mainnet 현물 상장 목록을 그대로 미러링하므로, mainnet 현물
 # universe를 두 환경 공통 필터로 사용한다. exchangeInfo 페이로드가 크므로 1시간 캐시한다.
-_SPOT_SYMBOLS_CACHE: dict[str, Any] = {"symbols": set(), "ts": 0.0}
+_SPOT_SYMBOLS_CACHE: dict[str, Any] = {}
 _SPOT_SYMBOLS_TTL = 3600.0
 
 
-async def _fetch_tradable_spot_symbols() -> set[str]:
+async def _fetch_tradable_spot_symbols(testnet: bool = False) -> set[str]:
     """현재 거래(TRADING) 가능한 현물 심볼 집합을 반환(1시간 캐시).
 
     조회 실패 시 마지막으로 캐시된 집합(없으면 빈 집합)을 반환하여, 스크리너가
     필터 때문에 전부 비는 일이 없도록 한다(빈 집합이면 호출 측에서 필터를 건너뜀).
+
+    testnet=True이면 데모 트레이딩 현물(demo-api.binance.com)을 조회한다.
+    운영망과 캐시를 분리하여 환경별 상장 차이를 정확히 반영한다.
     """
     import time as _time
 
     now = _time.time()
-    cached = _SPOT_SYMBOLS_CACHE
+    cache_key = "testnet" if testnet else "mainnet"
+    cached = _SPOT_SYMBOLS_CACHE.setdefault(cache_key, {"symbols": set(), "ts": 0.0})
     if cached["symbols"] and (now - cached["ts"]) < _SPOT_SYMBOLS_TTL:
         return cached["symbols"]
+    base_url = "https://demo-api.binance.com" if testnet else "https://api.binance.com"
     try:
-        async with httpx.AsyncClient(base_url="https://api.binance.com", timeout=10.0) as client:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
             resp = await client.get("/api/v3/exchangeInfo")
             resp.raise_for_status()
             syms = {
@@ -241,8 +246,8 @@ async def _fetch_tradable_spot_symbols() -> set[str]:
                 if isinstance(s, dict) and s.get("status") == "TRADING"
             }
         if syms:
-            _SPOT_SYMBOLS_CACHE["symbols"] = syms
-            _SPOT_SYMBOLS_CACHE["ts"] = now
+            cached["symbols"] = syms
+            cached["ts"] = now
         return syms
     except Exception:
         _log.warning("Failed to fetch spot symbols for screener filter", exc_info=True)
@@ -1138,15 +1143,28 @@ def create_app() -> FastAPI:
     @app.get("/api/funding-arb/screener", response_model=FundingScreenerResponse)
     async def funding_arb_screener(
         top_n: int = 5,
+        env: str = "mainnet",
         user: AuthenticatedUser = Depends(require_auth),  # noqa: ARG001
     ) -> FundingScreenerResponse:
         """현재 펀딩비가 높고 통계적으로 유리한 종목 Top-N 스크리너.
 
         Redis에 캐시된 AR(1)/OU half-life 통계를 읽고, Binance /fapi/v1/premiumIndex로
         실시간 펀딩비를 조회하여 score = current_rate / entry_threshold 기준으로 정렬.
+
+        ``env`` 가 ``testnet`` 이면 데모 트레이딩(testnet.binancefuture.com 선물 +
+        demo-api.binance.com 현물)의 실제 펀딩비·상장을 반영한다. Testnet 펀딩비는
+        운영망과 부호·크기가 전혀 다르므로(예: 운영망 +0.01% 인데 testnet −0.34%),
+        엔진이 실제로 보게 될 값으로 스크리닝해야 "양수처럼 보이는데 진입 안 됨"
+        혼란을 막는다. half-life 통계는 운영망 OU 적합 결과를 그대로 사용한다
+        (testnet은 통계 표본이 없음).
         """
         import json as _json
         from datetime import timezone
+
+        is_testnet = env == "testnet"
+        fut_base = (
+            "https://testnet.binancefuture.com" if is_testnet else "https://fapi.binance.com"
+        )
 
         ROUNDTRIP = _FUNDING_ROUNDTRIP_COST
         DEFAULT_INTERVAL_H = 8.0
@@ -1200,7 +1218,7 @@ def create_app() -> FastAPI:
         # Binance /fapi/v1/premiumIndex (인수 없이 호출 시 전체 종목 반환)
         try:
             async with httpx.AsyncClient(
-                base_url="https://fapi.binance.com", timeout=10.0
+                base_url=fut_base, timeout=10.0
             ) as client:
                 resp = await client.get("/fapi/v1/premiumIndex")
                 resp.raise_for_status()
@@ -1216,7 +1234,7 @@ def create_app() -> FastAPI:
             )
 
         # 현물 시장에도 상장된 심볼만 후보로 사용 (현물 롱 + 선물 숏 모두 체결 가능해야 함).
-        spot_symbols = await _fetch_tradable_spot_symbols()
+        spot_symbols = await _fetch_tradable_spot_symbols(testnet=is_testnet)
 
         items: list[FundingScreenerItem] = []
         for sym, stat in stats_map.items():
