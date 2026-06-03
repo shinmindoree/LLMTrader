@@ -46,6 +46,11 @@ _POLL_INTERVAL_SEC = 10
 _METRICS_REFRESH_EVERY_TICKS = 6  # ~60s
 _UNWIND_SLICES = 4
 _UNWIND_INTERVAL_SEC = 3
+# 잔여 강제 청산(스윕) 재시도 설정. 데모/저유동 환경에서 시장가 reduceOnly
+# 주문이 부분 체결되어 잔량이 남을 수 있으므로, 거래소 잔량이 0이 될 때까지
+# 재조회·재청산을 반복한다.
+_SWEEP_MAX_RETRIES = 5
+_SWEEP_RECHECK_SEC = 1.0
 _MIN_TRANSFER_USDT = 1.0
 # 상태 스냅샷이 이 시간(초)보다 오래되면 엔진이 죽은 것으로 간주한다.
 # 멀티 replica 환경에서 엔진이 소유하지 않은 replica가 좀비 "Running"을
@@ -1118,79 +1123,169 @@ async def _sweep_residual(
     base, _quote = _base_quote(params.symbol)
 
     # 1) 선물 잔여 숏 강제 청산 (reduceOnly 시장가 BUY)
-    with contextlib.suppress(Exception):
-        resp = await futures_client.get(
-            "/fapi/v2/positionRisk",
-            headers=_auth_headers(st.api_key),
-            params=_signed_params(st.api_secret, {"symbol": params.symbol}),
-        )
-        resp.raise_for_status()
+    #    데모/저유동 환경에서는 시장가 reduceOnly 주문이 부분 체결되어 잔량이 또
+    #    남을 수 있다. 단일 주문으로 끝내지 말고 positionRisk가 0이 될 때까지
+    #    (최대 _SWEEP_MAX_RETRIES회) 재조회·재청산을 반복해 완전 청산을 보장한다.
+    fut_flt = None
+    fut_swept_clean = False
+    for attempt in range(_SWEEP_MAX_RETRIES):
         residual_short = 0.0
-        for p in resp.json():
-            if p.get("positionSide") in ("SHORT", "BOTH"):
-                residual_short = max(residual_short, abs(float(p.get("positionAmt") or 0.0)))
-        if residual_short > 0:
-            fut_flt = await _get_filter(
-                futures_client, st.futures_base, params.symbol, is_futures=True
+        try:
+            resp = await futures_client.get(
+                "/fapi/v2/positionRisk",
+                headers=_auth_headers(st.api_key),
+                params=_signed_params(st.api_secret, {"symbol": params.symbol}),
             )
-            qty = _round_step(residual_short, fut_flt.step_size)
-            if qty >= max(fut_flt.min_qty, fut_flt.step_size):
-                position_side = await _resolve_position_side(st, futures_client)
-                _log.info(
-                    "Sweep: force-closing residual futures short %.6f (user=%s)",
-                    qty,
+            resp.raise_for_status()
+            for p in resp.json():
+                if p.get("positionSide") in ("SHORT", "BOTH"):
+                    residual_short = max(
+                        residual_short, abs(float(p.get("positionAmt") or 0.0))
+                    )
+        except Exception:
+            _log.warning(
+                "Sweep: positionRisk fetch failed (user=%s, attempt=%d)",
+                st.user_id,
+                attempt + 1,
+            )
+            break
+
+        if fut_flt is None:
+            with contextlib.suppress(Exception):
+                fut_flt = await _get_filter(
+                    futures_client, st.futures_base, params.symbol, is_futures=True
+                )
+        if fut_flt is None:
+            break
+
+        qty = _round_step(residual_short, fut_flt.step_size)
+        if qty < max(fut_flt.min_qty, fut_flt.step_size):
+            # 청산 완료(또는 step 미만 dust). 더 닫을 것이 없다.
+            fut_swept_clean = True
+            break
+
+        position_side = await _resolve_position_side(st, futures_client)
+        _log.info(
+            "Sweep: force-closing residual futures short %.6f (user=%s, attempt=%d/%d)",
+            qty,
+            st.user_id,
+            attempt + 1,
+            _SWEEP_MAX_RETRIES,
+        )
+        try:
+            fut_order = await _place_futures_order(
+                client=futures_client,
+                api_key=st.api_key,
+                api_secret=st.api_secret,
+                symbol=params.symbol,
+                side="BUY",
+                qty_str=_fmt_qty(qty, fut_flt.step_size),
+                position_side=position_side,
+                reduce_only=True,
+            )
+            st.exit_fee_usdt += await _fetch_futures_commission_usdt(
+                futures_client, st=st, symbol=params.symbol, order=fut_order
+            )
+        except Exception:
+            _log.exception(
+                "Sweep: futures force-close order failed (user=%s, attempt=%d)",
+                st.user_id,
+                attempt + 1,
+            )
+        # 다음 재조회 전, 시장가 체결이 positionRisk에 반영될 시간을 잠깐 준다.
+        await asyncio.sleep(_SWEEP_RECHECK_SEC)
+
+    if fut_swept_clean:
+        st.futures_short_qty = 0.0
+    else:
+        # 재시도 한도까지 갔는데도 잔량이 남았을 수 있다. 마지막으로 한 번 더
+        # positionRisk를 조회해 메모리 수량을 거래소 진실로 보정한다(0이 아니면
+        # 다음 청산/스윕이 이어서 처리하도록 남겨둔다).
+        with contextlib.suppress(Exception):
+            resp = await futures_client.get(
+                "/fapi/v2/positionRisk",
+                headers=_auth_headers(st.api_key),
+                params=_signed_params(st.api_secret, {"symbol": params.symbol}),
+            )
+            resp.raise_for_status()
+            remaining = 0.0
+            for p in resp.json():
+                if p.get("positionSide") in ("SHORT", "BOTH"):
+                    remaining = max(remaining, abs(float(p.get("positionAmt") or 0.0)))
+            st.futures_short_qty = remaining
+            if remaining > 0:
+                _log.warning(
+                    "Sweep: futures short still %.6f after %d retries (user=%s)",
+                    remaining,
+                    _SWEEP_MAX_RETRIES,
                     st.user_id,
                 )
-                fut_order = await _place_futures_order(
-                    client=futures_client,
-                    api_key=st.api_key,
-                    api_secret=st.api_secret,
-                    symbol=params.symbol,
-                    side="BUY",
-                    qty_str=_fmt_qty(qty, fut_flt.step_size),
-                    position_side=position_side,
-                    reduce_only=True,
-                )
-                st.exit_fee_usdt += await _fetch_futures_commission_usdt(
-                    futures_client, st=st, symbol=params.symbol, order=fut_order
-                )
-                st.futures_short_qty = 0.0
 
     # 2) 현물 잔여 base 자산 강제 매도
-    with contextlib.suppress(Exception):
-        resp = await spot_client.get(
-            "/api/v3/account",
-            headers=_auth_headers(st.spot_api_key),
-            params=_signed_params(st.spot_api_secret, {}),
-        )
-        resp.raise_for_status()
-        balances: list[dict[str, Any]] = resp.json().get("balances", [])
-        free_base = next(
-            (float(b["free"]) for b in balances if b.get("asset") == base),
-            0.0,
-        )
-        if free_base > 0:
-            spot_flt = await _get_filter(
-                spot_client, st.spot_base, params.symbol, is_futures=False
+    #    현물 시장가 매도도 부분 체결될 수 있으므로 free 잔고가 dust 이하로
+    #    떨어질 때까지 반복 매도한다.
+    spot_flt = None
+    for attempt in range(_SWEEP_MAX_RETRIES):
+        free_base = 0.0
+        try:
+            resp = await spot_client.get(
+                "/api/v3/account",
+                headers=_auth_headers(st.spot_api_key),
+                params=_signed_params(st.spot_api_secret, {}),
             )
-            qty = _round_step(free_base, spot_flt.step_size)
-            if qty >= max(spot_flt.min_qty, spot_flt.step_size):
-                _log.info(
-                    "Sweep: force-selling residual spot %.6f %s (user=%s)",
-                    qty,
-                    base,
-                    st.user_id,
+            resp.raise_for_status()
+            balances: list[dict[str, Any]] = resp.json().get("balances", [])
+            free_base = next(
+                (float(b["free"]) for b in balances if b.get("asset") == base),
+                0.0,
+            )
+        except Exception:
+            _log.warning(
+                "Sweep: spot account fetch failed (user=%s, attempt=%d)",
+                st.user_id,
+                attempt + 1,
+            )
+            break
+
+        if spot_flt is None:
+            with contextlib.suppress(Exception):
+                spot_flt = await _get_filter(
+                    spot_client, st.spot_base, params.symbol, is_futures=False
                 )
-                spot_order = await _place_spot_order(
-                    client=spot_client,
-                    api_key=st.spot_api_key,
-                    api_secret=st.spot_api_secret,
-                    symbol=params.symbol,
-                    side="SELL",
-                    qty_str=_fmt_qty(qty, spot_flt.step_size),
-                )
-                st.exit_fee_usdt += _spot_commission_usdt(spot_order, params.symbol)
-                st.spot_qty = 0.0
+        if spot_flt is None:
+            break
+
+        qty = _round_step(free_base, spot_flt.step_size)
+        if qty < max(spot_flt.min_qty, spot_flt.step_size):
+            # 매도 완료(또는 step 미만 dust). 더 팔 것이 없다.
+            st.spot_qty = 0.0
+            break
+
+        _log.info(
+            "Sweep: force-selling residual spot %.6f %s (user=%s, attempt=%d/%d)",
+            qty,
+            base,
+            st.user_id,
+            attempt + 1,
+            _SWEEP_MAX_RETRIES,
+        )
+        try:
+            spot_order = await _place_spot_order(
+                client=spot_client,
+                api_key=st.spot_api_key,
+                api_secret=st.spot_api_secret,
+                symbol=params.symbol,
+                side="SELL",
+                qty_str=_fmt_qty(qty, spot_flt.step_size),
+            )
+            st.exit_fee_usdt += _spot_commission_usdt(spot_order, params.symbol)
+        except Exception:
+            _log.exception(
+                "Sweep: spot force-sell order failed (user=%s, attempt=%d)",
+                st.user_id,
+                attempt + 1,
+            )
+        await asyncio.sleep(_SWEEP_RECHECK_SEC)
 
 
 async def _sync_qty_from_exchange(
