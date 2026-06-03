@@ -654,6 +654,11 @@ async def _tick(
         await _enter_position(
             st, futures_client=futures_client, spot_client=spot_client, mark_price=mark_price
         )
+        # 진입 직후 즉시 스냅샷을 기록한다. 루프 말미의 주기적 persist(최대 10s 후)에
+        # 의존하면, 엔진을 보유하지 않은 replica로 status 폴링이 라우팅됐을 때 DB
+        # 스냅샷이 낡아 UI가 포지션을 늦게 반영한다.
+        with contextlib.suppress(Exception):
+            await _persist_state(st)
         return
 
     exit_threshold_ann = params.exit_deadband_pct * ppy
@@ -665,6 +670,9 @@ async def _tick(
             exit_threshold_ann,
         )
         await _unwind_position(st, futures_client=futures_client, spot_client=spot_client)
+        # 청산 직후에도 즉시 스냅샷을 기록해 UI 반영 지연을 줄인다.
+        with contextlib.suppress(Exception):
+            await _persist_state(st)
 
 
 # ── 시세/펀딩 조회 ─────────────────────────────────────────

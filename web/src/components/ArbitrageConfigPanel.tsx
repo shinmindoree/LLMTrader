@@ -6,6 +6,9 @@ import { getFundingArbStatus, getFundingScreener, startFundingArb, stopFundingAr
 import type { FundingArbitrageParams, FundingScreenerItem } from "@/lib/types";
 
 const REFRESH_MS = 15_000;
+// 봇 가동 중에는 진입/청산이 거의 실시간으로 화면에 반영되도록 빠르게 폴링한다.
+// (백엔드 status는 DB 스냅샷/인메모리 조회로 가벼움)
+const REFRESH_MS_RUNNING = 3_000;
 const SCREENER_REFRESH_MS = 30_000;
 const ROUNDTRIP_COST_PCT = 0.20; // VIP0 conservative
 const EXIT_RATIOS: Record<number, number> = { 1: 0.50, 3: 0.25 };
@@ -71,7 +74,7 @@ export function ArbitrageConfigPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const { data: status, mutate } = useSWR("funding-arb-status", getFundingArbStatus, {
-    refreshInterval: REFRESH_MS,
+    refreshInterval: (latest) => (latest?.running ? REFRESH_MS_RUNNING : REFRESH_MS),
   });
   const { data: screener, isLoading: screenerLoading } = useSWR(
     "funding-arb-screener",
