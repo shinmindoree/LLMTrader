@@ -1,0 +1,251 @@
+{
+  "strategy": "eth_consistency_portfolio",
+  "symbol": "ETHUSDT-PERP",
+  "window": [
+    "2021-12-01",
+    "2026-06-03"
+  ],
+  "n_legs": 30,
+  "aggregate_trades_per_day": 6.132,
+  "family_weight_pct": {
+    "donchian_breakout": 33.3,
+    "pullback_in_trend": 20.0,
+    "oi_z_combo": 16.7,
+    "donchian_pullback": 10.0,
+    "ensemble_meanrev": 10.0,
+    "lsr_taker_confluence": 6.7,
+    "session_mr": 3.3
+  },
+  "deployed_equal_weight_in_sample": {
+    "note": "DEPLOYED config: 30 legs, equal 1/30 weight, equal-vote net direction (= the strategy file's runtime behaviour). Full-window additive backtest.",
+    "total_ret_pct": 25.98,
+    "mdd_pct": 3.35,
+    "worst_month_pct": -1.249,
+    "best_month_pct": 2.753,
+    "avg_month_pct": 0.472,
+    "pos_months": 39,
+    "n_months": 55,
+    "monthly_pct": {
+      "2021": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null,
+        "5": null,
+        "6": null,
+        "7": null,
+        "8": null,
+        "9": null,
+        "10": null,
+        "11": null,
+        "12": 1.145
+      },
+      "2022": {
+        "1": 1.068,
+        "2": 0.822,
+        "3": 0.953,
+        "4": -0.664,
+        "5": 0.555,
+        "6": 2.753,
+        "7": 1.242,
+        "8": -0.055,
+        "9": 1.234,
+        "10": -0.588,
+        "11": -0.402,
+        "12": 0.221
+      },
+      "2023": {
+        "1": 0.003,
+        "2": 0.901,
+        "3": 0.126,
+        "4": -0.155,
+        "5": -0.35,
+        "6": -0.5,
+        "7": -0.183,
+        "8": 0.543,
+        "9": 0.03,
+        "10": 0.39,
+        "11": 0.964,
+        "12": 0.077
+      },
+      "2024": {
+        "1": 0.749,
+        "2": 0.799,
+        "3": -0.269,
+        "4": 0.828,
+        "5": -1.064,
+        "6": -0.012,
+        "7": 2.359,
+        "8": 1.077,
+        "9": 0.403,
+        "10": 0.611,
+        "11": 0.966,
+        "12": 1.479
+      },
+      "2025": {
+        "1": 0.272,
+        "2": 2.647,
+        "3": 1.1,
+        "4": 0.664,
+        "5": 0.949,
+        "6": 0.395,
+        "7": 0.381,
+        "8": 0.55,
+        "9": -0.232,
+        "10": 0.303,
+        "11": -0.324,
+        "12": -0.566
+      },
+      "2026": {
+        "1": 1.44,
+        "2": -0.999,
+        "3": 0.631,
+        "4": -1.249,
+        "5": 1.802,
+        "6": 0.168,
+        "7": null,
+        "8": null,
+        "9": null,
+        "10": null,
+        "11": null,
+        "12": null
+      }
+    }
+  },
+  "in_sample_lp_weighted_additive": {
+    "note": "Best-case consistency reference: per-leg weights fit by full-window maximin LP (uses the whole history => in-sample / overfit). Shows every-month-positive is reachable in-sample with optimized weights.",
+    "total_ret_pct": 15.05,
+    "mdd_pct": 2.9,
+    "worst_month_pct": 0.0,
+    "best_month_pct": 1.69,
+    "avg_month_pct": 0.274,
+    "pos_months": 55,
+    "n_months": 55,
+    "monthly_pct": {
+      "2021": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null,
+        "5": null,
+        "6": null,
+        "7": null,
+        "8": null,
+        "9": null,
+        "10": null,
+        "11": null,
+        "12": 0.572
+      },
+      "2022": {
+        "1": 0.302,
+        "2": 0.225,
+        "3": 0.001,
+        "4": 0.001,
+        "5": 0.001,
+        "6": 1.29,
+        "7": 0.0,
+        "8": 0.001,
+        "9": 0.362,
+        "10": 0.001,
+        "11": 0.001,
+        "12": 0.302
+      },
+      "2023": {
+        "1": 0.566,
+        "2": 0.699,
+        "3": 0.51,
+        "4": 0.058,
+        "5": 0.005,
+        "6": 0.001,
+        "7": 0.001,
+        "8": 0.337,
+        "9": 0.047,
+        "10": 0.001,
+        "11": 1.064,
+        "12": 0.001
+      },
+      "2024": {
+        "1": 0.055,
+        "2": 1.118,
+        "3": 0.06,
+        "4": 0.001,
+        "5": 0.001,
+        "6": 0.143,
+        "7": 1.69,
+        "8": 0.16,
+        "9": 0.001,
+        "10": 0.539,
+        "11": 0.0,
+        "12": 0.314
+      },
+      "2025": {
+        "1": 0.273,
+        "2": 1.664,
+        "3": 0.001,
+        "4": 0.001,
+        "5": 0.607,
+        "6": 0.001,
+        "7": 0.0,
+        "8": 0.041,
+        "9": 0.023,
+        "10": 0.054,
+        "11": 0.001,
+        "12": 0.146
+      },
+      "2026": {
+        "1": 0.013,
+        "2": 0.001,
+        "3": 0.001,
+        "4": 0.029,
+        "5": 1.66,
+        "6": 0.108,
+        "7": null,
+        "8": null,
+        "9": null,
+        "10": null,
+        "11": null,
+        "12": null
+      }
+    }
+  },
+  "walk_forward_truth": {
+    "note": "Honest / live-realistic: weights refit each month using ONLY past data (expanding window, 12-month warmup), then applied to the next unseen month. This is what live trading would actually have produced. Every-month-positive is NOT achievable out-of-sample on ETH; the realistic ceiling is ~60% positive months.",
+    "schemes": {
+      "equal": {
+        "n_months": 43,
+        "pos_months": 31,
+        "pos_month_pct": 72.1,
+        "total_ret_pct": 17.92,
+        "mdd_pct": 1.38,
+        "worst_month_pct": -1.249,
+        "avg_month_pct": 0.417
+      },
+      "maximin": {
+        "n_months": 43,
+        "pos_months": 26,
+        "pos_month_pct": 60.5,
+        "total_ret_pct": 7.62,
+        "mdd_pct": 3.78,
+        "worst_month_pct": -1.855,
+        "avg_month_pct": 0.177
+      },
+      "minvar": {
+        "n_months": 43,
+        "pos_months": 24,
+        "pos_month_pct": 55.8,
+        "total_ret_pct": 11.82,
+        "mdd_pct": 0.84,
+        "worst_month_pct": -0.885,
+        "avg_month_pct": 0.275
+      }
+    }
+  },
+  "constraint_check": {
+    "every_month_positive_in_sample_lp_weighted": true,
+    "every_month_positive_deployed_equal_weight": false,
+    "every_month_positive_walk_forward": false,
+    "best_walk_forward_pos_month_pct": 72.1,
+    "trades_per_day_ge_2": true,
+    "mdd_deployed_in_sample_pct": 3.35
+  }
+}
