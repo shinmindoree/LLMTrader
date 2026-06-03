@@ -610,6 +610,7 @@ const ko: TranslationKeys = {
     autoSweepKeysRequired: "Binance API 키를 먼저 등록한 후 활성화하세요.",
     autoSweepFuturesBuffer: "Futures 버퍼 USDT (항상 이 금액은 Futures에 유지)",
     autoSweepSweepThreshold: "스윕 임계값 USDT (버퍼 초과분이 이 값 이상일 때만 예치)",
+    autoSweepMarginRestoreCap: "진입 시 Earn→Futures 복원 상한 USDT (0이면 전액)",
     autoSweepFuturesBalance: "Futures 잔고",
     autoSweepEarnBalance: "Earn 잔고",
     autoSweepLastRun: "최근 실행",

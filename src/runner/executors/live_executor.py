@@ -91,6 +91,23 @@ async def run_live(
         raise ValueError("session_maker is required for live trading")
     env = str(config.get("env") or "mainnet")
     client, earn_client = await _resolve_binance_client(user_id, session_maker, env)
+
+    # Cap (USDT) on how much is pulled from Simple Earn into Futures right
+    # before an entry (JIT margin restore). 0 = unlimited (full position).
+    margin_restore_cap_usdt = 0.0
+    if earn_client is not None:
+        try:
+            from control.repo import get_user_profile
+
+            async with session_maker() as _profile_session:
+                _profile = await get_user_profile(_profile_session, user_id=user_id)
+            if _profile is not None:
+                margin_restore_cap_usdt = float(
+                    getattr(_profile, "auto_sweep_margin_restore_usdt", 0.0) or 0.0
+                )
+        except Exception:  # noqa: BLE001
+            margin_restore_cap_usdt = 0.0
+
     notifier = SlackNotifier(settings.slack.webhook_url) if settings.slack.webhook_url else None
 
     strategy_code_snapshot = config.get("_strategy_code")
@@ -179,6 +196,7 @@ async def run_live(
             trade_backfill_hook=sink.backfill_trades,
             job_id=job_id,
             earn_client=earn_client,
+            margin_restore_cap_usdt=margin_restore_cap_usdt,
         )
         trade_contexts[sym] = ctx
 

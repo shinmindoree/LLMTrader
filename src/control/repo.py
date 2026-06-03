@@ -163,6 +163,7 @@ async def update_user_auto_sweep_settings(
     enabled: bool,
     futures_buffer_usdt: float,
     sweep_threshold_usdt: float,
+    margin_restore_usdt: float,
 ) -> None:
     await session.execute(
         update(UserProfile)
@@ -171,6 +172,7 @@ async def update_user_auto_sweep_settings(
             auto_sweep_enabled=enabled,
             auto_sweep_futures_buffer_usdt=futures_buffer_usdt,
             auto_sweep_sweep_threshold_usdt=sweep_threshold_usdt,
+            auto_sweep_margin_restore_usdt=margin_restore_usdt,
             updated_at=datetime.now(),
         )
     )

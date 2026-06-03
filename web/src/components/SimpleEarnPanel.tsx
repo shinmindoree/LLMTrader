@@ -28,6 +28,7 @@ export function SimpleEarnPanel() {
   const [enabled, setEnabled] = useState(false);
   const [futuresBuffer, setFuturesBuffer] = useState<string>("200");
   const [sweepThreshold, setSweepThreshold] = useState<string>("50");
+  const [marginRestoreCap, setMarginRestoreCap] = useState<string>("0");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -36,6 +37,7 @@ export function SimpleEarnPanel() {
     setEnabled(data.enabled);
     setFuturesBuffer(String(data.futures_buffer_usdt));
     setSweepThreshold(String(data.sweep_threshold_usdt));
+    setMarginRestoreCap(String(data.margin_restore_cap_usdt ?? 0));
     setHydrated(true);
   }
 
@@ -49,13 +51,22 @@ export function SimpleEarnPanel() {
     try {
       const buf = Number.parseFloat(futuresBuffer);
       const thr = Number.parseFloat(sweepThreshold);
-      if (!Number.isFinite(buf) || !Number.isFinite(thr) || buf < 0 || thr < 0) {
+      const cap = Number.parseFloat(marginRestoreCap);
+      if (
+        !Number.isFinite(buf) ||
+        !Number.isFinite(thr) ||
+        !Number.isFinite(cap) ||
+        buf < 0 ||
+        thr < 0 ||
+        cap < 0
+      ) {
         throw new Error("Invalid number");
       }
       const result = await setAutoSweepSettings({
         enabled,
         futures_buffer_usdt: buf,
         sweep_threshold_usdt: thr,
+        margin_restore_cap_usdt: cap,
       });
       await mutate(result, { revalidate: false });
       setMessage({ type: "success", text: s.autoSweepSaved });
@@ -222,6 +233,18 @@ export function SimpleEarnPanel() {
               step="1"
               value={sweepThreshold}
               onChange={(e) => setSweepThreshold(e.target.value)}
+              disabled={blocked}
+              className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] disabled:opacity-50"
+            />
+          </label>
+          <label className="block text-xs text-[#868993] sm:col-span-2">
+            {s.autoSweepMarginRestoreCap}
+            <input
+              type="number"
+              min={0}
+              step="1"
+              value={marginRestoreCap}
+              onChange={(e) => setMarginRestoreCap(e.target.value)}
               disabled={blocked}
               className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] disabled:opacity-50"
             />

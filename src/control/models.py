@@ -64,6 +64,12 @@ class UserProfile(Base):
     auto_sweep_sweep_threshold_usdt: Mapped[float] = mapped_column(
         Float, nullable=False, default=50.0, server_default="50"
     )
+    # Cap (USDT) on how much is pulled from Simple Earn into the Futures
+    # wallet right before a live entry (JIT margin restore). 0 = unlimited
+    # (restore the entire Earn position, legacy behaviour).
+    auto_sweep_margin_restore_usdt: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

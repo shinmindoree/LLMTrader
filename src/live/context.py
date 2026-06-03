@@ -52,6 +52,7 @@ class LiveContext:
         trade_backfill_hook: Callable[..., Any] | None = None,
         job_id: Any | None = None,
         earn_client: "BinanceEarnClient | None" = None,
+        margin_restore_cap_usdt: float = 0.0,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -75,6 +76,13 @@ class LiveContext:
         # Auto-Sweep can keep almost the entire balance earning yield while
         # still allowing full-size entries when a signal fires.
         self._earn_client: "BinanceEarnClient | None" = earn_client
+        # Cap (USDT) on how much is redeemed from Simple Earn into the
+        # Futures wallet on each JIT margin restore. 0 (or negative) means
+        # unlimited — restore the entire Earn position (legacy behaviour).
+        try:
+            self._margin_restore_cap_usdt: float = max(0.0, float(margin_restore_cap_usdt))
+        except (TypeError, ValueError):
+            self._margin_restore_cap_usdt = 0.0
         self._margin_restore_inflight: bool = False
         self._logger = get_logger("llmtrader.live")
         self.strategy_name: str | None = None
@@ -2397,12 +2405,15 @@ class LiveContext:
             self._log_audit("JIT_MARGIN_TASK_ERROR", {"error": str(exc)})
 
     async def _restore_margin_from_earn(self) -> None:
-        """Simple Earn(Flexible)에 예치된 USDT 전액을 Futures 지갑으로 복원한다.
+        """Simple Earn(Flexible)에 예치된 USDT를 Futures 지갑으로 복원한다.
 
-        흐름: Earn 포지션 조회 → 전액 redeem(→SPOT) → Spot 정산 대기 →
-        Spot→Futures 이체 → REST 로 Futures 가용잔고를 재조회해 ``balance`` 를
-        결정적으로 덮어쓴다. 이렇게 하면 이후 ``calc_entry_quantity`` 가 복원된
-        잔고를 기준으로 수량을 산출한다.
+        흐름: Earn 포지션 조회 → 복원 금액 결정(상한 적용) → redeem(→SPOT) →
+        Spot 정산 대기 → Spot→Futures 이체 → REST 로 Futures 가용잔고를
+        재조회해 ``balance`` 를 결정적으로 덮어쓴다. 이렇게 하면 이후
+        ``calc_entry_quantity`` 가 복원된 잔고를 기준으로 수량을 산출한다.
+
+        ``_margin_restore_cap_usdt`` 가 0 보다 크면 그 금액까지만 Earn 에서
+        가져오고, 0(기본값)이면 Earn 포지션 전액을 복원한다.
         """
         earn = self._earn_client
         if earn is None:
@@ -2410,13 +2421,24 @@ class LiveContext:
         position = await earn.fetch_flexible_position_usdt()
         if position < _MIN_RESTORE_USDT:
             return
+        # Cap how much we pull from Earn into Futures. 0 = unlimited.
+        cap = self._margin_restore_cap_usdt
+        restore_amount = min(position, cap) if cap > 0 else position
+        if restore_amount < _MIN_RESTORE_USDT:
+            self._log_audit(
+                "JIT_MARGIN_CAP_TOO_SMALL",
+                {"position": position, "cap": cap, "restore_amount": restore_amount},
+            )
+            return
         product_id = await earn.get_usdt_flexible_product_id()
         if not product_id:
             self._log_audit("JIT_MARGIN_NO_PRODUCT", {})
             return
 
-        await earn.redeem(position, product_id)
-        self._log_audit("JIT_MARGIN_REDEEM", {"amount": position})
+        await earn.redeem(restore_amount, product_id)
+        self._log_audit(
+            "JIT_MARGIN_REDEEM", {"amount": restore_amount, "cap": cap, "position": position}
+        )
 
         # Fast redemption 은 거의 즉시지만 Spot 반영이 원자적이지 않으므로
         # 짧게 폴링한다. Standard 로 처리되면 자금이 늦게 도착하므로 이체를
@@ -2424,11 +2446,11 @@ class LiveContext:
         spot = 0.0
         for _ in range(_RESTORE_SETTLE_RETRIES):
             spot = await earn.fetch_spot_usdt_balance()
-            if spot >= min(position, _MIN_RESTORE_USDT):
+            if spot >= min(restore_amount, _MIN_RESTORE_USDT):
                 break
             await asyncio.sleep(_RESTORE_SETTLE_DELAY_SEC)
 
-        transfer_amount = min(position, spot)
+        transfer_amount = min(restore_amount, spot)
         if transfer_amount >= _MIN_RESTORE_USDT:
             await earn.transfer_spot_to_futures(transfer_amount)
             self._log_audit("JIT_MARGIN_TRANSFER", {"amount": transfer_amount})

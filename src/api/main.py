@@ -3298,6 +3298,7 @@ def create_app() -> FastAPI:
             enabled=bool(profile.auto_sweep_enabled),
             futures_buffer_usdt=float(profile.auto_sweep_futures_buffer_usdt),
             sweep_threshold_usdt=float(profile.auto_sweep_sweep_threshold_usdt),
+            margin_restore_cap_usdt=float(profile.auto_sweep_margin_restore_usdt),
             mainnet_required=mainnet_cred is None,
             keys_configured=mainnet_cred is not None,
             futures_usdt=(snap or {}).get("futures_usdt"),
@@ -3338,6 +3339,7 @@ def create_app() -> FastAPI:
             enabled=body.enabled,
             futures_buffer_usdt=body.futures_buffer_usdt,
             sweep_threshold_usdt=body.sweep_threshold_usdt,
+            margin_restore_usdt=body.margin_restore_cap_usdt,
         )
         await session.commit()
 
@@ -3358,6 +3360,7 @@ def create_app() -> FastAPI:
             enabled=body.enabled,
             futures_buffer_usdt=body.futures_buffer_usdt,
             sweep_threshold_usdt=body.sweep_threshold_usdt,
+            margin_restore_cap_usdt=body.margin_restore_cap_usdt,
             mainnet_required=not body.enabled,
             keys_configured=body.enabled,
             futures_usdt=(snap or {}).get("futures_usdt"),

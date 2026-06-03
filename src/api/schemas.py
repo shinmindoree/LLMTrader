@@ -394,12 +394,14 @@ class AutoSweepSettingsRequest(BaseModel):
     enabled: bool
     futures_buffer_usdt: float = Field(default=200.0, ge=0)
     sweep_threshold_usdt: float = Field(default=50.0, ge=0)
+    margin_restore_cap_usdt: float = Field(default=0.0, ge=0)
 
 
 class AutoSweepStatusResponse(BaseModel):
     enabled: bool
     futures_buffer_usdt: float
     sweep_threshold_usdt: float
+    margin_restore_cap_usdt: float
     mainnet_required: bool
     keys_configured: bool
     futures_usdt: float | None = None

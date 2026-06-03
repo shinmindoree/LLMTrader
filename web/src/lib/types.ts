@@ -316,6 +316,7 @@ export type AutoSweepSettings = {
   enabled: boolean;
   futures_buffer_usdt: number;
   sweep_threshold_usdt: number;
+  margin_restore_cap_usdt: number;
   mainnet_required: boolean;
   keys_configured: boolean;
   futures_usdt: number | null;
@@ -329,6 +330,7 @@ export type AutoSweepSettingsInput = {
   enabled: boolean;
   futures_buffer_usdt: number;
   sweep_threshold_usdt: number;
+  margin_restore_cap_usdt: number;
 };
 
 export type WalletBalance = {

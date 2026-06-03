@@ -607,6 +607,7 @@ const en = {
     autoSweepKeysRequired: "Configure Binance API keys before enabling auto-sweep.",
     autoSweepFuturesBuffer: "Futures buffer USDT (always keep this much in Futures)",
     autoSweepSweepThreshold: "Sweep threshold USDT (only sweep if excess exceeds this)",
+    autoSweepMarginRestoreCap: "Entry Earn→Futures restore cap USDT (0 = full position)",
     autoSweepFuturesBalance: "Futures USDT",
     autoSweepEarnBalance: "Earn USDT",
     autoSweepLastRun: "Last run",
