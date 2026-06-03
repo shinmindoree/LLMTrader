@@ -27,6 +27,7 @@ import math
 import os
 import socket
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -113,6 +114,7 @@ class _EngineState:
     last_error: str | None = None
     futures_dual_side: bool | None = None  # None=미확인, True=헤지모드, False=원웨이모드
     owner: str = _REPLICA_ID  # 이 엔진을 소유한 replica id
+    instance_id: str = field(default_factory=lambda: uuid.uuid4().hex)  # 이 엔진 인스턴스 식별자
     api_key: str = ""          # futures api key
     api_secret: str = ""       # futures api secret
     spot_api_key: str = ""     # spot api key (differs from futures on testnet)
@@ -186,14 +188,15 @@ async def _set_desired_running(
         await session.commit()
 
 
-async def _get_desired_running(
+async def _get_control_state(
     session_maker: async_sessionmaker[AsyncSession], user_id: str
-) -> bool:
+) -> dict[str, Any]:
+    """제어 키(desired_running, instance_id 등)를 반환한다. 없으면 빈 dict."""
     async with session_maker() as session:
         snap = await get_account_snapshot(session, key=_control_key(user_id))
     if not snap or not snap.data_json:
-        return True
-    return bool(snap.data_json.get("desired_running", True))
+        return {}
+    return dict(snap.data_json)
 
 
 async def get_engine_status_persisted(
@@ -206,12 +209,22 @@ async def get_engine_status_persisted(
     반영해 보고한다. 멀티 replica 깜빡임과 좀비 Running을 방지한다.
     """
     desired = True
+    ctl_instance: str | None = None
+    ctl_symbol: str | None = None
     ctl = await get_account_snapshot(session, key=_control_key(user_id))
     if ctl and ctl.data_json:
         desired = bool(ctl.data_json.get("desired_running", True))
+        ctl_instance = ctl.data_json.get("instance_id")
+        ctl_symbol = ctl.data_json.get("symbol")
 
+    # 이 replica가 지정 인스턴스를 들고 있으면 가장 신선한 인메모리 상태를 보고.
     st = _engines.get(user_id)
-    if st is not None and st.running and desired:
+    if (
+        st is not None
+        and st.running
+        and desired
+        and (ctl_instance is None or ctl_instance == st.instance_id)
+    ):
         return get_engine_status(user_id)
 
     snap = await get_account_snapshot(session, key=_snapshot_key(user_id))
@@ -219,6 +232,23 @@ async def get_engine_status_persisted(
         return FundingArbitrageStatusResponse(running=False, accumulated_funding_income=0.0)
 
     d = snap.data_json
+
+    # 스냅샷이 지정 인스턴스가 아닌 좀비 엔진이 마지막에 덮어쓴 것이라면(교체 직후
+    # 새 엔진이 아직 자기 스냅샷을 쓰기 전), 옛 심볼을 보여주지 않는다. 제어 키의
+    # 의도된 심볼로 "기동 중" 상태만 노출해 BTC↔BNB 깜빡임을 방지한다.
+    snap_instance = d.get("instance_id")
+    if (
+        desired
+        and ctl_instance is not None
+        and snap_instance is not None
+        and snap_instance != ctl_instance
+    ):
+        return FundingArbitrageStatusResponse(
+            running=True,
+            symbol=ctl_symbol,
+            accumulated_funding_income=0.0,
+        )
+
     running = bool(d.get("running")) and desired and not _is_stale(snap.updated_at)
 
     params = None
@@ -265,8 +295,24 @@ async def start_engine(
 ) -> None:
     existing = _engines.get(user_id)
     if existing and existing.running:
-        _log.warning("Engine already running for user=%s — ignoring start", user_id)
-        return
+        if existing.symbol == params.symbol:
+            _log.warning("Engine already running for user=%s — ignoring start", user_id)
+            return
+        # 같은 replica에 다른 심볼의 잔존(좀비) 엔진이 있으면 먼저 청산·정지하고
+        # 교체한다. (사용자가 Stop 후 다른 심볼로 재시작한 경우)
+        _log.info(
+            "Replacing local engine user=%s: %s -> %s (liquidating old)",
+            user_id,
+            existing.symbol,
+            params.symbol,
+        )
+        existing.running = False
+        if existing._task and not existing._task.done():
+            existing._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await existing._task
+        with contextlib.suppress(Exception):
+            await _liquidate_all(existing)
 
     spot_base, futures_base = _bases_for_env(is_testnet)
     st = _EngineState(
@@ -289,6 +335,8 @@ async def start_engine(
         await _restore_state(st)
         # desired-state를 true로 기록하고(기동에 필요한 메타 포함), 즉시 초기
         # 스냅샷을 남겨 다른 replica의 상태 조회가 곧바로 Running을 보게 한다.
+        # instance_id를 함께 기록하여, 이후 다른 심볼/replica로 새 엔진이 시작되면
+        # 기존(좀비) 엔진이 자신이 더 이상 지정 엔진이 아님을 감지해 자가 정지한다.
         env = "testnet" if is_testnet else "mainnet"
         await _set_desired_running(
             session_maker,
@@ -299,6 +347,7 @@ async def start_engine(
                 "is_testnet": is_testnet,
                 "params": params.model_dump(),
                 "symbol": params.symbol,
+                "instance_id": st.instance_id,
             },
         )
         await _persist_state(st)
@@ -386,6 +435,7 @@ async def _persist_state(st: _EngineState) -> None:
     data = {
         "running": st.running,
         "owner": st.owner,
+        "instance_id": st.instance_id,
         "symbol": st.symbol,
         "spot_qty": st.spot_qty,
         "futures_short_qty": st.futures_short_qty,
@@ -436,6 +486,59 @@ async def _restore_state(st: _EngineState) -> None:
                 st.spot_qty,
                 st.futures_short_qty,
             )
+            # 거래소 실제 포지션과 대조해 유령(이미 청산됐거나 한 번도 안 열린)
+            # 상태를 정리한다. 그렇지 않으면 has_position=True로 신규 진입이
+            # 영구히 스킵된다.
+            await _reconcile_restored_position(st)
+
+
+async def _reconcile_restored_position(st: _EngineState) -> None:
+    """복원한 포지션을 거래소 실제 선물 포지션과 대조한다.
+
+    선물 숏이 실제로 존재하지 않으면(positionRisk 수량 ≈ 0) 델타-뉴트럴
+    포지션이 더 이상 유효하지 않다고 보고 양 레그를 평탄화(flat)한다.
+    이렇게 하면 오래된 스냅샷이 신규 진입을 막는 문제를 방지한다.
+    조회 실패 시에는 안전하게 복원값을 유지한다.
+    """
+    params = st.params
+    if params is None:
+        return
+    try:
+        async with httpx.AsyncClient(base_url=st.futures_base, timeout=10.0) as fc:
+            resp = await fc.get(
+                "/fapi/v2/positionRisk",
+                headers=_auth_headers(st.api_key),
+                params=_signed_params(st.api_secret, {"symbol": params.symbol}),
+            )
+            resp.raise_for_status()
+            positions: list[dict[str, Any]] = resp.json()
+    except Exception:
+        _log.warning(
+            "Reconcile skipped (user=%s) — positionRisk fetch failed; keeping restored state",
+            st.user_id,
+        )
+        return
+
+    actual_short = 0.0
+    for p in positions:
+        if p.get("positionSide") in ("SHORT", "BOTH"):
+            amt = abs(float(p.get("positionAmt") or 0.0))
+            actual_short = max(actual_short, amt)
+
+    if actual_short <= 0.0 and st.futures_short_qty > 0.0:
+        _log.info(
+            "Reconcile: no live futures short on exchange (user=%s) — clearing stale "
+            "position (was spot=%.6f short=%.6f)",
+            st.user_id,
+            st.spot_qty,
+            st.futures_short_qty,
+        )
+        st.spot_qty = 0.0
+        st.futures_short_qty = 0.0
+        st.entry_mark_price = 0.0
+        st.entry_ts_ms = None
+        with contextlib.suppress(Exception):
+            await _persist_state(st)
 
 
 # ── 내부 루프 ──────────────────────────────────────────────
@@ -471,13 +574,25 @@ async def _engine_loop(st: _EngineState) -> None:
             with contextlib.suppress(Exception):
                 await _persist_state(st)
 
-            # desired-state 확인: 다른 replica에서 Stop이 처리됐다면 자가 정지.
+            # desired-state 확인: 다른 replica/심볼에서 Stop이나 교체가 일어났다면 자가 정지.
+            #  - desired_running=false  → 사용자가 Stop을 눌렀다.
+            #  - instance_id 불일치      → 다른 엔진(새 심볼/replica)이 지정 엔진을 넘겨받았다.
+            #    이 엔진은 좀비이므로 보유 포지션을 청산하고 종료한다.
             if st.session_maker is not None:
                 try:
-                    if not await _get_desired_running(st.session_maker, st.user_id):
+                    ctl = await _get_control_state(st.session_maker, st.user_id)
+                    desired = bool(ctl.get("desired_running", True))
+                    ctl_instance = ctl.get("instance_id")
+                    superseded = ctl_instance is not None and ctl_instance != st.instance_id
+                    if not desired or superseded:
                         _log.info(
-                            "Stop requested via desired-state (user=%s) — self-stopping",
+                            "Self-stopping (user=%s): desired=%s superseded=%s "
+                            "(my_instance=%s ctl_instance=%s)",
                             st.user_id,
+                            desired,
+                            superseded,
+                            st.instance_id,
+                            ctl_instance,
                         )
                         st.running = False
                         # 거래소 포지션 청산(현재 루프의 클라이언트 재사용)
@@ -487,8 +602,11 @@ async def _engine_loop(st: _EngineState) -> None:
                                 futures_client=futures_client,
                                 spot_client=spot_client,
                             )
-                        with contextlib.suppress(Exception):
-                            await _persist_state(st)
+                        # 좀비가 교체된 경우 관측 스냅샷을 덮어쓰지 않는다(새 엔진이
+                        # 이미 자신의 상태를 기록 중). desired=false로 멈춘 경우에만 기록.
+                        if not superseded:
+                            with contextlib.suppress(Exception):
+                                await _persist_state(st)
                         break
                 except Exception:
                     _log.warning("desired-state check failed (user=%s)", st.user_id)
