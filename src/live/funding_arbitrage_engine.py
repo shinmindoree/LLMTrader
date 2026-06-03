@@ -242,15 +242,20 @@ async def get_engine_status_persisted(
 
     d = snap.data_json
 
-    # 스냅샷이 지정 인스턴스가 아닌 좀비 엔진이 마지막에 덮어쓴 것이라면(교체 직후
-    # 새 엔진이 아직 자기 스냅샷을 쓰기 전), 옛 심볼을 보여주지 않는다. 제어 키의
-    # 의도된 심볼로 "기동 중" 상태만 노출해 BTC↔BNB 깜빡임을 방지한다.
-    snap_instance = d.get("instance_id")
+    # 스냅샷이 "의도된 심볼과 다른" 경우에만 기동 중 최소 상태로 가린다. 이는
+    # 실제 심볼 교체(BTC→BNB) 직후 새 엔진이 아직 자기 스냅샷을 쓰기 전, 옛 심볼이
+    # 잠깐 노출되는 깜빡임을 막기 위함이다. 심볼이 같으면 어느 instance가 기록했든
+    # 그 스냅샷이 해당 심볼의 관측된 진실이므로 그대로 보여준다.
+    #
+    # (이전에는 instance_id 불일치만으로 가렸는데, 같은 심볼을 같은 replica가 아닌
+    #  다른 instance가 기록한 정상 상황에서도 Running인데 모든 지표가 빈 값으로 보이는
+    #  버그가 있었다.)
+    snap_symbol = d.get("symbol")
     if (
         desired
-        and ctl_instance is not None
-        and snap_instance is not None
-        and snap_instance != ctl_instance
+        and ctl_symbol is not None
+        and snap_symbol is not None
+        and snap_symbol != ctl_symbol
     ):
         return FundingArbitrageStatusResponse(
             running=True,
