@@ -475,87 +475,73 @@ async def _persist_state(st: _EngineState) -> None:
 
 
 async def _restore_state(st: _EngineState) -> None:
+    """엔진 기동 시 포지션 상태를 거래소 실제 보유분으로 결정한다.
+
+    과거 스냅샷의 수량을 그대로 신뢰하면 다음 문제가 생긴다:
+      - 이미 청산된 유령 포지션이 복원되어 ``has_position=True``로 신규 진입이
+        영구히 스킵된다("진입이 안 됨").
+      - 반대로 거래소엔 남았는데 스냅샷엔 없는 고아 포지션을 놓친다.
+    따라서 거래소(positionRisk·현물 잔고)를 진실로 삼아 수량을 정한다.
+
+    또한 진입/청산 수수료 누계는 항상 0에서 시작한다(세션별 회계). 과거 스냅샷의
+    수수료를 복원하면 새 진입 화면에 옛 청산 수수료가 섞여 혼란을 준다.
+    """
     if st.session_maker is None:
         return
 
+    # 1) 세션별 수수료 회계는 항상 0에서 시작
+    st.entry_fee_usdt = 0.0
+    st.exit_fee_usdt = 0.0
+
+    # 2) 거래소가 모르는 메타데이터(진입가·진입시각·누적 펀딩)는 동일 심볼
+    #    스냅샷에서만 best-effort로 가져온다.
+    snap_meta: dict[str, Any] = {}
     try:
         async with st.session_maker() as session:
             snap = await get_account_snapshot(session, key=_snapshot_key(st.user_id))
+        if snap and snap.data_json and snap.data_json.get("symbol") == st.symbol:
+            snap_meta = snap.data_json
     except Exception:
-        _log.exception("Failed to restore funding-arb state for user=%s", st.user_id)
-        return
-    if not snap or not snap.data_json:
-        return
-    data = snap.data_json
-    # 같은 심볼에 대한 미청산 포지션만 복원
-    if data.get("symbol") == st.symbol:
-        st.spot_qty = float(data.get("spot_qty") or 0.0)
-        st.futures_short_qty = float(data.get("futures_short_qty") or 0.0)
-        st.entry_mark_price = float(data.get("entry_mark_price") or 0.0)
-        st.entry_ts_ms = data.get("entry_ts_ms")
-        st.accumulated_funding_income = float(data.get("accumulated_funding_income") or 0.0)
-        st.entry_fee_usdt = float(data.get("entry_fee_usdt") or 0.0)
-        st.exit_fee_usdt = float(data.get("exit_fee_usdt") or 0.0)
-        if st.spot_qty or st.futures_short_qty:
-            _log.info(
-                "Restored open position user=%s spot=%.6f short=%.6f",
-                st.user_id,
-                st.spot_qty,
-                st.futures_short_qty,
-            )
-            # 거래소 실제 포지션과 대조해 유령(이미 청산됐거나 한 번도 안 열린)
-            # 상태를 정리한다. 그렇지 않으면 has_position=True로 신규 진입이
-            # 영구히 스킵된다.
-            await _reconcile_restored_position(st)
+        _log.exception("Failed to read funding-arb snapshot for user=%s", st.user_id)
 
-
-async def _reconcile_restored_position(st: _EngineState) -> None:
-    """복원한 포지션을 거래소 실제 선물 포지션과 대조한다.
-
-    선물 숏이 실제로 존재하지 않으면(positionRisk 수량 ≈ 0) 델타-뉴트럴
-    포지션이 더 이상 유효하지 않다고 보고 양 레그를 평탄화(flat)한다.
-    이렇게 하면 오래된 스냅샷이 신규 진입을 막는 문제를 방지한다.
-    조회 실패 시에는 안전하게 복원값을 유지한다.
-    """
-    params = st.params
-    if params is None:
-        return
+    # 3) 수량은 거래소를 진실로 삼는다. 0에서 시작해 _sync_qty_from_exchange로
+    #    실제 보유분을 채운다(선물 positionRisk + 현물 base 잔고).
+    st.spot_qty = 0.0
+    st.futures_short_qty = 0.0
     try:
-        async with httpx.AsyncClient(base_url=st.futures_base, timeout=10.0) as fc:
-            resp = await fc.get(
-                "/fapi/v2/positionRisk",
-                headers=_auth_headers(st.api_key),
-                params=_signed_params(st.api_secret, {"symbol": params.symbol}),
-            )
-            resp.raise_for_status()
-            positions: list[dict[str, Any]] = resp.json()
+        async with (
+            httpx.AsyncClient(base_url=st.futures_base, timeout=10.0) as fc,
+            httpx.AsyncClient(base_url=st.spot_base, timeout=10.0) as sc,
+        ):
+            await _sync_qty_from_exchange(st, futures_client=fc, spot_client=sc)
     except Exception:
         _log.warning(
-            "Reconcile skipped (user=%s) — positionRisk fetch failed; keeping restored state",
+            "Start reconcile failed (user=%s) — assuming flat; entry will re-evaluate",
             st.user_id,
         )
-        return
+        st.spot_qty = 0.0
+        st.futures_short_qty = 0.0
 
-    actual_short = 0.0
-    for p in positions:
-        if p.get("positionSide") in ("SHORT", "BOTH"):
-            amt = abs(float(p.get("positionAmt") or 0.0))
-            actual_short = max(actual_short, amt)
-
-    if actual_short <= 0.0 and st.futures_short_qty > 0.0:
+    if st.spot_qty > 0.0 or st.futures_short_qty > 0.0:
+        # 거래소에 실제 포지션 존재 → 채택(adopt). 다음 tick에서 중복 진입하지
+        # 않고, Stop 시 정상 청산되도록 메타데이터를 복원한다.
+        st.entry_mark_price = float(snap_meta.get("entry_mark_price") or 0.0)
+        st.entry_ts_ms = snap_meta.get("entry_ts_ms")
+        st.accumulated_funding_income = float(
+            snap_meta.get("accumulated_funding_income") or 0.0
+        )
         _log.info(
-            "Reconcile: no live futures short on exchange (user=%s) — clearing stale "
-            "position (was spot=%.6f short=%.6f)",
+            "Adopted live exchange position user=%s spot=%.6f short=%.6f",
             st.user_id,
             st.spot_qty,
             st.futures_short_qty,
         )
-        st.spot_qty = 0.0
-        st.futures_short_qty = 0.0
+    else:
+        # 거래소 평탄(flat) → 깨끗한 시작. 진입 메타데이터를 초기화한다.
         st.entry_mark_price = 0.0
         st.entry_ts_ms = None
-        with contextlib.suppress(Exception):
-            await _persist_state(st)
+        st.accumulated_funding_income = 0.0
+        _log.info("Clean start user=%s — exchange flat, ready to enter", st.user_id)
 
 
 # ── 내부 루프 ──────────────────────────────────────────────
