@@ -501,6 +501,7 @@ export type FundingArbitrageStatusResponse = {
   futures_short_qty: number | null;
   current_funding_rate: number | null;
   annualized_funding_pct: number | null;
+  next_funding_time: string | null;
   unrealized_pnl: number | null;
   accumulated_funding_income: number;
   last_funding_ts: string | null;

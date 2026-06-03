@@ -105,6 +105,7 @@ class _EngineState:
     entry_ts_ms: int | None = None
     funding_interval_hours: float = _DEFAULT_FUNDING_INTERVAL_HOURS
     current_funding_rate: float | None = None
+    next_funding_time_ms: int | None = None
     unrealized_pnl: float | None = None
     accumulated_funding_income: float = 0.0
     last_funding_ts: datetime | None = None
@@ -130,6 +131,15 @@ _engines: dict[str, _EngineState] = {}
 # ── 퍼블릭 인터페이스 ──────────────────────────────────────
 
 
+def _ms_to_dt(ms: int | None) -> datetime | None:
+    if not ms or ms <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(ms / 1000.0, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 def get_engine_status(user_id: str) -> FundingArbitrageStatusResponse:
     st = _engines.get(user_id)
     if st is None:
@@ -146,6 +156,7 @@ def get_engine_status(user_id: str) -> FundingArbitrageStatusResponse:
         futures_short_qty=st.futures_short_qty or None,
         current_funding_rate=st.current_funding_rate,
         annualized_funding_pct=ann,
+        next_funding_time=_ms_to_dt(st.next_funding_time_ms),
         unrealized_pnl=st.unrealized_pnl,
         accumulated_funding_income=st.accumulated_funding_income,
         last_funding_ts=st.last_funding_ts,
@@ -232,6 +243,7 @@ async def get_engine_status_persisted(
         futures_short_qty=(d.get("futures_short_qty") or None),
         current_funding_rate=d.get("current_funding_rate"),
         annualized_funding_pct=d.get("annualized_funding_pct"),
+        next_funding_time=_ms_to_dt(d.get("next_funding_time_ms")),
         unrealized_pnl=d.get("unrealized_pnl"),
         accumulated_funding_income=float(d.get("accumulated_funding_income") or 0.0),
         last_funding_ts=last_dt,
@@ -336,6 +348,9 @@ async def stop_engine(
         st._task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await st._task
+    # 거래소 포지션 청산: 현물 SELL + 선물 BUY로 델타 노출 해소
+    with contextlib.suppress(Exception):
+        await _liquidate_all(st)
     with contextlib.suppress(Exception):
         await _persist_state(st)
     _log.info("Funding arbitrage engine stopped: user=%s replica=%s", user_id, _REPLICA_ID)
@@ -378,6 +393,7 @@ async def _persist_state(st: _EngineState) -> None:
         "entry_ts_ms": st.entry_ts_ms,
         "funding_interval_hours": st.funding_interval_hours,
         "current_funding_rate": st.current_funding_rate,
+        "next_funding_time_ms": st.next_funding_time_ms,
         "annualized_funding_pct": ann,
         "unrealized_pnl": st.unrealized_pnl,
         "accumulated_funding_income": st.accumulated_funding_income,
@@ -464,6 +480,13 @@ async def _engine_loop(st: _EngineState) -> None:
                             st.user_id,
                         )
                         st.running = False
+                        # 거래소 포지션 청산(현재 루프의 클라이언트 재사용)
+                        with contextlib.suppress(Exception):
+                            await _unwind_position(
+                                st,
+                                futures_client=futures_client,
+                                spot_client=spot_client,
+                            )
                         with contextlib.suppress(Exception):
                             await _persist_state(st)
                         break
@@ -483,8 +506,9 @@ async def _tick(
     assert params is not None
     st._tick_count += 1
 
-    funding_rate, mark_price = await _fetch_funding_rate(futures_client, params.symbol)
+    funding_rate, mark_price, next_funding_ms = await _fetch_funding_rate(futures_client, params.symbol)
     st.current_funding_rate = funding_rate
+    st.next_funding_time_ms = next_funding_ms
     st.last_funding_ts = datetime.now(UTC)
     ppy = _periods_per_year(st.funding_interval_hours)
     ann_pct = funding_rate * ppy * 100
@@ -528,13 +552,20 @@ async def _tick(
 # ── 시세/펀딩 조회 ─────────────────────────────────────────
 
 
-async def _fetch_funding_rate(client: httpx.AsyncClient, symbol: str) -> tuple[float, float]:
+async def _fetch_funding_rate(client: httpx.AsyncClient, symbol: str) -> tuple[float, float, int | None]:
     resp = await client.get("/fapi/v1/premiumIndex", params={"symbol": symbol})
     resp.raise_for_status()
     data: dict[str, Any] = resp.json()
     rate = float(data.get("lastFundingRate") or 0)
     mark_price = float(data.get("markPrice") or 0)
-    return rate, mark_price
+    next_ft = data.get("nextFundingTime")
+    try:
+        next_ms = int(next_ft) if next_ft else None
+    except (TypeError, ValueError):
+        next_ms = None
+    if next_ms is not None and next_ms <= 0:
+        next_ms = None
+    return rate, mark_price, next_ms
 
 
 async def _fetch_funding_interval(client: httpx.AsyncClient, symbol: str) -> float:
@@ -590,6 +621,21 @@ def _round_step(qty: float, step: float) -> float:
     if step <= 0:
         return qty
     return math.floor(qty / step) * step
+
+
+def _resolved_filled_qty(order: dict[str, Any], fallback: float) -> float:
+    """주문 응답의 체결 수량을 안전하게 해석한다.
+
+    Binance가 ``executedQty``를 문자열 ``"0"``(예: 선물 ACK 응답)로 주면
+    ``float(... or fallback)`` 패턴이 ``"0"``을 truthy로 보아 0이 되는 버그가
+    있었다. 명시적으로 0 초과 여부를 확인하고, 아니면 ``fallback``을 쓴다.
+    """
+    raw = order.get("executedQty")
+    try:
+        qty = float(raw) if raw is not None else 0.0
+    except (TypeError, ValueError):
+        qty = 0.0
+    return qty if qty > 0 else fallback
 
 
 async def _get_filter(
@@ -775,7 +821,7 @@ async def _enter_position(
             side="BUY",
             qty_str=qty_str,
         )
-        filled = float(spot_order.get("executedQty") or qty)
+        filled = _resolved_filled_qty(spot_order, qty)
         st.spot_qty = filled
         st.last_error = None
         _log.info("Spot BUY filled (user=%s): qty=%s", st.user_id, qty_str)
@@ -798,7 +844,7 @@ async def _enter_position(
             qty_str=fut_qty_str,
             position_side=position_side,
         )
-        st.futures_short_qty = float(fut_order.get("executedQty") or fut_qty)
+        st.futures_short_qty = _resolved_filled_qty(fut_order, fut_qty)
         st.entry_mark_price = mark_price
         st.entry_ts_ms = int(time.time() * 1000)
         st.last_error = None
@@ -908,6 +954,35 @@ async def _unwind_position(
     await _persist_state(st)
 
 
+async def _liquidate_all(st: _EngineState) -> None:
+    """보유 중인 현물·선물 레그를 전량 청산해 거래소 포지션을 비운다.
+
+    STOP 또는 다른 replica의 desired=false 자가정지 시 호출한다. 자체 httpx
+    클라이언트를 열어 ``_unwind_position``으로 분할 청산한다. 보유분이 없으면
+    즉시 반환한다. 베스트-에포트로, 실패해도 정지 흐름을 막지 않는다.
+    """
+    if st.spot_qty <= 0 and st.futures_short_qty <= 0:
+        return
+    try:
+        async with (
+            httpx.AsyncClient(base_url=st.futures_base, timeout=10.0) as futures_client,
+            httpx.AsyncClient(base_url=st.spot_base, timeout=10.0) as spot_client,
+        ):
+            _log.info(
+                "Liquidating on stop (user=%s): spot=%.6f short=%.6f",
+                st.user_id,
+                st.spot_qty,
+                st.futures_short_qty,
+            )
+            await _unwind_position(
+                st, futures_client=futures_client, spot_client=spot_client
+            )
+    except Exception:
+        _log.exception(
+            "Liquidation on stop failed (user=%s) — positions may remain open", st.user_id
+        )
+
+
 # ── 메트릭 (펀딩 수익 / 미실현 손익) ───────────────────────
 
 
@@ -998,7 +1073,13 @@ async def _place_spot_order(
 ) -> dict[str, Any]:
     params = _signed_params(
         api_secret,
-        {"symbol": symbol, "side": side, "type": "MARKET", "quantity": qty_str},
+        {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": qty_str,
+            "newOrderRespType": "RESULT",
+        },
     )
     resp = await client.post("/api/v3/order", headers=_auth_headers(api_key), data=params)
     resp.raise_for_status()
@@ -1023,6 +1104,7 @@ async def _place_futures_order(
             "positionSide": position_side,
             "type": "MARKET",
             "quantity": qty_str,
+            "newOrderRespType": "RESULT",
         },
     )
     resp = await client.post("/fapi/v1/order", headers=_auth_headers(api_key), data=params)

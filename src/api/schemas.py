@@ -505,6 +505,7 @@ class FundingArbitrageStatusResponse(BaseModel):
     futures_short_qty: float | None = None
     current_funding_rate: float | None = None
     annualized_funding_pct: float | None = None
+    next_funding_time: datetime | None = None
     unrealized_pnl: float | None = None
     accumulated_funding_income: float
     last_funding_ts: datetime | None = None

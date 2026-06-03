@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { getFundingArbStatus, getFundingScreener, startFundingArb, stopFundingArb } from "@/lib/api";
 import type { FundingArbitrageParams, FundingScreenerItem } from "@/lib/types";
@@ -26,6 +26,20 @@ function fmt2(v: number) {
 function fmtPct(v: number | null | undefined, digits = 2) {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${v.toFixed(digits)}%`;
+}
+
+function fmtCountdown(targetIso: string | null | undefined, nowMs: number): string | null {
+  if (!targetIso) return null;
+  const t = Date.parse(targetIso);
+  if (!Number.isFinite(t)) return null;
+  let diff = Math.max(0, t - nowMs);
+  const h = Math.floor(diff / 3_600_000);
+  diff -= h * 3_600_000;
+  const m = Math.floor(diff / 60_000);
+  diff -= m * 60_000;
+  const s = Math.floor(diff / 1_000);
+  if (h > 0) return `${h}시간 ${m}분 ${s}초`;
+  return `${m}분 ${s}초`;
 }
 
 function ScoreBar({ score }: { score: number }) {
@@ -77,6 +91,13 @@ export function ArbitrageConfigPanel() {
 
   const annPct = status?.annualized_funding_pct;
   const baseAsset = (status?.symbol ?? "").replace(/USDT$/, "") || (status?.symbol ?? "");
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  const fundingCountdown = fmtCountdown(status?.next_funding_time, nowMs);
   const pnlColor = (status?.unrealized_pnl ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]";
   const fundingColor = annPct != null && annPct > 0 ? "text-[#26a69a]" : "text-[#ef5350]";
 
@@ -509,6 +530,7 @@ export function ArbitrageConfigPanel() {
                       : "—"
                   }
                   valueClass={pnlColor}
+                  hint="양 레그 평가손익 합 · 수수료·펀딩 미포함"
                 />
                 <Stat
                   label="현물 롱 (Spot Long)"
@@ -533,6 +555,11 @@ export function ArbitrageConfigPanel() {
                     label="Funding Income"
                     value={`$${fmt2(status.accumulated_funding_income)}`}
                     valueClass="text-[#26a69a]"
+                    hint={
+                      fundingCountdown
+                        ? `다음 펀딩 정산까지 ${fundingCountdown} · 정산 시 수취`
+                        : "선물 숏 보유 시 펀딩 정산마다 수취"
+                    }
                   />
                 </div>
               </div>
@@ -573,15 +600,18 @@ function Stat({
   label,
   value,
   valueClass = "text-[#d1d4dc]",
+  hint,
 }: {
   label: string;
   value: string;
   valueClass?: string;
+  hint?: string;
 }) {
   return (
     <div className="rounded border border-[#2a2e39] bg-[#131722] p-2.5">
       <p className="text-[10px] text-[#868993]">{label}</p>
       <p className={`mt-0.5 text-sm font-semibold ${valueClass}`}>{value}</p>
+      {hint && <p className="mt-0.5 text-[10px] leading-snug text-[#6b7383]">{hint}</p>}
     </div>
   );
 }
