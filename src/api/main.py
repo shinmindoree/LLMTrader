@@ -828,6 +828,22 @@ def create_app() -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 _logger.warning("Auto-sweep engine failed to start: %s", exc)
 
+        # 펀딩비 차익거래 엔진 자동 복원: 재배포·재시작 후에도 desired_running=true인
+        # 엔진을 다시 띄워 거래소 포지션이 고아가 되지 않게 한다. DB가 준비될 때까지
+        # 대기·jitter·heartbeat 체크가 포함되어 startup을 막지 않는다.
+        try:
+            from live.funding_arbitrage_engine import (
+                restore_engines_on_startup as _restore_funding_arb,
+            )
+
+            asyncio.create_task(
+                _restore_funding_arb(session_maker),
+                name="funding_arb_auto_restore",
+            )
+            _logger.info("Funding-arb auto-restore task scheduled")
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Funding-arb auto-restore failed to schedule: %s", exc)
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         nonlocal _keepalive_task, _runner_task, _runner_worker, _db_init_task
@@ -3298,7 +3314,6 @@ def create_app() -> FastAPI:
             enabled=bool(profile.auto_sweep_enabled),
             futures_buffer_usdt=float(profile.auto_sweep_futures_buffer_usdt),
             sweep_threshold_usdt=float(profile.auto_sweep_sweep_threshold_usdt),
-            margin_restore_cap_usdt=float(profile.auto_sweep_margin_restore_usdt),
             mainnet_required=mainnet_cred is None,
             keys_configured=mainnet_cred is not None,
             futures_usdt=(snap or {}).get("futures_usdt"),
@@ -3339,7 +3354,6 @@ def create_app() -> FastAPI:
             enabled=body.enabled,
             futures_buffer_usdt=body.futures_buffer_usdt,
             sweep_threshold_usdt=body.sweep_threshold_usdt,
-            margin_restore_usdt=body.margin_restore_cap_usdt,
         )
         await session.commit()
 
@@ -3360,7 +3374,6 @@ def create_app() -> FastAPI:
             enabled=body.enabled,
             futures_buffer_usdt=body.futures_buffer_usdt,
             sweep_threshold_usdt=body.sweep_threshold_usdt,
-            margin_restore_cap_usdt=body.margin_restore_cap_usdt,
             mainnet_required=not body.enabled,
             keys_configured=body.enabled,
             futures_usdt=(snap or {}).get("futures_usdt"),

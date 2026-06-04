@@ -428,6 +428,169 @@ async def stop_engine(
     _log.info("Funding arbitrage engine stopped: user=%s replica=%s", user_id, _REPLICA_ID)
 
 
+async def restore_engines_on_startup(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """프로세스 부팅 시 desired_running=true인 엔진을 자동 복원한다.
+
+    Azure Container Apps 재배포 등으로 모든 replica가 교체되면 인메모리 엔진은
+    사라지지만 바이낸스 거래소에는 사용자의 포지션이 그대로 남는다. 사용자가
+    명시적으로 Stop을 누르지 않은 한 ``funding_arb_ctl:{user}``의
+    ``desired_running``은 true 그대로이므로, 새 replica가 떴을 때 즉시 엔진을
+    다시 띄워 모니터링·청산·재진입 사이클을 복구한다.
+
+    멀티 replica 동시 부팅 race는 두 가지로 방어한다:
+      1. 짧은 jitter 후 관측 스냅샷의 heartbeat을 확인 — 다른 replica가
+         이미 복원해 신선한 heartbeat이 있다면 건너뛴다.
+      2. ``_engine_loop``의 supersede 처리에서 "같은 심볼·다른 instance"는
+         포지션 청산 없이 조용히 양보한다(restart race 안전화).
+    """
+    from sqlalchemy import select
+
+    from common.crypto import get_crypto_service
+    from control.models import AccountSnapshot
+    from control.repo import get_binance_credential
+
+    # DB가 준비될 때까지 대기 (init_db는 백그라운드에서 실행됨)
+    deadline = time.monotonic() + 300.0
+    rows: list[AccountSnapshot] = []
+    while time.monotonic() < deadline:
+        try:
+            async with session_maker() as session:
+                result = await session.execute(
+                    select(AccountSnapshot).where(
+                        AccountSnapshot.key.like("funding_arb_ctl:%")
+                    )
+                )
+                rows = list(result.scalars().all())
+            break
+        except Exception as exc:  # noqa: BLE001
+            _log.debug("Auto-restore: waiting for DB (%s)", exc)
+            await asyncio.sleep(5.0)
+    else:
+        _log.warning("Auto-restore aborted: DB not ready within 5 minutes")
+        return
+
+    if not rows:
+        _log.info("Auto-restore: no funding-arb engines to restore")
+        return
+
+    # 여러 replica가 같은 순간에 복원하지 않도록 0~5초 jitter (uuid 기반 deterministic).
+    jitter = 0.5 + (uuid.uuid4().int % 5000) / 1000.0
+    await asyncio.sleep(jitter)
+
+    crypto = get_crypto_service()
+    restored = 0
+    skipped = 0
+    failed = 0
+    for row in rows:
+        try:
+            data = dict(row.data_json or {})
+            if not data.get("desired_running"):
+                continue
+            user_id = row.key.removeprefix("funding_arb_ctl:")
+            params_dict = data.get("params")
+            if not isinstance(params_dict, dict):
+                _log.warning(
+                    "Auto-restore skip user=%s: no params in ctl snapshot", user_id
+                )
+                skipped += 1
+                continue
+            try:
+                params = FundingArbitrageParams(**params_dict)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "Auto-restore skip user=%s: invalid params: %s", user_id, exc
+                )
+                skipped += 1
+                continue
+
+            is_testnet = bool(data.get("is_testnet", False))
+
+            # 다른 replica가 이미 복원해 heartbeat을 쓰고 있으면 건너뜀
+            try:
+                async with session_maker() as session:
+                    obs = await get_account_snapshot(
+                        session, key=_snapshot_key(user_id)
+                    )
+                if obs and not _is_stale(obs.updated_at):
+                    _log.info(
+                        "Auto-restore skip user=%s symbol=%s: heartbeat fresh "
+                        "(owned by another replica)",
+                        user_id,
+                        params.symbol,
+                    )
+                    skipped += 1
+                    continue
+            except Exception:  # noqa: BLE001
+                _log.debug("Auto-restore heartbeat check failed (user=%s)", user_id)
+
+            env = "testnet" if is_testnet else "mainnet"
+            try:
+                async with session_maker() as session:
+                    cred = await get_binance_credential(
+                        session, user_id=user_id, env=env
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "Auto-restore skip user=%s: credential lookup failed: %s",
+                    user_id,
+                    exc,
+                )
+                skipped += 1
+                continue
+            if cred is None:
+                _log.warning(
+                    "Auto-restore skip user=%s: no %s credentials", user_id, env
+                )
+                skipped += 1
+                continue
+
+            try:
+                futures_api_key = crypto.decrypt(cred.api_key_enc)
+                futures_api_secret = crypto.decrypt(cred.api_secret_enc)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "Auto-restore skip user=%s: credential decrypt failed: %s",
+                    user_id,
+                    exc,
+                )
+                skipped += 1
+                continue
+
+            await start_engine(
+                user_id=user_id,
+                params=params,
+                futures_api_key=futures_api_key,
+                futures_api_secret=futures_api_secret,
+                spot_api_key=futures_api_key,
+                spot_api_secret=futures_api_secret,
+                is_testnet=is_testnet,
+                session_maker=session_maker,
+            )
+            restored += 1
+            _log.info(
+                "Auto-restored funding-arb engine: user=%s symbol=%s env=%s replica=%s",
+                user_id,
+                params.symbol,
+                env,
+                _REPLICA_ID,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            _log.exception(
+                "Auto-restore failed for ctl row %s: %s", getattr(row, "key", "?"), exc
+            )
+
+    _log.info(
+        "Auto-restore summary (replica=%s): restored=%d skipped=%d failed=%d",
+        _REPLICA_ID,
+        restored,
+        skipped,
+        failed,
+    )
+
+
 # ── base URL 도출 ──────────────────────────────────────────
 
 
@@ -588,26 +751,44 @@ async def _engine_loop(st: _EngineState) -> None:
                 await _persist_state(st)
 
             # desired-state 확인: 다른 replica/심볼에서 Stop이나 교체가 일어났다면 자가 정지.
-            #  - desired_running=false  → 사용자가 Stop을 눌렀다.
-            #  - instance_id 불일치      → 다른 엔진(새 심볼/replica)이 지정 엔진을 넘겨받았다.
-            #    이 엔진은 좀비이므로 보유 포지션을 청산하고 종료한다.
+            #  - desired_running=false       → 사용자가 Stop을 눌렀다 → 청산 후 종료.
+            #  - 다른 instance + 다른 심볼  → 사용자가 심볼을 바꿔 새 엔진을 시작 → 청산 후 종료.
+            #  - 다른 instance + 같은 심볼  → 재시작 race(자동 복원/멀티 replica). 새 owner가
+            #                                  이미 같은 포지션을 관리 중이므로 청산하지 말고
+            #                                  조용히 양보한다. (옛 동작은 무조건 청산하여
+            #                                  배포 직후 포지션이 닫히는 사고가 났다)
             if st.session_maker is not None:
                 try:
                     ctl = await _get_control_state(st.session_maker, st.user_id)
                     desired = bool(ctl.get("desired_running", True))
                     ctl_instance = ctl.get("instance_id")
+                    ctl_symbol = ctl.get("symbol")
                     superseded = ctl_instance is not None and ctl_instance != st.instance_id
+                    same_symbol_race = (
+                        superseded
+                        and ctl_symbol is not None
+                        and ctl_symbol == st.symbol
+                    )
                     if not desired or superseded:
                         _log.info(
                             "Self-stopping (user=%s): desired=%s superseded=%s "
-                            "(my_instance=%s ctl_instance=%s)",
+                            "same_symbol_race=%s (my_instance=%s ctl_instance=%s "
+                            "my_symbol=%s ctl_symbol=%s)",
                             st.user_id,
                             desired,
                             superseded,
+                            same_symbol_race,
                             st.instance_id,
                             ctl_instance,
+                            st.symbol,
+                            ctl_symbol,
                         )
                         st.running = False
+                        if same_symbol_race:
+                            # 같은 심볼·다른 instance가 owner → 재시작 race로 판단하고
+                            # 포지션 청산 없이 조용히 양보한다. 새 owner가 동일 포지션을
+                            # 이어서 관리한다.
+                            break
                         # 거래소 포지션 청산 — _liquidate_all은 거래소 실제 잔량을
                         # 동기화하고 최종 스윕까지 수행해 완전 청산을 보장한다.
                         with contextlib.suppress(Exception):
