@@ -31,6 +31,13 @@ run_bb_oi_q1.json
 scripts/_alpha_lab/
 data/*
 
+# Multi-factor portfolio / alpha-lab scratch run artifacts (one-off backtest outputs).
+# alpha_lab_portfolio_v2.json is the committed final config and stays tracked.
+mfp_*.json
+alpha_lab_portfolio.json
+alpha_lab_trend_legs.json
+eth_consistency_report.json
+
 # Track strategy param artifacts as config-as-code: small JSON files that are
 # baked into the runner image (param_store resolves the local file first, so no
 # blob/env/network is needed). Re-include only this subtree; everything else
