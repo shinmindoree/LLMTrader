@@ -12,17 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.enums import EventKind, JobStatus, JobType
 from control.models import (
     AccountSnapshot,
+    AllocationMode,
     BinanceApiCredential,
     BridgeTransfer,
     Job,
     JobEvent,
     Order,
+    StrategyAllocation,
     StrategyMeta,
     StrategyChatSession,
     StrategyQualityLog,
     Trade,
     UsageRecord,
     UserProfile,
+    WalletAccount,
+    WalletAccountStatus,
+    WalletRole,
+    WalletTransfer,
+    WalletTransferStatus,
 )
 
 ACTIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING, JobStatus.STOP_REQUESTED}
@@ -1260,3 +1267,395 @@ async def update_bridge_transfer(
         .where(BridgeTransfer.id == transfer_id)
         .values(**kwargs)
     )
+
+
+# ---------------------------------------------------------------------------
+# WalletAccount (Sub-account topology)
+# ---------------------------------------------------------------------------
+
+
+_VALID_WALLET_ROLES = frozenset({WalletRole.MASTER, WalletRole.SUB})
+
+
+def _wallet_status_value(status: WalletAccountStatus | str) -> str:
+    return status.value if isinstance(status, WalletAccountStatus) else str(status)
+
+
+async def get_wallet_account(
+    session: AsyncSession, *, wallet_account_id: uuid.UUID
+) -> WalletAccount | None:
+    result = await session.execute(
+        select(WalletAccount).where(WalletAccount.id == wallet_account_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_wallet_account_by_alias(
+    session: AsyncSession, *, user_id: str, env: str, alias: str
+) -> WalletAccount | None:
+    result = await session.execute(
+        select(WalletAccount).where(
+            WalletAccount.user_id == user_id,
+            WalletAccount.env == env,
+            WalletAccount.alias == alias,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_master_wallet_account(
+    session: AsyncSession, *, user_id: str, env: str
+) -> WalletAccount | None:
+    """Return the user's master wallet for the given env, if any.
+
+    Only one master per (user_id, env) is expected; if duplicates exist for
+    any reason (e.g. partial migration), the most recently updated wins.
+    """
+    result = await session.execute(
+        select(WalletAccount)
+        .where(
+            WalletAccount.user_id == user_id,
+            WalletAccount.env == env,
+            WalletAccount.role == WalletRole.MASTER,
+        )
+        .order_by(WalletAccount.updated_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_wallet_accounts(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    env: str | None = None,
+    role: WalletRole | str | None = None,
+) -> list[WalletAccount]:
+    stmt = select(WalletAccount).where(WalletAccount.user_id == user_id)
+    if env is not None:
+        stmt = stmt.where(WalletAccount.env == env)
+    if role is not None:
+        role_value = role.value if isinstance(role, WalletRole) else role
+        stmt = stmt.where(WalletAccount.role == role_value)
+    stmt = stmt.order_by(WalletAccount.role.desc(), WalletAccount.alias.asc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def create_wallet_account(  # noqa: PLR0913 — each kwarg maps to a distinct table column
+    session: AsyncSession,
+    *,
+    user_id: str,
+    env: str,
+    role: WalletRole | str,
+    alias: str,
+    purpose: str = "generic",
+    sub_account_email: str | None = None,
+    api_key_enc: str | None = None,
+    api_secret_enc: str | None = None,
+    enabled_wallets: dict[str, Any] | None = None,
+    ip_whitelist: list[str] | None = None,
+    status: WalletAccountStatus | str = WalletAccountStatus.KEY_MISSING,
+) -> WalletAccount:
+    role_value = role.value if isinstance(role, WalletRole) else role
+    if role_value not in {r.value for r in _VALID_WALLET_ROLES}:
+        raise ValueError(f"invalid wallet role: {role_value!r}")
+    if role_value == WalletRole.SUB and not sub_account_email:
+        raise ValueError("sub_account_email is required when role='sub'")
+
+    wallet = WalletAccount(
+        user_id=user_id,
+        env=env,
+        role=role_value,
+        sub_account_email=sub_account_email,
+        alias=alias,
+        purpose=purpose,
+        api_key_enc=api_key_enc,
+        api_secret_enc=api_secret_enc,
+        enabled_wallets=enabled_wallets or {},
+        ip_whitelist=ip_whitelist or [],
+        status=_wallet_status_value(status),
+    )
+    session.add(wallet)
+    await session.flush()
+    return wallet
+
+
+async def update_wallet_account_keys(
+    session: AsyncSession,
+    *,
+    wallet_account_id: uuid.UUID,
+    api_key_enc: str,
+    api_secret_enc: str,
+    mark_active: bool = True,
+) -> None:
+    values: dict[str, Any] = {
+        "api_key_enc": api_key_enc,
+        "api_secret_enc": api_secret_enc,
+        "updated_at": datetime.now(),
+    }
+    if mark_active:
+        values["status"] = WalletAccountStatus.ACTIVE.value
+    await session.execute(
+        update(WalletAccount)
+        .where(WalletAccount.id == wallet_account_id)
+        .values(**values)
+    )
+
+
+async def update_wallet_account_status(
+    session: AsyncSession,
+    *,
+    wallet_account_id: uuid.UUID,
+    status: WalletAccountStatus | str,
+) -> None:
+    await session.execute(
+        update(WalletAccount)
+        .where(WalletAccount.id == wallet_account_id)
+        .values(status=_wallet_status_value(status), updated_at=datetime.now())
+    )
+
+
+async def update_wallet_account_meta(
+    session: AsyncSession,
+    *,
+    wallet_account_id: uuid.UUID,
+    enabled_wallets: dict[str, Any] | None = None,
+    ip_whitelist: list[str] | None = None,
+    purpose: str | None = None,
+) -> None:
+    values: dict[str, Any] = {"updated_at": datetime.now()}
+    if enabled_wallets is not None:
+        values["enabled_wallets"] = enabled_wallets
+    if ip_whitelist is not None:
+        values["ip_whitelist"] = ip_whitelist
+    if purpose is not None:
+        values["purpose"] = purpose
+    if len(values) == 1:
+        return
+    await session.execute(
+        update(WalletAccount)
+        .where(WalletAccount.id == wallet_account_id)
+        .values(**values)
+    )
+
+
+async def delete_wallet_account(
+    session: AsyncSession, *, wallet_account_id: uuid.UUID
+) -> None:
+    await session.execute(
+        delete(WalletAccount).where(WalletAccount.id == wallet_account_id)
+    )
+
+
+# ---------------------------------------------------------------------------
+# StrategyAllocation (per-job capital budget)
+# ---------------------------------------------------------------------------
+
+
+async def get_strategy_allocation(
+    session: AsyncSession, *, job_id: uuid.UUID
+) -> StrategyAllocation | None:
+    result = await session.execute(
+        select(StrategyAllocation).where(StrategyAllocation.job_id == job_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_strategy_allocations_for_wallet(
+    session: AsyncSession, *, wallet_account_id: uuid.UUID
+) -> list[StrategyAllocation]:
+    result = await session.execute(
+        select(StrategyAllocation).where(
+            StrategyAllocation.wallet_account_id == wallet_account_id
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def upsert_strategy_allocation(  # noqa: PLR0913 — each kwarg maps to a distinct table column
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    wallet_account_id: uuid.UUID,
+    allocated_usdt: float,
+    allocation_mode: AllocationMode | str = AllocationMode.FIXED_USDT,
+    max_drawdown_pct: float | None = None,
+) -> StrategyAllocation:
+    mode_value = (
+        allocation_mode.value if isinstance(allocation_mode, AllocationMode) else allocation_mode
+    )
+    now = datetime.now()
+    stmt = (
+        insert(StrategyAllocation)
+        .values(
+            job_id=job_id,
+            wallet_account_id=wallet_account_id,
+            allocation_mode=mode_value,
+            allocated_usdt=allocated_usdt,
+            reserved_usdt=0.0,
+            max_drawdown_pct=max_drawdown_pct,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            constraint="uq_strategy_alloc_job",
+            set_={
+                "wallet_account_id": wallet_account_id,
+                "allocation_mode": mode_value,
+                "allocated_usdt": allocated_usdt,
+                "max_drawdown_pct": max_drawdown_pct,
+                "updated_at": now,
+            },
+        )
+        .returning(StrategyAllocation)
+    )
+    result = await session.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is not None:
+        return row
+    refreshed = await session.execute(
+        select(StrategyAllocation).where(StrategyAllocation.job_id == job_id)
+    )
+    return refreshed.scalar_one()
+
+
+async def adjust_strategy_allocation_reserved(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    delta_usdt: float,
+) -> float | None:
+    """Atomically bump ``reserved_usdt`` by ``delta_usdt``.
+
+    Returns the new ``reserved_usdt`` value, or ``None`` if no row exists.
+    The pre-trade gate uses this to reserve capital on order intent and
+    release it after fills/cancels.
+    """
+    result = await session.execute(
+        update(StrategyAllocation)
+        .where(StrategyAllocation.job_id == job_id)
+        .values(
+            reserved_usdt=StrategyAllocation.reserved_usdt + delta_usdt,
+            updated_at=datetime.now(),
+        )
+        .returning(StrategyAllocation.reserved_usdt)
+    )
+    return result.scalar_one_or_none()
+
+
+async def reset_strategy_allocation_reserved(
+    session: AsyncSession, *, job_id: uuid.UUID, reserved_usdt: float
+) -> None:
+    await session.execute(
+        update(StrategyAllocation)
+        .where(StrategyAllocation.job_id == job_id)
+        .values(reserved_usdt=reserved_usdt, updated_at=datetime.now())
+    )
+
+
+async def delete_strategy_allocation(
+    session: AsyncSession, *, job_id: uuid.UUID
+) -> None:
+    await session.execute(
+        delete(StrategyAllocation).where(StrategyAllocation.job_id == job_id)
+    )
+
+
+# ---------------------------------------------------------------------------
+# WalletTransfer (audit log)
+# ---------------------------------------------------------------------------
+
+
+def _transfer_status_value(status: WalletTransferStatus | str) -> str:
+    return status.value if isinstance(status, WalletTransferStatus) else str(status)
+
+
+async def create_wallet_transfer(  # noqa: PLR0913 — every field is a distinct dimension of the transfer
+    session: AsyncSession,
+    *,
+    user_id: str,
+    from_wallet_account_id: uuid.UUID | None,
+    to_wallet_account_id: uuid.UUID | None,
+    from_wallet_type: str,
+    to_wallet_type: str,
+    asset: str,
+    amount: float,
+    reason: str,
+    client_tran_id: str,
+    status: WalletTransferStatus | str = WalletTransferStatus.PENDING,
+) -> WalletTransfer:
+    transfer = WalletTransfer(
+        user_id=user_id,
+        from_wallet_account_id=from_wallet_account_id,
+        to_wallet_account_id=to_wallet_account_id,
+        from_wallet_type=from_wallet_type,
+        to_wallet_type=to_wallet_type,
+        asset=asset,
+        amount=amount,
+        reason=reason,
+        status=_transfer_status_value(status),
+        client_tran_id=client_tran_id,
+    )
+    session.add(transfer)
+    await session.flush()
+    return transfer
+
+
+async def mark_wallet_transfer_succeeded(
+    session: AsyncSession,
+    *,
+    transfer_id: uuid.UUID,
+    binance_tran_id: str | None,
+) -> None:
+    await session.execute(
+        update(WalletTransfer)
+        .where(WalletTransfer.id == transfer_id)
+        .values(
+            status=WalletTransferStatus.SUCCEEDED.value,
+            binance_tran_id=binance_tran_id,
+            completed_at=datetime.now(),
+        )
+    )
+
+
+async def mark_wallet_transfer_failed(
+    session: AsyncSession,
+    *,
+    transfer_id: uuid.UUID,
+    error_message: str,
+) -> None:
+    await session.execute(
+        update(WalletTransfer)
+        .where(WalletTransfer.id == transfer_id)
+        .values(
+            status=WalletTransferStatus.FAILED.value,
+            error_message=error_message[:1000],
+            completed_at=datetime.now(),
+        )
+    )
+
+
+async def get_wallet_transfer_by_client_id(
+    session: AsyncSession, *, client_tran_id: str
+) -> WalletTransfer | None:
+    result = await session.execute(
+        select(WalletTransfer).where(WalletTransfer.client_tran_id == client_tran_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_wallet_transfers(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    limit: int = 50,
+) -> list[WalletTransfer]:
+    result = await session.execute(
+        select(WalletTransfer)
+        .where(WalletTransfer.user_id == user_id)
+        .order_by(WalletTransfer.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
