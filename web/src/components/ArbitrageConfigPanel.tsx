@@ -184,20 +184,23 @@ export function ArbitrageConfigPanel() {
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#9aa0ad]">
                   🔍 실시간 스크리너 — Top 5
                 </p>
-                <span
-                  className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                <button
+                  type="button"
+                  onClick={() => setEnv((e) => (e === "testnet" ? "mainnet" : "testnet"))}
+                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold transition-colors hover:brightness-125 ${
                     env === "testnet"
                       ? "bg-[#f0b90b]/15 text-[#f0b90b]"
                       : "bg-[#26a69a]/15 text-[#26a69a]"
                   }`}
                   title={
                     env === "testnet"
-                      ? "테스트넷(데모) 펀딩비 기준 — testnet.binancefuture.com"
-                      : "메인넷(실거래) 펀딩비 기준 — fapi.binance.com"
+                      ? "테스트넷(데모) 펀딩비 기준 — testnet.binancefuture.com · 클릭하면 메인넷으로 전환"
+                      : "메인넷(실거래) 펀딩비 기준 — fapi.binance.com · 클릭하면 테스트넷으로 전환"
                   }
                 >
                   {env === "testnet" ? "테스트넷 펀딩비" : "메인넷 펀딩비"}
-                </span>
+                  <span className="opacity-60">⇄</span>
+                </button>
               </div>
               <p className="text-[10px] text-[#555]">
                 score = 현재 펀딩비 ÷ 최소 진입 임계치 · 30초마다 갱신
