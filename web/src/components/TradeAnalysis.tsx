@@ -356,97 +356,179 @@ function enrichLiveTrades(
   });
 }
 
+type EntryLeg = {
+  price: number;
+  qty: number;
+  timeLabel: string;
+  symbol: string | null;
+  timestamp: number | null;
+};
+
+/**
+ * Reconstruct positions from a chronological trade list using a signed
+ * net-quantity model.
+ *
+ * The previous implementation only tracked BUY/SELL direction plus a running
+ * entry/exit quantity and reset to flat as soon as the exit quantity reached
+ * the entry quantity. That model broke on two real-world cases:
+ *
+ *  1. Reversals (flips): a single fill (or the fill that crosses zero) both
+ *     closes the current position and opens the opposite one. The old code
+ *     closed the position and *discarded* the surplus quantity, so the next
+ *     position's real entry volume vanished and every subsequent position
+ *     boundary was shifted by one trade.
+ *  2. A position inherited from before the trade window (e.g. a live job that
+ *     restarted while holding a position). Its closing fill carries a realized
+ *     PnL but no visible entry, which the old code mislabeled as a brand-new
+ *     entry, cascading the same off-by-one error.
+ *
+ * This version accumulates a signed quantity (BUY = +, SELL = -). A position
+ * is closed exactly when the signed quantity returns to (or crosses) zero, a
+ * flip opens a fresh opposite position with the leftover quantity, and a
+ * closing fill seen while flat is treated as an orphan close (the position was
+ * opened before our window) and excluded. Realized PnL is taken verbatim from
+ * the exchange-provided per-trade values.
+ */
 export function buildPositions(trades: NormalizedTrade[], leverage: number): Position[] {
   const positions: Position[] = [];
-  let entryTrades: NormalizedTrade[] = [];
-  let exitTrades: NormalizedTrade[] = [];
-  let entryDirection: string | null = null;
+
+  let netQty = 0; // signed running quantity: + long, - short
+  let dir: "Long" | "Short" | null = null;
+  let entryLegs: EntryLeg[] = [];
+  let pnlAccum = 0; // exchange realized PnL accumulated for the current position
+  let commissionAccum = 0; // commissions attributable to the current position
+  let exitVol = 0; // gross closed volume so far
+  let exitPriceVol = 0; // sum(price * qty) over closing fills (for avg close price)
+  let lastExitTs: number | null = null;
+  let lastExitLabel = "-";
+
+  const resetPosition = () => {
+    dir = null;
+    entryLegs = [];
+    pnlAccum = 0;
+    commissionAccum = 0;
+    exitVol = 0;
+    exitPriceVol = 0;
+    lastExitTs = null;
+    lastExitLabel = "-";
+  };
+
+  const finalizePosition = () => {
+    if (dir === null) return;
+    const entryQty = entryLegs.reduce((s, l) => s + l.qty, 0);
+    if (entryQty <= 0) {
+      resetPosition();
+      return;
+    }
+    const realizedPnl = pnlAccum - commissionAccum;
+    const avgEntry = entryLegs.reduce((s, l) => s + l.price * l.qty, 0) / entryQty;
+    const avgExit = exitVol > 0 ? exitPriceVol / exitVol : null;
+    const maxOi = entryLegs.reduce((m, l) => Math.max(m, l.qty), 0);
+    const costBasis = avgEntry * entryQty;
+    const roi = costBasis > 0 ? (realizedPnl / costBasis) * 100 * leverage : 0;
+
+    positions.push({
+      symbol: entryLegs[0]?.symbol ?? "-",
+      direction: `Cross ${dir}`,
+      status: "Closed",
+      realizedPnl,
+      roi,
+      closedVol: entryQty,
+      entryPrice: avgEntry,
+      avgClosePrice: avgExit,
+      maxOi,
+      openedAt: entryLegs[0]?.timeLabel ?? "-",
+      closedAt: lastExitLabel,
+      closedTimestamp: lastExitTs,
+    });
+    resetPosition();
+  };
 
   for (const trade of trades) {
     const side = trade.side?.toUpperCase();
-    if (!side) continue;
+    if (side !== "BUY" && side !== "SELL") continue;
+    const qty = trade.quantity ?? 0;
+    if (qty <= 0) continue;
+    const price = trade.price ?? 0;
+    const pnl = trade.pnl ?? 0;
+    const commission = trade.commission ?? 0;
+    const delta = side === "BUY" ? qty : -qty;
 
-    const isEntry = side === "BUY" && (entryDirection === null || entryDirection === "Long");
-    const isShortEntry = side === "SELL" && (entryDirection === null || entryDirection === "Short");
-
-    if (entryDirection === null) {
-      if (side === "BUY") {
-        entryDirection = "Long";
-        entryTrades = [trade];
-        exitTrades = [];
-      } else if (side === "SELL") {
-        entryDirection = "Short";
-        entryTrades = [trade];
-        exitTrades = [];
-      }
-    } else if (
-      (entryDirection === "Long" && side === "SELL") ||
-      (entryDirection === "Short" && side === "BUY")
-    ) {
-      exitTrades.push(trade);
-      const entryQty = entryTrades.reduce((s, t) => s + (t.quantity ?? 0), 0);
-      const exitQty = exitTrades.reduce((s, t) => s + (t.quantity ?? 0), 0);
-
-      if (exitQty >= entryQty - 1e-12) {
-        const totalPnl = exitTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-        const totalCommission = [...entryTrades, ...exitTrades].reduce((s, t) => s + (t.commission ?? 0), 0);
-        const realizedPnl = totalPnl - totalCommission;
-        const avgEntry =
-          entryTrades.reduce((s, t) => s + (t.price ?? 0) * (t.quantity ?? 0), 0) / (entryQty || 1);
-        const avgExit =
-          exitTrades.reduce((s, t) => s + (t.price ?? 0) * (t.quantity ?? 0), 0) / (exitQty || 1);
-        const maxOi = Math.max(...entryTrades.map((t) => t.quantity ?? 0));
-        const costBasis = avgEntry * entryQty;
-        const roi = costBasis > 0 ? (realizedPnl / costBasis) * 100 * leverage : 0;
-
-        positions.push({
-          symbol: entryTrades[0]?.symbol ?? "-",
-          direction: `Cross ${entryDirection}`,
-          status: "Closed",
-          realizedPnl,
-          roi,
-          closedVol: entryQty,
-          entryPrice: avgEntry,
-          avgClosePrice: avgExit,
-          maxOi,
-          openedAt: entryTrades[0]?.timeLabel ?? "-",
-          closedAt: exitTrades[exitTrades.length - 1]?.timeLabel ?? "-",
-          closedTimestamp: exitTrades[exitTrades.length - 1]?.timestamp ?? null,
-        });
-
-        entryDirection = null;
-        entryTrades = [];
-        exitTrades = [];
-      }
-    } else if (
-      (entryDirection === "Long" && side === "BUY") ||
-      (entryDirection === "Short" && side === "SELL")
-    ) {
-      entryTrades.push(trade);
+    if (dir === null) {
+      // Flat. A fill that carries a realized PnL while we have no open
+      // position is closing a position opened before this trade window
+      // (e.g. inherited on a live-job restart). Treat it as an orphan close
+      // and skip it so it is not counted as a new position.
+      if (Math.abs(pnl) > 1e-9) continue;
+      dir = side === "BUY" ? "Long" : "Short";
+      netQty = delta;
+      entryLegs = [{ price, qty, timeLabel: trade.timeLabel ?? "-", symbol: trade.symbol, timestamp: trade.timestamp }];
+      commissionAccum = commission;
+      continue;
     }
+
+    const sameDirection =
+      (dir === "Long" && side === "BUY") || (dir === "Short" && side === "SELL");
+
+    if (sameDirection) {
+      netQty += delta;
+      entryLegs.push({ price, qty, timeLabel: trade.timeLabel ?? "-", symbol: trade.symbol, timestamp: trade.timestamp });
+      commissionAccum += commission;
+      continue;
+    }
+
+    // Opposite side: reduces (and possibly flips) the current position.
+    const reduceQty = Math.min(qty, Math.abs(netQty));
+    exitVol += reduceQty;
+    exitPriceVol += price * reduceQty;
+    pnlAccum += pnl;
+    commissionAccum += commission;
+    lastExitTs = trade.timestamp ?? lastExitTs;
+    lastExitLabel = trade.timeLabel ?? lastExitLabel;
+    netQty += delta;
+
+    if (Math.abs(netQty) < 1e-9) {
+      // Exactly flat → close the position.
+      finalizePosition();
+      netQty = 0;
+      continue;
+    }
+
+    if ((dir === "Long" && netQty < 0) || (dir === "Short" && netQty > 0)) {
+      // Flip: the fill crossed through zero. Close the old position, then open
+      // a fresh opposite position with the leftover quantity.
+      finalizePosition();
+      const newDir: "Long" | "Short" = netQty > 0 ? "Long" : "Short";
+      const openQty = Math.abs(netQty);
+      dir = newDir;
+      entryLegs = [{ price, qty: openQty, timeLabel: trade.timeLabel ?? "-", symbol: trade.symbol, timestamp: trade.timestamp }];
+      // The single fill's commission was already attributed to the close above.
+      continue;
+    }
+    // Otherwise: partial reduce, position stays open in the same direction.
   }
 
-  // Open position (not yet closed)
-  if (entryDirection && entryTrades.length > 0) {
-    const entryQty = entryTrades.reduce((s, t) => s + (t.quantity ?? 0), 0);
-    const avgEntry =
-      entryTrades.reduce((s, t) => s + (t.price ?? 0) * (t.quantity ?? 0), 0) / (entryQty || 1);
-    const maxOi = Math.max(...entryTrades.map((t) => t.quantity ?? 0));
-
-    positions.push({
-      symbol: entryTrades[0]?.symbol ?? "-",
-      direction: `Cross ${entryDirection}`,
-      status: "Open",
-      realizedPnl: 0,
-      roi: 0,
-      closedVol: 0,
-      entryPrice: avgEntry,
-      avgClosePrice: null,
-      maxOi,
-      openedAt: entryTrades[0]?.timeLabel ?? "-",
-      closedAt: null,
-      closedTimestamp: null,
-    });
+  // Trailing open position (not yet closed).
+  if (dir !== null) {
+    const entryQty = entryLegs.reduce((s, l) => s + l.qty, 0);
+    if (entryQty > 0) {
+      const avgEntry = entryLegs.reduce((s, l) => s + l.price * l.qty, 0) / entryQty;
+      const maxOi = entryLegs.reduce((m, l) => Math.max(m, l.qty), 0);
+      positions.push({
+        symbol: entryLegs[0]?.symbol ?? "-",
+        direction: `Cross ${dir}`,
+        status: "Open",
+        realizedPnl: 0,
+        roi: 0,
+        closedVol: 0,
+        entryPrice: avgEntry,
+        avgClosePrice: null,
+        maxOi,
+        openedAt: entryLegs[0]?.timeLabel ?? "-",
+        closedAt: null,
+        closedTimestamp: null,
+      });
+    }
   }
 
   return positions;

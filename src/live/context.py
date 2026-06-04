@@ -1199,7 +1199,16 @@ class LiveContext:
                 return
             print(f"❌ 주문 실패: {e}")
             self._release_order_inflight()
-            self._drain_pending_after_fill(success=False)
+            if self._pending_after_fill:
+                # A flip's close task reported failure, but the close may have
+                # actually filled at the exchange (e.g. a chase order that
+                # raised *after* the fill — the user-trades poller still records
+                # the trade). Reconcile the real position before deciding
+                # whether to honor or drop the queued reverse entry, so a
+                # flip never silently loses its new-direction leg.
+                asyncio.create_task(self._reconcile_then_drain_pending())
+            else:
+                self._drain_pending_after_fill(success=False)
 
     def _on_after_order_settled(self, _task: asyncio.Task) -> None:
         """``_after_order_filled`` 완료 후 호출되는 콜백.
@@ -1239,6 +1248,50 @@ class LiveContext:
 
     def _release_order_inflight(self) -> None:
         self._order_inflight = False
+
+    def _is_effectively_flat(self) -> bool:
+        """현재 포지션이 사실상 0(플랫)인지 판정한다.
+
+        거래소 ``step_size``/``min_qty`` 미만의 잔량(dust)은 청산이 끝난 것으로
+        간주한다. 이렇게 해야 청산 직후 남은 미세 반올림 잔량이 플립 재진입을
+        막지 않는다.
+        """
+        size = abs(float(self.position.size))
+        threshold = 1e-9
+        if self.step_size is not None:
+            threshold = max(threshold, float(self.step_size) * 0.5)
+        if self.min_qty is not None:
+            threshold = max(threshold, float(self.min_qty) * 0.5)
+        return size < threshold
+
+    async def _reconcile_then_drain_pending(self) -> None:
+        """청산 태스크가 실패로 보고됐을 때, 실제 포지션을 REST 로 재조회해
+        대기 중인 후속 진입(플립의 반대 방향 진입)을 실행할지 결정한다.
+
+        - 실제로 플랫이면(=청산은 거래소에서 체결됨) 후속 진입을 실행한다.
+          진입을 포기하지 않는다는 원칙을 지킨다.
+        - 여전히 기존 포지션을 들고 있으면(=청산이 진짜 실패) 반대 진입은
+          위험하므로 큐를 폐기한다.
+        """
+        try:
+            await self.update_account_info(force=True)
+        except Exception as exc:  # noqa: BLE001
+            self._log_audit("FLIP_RECONCILE_FAILED", {"error": str(exc)})
+            self._drain_pending_after_fill(success=False)
+            return
+        if self._is_effectively_flat():
+            self._log_audit(
+                "FLIP_RECONCILE_FLAT_PROCEED",
+                {"position_size": float(self.position.size)},
+            )
+            self._drain_pending_after_fill(success=True)
+        else:
+            self._log_audit(
+                "FLIP_RECONCILE_NOT_FLAT_DROP",
+                {"position_size": float(self.position.size)},
+            )
+            self._drain_pending_after_fill(success=False)
+
 
     async def _after_order_filled(self, result: dict[str, Any]) -> None:
         """주문 체결 후 후처리."""
@@ -2452,7 +2505,7 @@ class LiveContext:
         use_chase: bool | None = None,
     ) -> None:
         """시스템 리스크 설정 기반으로 롱 진입."""
-        if abs(self.position.size) > 1e-12:
+        if not self._is_effectively_flat():
             return
         if self._earn_client is None:
             qty = self.calc_entry_quantity(entry_pct=entry_pct)
@@ -2471,7 +2524,7 @@ class LiveContext:
         use_chase: bool | None = None,
     ) -> None:
         """시스템 리스크 설정 기반으로 숏 진입."""
-        if abs(self.position.size) > 1e-12:
+        if not self._is_effectively_flat():
             return
         if self._earn_client is None:
             qty = self.calc_entry_quantity(entry_pct=entry_pct)
@@ -2537,7 +2590,7 @@ class LiveContext:
             self._log_audit("JIT_MARGIN_RESTORE_FAILED", {"error": str(exc)})
 
         # 복원 대기 중 포지션/락 상태가 바뀌었을 수 있으므로 재검증
-        if abs(self.position.size) > 1e-12:
+        if not self._is_effectively_flat():
             return
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty <= 0:
