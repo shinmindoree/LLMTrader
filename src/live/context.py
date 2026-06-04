@@ -3096,10 +3096,10 @@ class LiveContext:
 
         Returns:
             (reason, exit_reason). 전략 발주 체결이면 (None, None).
-            사용자가 Binance에서 수동 청산한 경우 ("manual_close_binance", "Manual close on Binance").
+            사용자가 Binance에서 수동 주문한 경우 ("manual_close_binance", "Manual order in Binance").
         """
         if self._is_external_order_id(trade.get("orderId")):
-            return "manual_close_binance", "Manual close on Binance"
+            return "manual_close_binance", "Manual order in Binance"
         return None, None
 
     def _augment_trades_with_external_reason(
@@ -3111,7 +3111,7 @@ class LiveContext:
         - 전략 발주 체결: 발주 시 저장해 둔 orderId -> reason 매핑에서 복원한다.
           (Maker 주문이 비동기로 나중에 체결되어 REST 백필로만 들어올 때 reason이
           비는 문제를 막는다.)
-        - 외부(수동) 청산 체결: "Manual close on Binance" 라벨을 부여한다.
+        - 외부(수동) 주문 체결: "Manual order in Binance" 라벨을 부여한다.
 
         이 거래 dict는 그대로 DB raw_json에 저장되므로 웹에서 그대로 표시된다.
         """
