@@ -832,6 +832,25 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   const winCount = positionPnls.filter((p) => p > 0).length;
   const winRatePct = numTrades > 0 ? (winCount / numTrades) * 100 : 0;
 
+  // Compounded per-trade ROI (return on deployed margin), chained across all
+  // closed positions: Π(1 + roiᵢ) − 1. Each position's roi is measured against
+  // the margin actually committed to that trade, so this metric is independent
+  // of the (volatile) account/Earn balance and stays valid even as funds move
+  // between the Futures wallet and Simple Earn.
+  const compoundReturnPct = useMemo(() => {
+    const closed = positions.filter((p) => p.status === "Closed");
+    if (closed.length === 0) return null;
+    let factor = 1;
+    for (const p of closed) factor *= 1 + p.roi / 100;
+    return (factor - 1) * 100;
+  }, [positions]);
+
+  // Live jobs park most capital in Simple Earn, so the Futures-wallet-based
+  // initialEquity is an unreliable denominator (it can be near-zero, blowing up
+  // the percentage). Use the balance-independent compounded ROI for the live
+  // headline %, while backtests keep the initial_balance-based total return.
+  const displayReturnPct = isLive ? compoundReturnPct : totalReturnPct;
+
   const backtestSymbol = useMemo(() => {
     if (job.type !== "BACKTEST" || !job.config) return null;
     const cfg = job.config as Record<string, unknown>;
@@ -1064,7 +1083,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 {netProfit !== null && (
                   <MetricCard
                     label={t.result.netProfit}
-                    value={`${formatSigned(netProfit, "USDT")}${totalReturnPct !== null ? ` (${formatNumber(totalReturnPct)}%)` : ""}`}
+                    value={`${formatSigned(netProfit, "USDT")}${displayReturnPct !== null ? ` (${formatNumber(displayReturnPct)}%)` : ""}`}
                     tone={netProfit >= 0 ? "positive" : "negative"}
                   />
                 )}
