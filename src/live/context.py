@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 import math
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,36 @@ if TYPE_CHECKING:
 _MIN_RESTORE_USDT = 1.0  # skip dust-sized restores
 _RESTORE_SETTLE_RETRIES = 5  # poll spot balance after redeem before transfer
 _RESTORE_SETTLE_DELAY_SEC = 0.2
+# Binance error codes that indicate "redemption amount exceeds available" and
+# can be retried with a smaller amount (or redeemAll).
+_REDEEM_RETRYABLE_CODES = {-6025}
+# Binance error codes for a rejected reduce-only order. These almost always
+# mean the position is already (near) closed, so we re-sync from REST instead
+# of treating it as a hard failure.
+_REDUCE_ONLY_REJECT_CODES = {-2022, -2011, -4118}
+
+_BINANCE_CODE_RE = re.compile(r"'code':\s*(-?\d+)")
+
+
+def _extract_binance_code(exc: object) -> int | None:
+    """Best-effort extraction of the Binance numeric error code from an
+    exception whose string embeds the JSON error body (e.g.
+    ``payload={'code': -2022, 'msg': ...}`` or ``-> 400: {'code': -6025}``)."""
+    m = _BINANCE_CODE_RE.search(str(exc))
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _is_reduce_only_reject(exc: object) -> bool:
+    return _extract_binance_code(exc) in _REDUCE_ONLY_REJECT_CODES
+
+
+def _is_retryable_redeem_error(exc: object) -> bool:
+    return _extract_binance_code(exc) in _REDEEM_RETRYABLE_CODES
 
 
 class LivePosition:
@@ -2047,69 +2078,202 @@ class LiveContext:
                 })
                 print(f"⚠️ Chase Order 에러: {e}")
 
+                # A rejected reduce-only order (-2022/-2011/-4118) almost always
+                # means the position is already (near) closed but our cached
+                # ``position.size`` is stale. Re-sync from REST and, if we've
+                # already reached the target, stop chasing instead of firing
+                # more doomed reduce-only orders.
+                if _is_reduce_only_reject(e):
+                    try:
+                        await self.update_account_info(force=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    reached = (
+                        side == "BUY" and self.position.size >= target_pos - 1e-9
+                    ) or (
+                        side == "SELL" and self.position.size <= target_pos + 1e-9
+                    )
+                    if reached:
+                        self._log_audit("CHASE_ORDER_REDUCEONLY_RESOLVED", {
+                            "attempt": attempt + 1,
+                            "position_size": self.position.size,
+                            "target_pos": target_pos,
+                        })
+                        break
+
+        # ── Fallback path (B-1/B-3/B-4) ──────────────────────────
+        # Re-sync the real position from REST before deciding anything. The
+        # chase loop relied on the (websocket-cached) ``position.size`` which
+        # can lag the exchange, leading to (a) phantom "FILLED" results when
+        # nothing actually filled and (b) needless reduce-only market orders.
+        try:
+            await self.update_account_info(force=True)
+        except Exception:  # noqa: BLE001
+            pass
+
         pos_change = abs(self.position.size - initial_pos_size)
+        min_qty = float(self.min_qty or Decimal("0.001"))
+
+        def _filled_response(status: str = "FILLED") -> dict[str, Any]:
+            # Report the *actually* filled quantity (clamped to original_qty),
+            # not a blind original_qty, so downstream position bookkeeping
+            # reflects reality.
+            filled = min(pos_change, float(original_qty))
+            return {
+                "status": status,
+                "_reason": reason,
+                "_exit_reason": exit_reason,
+                "_order_type": "CHASE_LIMIT",
+                "_chase_attempts": self._chase_max_attempts,
+                "_initial_pos_size": initial_pos_size,
+                "_all_order_ids": chase_order_ids,
+                "_chase_fills": chase_fills,
+                "side": side,
+                "executedQty": str(filled),
+            }
+
+        # Fully (or all-but-dust) filled by the maker chase already.
         if pos_change >= float(original_qty) * 0.99:
-            print(f"✅ Chase Order 이미 체결됨 (시장가 전환 전 확인: {initial_pos_size:.4f} → {self.position.size:.4f}, 총 {len(chase_order_ids)}개 주문)")
-            return {
-                "status": "FILLED",
-                "_reason": reason,
-                "_exit_reason": exit_reason,
-                "_order_type": "CHASE_LIMIT",
-                "_chase_attempts": self._chase_max_attempts,
-                "_initial_pos_size": initial_pos_size,
-                "_all_order_ids": chase_order_ids,
-                "_chase_fills": chase_fills,
-                "side": side,
-                "executedQty": str(float(original_qty)),
-            }
-        
+            print(f"✅ Chase Order 이미 체결됨 (REST 확인: {initial_pos_size:.4f} → {self.position.size:.4f}, 총 {len(chase_order_ids)}개 주문)")
+            return _filled_response()
+
         remaining_qty_to_fill = float(original_qty) - pos_change
-        if remaining_qty_to_fill < float(self.min_qty or Decimal("0.001")):
+        if remaining_qty_to_fill < min_qty:
             print(f"✅ Chase Order 거의 체결됨 (남은 수량 무시: {remaining_qty_to_fill:.6f}, 총 {len(chase_order_ids)}개 주문)")
-            return {
-                "status": "FILLED",
-                "_reason": reason,
-                "_exit_reason": exit_reason,
-                "_order_type": "CHASE_LIMIT",
-                "_chase_attempts": self._chase_max_attempts,
-                "_initial_pos_size": initial_pos_size,
-                "_all_order_ids": chase_order_ids,
-                "_chase_fills": chase_fills,
-                "side": side,
-                "executedQty": str(float(original_qty)),
-            }
-        
-        if self._chase_fallback_to_market:
-            print(f"🚨 Chase Order 실패 → 시장가로 전환 (남은 수량: {remaining_qty_to_fill:.4f}, 기존 {len(chase_order_ids)}개 주문)")
-            self._log_audit("CHASE_ORDER_FALLBACK_MARKET", {
-                "original_qty": original_qty,
-                "remaining_qty": remaining_qty_to_fill,
-                "position_change": pos_change,
-                "chase_order_ids": chase_order_ids,
-            })
-            adjusted_remaining = self._adjust_quantity(remaining_qty_to_fill)
-            if float(adjusted_remaining) < float(self.min_qty or Decimal("0.001")):
-                print(f"✅ 남은 수량이 최소 수량 미만으로 시장가 전환 생략")
-                return {
-                    "status": "FILLED",
-                    "_reason": reason,
-                    "_exit_reason": exit_reason,
-                    "_order_type": "CHASE_LIMIT",
-                    "_chase_attempts": self._chase_max_attempts,
-                    "_initial_pos_size": initial_pos_size,
-                    "_all_order_ids": chase_order_ids,
-                    "_chase_fills": chase_fills,
-                    "side": side,
-                    "executedQty": str(float(original_qty)),
-                }
-            response = await self._place_order(side, float(adjusted_remaining), price=None, reason=reason, exit_reason=exit_reason)
-            response["_initial_pos_size"] = initial_pos_size
-            response["_all_order_ids"] = chase_order_ids + [response.get("orderId")]
-            response["_chase_fills"] = chase_fills
-            response["executedQty"] = str(float(original_qty))
-            return response
-        else:
+            return _filled_response()
+
+        if not self._chase_fallback_to_market:
             raise ValueError(f"Chase Order 실패: {self._chase_max_attempts}회 시도 후 미체결 (주문 IDs: {chase_order_ids})")
+
+        # B-3: before a pure (uncapped-slippage) market order, try a marketable
+        # LIMIT IOC at a small slippage band. This fills immediately like a
+        # taker but caps the price, reducing the churn/slippage of repeated GTX
+        # rejections. Whatever it can't fill rolls on to the market fallback so
+        # entries are NEVER abandoned.
+        ioc_filled = await self._fill_remaining_ioc(
+            side, remaining_qty_to_fill, reason=reason, exit_reason=exit_reason,
+            chase_order_ids=chase_order_ids, chase_fills=chase_fills,
+        )
+        if ioc_filled > 0:
+            try:
+                await self.update_account_info(force=True)
+            except Exception:  # noqa: BLE001
+                pass
+            pos_change = abs(self.position.size - initial_pos_size)
+            remaining_qty_to_fill = float(original_qty) - pos_change
+            if remaining_qty_to_fill < min_qty:
+                print(f"✅ IOC 체결로 완료 (남은 수량 {remaining_qty_to_fill:.6f})")
+                return _filled_response()
+
+        print(f"🚨 Chase Order 실패 → 시장가로 전환 (남은 수량: {remaining_qty_to_fill:.4f}, 기존 {len(chase_order_ids)}개 주문)")
+        self._log_audit("CHASE_ORDER_FALLBACK_MARKET", {
+            "original_qty": original_qty,
+            "remaining_qty": remaining_qty_to_fill,
+            "position_change": pos_change,
+            "chase_order_ids": chase_order_ids,
+        })
+        adjusted_remaining = self._adjust_quantity(remaining_qty_to_fill)
+        if float(adjusted_remaining) < min_qty:
+            print("✅ 남은 수량이 최소 수량 미만으로 시장가 전환 생략")
+            return _filled_response()
+        response = await self._place_order(side, float(adjusted_remaining), price=None, reason=reason, exit_reason=exit_reason)
+        response["_initial_pos_size"] = initial_pos_size
+        response["_all_order_ids"] = chase_order_ids + [response.get("orderId")]
+        response["_chase_fills"] = chase_fills
+        response["executedQty"] = str(float(original_qty))
+        return response
+
+    async def _fill_remaining_ioc(
+        self,
+        side: str,
+        remaining_qty: float,
+        *,
+        reason: str | None,
+        exit_reason: str | None,
+        chase_order_ids: list[int],
+        chase_fills: list[dict[str, Any]],
+    ) -> float:
+        """Try to fill ``remaining_qty`` with marketable LIMIT IOC orders.
+
+        Returns the total executed quantity across the IOC attempt(s). Any
+        unfilled remainder is left for the caller's market fallback, so this
+        never abandons an entry.
+        """
+        qty = self._adjust_quantity(remaining_qty)
+        if float(qty) < float(self.min_qty or Decimal("0.001")):
+            return 0.0
+        current_price = self._current_price
+        if current_price <= 0:
+            return 0.0
+
+        # Determine reduce-only against the freshly-synced position.
+        new_pos = self.position.size + (float(qty) if side == "BUY" else -float(qty))
+        is_reducing = abs(new_pos) < abs(self.position.size) - 1e-12
+
+        total_filled = 0.0
+        for ioc_attempt in range(2):
+            if float(qty) < float(self.min_qty or Decimal("0.001")):
+                break
+            # Marketable price: cross a few ticks / a small slippage band so the
+            # IOC actually executes, but never worse than this cap.
+            if self._best_bid is not None and self._best_ask is not None and self.tick_size is not None:
+                cross = self.tick_size * 3
+                limit_price = (self._best_ask + cross) if side == "BUY" else (self._best_bid - cross)
+                limit_price = self._adjust_price(float(limit_price))
+            else:
+                slip = self._chase_slippage_bps / 10000.0
+                raw = current_price * (1 + slip) if side == "BUY" else current_price * (1 - slip)
+                limit_price = self._adjust_price(raw)
+
+            order_params: dict[str, Any] = {
+                "type": "LIMIT",
+                "price": str(limit_price),
+                "timeInForce": "IOC",
+            }
+            if is_reducing:
+                order_params["reduceOnly"] = True
+            try:
+                response = await self.client.place_order(
+                    symbol=self.symbol, side=side, quantity=str(qty), **order_params,
+                )
+            except Exception as e:  # noqa: BLE001
+                self._log_audit("CHASE_ORDER_IOC_ERROR", {
+                    "attempt": ioc_attempt + 1, "error": str(e),
+                })
+                # A reduce-only reject here means the position is already closed.
+                if _is_reduce_only_reject(e):
+                    break
+                continue
+
+            order_id = response.get("orderId")
+            executed = float(response.get("executedQty", 0) or 0)
+            if order_id:
+                self._record_placed_order_id(order_id, reason, exit_reason)
+                chase_order_ids.append(order_id)
+                chase_fills.append({
+                    "order_id": order_id,
+                    "attempt": f"ioc{ioc_attempt + 1}",
+                    "price": str(limit_price),
+                    "qty": str(qty),
+                    "status": response.get("status"),
+                    "executed_qty": str(executed),
+                })
+            self._log_audit("CHASE_ORDER_IOC", {
+                "attempt": ioc_attempt + 1,
+                "order_id": order_id,
+                "limit_price": float(limit_price),
+                "executed_qty": executed,
+                "status": response.get("status"),
+            })
+
+            total_filled += executed
+            remaining_qty -= executed
+            if remaining_qty < float(self.min_qty or Decimal("0.001")):
+                break
+            qty = self._adjust_quantity(remaining_qty)
+            current_price = self._current_price
+
+        return total_filled
 
     def cancel_order(self, order_id: int) -> None:
         """주문 취소.
@@ -2435,9 +2599,28 @@ class LiveContext:
             self._log_audit("JIT_MARGIN_NO_PRODUCT", {})
             return
 
-        await earn.redeem(restore_amount, product_id)
+        # ``totalAmount`` (position) can include principal that is not yet
+        # redeemable (just-subscribed by Auto-Sweep, daily fast-redeem quota,
+        # rounding), which makes a full-amount redeem fail with -6025. Restore
+        # with retries: when pulling the whole position prefer ``redeemAll``
+        # (lets Binance redeem exactly what's available); when capped, request
+        # the explicit (floored) amount and shrink it on -6025 — never exceed
+        # the cap.
+        full_restore = cap <= 0 or restore_amount >= position - 1e-9
+        redeemed = await self._redeem_with_retry(
+            earn,
+            product_id=product_id,
+            want_amount=restore_amount,
+            full_restore=full_restore,
+        )
+        if redeemed <= 0.0:
+            # Every redeem attempt failed. Surface it and bail; the caller's
+            # best-effort guard proceeds with whatever margin already sits in
+            # the Futures wallet (and retries on the next bar).
+            return
         self._log_audit(
-            "JIT_MARGIN_REDEEM", {"amount": restore_amount, "cap": cap, "position": position}
+            "JIT_MARGIN_REDEEM",
+            {"amount": redeemed, "cap": cap, "position": position, "full": full_restore},
         )
 
         # Fast redemption 은 거의 즉시지만 Spot 반영이 원자적이지 않으므로
@@ -2446,11 +2629,11 @@ class LiveContext:
         spot = 0.0
         for _ in range(_RESTORE_SETTLE_RETRIES):
             spot = await earn.fetch_spot_usdt_balance()
-            if spot >= min(restore_amount, _MIN_RESTORE_USDT):
+            if spot >= min(redeemed, _MIN_RESTORE_USDT):
                 break
             await asyncio.sleep(_RESTORE_SETTLE_DELAY_SEC)
 
-        transfer_amount = min(restore_amount, spot)
+        transfer_amount = min(redeemed, spot)
         if transfer_amount >= _MIN_RESTORE_USDT:
             await earn.transfer_spot_to_futures(transfer_amount)
             self._log_audit("JIT_MARGIN_TRANSFER", {"amount": transfer_amount})
@@ -2459,6 +2642,59 @@ class LiveContext:
         self.balance = fresh
         self.available_balance = fresh
         self._log_audit("JIT_MARGIN_RESTORED", {"futures_balance": fresh})
+
+    async def _redeem_with_retry(
+        self,
+        earn: "BinanceEarnClient",
+        *,
+        product_id: str,
+        want_amount: float,
+        full_restore: bool,
+    ) -> float:
+        """Redeem USDT from Simple Earn, retrying around ``-6025``.
+
+        Returns the amount we *requested* on the attempt that succeeded
+        (``want_amount`` for ``redeemAll``), or ``0.0`` if all attempts failed.
+        """
+        from binance.earn_client import BinanceEarnClientError
+
+        # Build the ordered list of attempts.
+        attempts: list[tuple[bool, float]] = []  # (redeem_all, amount)
+        if full_restore:
+            # Prefer redeemAll, then fall back to shrinking explicit amounts.
+            attempts.append((True, want_amount))
+            for frac in (0.75, 0.5, 0.25):
+                attempts.append((False, math.floor(want_amount * frac * 100) / 100.0))
+        else:
+            # Respect the cap: explicit amounts only, shrinking on -6025.
+            for frac in (1.0, 0.75, 0.5, 0.25):
+                attempts.append((False, math.floor(want_amount * frac * 100) / 100.0))
+
+        last_exc: Exception | None = None
+        for idx, (redeem_all, amount) in enumerate(attempts):
+            if not redeem_all and amount < _MIN_RESTORE_USDT:
+                continue
+            try:
+                await earn.redeem(amount, product_id, redeem_all=redeem_all)
+                return want_amount if redeem_all else amount
+            except BinanceEarnClientError as exc:
+                last_exc = exc
+                self._log_audit(
+                    "JIT_MARGIN_REDEEM_RETRY",
+                    {
+                        "attempt": idx + 1,
+                        "redeem_all": redeem_all,
+                        "amount": amount,
+                        "retryable": _is_retryable_redeem_error(exc),
+                        "error": str(exc),
+                    },
+                )
+                if not _is_retryable_redeem_error(exc):
+                    # Non-(-6025) error: shrinking won't help, stop early.
+                    break
+        if last_exc is not None:
+            self._log_audit("JIT_MARGIN_RESTORE_FAILED", {"error": str(last_exc)})
+        return 0.0
 
 
     def flip_position(

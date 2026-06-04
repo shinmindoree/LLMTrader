@@ -193,12 +193,25 @@ class BinanceEarnClient:
         payload = {"productId": product_id, "amount": f"{amount:.2f}"}
         return await self._signed("POST", "/sapi/v1/simple-earn/flexible/subscribe", payload)
 
-    async def redeem(self, amount: float, product_id: str) -> dict[str, Any]:
-        payload = {
+    async def redeem(
+        self, amount: float, product_id: str, *, redeem_all: bool = False
+    ) -> dict[str, Any]:
+        """Redeem from a USDT Flexible product into the Spot wallet.
+
+        When ``redeem_all`` is True the ``redeemAll=true`` flag is sent and the
+        ``amount`` is omitted, letting Binance redeem the entire *currently
+        redeemable* balance. This avoids ``-6025 redemption amount exceeds
+        available`` errors caused by requesting an amount that includes
+        un-settled / locked principal.
+        """
+        payload: dict[str, Any] = {
             "productId": product_id,
-            "amount": f"{amount:.2f}",
             "destAccount": "SPOT",
         }
+        if redeem_all:
+            payload["redeemAll"] = "true"
+        else:
+            payload["amount"] = f"{amount:.2f}"
         return await self._signed("POST", "/sapi/v1/simple-earn/flexible/redeem", payload)
 
     # ── Deposits & Withdrawals ─────────────────────────────
