@@ -220,7 +220,13 @@ def upgrade() -> None:
             'router',
             c.api_key_enc,
             c.api_secret_enc,
-            '{"spot": true, "futures_um": true, "futures_cm": false, "margin": false, "options": false}'::jsonb,
+            jsonb_build_object(
+                'spot', true,
+                'futures_um', true,
+                'futures_cm', false,
+                'margin', false,
+                'options', false
+            ),
             '[]'::jsonb,
             'active',
             c.created_at,
