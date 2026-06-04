@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -107,6 +107,16 @@ class Job(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     live_heartbeat_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
+    )
+
+    # Sub-account topology: which wallet (master or sub) this job trades against.
+    # Nullable for backward compatibility with legacy jobs created before the
+    # topology rollout; new jobs should always set this.
+    wallet_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("wallet_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
 
@@ -327,3 +337,174 @@ class BridgeTransfer(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+# ---------------------------------------------------------------------------
+# Sub-account topology (Phase 0)
+# ---------------------------------------------------------------------------
+
+
+class WalletRole(str, enum.Enum):
+    MASTER = "master"
+    SUB = "sub"
+
+
+class WalletPurpose(str, enum.Enum):
+    ROUTER = "router"                # master, owns Earn pool + routes funds
+    DIRECTIONAL = "directional"      # directional alpha (futures)
+    ARBITRAGE = "arbitrage"          # spot/futures arbitrage
+    DERIVATIVES = "derivatives"      # futures + options paired strategies
+    EARN = "earn"                    # dedicated earn-only sub (optional)
+    GENERIC = "generic"
+
+
+class WalletAccountStatus(str, enum.Enum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    KEY_MISSING = "key_missing"
+
+
+class WalletAccount(Base):
+    """Master or sub-account binding for a user.
+
+    A user has exactly one master per env and zero or more sub-accounts.
+    Each row owns its own (api_key, api_secret) — for masters this is the
+    master API key, for subs this is the sub-account's own trading key
+    (which retail users must create manually in the Binance web UI; the
+    backend then registers IP whitelist via the master key).
+    """
+
+    __tablename__ = "wallet_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "env", "alias", name="uq_wallet_user_env_alias"),
+        UniqueConstraint(
+            "user_id", "env", "sub_account_email", name="uq_wallet_user_env_sub_email"
+        ),
+        Index("ix_wallet_user_env_role", "user_id", "env", "role"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True
+    )
+    env: Mapped[str] = mapped_column(String(32), nullable=False)  # "mainnet" | "testnet"
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    sub_account_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    alias: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=WalletPurpose.GENERIC
+    )
+
+    api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    enabled_wallets: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    ip_whitelist: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=WalletAccountStatus.KEY_MISSING
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AllocationMode(str, enum.Enum):
+    FIXED_USDT = "fixed_usdt"
+    PCT_OF_WALLET = "pct_of_wallet"
+    VOL_TARGET = "vol_target"
+
+
+class StrategyAllocation(Base):
+    """Per-job capital budget — source of truth for the Capital Allocator.
+
+    A job has at most one active allocation. ``reserved_usdt`` is updated
+    by the pre-trade gate as positions/orders are opened; ``allocated_usdt``
+    is the upper bound set by the user (or the allocator policy).
+    """
+
+    __tablename__ = "strategy_allocations"
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uq_strategy_alloc_job"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    wallet_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("wallet_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    allocation_mode: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=AllocationMode.FIXED_USDT
+    )
+    allocated_usdt: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reserved_usdt: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    max_drawdown_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WalletTransferStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class WalletTransfer(Base):
+    """Audit log of every master↔sub / sub↔sub / wallet-type transfer.
+
+    NULL ``from_wallet_account_id`` / ``to_wallet_account_id`` denotes the
+    master account itself (when transferring between master wallets only).
+    ``client_tran_id`` is our idempotency key passed to Binance.
+    """
+
+    __tablename__ = "wallet_transfers"
+    __table_args__ = (
+        UniqueConstraint("client_tran_id", name="uq_wallet_transfer_client_tran_id"),
+        Index("ix_wallet_transfer_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("user_profiles.user_id"), nullable=False, index=True
+    )
+    from_wallet_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("wallet_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    to_wallet_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("wallet_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    from_wallet_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    to_wallet_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    asset: Mapped[str] = mapped_column(String(16), nullable=False, default="USDT")
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=WalletTransferStatus.PENDING
+    )
+    binance_tran_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    client_tran_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
