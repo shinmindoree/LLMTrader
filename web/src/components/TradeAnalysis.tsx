@@ -34,7 +34,10 @@ type Position = {
   direction: string;
   status: "Closed" | "Open";
   realizedPnl: number;
+  grossPnl: number;
+  commission: number;
   roi: number;
+  roiGross: number;
   closedVol: number;
   entryPrice: number;
   avgClosePrice: number | null;
@@ -103,10 +106,42 @@ const metricToneClass: Record<MetricTone, string> = {
   negative: "text-[#ef5350]",
 };
 
-function MetricCard({ label, value, tone = "neutral" }: { label: string; value: string; tone?: MetricTone }) {
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="group/tip relative ml-1 inline-flex items-center align-middle">
+      <span
+        className="flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-[#3a3f4b] text-[9px] font-semibold leading-none text-[#868993]"
+        aria-hidden="true"
+      >
+        i
+      </span>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 w-52 -translate-x-1/2 rounded border border-[#2a2e39] bg-[#1e222d] px-2.5 py-1.5 text-[11px] font-normal leading-snug text-[#d1d4dc] opacity-0 shadow-lg transition-opacity duration-150 group-hover/tip:opacity-100"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  tone = "neutral",
+  info,
+}: {
+  label: string;
+  value: string;
+  tone?: MetricTone;
+  info?: string;
+}) {
   return (
     <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
-      <div className="text-xs text-[#868993]">{label}</div>
+      <div className="flex items-center text-xs text-[#868993]">
+        <span>{label}</span>
+        {info ? <InfoTip text={info} /> : null}
+      </div>
       <div className={`mt-1 text-lg font-semibold ${metricToneClass[tone]}`}>{value}</div>
     </div>
   );
@@ -298,18 +333,19 @@ function buildEquitySeriesFromPositions(
   for (let i = 0; i < positions.length; i++) {
     const pos = positions[i];
     if (pos.status !== "Closed") continue;
-    const grossPnl = pos.realizedPnl; // already net of commission in buildPositions
-    equityNet += grossPnl;
+    const netPnl = pos.realizedPnl; // already net of commission in buildPositions
+    const grossPnl = pos.grossPnl; // before commission
+    equityNet += netPnl;
     equityGross += grossPnl;
 
     points.push({
       index: i + 1,
       timestamp: pos.closedTimestamp,
       pnl: grossPnl,
-      pnlNet: grossPnl,
+      pnlNet: netPnl,
       equity: equityNet,
       equityGross,
-      commission: 0,
+      commission: pos.commission,
       symbol: pos.symbol,
       side: pos.direction,
       positionSizeUsdt: pos.entryPrice * pos.closedVol,
@@ -426,13 +462,17 @@ export function buildPositions(trades: NormalizedTrade[], leverage: number): Pos
     const maxOi = entryLegs.reduce((m, l) => Math.max(m, l.qty), 0);
     const costBasis = avgEntry * entryQty;
     const roi = costBasis > 0 ? (realizedPnl / costBasis) * 100 * leverage : 0;
+    const roiGross = costBasis > 0 ? (pnlAccum / costBasis) * 100 * leverage : 0;
 
     positions.push({
       symbol: entryLegs[0]?.symbol ?? "-",
       direction: `Cross ${dir}`,
       status: "Closed",
       realizedPnl,
+      grossPnl: pnlAccum,
+      commission: commissionAccum,
       roi,
+      roiGross,
       closedVol: entryQty,
       entryPrice: avgEntry,
       avgClosePrice: avgExit,
@@ -519,7 +559,10 @@ export function buildPositions(trades: NormalizedTrade[], leverage: number): Pos
         direction: `Cross ${dir}`,
         status: "Open",
         realizedPnl: 0,
+        grossPnl: 0,
+        commission: 0,
         roi: 0,
+        roiGross: 0,
         closedVol: 0,
         entryPrice: avgEntry,
         avgClosePrice: null,
@@ -539,16 +582,17 @@ function Chart({
   showEquity,
   backtestSymbol,
   isLive = false,
+  afterFees,
 }: {
   points: ChartPoint[];
   showEquity: boolean;
   backtestSymbol: string | null;
   isLive?: boolean;
+  afterFees: boolean;
 }) {
   const { t } = useI18n();
   const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  const [afterFees, setAfterFees] = useState(true);
 
   const hasAnyCommission = points.some((p) => p.commission > 0);
 
@@ -611,17 +655,9 @@ function Chart({
         <div className="flex items-center gap-3">
           <span>{points.length} positions - PnL range +/-{formatNumber(maxAbsPnl, 2)} USDT</span>
           {hasAnyCommission && (
-            <label className="inline-flex cursor-pointer items-center gap-1.5 select-none">
-              <input
-                type="checkbox"
-                checked={afterFees}
-                onChange={() => setAfterFees((v) => !v)}
-                className="h-3 w-3 accent-[#2962ff]"
-              />
-              <span className={afterFees ? "text-[#d1d4dc]" : "text-[#868993]"}>
-                {t.tradeAnalysis.afterFees}
-              </span>
-            </label>
+            <span className={afterFees ? "text-[#d1d4dc]" : "text-[#868993]"}>
+              {afterFees ? t.tradeAnalysis.feeAfter : t.tradeAnalysis.feeBefore}
+            </span>
           )}
         </div>
       </div>
@@ -764,9 +800,6 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     });
   }, [normalizedTrades]);
 
-  const totalPnl = useMemo(() => {
-    return sortedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
-  }, [sortedTrades]);
   const totalCommission = useMemo(() => {
     return sortedTrades.reduce((sum, t) => sum + (t.commission ?? 0), 0);
   }, [sortedTrades]);
@@ -797,40 +830,61 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     [positions, initialEquity, isLive],
   );
 
-  const finalEquity =
-    initialEquity !== null ? initialEquity + totalPnl - totalCommission : null;
+  // Fee toggle (master). Checked = after fees (default), unchecked = before fees.
+  // Drives both the metric cards below and the equity Chart at the bottom.
+  const [afterFees, setAfterFees] = useState(true);
 
-  const netProfit = initialEquity !== null && finalEquity !== null ? finalEquity - initialEquity : null;
-  const totalReturnPct =
-    initialEquity != null && initialEquity > 0 && finalEquity !== null
-      ? ((finalEquity - initialEquity) / initialEquity) * 100
-      : null;
-
-  const positionPnls = useMemo(
-    () => positions.filter((p) => p.status === "Closed").map((p) => p.realizedPnl),
+  const closedPositions = useMemo(
+    () => positions.filter((p) => p.status === "Closed"),
     [positions],
+  );
+
+  // Per-position PnL / ROI selectors that honour the fee toggle.
+  const positionPnls = useMemo(
+    () => closedPositions.map((p) => (afterFees ? p.realizedPnl : p.grossPnl)),
+    [closedPositions, afterFees],
   );
   const tradeStats = useMemo(() => computeTradeStats(positionPnls), [positionPnls]);
 
-  const maxDrawdown = useMemo(() => {
-    if (!chartPoints.length) return { amount: 0, pct: 0 };
-    let peak = chartPoints[0].equity;
-    let maxDd = 0;
-    let maxDdPct = 0;
-    for (const p of chartPoints) {
-      if (p.equity > peak) peak = p.equity;
-      const dd = peak - p.equity;
-      if (dd > maxDd) {
-        maxDd = dd;
-        maxDdPct = peak > 0 ? (dd / peak) * 100 : 0;
-      }
-    }
-    return { amount: maxDd, pct: maxDdPct };
-  }, [chartPoints]);
+  // Net profit (USDT) = sum of closed-position PnL under the selected fee mode.
+  // Balance-independent, so it stays valid for live jobs whose wallet equity
+  // is unreliable (capital parked in Simple Earn).
+  const netProfit = positionPnls.length > 0
+    ? positionPnls.reduce((s, p) => s + p, 0)
+    : null;
 
-  const numTrades = positions.filter((p) => p.status === "Closed").length;
+  // Total return % for backtests uses the known initial balance; for live it
+  // is replaced below by the compounded per-trade ROI.
+  const totalReturnPct =
+    initialEquity != null && initialEquity > 0 && netProfit !== null
+      ? (netProfit / initialEquity) * 100
+      : null;
+
+  // Max drawdown (USDT) from the cumulative-PnL curve. Measured peak-to-trough
+  // on cumulative realized PnL (starts at 0), so it does not depend on the
+  // account balance base.
+  const maxDrawdown = useMemo(() => {
+    let cum = 0;
+    let peak = 0;
+    let maxDd = 0;
+    for (const p of positionPnls) {
+      cum += p;
+      if (cum > peak) peak = cum;
+      const dd = peak - cum;
+      if (dd > maxDd) maxDd = dd;
+    }
+    return { amount: maxDd };
+  }, [positionPnls]);
+
+  // Recovery factor = net profit / max drawdown. Higher = better risk-adjusted
+  // recovery. Null when there has been no drawdown yet.
+  const recoveryFactor =
+    netProfit !== null && maxDrawdown.amount > 1e-9 ? netProfit / maxDrawdown.amount : null;
+
+  const numTrades = closedPositions.length;
   const winCount = positionPnls.filter((p) => p > 0).length;
   const winRatePct = numTrades > 0 ? (winCount / numTrades) * 100 : 0;
+  const avgPnlPerTrade = netProfit !== null && numTrades > 0 ? netProfit / numTrades : null;
 
   // Compounded per-trade ROI (return on deployed margin), chained across all
   // closed positions: Π(1 + roiᵢ) − 1. Each position's roi is measured against
@@ -838,12 +892,11 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
   // of the (volatile) account/Earn balance and stays valid even as funds move
   // between the Futures wallet and Simple Earn.
   const compoundReturnPct = useMemo(() => {
-    const closed = positions.filter((p) => p.status === "Closed");
-    if (closed.length === 0) return null;
+    if (closedPositions.length === 0) return null;
     let factor = 1;
-    for (const p of closed) factor *= 1 + p.roi / 100;
+    for (const p of closedPositions) factor *= 1 + (afterFees ? p.roi : p.roiGross) / 100;
     return (factor - 1) * 100;
-  }, [positions]);
+  }, [closedPositions, afterFees]);
 
   // Live jobs park most capital in Simple Earn, so the Futures-wallet-based
   // initialEquity is an unreliable denominator (it can be near-zero, blowing up
@@ -1078,133 +1131,129 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
       <div className="rounded border border-[#2a2e39] bg-[#131722] p-4">
           {activeTab === "chart" ? (
             <>
-              {/* Row 1: Core Performance */}
-              <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {/* Fee toggle (master): checked = after fees, unchecked = before fees */}
+              <div className="mb-3 flex items-center justify-end">
+                <label className="inline-flex cursor-pointer items-center gap-2 select-none rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={afterFees}
+                    onChange={() => setAfterFees((v) => !v)}
+                    className="h-3.5 w-3.5 accent-[#2962ff]"
+                  />
+                  <span className={afterFees ? "text-[#d1d4dc]" : "text-[#868993]"}>
+                    {afterFees ? t.tradeAnalysis.feeAfter : t.tradeAnalysis.feeBefore}
+                  </span>
+                </label>
+              </div>
+
+              {/* Group 1: Profitability */}
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-[#868993]">
+                {t.tradeAnalysis.groupProfitability}
+              </div>
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {netProfit !== null && (
                   <MetricCard
                     label={t.result.netProfit}
                     value={`${formatSigned(netProfit, "USDT")}${displayReturnPct !== null ? ` (${formatNumber(displayReturnPct)}%)` : ""}`}
                     tone={netProfit >= 0 ? "positive" : "negative"}
+                    info={isLive ? t.tradeAnalysis.tips.netProfitLive : t.tradeAnalysis.tips.netProfit}
                   />
                 )}
-                <MetricCard
-                  label={t.result.winRate}
-                  value={`${formatNumber(winRatePct, 1)}%  (${winCount}W / ${numTrades - winCount}L of ${numTrades})`}
-                  tone={winRatePct >= 50 ? "positive" : winRatePct > 0 ? "negative" : "neutral"}
-                />
+                {avgPnlPerTrade !== null && (
+                  <MetricCard
+                    label={t.result.avgProfitPerTrade}
+                    value={formatSigned(avgPnlPerTrade, "USDT")}
+                    tone={avgPnlPerTrade >= 0 ? "positive" : "negative"}
+                    info={t.tradeAnalysis.tips.avgPnl}
+                  />
+                )}
                 {tradeStats && (
                   <MetricCard
                     label={t.result.profitFactor}
                     value={tradeStats.profitFactor === Infinity ? "∞" : formatNumber(tradeStats.profitFactor)}
                     tone={tradeStats.profitFactor >= 1.5 ? "positive" : tradeStats.profitFactor >= 1 ? "neutral" : "negative"}
+                    info={t.tradeAnalysis.tips.profitFactor}
+                  />
+                )}
+                {tradeStats?.expectancy != null && (
+                  <MetricCard
+                    label={t.tradeAnalysis.expectancy}
+                    value={formatSigned(tradeStats.expectancy, "USDT")}
+                    tone={tradeStats.expectancy >= 0 ? "positive" : "negative"}
+                    info={t.tradeAnalysis.tips.expectancy}
                   />
                 )}
               </div>
 
-              {/* Row 2: Risk */}
-              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {/* Group 2: Win rate & consistency */}
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-[#868993]">
+                {t.tradeAnalysis.groupWinConsistency}
+              </div>
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <MetricCard
+                  label={t.result.winRate}
+                  value={`${formatNumber(winRatePct, 1)}%  (${winCount}W / ${numTrades - winCount}L of ${numTrades})`}
+                  tone={winRatePct >= 50 ? "positive" : winRatePct > 0 ? "negative" : "neutral"}
+                  info={t.tradeAnalysis.tips.winRate}
+                />
+                {tradeStats?.payoffRatio != null && (
+                  <MetricCard
+                    label={t.tradeAnalysis.payoffRatio}
+                    value={formatNumber(tradeStats.payoffRatio, 2)}
+                    tone={tradeStats.payoffRatio >= 1 ? "positive" : "negative"}
+                    info={t.tradeAnalysis.tips.payoffRatio}
+                  />
+                )}
+                {tradeStats && (
+                  <MetricCard
+                    label={t.result.maxConsecutiveWins}
+                    value={`${tradeStats.maxConsecutiveWins}`}
+                    tone="positive"
+                    info={t.tradeAnalysis.tips.maxConsecutiveWins}
+                  />
+                )}
+                {tradeStats && (
+                  <MetricCard
+                    label={t.result.maxConsecutiveLosses}
+                    value={`${tradeStats.maxConsecutiveLosses}`}
+                    tone="negative"
+                    info={t.tradeAnalysis.tips.maxConsecutiveLosses}
+                  />
+                )}
+              </div>
+
+              {/* Group 3: Risk & costs */}
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-[#868993]">
+                {t.tradeAnalysis.groupRiskCost}
+              </div>
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
                   label={t.tradeAnalysis.maxDrawdown}
-                  value={maxDrawdown.amount > 0
-                    ? `${formatSigned(-maxDrawdown.amount, "USDT")} (${formatNumber(maxDrawdown.pct, 2)}%)`
-                    : "-"}
+                  value={maxDrawdown.amount > 0 ? formatSigned(-maxDrawdown.amount, "USDT") : "-"}
                   tone={maxDrawdown.amount > 0 ? "negative" : "neutral"}
+                  info={t.tradeAnalysis.tips.maxDrawdown}
                 />
                 {tradeStats && (tradeStats.maxProfit !== null || tradeStats.maxLoss !== null) && (
                   <MetricCard
                     label={t.tradeAnalysis.bestWorst}
                     value={`${tradeStats.maxProfit !== null ? formatSigned(tradeStats.maxProfit) : "-"} / ${tradeStats.maxLoss !== null ? formatSigned(tradeStats.maxLoss) : "-"} USDT`}
                     tone="neutral"
+                    info={t.tradeAnalysis.tips.bestWorst}
                   />
                 )}
-                {tradeStats?.payoffRatio != null && (
-                  <MetricCard
-                    label={t.tradeAnalysis.payoffRatio}
-                    value={formatNumber(tradeStats.payoffRatio, 2)}
-                    tone={tradeStats.payoffRatio >= 1 ? "positive" : "negative"}
-                  />
-                )}
+                <MetricCard
+                  label={t.tradeAnalysis.recoveryFactor}
+                  value={recoveryFactor !== null ? formatNumber(recoveryFactor, 2) : "-"}
+                  tone={recoveryFactor !== null && recoveryFactor >= 1 ? "positive" : "neutral"}
+                  info={t.tradeAnalysis.tips.recoveryFactor}
+                />
+                <MetricCard
+                  label={t.result.totalCommission}
+                  value={`${formatNumber(totalCommission)} USDT`}
+                  tone="negative"
+                  info={t.tradeAnalysis.tips.totalCommission}
+                />
               </div>
-
-              {/* Expandable Detail */}
-              <details className="mb-4 group">
-                <summary className="flex cursor-pointer list-none items-center rounded border border-[#2a2e39] bg-[#1e222d] px-4 py-2 text-xs font-medium text-[#d1d4dc] hover:bg-[#252a37] [&::-webkit-details-marker]:hidden [&::marker]:hidden">
-                  {t.tradeAnalysis.tradeDetail}
-                  <span className="ml-2 inline-block text-[#868993] transition-transform group-open:rotate-180">
-                    ▾
-                  </span>
-                </summary>
-                <div className="rounded-b border border-[#2a2e39] border-t-0 bg-[#131722] p-4">
-                  {/* Group A: Trade Distribution */}
-                  <div className="mb-3 text-[10px] font-medium uppercase tracking-wider text-[#868993]">
-                    {t.tradeAnalysis.groupDistribution}
-                  </div>
-                  <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    {numTrades > 0 && netProfit !== null && (
-                      <MetricCard
-                        label={t.result.avgProfitPerTrade}
-                        value={formatSigned(netProfit / numTrades, "USDT")}
-                        tone={netProfit >= 0 ? "positive" : "negative"}
-                      />
-                    )}
-                    {tradeStats?.avgWin != null && (
-                      <MetricCard
-                        label={t.tradeAnalysis.avgWin}
-                        value={formatSigned(tradeStats.avgWin, "USDT")}
-                        tone="positive"
-                      />
-                    )}
-                    {tradeStats?.avgLoss != null && (
-                      <MetricCard
-                        label={t.tradeAnalysis.avgLoss}
-                        value={formatSigned(-tradeStats.avgLoss, "USDT")}
-                        tone="negative"
-                      />
-                    )}
-                    {tradeStats?.expectancy != null && (
-                      <MetricCard
-                        label={t.tradeAnalysis.expectancy}
-                        value={formatSigned(tradeStats.expectancy, "USDT")}
-                        tone={tradeStats.expectancy >= 0 ? "positive" : "negative"}
-                      />
-                    )}
-                  </div>
-
-                  {/* Group B: Streaks & Costs */}
-                  <div className="mb-3 text-[10px] font-medium uppercase tracking-wider text-[#868993]">
-                    {t.tradeAnalysis.groupStreaksCosts}
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    {tradeStats && (
-                      <>
-                        <MetricCard label={t.result.maxConsecutiveWins} value={`${tradeStats.maxConsecutiveWins}`} tone="positive" />
-                        <MetricCard label={t.result.maxConsecutiveLosses} value={`${tradeStats.maxConsecutiveLosses}`} tone="negative" />
-                      </>
-                    )}
-                    <MetricCard
-                      label={t.result.totalCommission}
-                      value={`${formatNumber(totalCommission)} USDT`}
-                      tone="negative"
-                    />
-                    {isLive ? (
-                      netProfit !== null && (
-                        <MetricCard
-                          label={t.tradeAnalysis.cumulativePnl}
-                          value={`${formatNumber(0)} → ${formatSigned(netProfit, "USDT")}`}
-                          tone={netProfit >= 0 ? "positive" : "negative"}
-                        />
-                      )
-                    ) : (
-                      initialEquity !== null && finalEquity !== null && (
-                        <MetricCard
-                          label={t.tradeAnalysis.balance}
-                          value={`${formatNumber(initialEquity)} → ${formatNumber(finalEquity)} USDT`}
-                        />
-                      )
-                    )}
-                  </div>
-                </div>
-              </details>
 
               {job.type === "BACKTEST" && backtestChartPayload && topChartTrades.length > 0 ? (
                 <div className="mb-4">
@@ -1231,6 +1280,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                 showEquity={isLive || initialEquity !== null}
                 backtestSymbol={backtestSymbol}
                 isLive={isLive}
+                afterFees={afterFees}
               />
             </>
           ) : activeTab === "trades" ? (
