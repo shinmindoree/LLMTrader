@@ -1593,6 +1593,40 @@ class LiveContext:
             },
         )
 
+        # 포지션 캐시를 방금 검증한 체결 결과(after_pos)로 즉시 동기화한다.
+        #
+        # self.position.size 는 지금까지 user-stream ACCOUNT_UPDATE 또는 REST 조회로만
+        # 갱신됐다. 그런데 chase 청산 직후 곧바로 실행되는 flip 재진입
+        # (_on_after_order_settled → _drain_pending_after_fill → enter_long/short)은
+        # 동기 콜백이라, 스트림 업데이트가 0.5s 안에 도착하지 못하면 enter_* 의 flat
+        # 가드(_is_effectively_flat)가 청산 전 낡은 사이즈를 보고 재진입을 조용히
+        # 건너뛰는 문제가 있었다(= 청산은 성공했는데 반대 방향 진입이 누락되는 FLIP 버그).
+        #
+        # after_pos 는 이미 ORDER_FILLED 의 position_after 로 기록되고 PnL 계산의
+        # 기준으로 신뢰되는 값이므로, 캐시도 여기에 맞춰 재진입 가드가 진실을 보도록 한다.
+        try:
+            prev_cached_size = float(self.position.size)
+            self.position.size = after_pos
+            if abs(after_pos) < 1e-12:
+                self.position.entry_price = 0.0
+                self.position.entry_balance = 0.0
+                self.position.unrealized_pnl = 0.0
+            elif abs(prev_cached_size) < 1e-12 and parsed_avg_price > 0:
+                # 플랫 -> 신규 진입: entry 가격/잔고 기준을 체결가로 설정
+                self.position.entry_price = parsed_avg_price
+                self.position.entry_balance = self.balance
+            if abs(prev_cached_size - after_pos) > 1e-12:
+                self._log_audit(
+                    "POSITION_CACHE_SYNCED",
+                    {
+                        "prev_size": prev_cached_size,
+                        "after_pos": after_pos,
+                        "source": "after_order_filled",
+                    },
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
         if self.notifier and event in {"ENTRY", "EXIT"}:
             max_position_pct = self.risk_manager.config.max_position_size * 100
             
