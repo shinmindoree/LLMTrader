@@ -520,6 +520,7 @@ const ko: TranslationKeys = {
     equity: "자본금 (Equity)",
     afterFees: "수수료 적용",
     balance: "잔고",
+    cumulativePnl: "누적 손익",
     totalTrades: "총 트레이드 수",
     maxDrawdown: "최대 낙폭 (MDD)",
     bestWorst: "최대 수익 / 최대 손실",

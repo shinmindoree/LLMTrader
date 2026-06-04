@@ -1186,11 +1186,21 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
                       value={`${formatNumber(totalCommission)} USDT`}
                       tone="negative"
                     />
-                    {initialEquity !== null && finalEquity !== null && (
-                      <MetricCard
-                        label={t.tradeAnalysis.balance}
-                        value={`${formatNumber(initialEquity)} → ${formatNumber(finalEquity)} USDT`}
-                      />
+                    {isLive ? (
+                      netProfit !== null && (
+                        <MetricCard
+                          label={t.tradeAnalysis.cumulativePnl}
+                          value={`${formatNumber(0)} → ${formatSigned(netProfit, "USDT")}`}
+                          tone={netProfit >= 0 ? "positive" : "negative"}
+                        />
+                      )
+                    ) : (
+                      initialEquity !== null && finalEquity !== null && (
+                        <MetricCard
+                          label={t.tradeAnalysis.balance}
+                          value={`${formatNumber(initialEquity)} → ${formatNumber(finalEquity)} USDT`}
+                        />
+                      )
                     )}
                   </div>
                 </div>

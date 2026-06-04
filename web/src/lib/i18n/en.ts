@@ -517,6 +517,7 @@ const en = {
     equity: "Equity",
     afterFees: "After fees",
     balance: "Balance",
+    cumulativePnl: "Cumulative PnL",
     totalTrades: "Total Trades",
     maxDrawdown: "Max Drawdown",
     bestWorst: "Best / Worst",
