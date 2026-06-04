@@ -180,9 +180,25 @@ export function ArbitrageConfigPanel() {
           {/* Screener */}
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#9aa0ad]">
-                🔍 실시간 스크리너 — Top 5
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#9aa0ad]">
+                  🔍 실시간 스크리너 — Top 5
+                </p>
+                <span
+                  className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                    env === "testnet"
+                      ? "bg-[#f0b90b]/15 text-[#f0b90b]"
+                      : "bg-[#26a69a]/15 text-[#26a69a]"
+                  }`}
+                  title={
+                    env === "testnet"
+                      ? "테스트넷(데모) 펀딩비 기준 — testnet.binancefuture.com"
+                      : "메인넷(실거래) 펀딩비 기준 — fapi.binance.com"
+                  }
+                >
+                  {env === "testnet" ? "테스트넷 펀딩비" : "메인넷 펀딩비"}
+                </span>
+              </div>
               <p className="text-[10px] text-[#555]">
                 score = 현재 펀딩비 ÷ 최소 진입 임계치 · 30초마다 갱신
               </p>
