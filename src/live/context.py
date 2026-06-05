@@ -18,6 +18,7 @@ from notifications.slack import SlackNotifier
 
 if TYPE_CHECKING:
     from binance.earn_client import BinanceEarnClient
+    from live.allocator import CapitalAllocator
 
 # JIT margin restore (Auto-Sweep aware live entry) tuning
 _MIN_RESTORE_USDT = 1.0  # skip dust-sized restores
@@ -84,6 +85,9 @@ class LiveContext:
         job_id: Any | None = None,
         earn_client: "BinanceEarnClient | None" = None,
         margin_restore_cap_usdt: float = 0.0,
+        capital_allocator: "CapitalAllocator | None" = None,
+        allocator_session_maker: Any = None,
+        allocator_enabled: bool = False,
     ) -> None:
         """컨텍스트 초기화.
 
@@ -193,6 +197,21 @@ class LiveContext:
         self.balance: float = 0.0
         self.available_balance: float = 0.0
         self.position = LivePosition()
+
+        # Capital Allocator pre-trade gate plumbing.
+        # When ``allocator_enabled`` is True and all of ``capital_allocator``,
+        # ``allocator_session_maker``, and ``job_id`` are supplied, every
+        # additive order goes through ``CapitalAllocator.reserve`` before
+        # submission. Disabled by default so existing live jobs keep working.
+        self._capital_allocator: "CapitalAllocator | None" = capital_allocator
+        self._allocator_session_maker = allocator_session_maker
+        self._allocator_enabled: bool = bool(
+            allocator_enabled
+            and capital_allocator is not None
+            and allocator_session_maker is not None
+            and job_id is not None
+        )
+        self._allocator_reserved_usdt: float = 0.0
         self._current_price: float = 0.0
         self._price_history: list[float] = []
         self._open_history: list[float] = []
@@ -1249,6 +1268,107 @@ class LiveContext:
     def _release_order_inflight(self) -> None:
         self._order_inflight = False
 
+    # ── Capital Allocator hooks ──────────────────────────────────
+
+    async def _allocator_reserve(
+        self,
+        *,
+        side: str,
+        quantity: float,
+        price_hint: float | None,
+    ) -> bool:
+        """Try to reserve capital for an additive (non-reducing) order.
+
+        Returns ``True`` if the order may proceed (gate disabled or
+        reservation granted), ``False`` if rejected. On rejection the
+        caller must not place the order — an audit event is emitted here.
+        """
+        if not self._allocator_enabled or self._capital_allocator is None:
+            return True
+        price = price_hint if price_hint and price_hint > 0 else self._current_price
+        if not price or price <= 0:
+            self._log_audit(
+                "ALLOC_GATE_SKIPPED_NO_PRICE",
+                {"side": side, "quantity": quantity},
+            )
+            return True
+        notional = float(quantity) * float(price)
+        if notional <= 0:
+            return True
+        try:
+            async with self._allocator_session_maker() as session:
+                result = await self._capital_allocator.reserve(
+                    session,
+                    job_id=self.job_id,
+                    notional_usdt=notional,
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._log_audit(
+                "ALLOC_GATE_ERROR",
+                {"side": side, "quantity": quantity, "error": str(exc)},
+            )
+            # Fail-OPEN on transient infra errors so we don't black-hole
+            # trades when the DB hiccups. The periodic reconciler will
+            # repair any drift.
+            return True
+        if result.is_blocked:
+            self._log_audit(
+                "ORDER_REJECTED_ALLOC_GATE",
+                {
+                    "side": side,
+                    "quantity": quantity,
+                    "notional": notional,
+                    "free_after": result.free_after,
+                    "reason": result.reason,
+                },
+            )
+            return False
+        self._allocator_reserved_usdt += float(result.granted)
+        self._log_audit(
+            "ALLOC_GATE_RESERVED",
+            {
+                "side": side,
+                "quantity": quantity,
+                "notional": notional,
+                "granted": result.granted,
+                "status": result.status.value,
+                "free_after": result.free_after,
+            },
+        )
+        return True
+
+    async def _allocator_release_all(self) -> None:
+        """Release the entire running reservation for this context's job.
+
+        Called after a fully-closing order is placed (intent-based release)
+        and on graceful teardown. Idempotent.
+        """
+        if (
+            not self._allocator_enabled
+            or self._capital_allocator is None
+            or self._allocator_reserved_usdt <= 0
+        ):
+            return
+        amount = self._allocator_reserved_usdt
+        self._allocator_reserved_usdt = 0.0
+        try:
+            async with self._allocator_session_maker() as session:
+                await self._capital_allocator.release(
+                    session,
+                    job_id=self.job_id,
+                    notional_usdt=amount,
+                )
+        except Exception as exc:  # noqa: BLE001
+            # Don't fail order flow on release errors; the reconciler will
+            # eventually sync reserved_usdt with the on-exchange truth.
+            self._log_audit(
+                "ALLOC_GATE_RELEASE_FAILED",
+                {"amount": amount, "error": str(exc)},
+            )
+            # Restore in-memory tally so we don't double-account on the
+            # next release attempt.
+            self._allocator_reserved_usdt += amount
+
     def _is_effectively_flat(self) -> bool:
         """현재 포지션이 사실상 0(플랫)인지 판정한다.
 
@@ -1841,6 +1961,13 @@ class LiveContext:
                 self._log_audit("ORDER_REJECTED_POSITION", {"side": side, "quantity": quantity, "reason": msg})
                 raise ValueError(f"포지션 크기 검증 실패: {msg}")
 
+        if not is_reducing_order:
+            allowed = await self._allocator_reserve(
+                side=side, quantity=float(quantity), price_hint=price,
+            )
+            if not allowed:
+                raise ValueError("Capital allocator REJECTED: insufficient budget")
+
         snapshot_pos_size = self.position.size
         snapshot_entry_price = self.position.entry_price
 
@@ -1886,6 +2013,9 @@ class LiveContext:
                     "price": price,
                     "timestamp": datetime.now().isoformat(),
                 }
+
+            if is_reducing_order and abs(new_position_size) < 1e-12:
+                asyncio.create_task(self._allocator_release_all())
 
             return response
 
@@ -1936,6 +2066,17 @@ class LiveContext:
                 error_msg = f"거래 불가: {risk_reason}"
                 self._log_audit("ORDER_REJECTED_RISK", {"side": side, "quantity": quantity, "reason": risk_reason})
                 raise ValueError(error_msg)
+
+        if not is_reducing_order:
+            allowed = await self._allocator_reserve(
+                side=side,
+                quantity=float(quantity),
+                price_hint=self._current_price,
+            )
+            if not allowed:
+                raise ValueError("Capital allocator REJECTED: insufficient budget")
+        elif abs(target_pos) < 1e-12:
+            asyncio.create_task(self._allocator_release_all())
         
         # 이미 충분한 포지션이 있는지 확인 (chase order가 이미 체결되었을 수 있음)
         # BUY인 경우: 현재 포지션이 목표 포지션 이상이면 이미 체결됨
