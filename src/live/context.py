@@ -20,13 +20,6 @@ if TYPE_CHECKING:
     from binance.earn_client import BinanceEarnClient
     from live.allocator import CapitalAllocator
 
-# JIT margin restore (Auto-Sweep aware live entry) tuning
-_MIN_RESTORE_USDT = 1.0  # skip dust-sized restores
-_RESTORE_SETTLE_RETRIES = 5  # poll spot balance after redeem before transfer
-_RESTORE_SETTLE_DELAY_SEC = 0.2
-# Binance error codes that indicate "redemption amount exceeds available" and
-# can be retried with a smaller amount (or redeemAll).
-_REDEEM_RETRYABLE_CODES = {-6025}
 # Binance error codes for a rejected reduce-only order. These almost always
 # mean the position is already (near) closed, so we re-sync from REST instead
 # of treating it as a hard failure.
@@ -50,10 +43,6 @@ def _extract_binance_code(exc: object) -> int | None:
 
 def _is_reduce_only_reject(exc: object) -> bool:
     return _extract_binance_code(exc) in _REDUCE_ONLY_REJECT_CODES
-
-
-def _is_retryable_redeem_error(exc: object) -> bool:
-    return _extract_binance_code(exc) in _REDEEM_RETRYABLE_CODES
 
 
 class LivePosition:
@@ -106,19 +95,16 @@ class LiveContext:
         self.leverage = leverage
         self.env = env
         self.notifier = notifier
-        # Optional Simple Earn (mainnet-only) client used to pull idle USDT
-        # back from Earn into the Futures wallet right before an entry, so
-        # Auto-Sweep can keep almost the entire balance earning yield while
-        # still allowing full-size entries when a signal fires.
+        # Optional Simple Earn (mainnet-only) client. Retained for constructor
+        # compatibility; the JIT margin-restore-before-entry flow that used it
+        # was removed because the async redeem/transfer made entries unreliable.
         self._earn_client: "BinanceEarnClient | None" = earn_client
-        # Cap (USDT) on how much is redeemed from Simple Earn into the
-        # Futures wallet on each JIT margin restore. 0 (or negative) means
-        # unlimited — restore the entire Earn position (legacy behaviour).
+        # Retained for constructor/config compatibility; no longer used now that
+        # JIT margin restore is disabled.
         try:
             self._margin_restore_cap_usdt: float = max(0.0, float(margin_restore_cap_usdt))
         except (TypeError, ValueError):
             self._margin_restore_cap_usdt = 0.0
-        self._margin_restore_inflight: bool = False
         self._logger = get_logger("llmtrader.live")
         self.strategy_name: str | None = None
         self.strategy_meta: dict[str, Any] = {}
@@ -2682,15 +2668,10 @@ class LiveContext:
         """시스템 리스크 설정 기반으로 롱 진입."""
         if not self._is_effectively_flat():
             return
-        if self._earn_client is None:
-            qty = self.calc_entry_quantity(entry_pct=entry_pct)
-            if qty <= 0:
-                return
-            self.buy(qty, reason=reason, use_chase=use_chase)
+        qty = self.calc_entry_quantity(entry_pct=entry_pct)
+        if qty <= 0:
             return
-        self._begin_margin_restore_entry(
-            side=1, reason=reason, entry_pct=entry_pct, use_chase=use_chase
-        )
+        self.buy(qty, reason=reason, use_chase=use_chase)
 
     def enter_short(
         self,
@@ -2701,228 +2682,10 @@ class LiveContext:
         """시스템 리스크 설정 기반으로 숏 진입."""
         if not self._is_effectively_flat():
             return
-        if self._earn_client is None:
-            qty = self.calc_entry_quantity(entry_pct=entry_pct)
-            if qty <= 0:
-                return
-            self.sell(qty, reason=reason, use_chase=use_chase)
-            return
-        self._begin_margin_restore_entry(
-            side=-1, reason=reason, entry_pct=entry_pct, use_chase=use_chase
-        )
-
-    # ── JIT margin restore (Auto-Sweep aware entry) ────────────
-
-    def _begin_margin_restore_entry(
-        self,
-        *,
-        side: int,
-        reason: str | None,
-        entry_pct: float | None,
-        use_chase: bool | None,
-        pre_trade_check: Callable[[float], None] | None = None,
-    ) -> None:
-        """진입 시그널 직후 Earn→Futures 증거금 복원을 먼저 수행한 뒤 진입한다.
-
-        ``enter_long``/``enter_short`` 는 동기 함수이므로, 비동기 redeem→
-        transfer→잔고 재조회를 백그라운드 태스크로 돌리고 그 안에서 수량을
-        다시 계산해 ``buy``/``sell`` 을 호출한다. 복원이 끝나기 전 같은 봉에서
-        중복 진입이 발생하지 않도록 ``_margin_restore_inflight`` 가드를 둔다.
-
-        ``pre_trade_check`` 가 주어지면(포트폴리오 경로) 복원·재사이징이 끝난
-        직후, 실제 발주 직전에 복원된 수량으로 한 번 더 검사한다. 이렇게 해야
-        포트폴리오 리스크 검사가 0 잔고가 아닌 복원된 잔고를 기준으로 통과한다.
-        """
-        if self._margin_restore_inflight or self._order_inflight:
-            return
-        self._margin_restore_inflight = True
-        task = asyncio.create_task(
-            self._restore_then_enter(
-                side=side,
-                reason=reason,
-                entry_pct=entry_pct,
-                use_chase=use_chase,
-                pre_trade_check=pre_trade_check,
-            )
-        )
-        task.add_done_callback(self._handle_restore_result)
-
-    async def _restore_then_enter(
-        self,
-        *,
-        side: int,
-        reason: str | None,
-        entry_pct: float | None,
-        use_chase: bool | None,
-        pre_trade_check: Callable[[float], None] | None = None,
-    ) -> None:
-        try:
-            await self._restore_margin_from_earn()
-        except Exception as exc:  # noqa: BLE001
-            # Best-effort: a failed restore must never block trading. Proceed
-            # with whatever margin currently sits in the Futures wallet.
-            print(f"⚠️ JIT margin restore failed: {exc}")
-            self._log_audit("JIT_MARGIN_RESTORE_FAILED", {"error": str(exc)})
-
-        # 복원 대기 중 포지션/락 상태가 바뀌었을 수 있으므로 재검증
-        if not self._is_effectively_flat():
-            return
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty <= 0:
             return
-        # 포트폴리오 경로: 복원된 잔고 기준 수량으로 리스크 검사를 수행한다.
-        # 검사 실패(예: 진짜 주문 크기 초과)는 발주를 건너뛰고 감사 로그만 남긴다.
-        if pre_trade_check is not None:
-            try:
-                pre_trade_check(qty)
-            except Exception as exc:  # noqa: BLE001
-                self._log_audit(
-                    "PORTFOLIO_PRE_TRADE_REJECTED",
-                    {"side": side, "qty": qty, "error": str(exc)},
-                )
-                return
-        if side == 1:
-            self.buy(qty, reason=reason, use_chase=use_chase)
-        else:
-            self.sell(qty, reason=reason, use_chase=use_chase)
-
-    def _handle_restore_result(self, task: asyncio.Task) -> None:
-        # buy()/sell() 가 이미 _order_inflight 를 세팅한 뒤 태스크가 종료되므로,
-        # 여기서 restore 가드를 풀어도 진입~체결 사이에 락 공백이 생기지 않는다.
-        self._margin_restore_inflight = False
-        try:
-            task.result()
-        except Exception as exc:  # noqa: BLE001
-            print(f"❌ JIT margin restore/entry task failed: {exc}")
-            self._log_audit("JIT_MARGIN_TASK_ERROR", {"error": str(exc)})
-
-    async def _restore_margin_from_earn(self) -> None:
-        """Simple Earn(Flexible)에 예치된 USDT를 Futures 지갑으로 복원한다.
-
-        흐름: Earn 포지션 조회 → 복원 금액 결정(상한 적용) → redeem(→SPOT) →
-        Spot 정산 대기 → Spot→Futures 이체 → REST 로 Futures 가용잔고를
-        재조회해 ``balance`` 를 결정적으로 덮어쓴다. 이렇게 하면 이후
-        ``calc_entry_quantity`` 가 복원된 잔고를 기준으로 수량을 산출한다.
-
-        ``_margin_restore_cap_usdt`` 가 0 보다 크면 그 금액까지만 Earn 에서
-        가져오고, 0(기본값)이면 Earn 포지션 전액을 복원한다.
-        """
-        earn = self._earn_client
-        if earn is None:
-            return
-        position = await earn.fetch_flexible_position_usdt()
-        if position < _MIN_RESTORE_USDT:
-            return
-        # Cap how much we pull from Earn into Futures. 0 = unlimited.
-        cap = self._margin_restore_cap_usdt
-        restore_amount = min(position, cap) if cap > 0 else position
-        if restore_amount < _MIN_RESTORE_USDT:
-            self._log_audit(
-                "JIT_MARGIN_CAP_TOO_SMALL",
-                {"position": position, "cap": cap, "restore_amount": restore_amount},
-            )
-            return
-        product_id = await earn.get_usdt_flexible_product_id()
-        if not product_id:
-            self._log_audit("JIT_MARGIN_NO_PRODUCT", {})
-            return
-
-        # ``totalAmount`` (position) can include principal that is not yet
-        # redeemable (just-subscribed by Auto-Sweep, daily fast-redeem quota,
-        # rounding), which makes a full-amount redeem fail with -6025. Restore
-        # with retries: when pulling the whole position prefer ``redeemAll``
-        # (lets Binance redeem exactly what's available); when capped, request
-        # the explicit (floored) amount and shrink it on -6025 — never exceed
-        # the cap.
-        full_restore = cap <= 0 or restore_amount >= position - 1e-9
-        redeemed = await self._redeem_with_retry(
-            earn,
-            product_id=product_id,
-            want_amount=restore_amount,
-            full_restore=full_restore,
-        )
-        if redeemed <= 0.0:
-            # Every redeem attempt failed. Surface it and bail; the caller's
-            # best-effort guard proceeds with whatever margin already sits in
-            # the Futures wallet (and retries on the next bar).
-            return
-        self._log_audit(
-            "JIT_MARGIN_REDEEM",
-            {"amount": redeemed, "cap": cap, "position": position, "full": full_restore},
-        )
-
-        # Fast redemption 은 거의 즉시지만 Spot 반영이 원자적이지 않으므로
-        # 짧게 폴링한다. Standard 로 처리되면 자금이 늦게 도착하므로 이체를
-        # 건너뛰고(아래 transfer 가드), 잔고 재조회 결과대로 안전하게 진행한다.
-        spot = 0.0
-        for _ in range(_RESTORE_SETTLE_RETRIES):
-            spot = await earn.fetch_spot_usdt_balance()
-            if spot >= min(redeemed, _MIN_RESTORE_USDT):
-                break
-            await asyncio.sleep(_RESTORE_SETTLE_DELAY_SEC)
-
-        transfer_amount = min(redeemed, spot)
-        if transfer_amount >= _MIN_RESTORE_USDT:
-            await earn.transfer_spot_to_futures(transfer_amount)
-            self._log_audit("JIT_MARGIN_TRANSFER", {"amount": transfer_amount})
-
-        fresh = await earn.fetch_futures_available_balance()
-        self.balance = fresh
-        self.available_balance = fresh
-        self._log_audit("JIT_MARGIN_RESTORED", {"futures_balance": fresh})
-
-    async def _redeem_with_retry(
-        self,
-        earn: "BinanceEarnClient",
-        *,
-        product_id: str,
-        want_amount: float,
-        full_restore: bool,
-    ) -> float:
-        """Redeem USDT from Simple Earn, retrying around ``-6025``.
-
-        Returns the amount we *requested* on the attempt that succeeded
-        (``want_amount`` for ``redeemAll``), or ``0.0`` if all attempts failed.
-        """
-        from binance.earn_client import BinanceEarnClientError
-
-        # Build the ordered list of attempts.
-        attempts: list[tuple[bool, float]] = []  # (redeem_all, amount)
-        if full_restore:
-            # Prefer redeemAll, then fall back to shrinking explicit amounts.
-            attempts.append((True, want_amount))
-            for frac in (0.75, 0.5, 0.25):
-                attempts.append((False, math.floor(want_amount * frac * 100) / 100.0))
-        else:
-            # Respect the cap: explicit amounts only, shrinking on -6025.
-            for frac in (1.0, 0.75, 0.5, 0.25):
-                attempts.append((False, math.floor(want_amount * frac * 100) / 100.0))
-
-        last_exc: Exception | None = None
-        for idx, (redeem_all, amount) in enumerate(attempts):
-            if not redeem_all and amount < _MIN_RESTORE_USDT:
-                continue
-            try:
-                await earn.redeem(amount, product_id, redeem_all=redeem_all)
-                return want_amount if redeem_all else amount
-            except BinanceEarnClientError as exc:
-                last_exc = exc
-                self._log_audit(
-                    "JIT_MARGIN_REDEEM_RETRY",
-                    {
-                        "attempt": idx + 1,
-                        "redeem_all": redeem_all,
-                        "amount": amount,
-                        "retryable": _is_retryable_redeem_error(exc),
-                        "error": str(exc),
-                    },
-                )
-                if not _is_retryable_redeem_error(exc):
-                    # Non-(-6025) error: shrinking won't help, stop early.
-                    break
-        if last_exc is not None:
-            self._log_audit("JIT_MARGIN_RESTORE_FAILED", {"error": str(last_exc)})
-        return 0.0
+        self.sell(qty, reason=reason, use_chase=use_chase)
 
 
     def flip_position(

@@ -109,37 +109,15 @@ class _SymbolTradingProxy:
         return self._ctx.calc_entry_quantity(entry_pct=entry_pct, price=price)
 
     def enter_long(self, reason: str | None = None, entry_pct: float | None = None) -> None:
-        # Earn 연동(메인넷)이면 LiveContext 의 JIT 증거금 복원 흐름에 위임한다.
-        # 복원·재사이징 직후 발주 직전에 포트폴리오 리스크 검사를 끼워 넣어
-        # 0 잔고가 아닌 복원된 잔고를 기준으로 검사가 통과되도록 한다.
-        if self._ctx._earn_client is not None:
-            self._ctx._begin_margin_restore_entry(
-                side=1,
-                reason=reason,
-                entry_pct=entry_pct,
-                use_chase=None,
-                pre_trade_check=lambda q: self._portfolio._pre_trade_check(
-                    symbol=self.symbol, side="BUY", quantity=float(q)
-                ),
-            )
-            return
+        # Direct synchronous entry. ``buy`` applies the portfolio pre-trade
+        # risk check via the wrapper.
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty > 0:
             self.buy(qty, reason=reason)
 
     def enter_short(self, reason: str | None = None, entry_pct: float | None = None) -> None:
-        # Earn 연동(메인넷)이면 LiveContext 의 JIT 증거금 복원 흐름에 위임한다.
-        if self._ctx._earn_client is not None:
-            self._ctx._begin_margin_restore_entry(
-                side=-1,
-                reason=reason,
-                entry_pct=entry_pct,
-                use_chase=None,
-                pre_trade_check=lambda q: self._portfolio._pre_trade_check(
-                    symbol=self.symbol, side="SELL", quantity=float(q)
-                ),
-            )
-            return
+        # Direct synchronous entry. ``sell`` applies the portfolio pre-trade
+        # risk check via the wrapper.
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty > 0:
             self.sell(qty, reason=reason)
