@@ -1,15 +1,22 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
 import {
+  deleteBinanceCredential,
   getUserProfile,
   listBinanceCredentials,
+  listWalletAccounts,
   setBinanceCredential,
-  deleteBinanceCredential,
 } from "@/lib/api";
-import type { UserProfile, BinanceCredential, BinanceCredentialEnv } from "@/lib/types";
+import type {
+  BinanceCredential,
+  BinanceCredentialEnv,
+  UserProfile,
+  WalletAccount,
+} from "@/lib/types";
 
 const ENV_ORDER: BinanceCredentialEnv[] = ["mainnet", "testnet"];
 
@@ -257,6 +264,128 @@ export default function SettingsPage() {
           </ul>
         </div>
       </section>
+
+      <SubAccountSection />
     </main>
+  );
+}
+
+// ── Sub-account topology section ─────────────────────────────────────
+
+function SubAccountSection(): React.JSX.Element {
+  const { data: wallets, isLoading } = useSWR<WalletAccount[]>(
+    "walletAccounts:mainnet",
+    () => listWalletAccounts("mainnet"),
+  );
+
+  const subs = (wallets ?? []).filter((w) => w.role === "sub");
+  const activeSubs = subs.filter((w) => w.status === "active").length;
+  const masterExists = (wallets ?? []).some((w) => w.role === "master");
+
+  let badgeText: string;
+  let badgeCls: string;
+  if (isLoading) {
+    badgeText = "확인 중...";
+    badgeCls = "border-[#2a2e39] bg-[#131722] text-[#868993]";
+  } else if (subs.length === 0) {
+    badgeText = "미설정";
+    badgeCls = "border-[#F0B90B]/30 bg-[#F0B90B]/10 text-[#F0B90B]";
+  } else if (activeSubs === subs.length && masterExists) {
+    badgeText = `${activeSubs} active`;
+    badgeCls = "border-[#26a69a]/30 bg-[#26a69a]/10 text-[#26a69a]";
+  } else {
+    badgeText = `${activeSubs} / ${subs.length} active`;
+    badgeCls = "border-[#868993]/30 bg-[#868993]/10 text-[#868993]";
+  }
+
+  return (
+    <section className="mt-6">
+      <div className="mb-1 flex items-center gap-2">
+        <h2 className="text-lg font-semibold text-[#d1d4dc]">
+          Sub-account Wallets
+        </h2>
+        <span
+          className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeCls}`}
+        >
+          {badgeText}
+        </span>
+      </div>
+      <p className="mb-4 text-xs leading-relaxed text-[#868993]">
+        여러 전략(디렉셔널·차익·파생·Earn)을 병행 운영할 때 자금 충돌을
+        막기 위해 각 전략을 별도의 Binance 서브 계정에 격리합니다. 마스터
+        키 1개로 모든 서브를 생성·통제하며, 자금은 Capital Router가 자동으로
+        마스터↔서브 사이를 이동시킵니다.
+      </p>
+
+      <div className="rounded-lg border border-[#2a2e39] bg-[#1e222d] p-5">
+        {subs.length === 0 ? (
+          <div className="space-y-3">
+            <p className="text-sm text-[#d1d4dc]">
+              아직 서브 계정이 설정되지 않았습니다.
+            </p>
+            <p className="text-xs text-[#868993]">
+              온보딩 위저드에서 마스터 키 등록 → 4개 서브 자동 생성 → 거래 키
+              입력의 3단계로 5분 안에 설정할 수 있습니다.
+            </p>
+            <Link
+              href="/onboarding/wallets"
+              className="inline-flex items-center rounded bg-[#2962ff] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2962ff]/80"
+            >
+              온보딩 시작 →
+            </Link>
+          </div>
+        ) : (
+          <>
+            <ul className="space-y-2">
+              {subs.map((w) => (
+                <li
+                  key={w.id}
+                  className="flex items-center justify-between rounded border border-[#2a2e39] bg-[#131722] px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-[#d1d4dc]">
+                        {w.alias}
+                      </span>
+                      <span className="rounded bg-[#2a2e39] px-1.5 py-0.5 text-[10px] text-[#a0a3ad]">
+                        {w.purpose}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-[#868993]">
+                      {w.sub_account_email ?? "—"}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                      w.status === "active"
+                        ? "border-[#26a69a]/30 bg-[#26a69a]/10 text-[#26a69a]"
+                        : w.status === "key_missing"
+                          ? "border-[#F0B90B]/30 bg-[#F0B90B]/10 text-[#F0B90B]"
+                          : w.status === "key_invalid"
+                            ? "border-[#ef5350]/30 bg-[#ef5350]/10 text-[#ef5350]"
+                            : "border-[#868993]/30 bg-[#868993]/10 text-[#868993]"
+                    }`}
+                  >
+                    {w.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-[#868993]">
+                서브 추가 생성, 키 교체, IP 화이트리스트 변경은 온보딩 위저드에서
+                할 수 있습니다.
+              </p>
+              <Link
+                href="/onboarding/wallets"
+                className="shrink-0 rounded border border-[#2962ff]/40 px-3 py-1.5 text-xs font-medium text-[#2962ff] transition-colors hover:bg-[#2962ff]/10"
+              >
+                관리 →
+              </Link>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
