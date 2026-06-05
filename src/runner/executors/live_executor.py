@@ -10,7 +10,12 @@ from common.risk import RiskConfig
 from control.enums import EventKind
 from control.live_heartbeat import clear_alive as redis_hb_clear
 from control.live_heartbeat import mark_alive as redis_hb_mark
-from control.repo import update_live_job_heartbeat, store_live_initial_equity
+from control.repo import (
+    get_strategy_allocation,
+    store_live_initial_equity,
+    update_live_job_heartbeat,
+)
+from live.allocator import get_capital_allocator
 from live.context import LiveContext
 from live.indicator_context import CandleStreamIndicatorContext
 from live.portfolio_context import PortfolioContext
@@ -160,6 +165,27 @@ async def run_live(
     )
     portfolio_risk_manager = LiveRiskManager(portfolio_risk_config)
 
+    # Capital Allocator pre-trade gate wiring.
+    # Activate only when a strategy_allocations row exists for this job —
+    # legacy jobs without a budget keep the gate disabled and behave as before.
+    capital_allocator = None
+    allocator_enabled = False
+    try:
+        async with session_maker() as _alloc_session:
+            _alloc_row = await get_strategy_allocation(
+                _alloc_session, job_id=job_id
+            )
+        if _alloc_row is not None:
+            capital_allocator = get_capital_allocator()
+            allocator_enabled = True
+            print(
+                f"✅ Capital Allocator gate enabled (job={job_id}, "
+                f"allocated={_alloc_row.allocated_usdt:.2f}, "
+                f"reserved={_alloc_row.reserved_usdt:.2f})"
+            )
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ allocator gate detection failed: {exc}")
+
     trade_contexts: dict[str, LiveContext] = {}
     for sym in symbols:
         # pick first stream config for the symbol
@@ -197,6 +223,9 @@ async def run_live(
             job_id=job_id,
             earn_client=earn_client,
             margin_restore_cap_usdt=margin_restore_cap_usdt,
+            capital_allocator=capital_allocator,
+            allocator_session_maker=session_maker,
+            allocator_enabled=allocator_enabled,
         )
         trade_contexts[sym] = ctx
 
