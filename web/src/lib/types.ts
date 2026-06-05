@@ -281,6 +281,79 @@ export type BinanceCredential = {
   api_key_masked?: string;
 };
 
+export type WalletRole = "master" | "sub";
+export type WalletPurpose =
+  | "generic"
+  | "directional"
+  | "arbitrage"
+  | "derivatives"
+  | "earn"
+  | "copy_trading";
+export type WalletAccountStatus =
+  | "active"
+  | "disabled"
+  | "key_missing"
+  | "key_invalid";
+
+export type WalletAccount = {
+  id: string;
+  env: BinanceCredentialEnv;
+  role: WalletRole;
+  purpose: WalletPurpose;
+  alias: string;
+  sub_account_email: string | null;
+  status: WalletAccountStatus;
+  api_key_masked: string | null;
+  enabled_wallets: Record<string, unknown> | null;
+  ip_whitelist: string[] | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type CreateSubAccountInput = {
+  alias: string;
+  purpose: WalletPurpose;
+  env?: BinanceCredentialEnv;
+  enable_futures?: boolean;
+  enable_options?: boolean;
+};
+
+export type UpdateWalletKeysInput = {
+  api_key: string;
+  api_secret: string;
+  ip_whitelist?: string[];
+  mark_active?: boolean;
+};
+
+export type StrategyAllocation = {
+  job_id: string;
+  wallet_account_id: string;
+  allocation_mode: string;
+  allocated_usdt: number;
+  reserved_usdt: number;
+  free_usdt: number;
+  max_drawdown_pct: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type WalletTransferRecord = {
+  id: string;
+  from_wallet_account_id: string | null;
+  to_wallet_account_id: string | null;
+  from_wallet_type: string;
+  to_wallet_type: string;
+  asset: string;
+  amount: number;
+  reason: string | null;
+  status: "pending" | "succeeded" | "failed" | string;
+  client_tran_id: string | null;
+  binance_tran_id: string | null;
+  error_message: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+};
+
 export type UserProfile = {
   user_id: string;
   email: string;

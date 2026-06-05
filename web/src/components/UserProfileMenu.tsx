@@ -41,6 +41,7 @@ export function UserProfileMenu() {
 
   const menuItems = [
     { href: "/settings", label: t.nav.settings },
+    { href: "/onboarding/wallets", label: "Sub-account Wallets" },
     { href: "/billing", label: "Billing" },
     ...(admin ? [{ href: "/admin", label: "Admin" }] : []),
   ];

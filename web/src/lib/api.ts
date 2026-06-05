@@ -2,8 +2,10 @@ import type {
   BillingStatus,
   BinanceAccountSummary,
   BinanceCredential,
+  BinanceCredentialEnv,
   BinanceKeysStatus,
   CheckoutResponse,
+  CreateSubAccountInput,
   DeleteAllResponse,
   DeleteResponse,
   Job,
@@ -18,6 +20,7 @@ import type {
   QuickBacktestRequest,
   QuickBacktestResponse,
   StopAllResponse,
+  StrategyAllocation,
   StrategyCapabilitiesResponse,
   StrategyContentResponse,
   StrategyGenerationResponse,
@@ -31,11 +34,15 @@ import type {
   StrategyParamsExtractResponse,
   StrategySyntaxCheckResponse,
   Trade,
+  UpdateWalletKeysInput,
   UserProfile,
   AdminUsersResponse,
   AutoSweepSettings,
   AutoSweepSettingsInput,
+  WalletAccount,
+  WalletAccountStatus,
   WalletOverview,
+  WalletTransferRecord,
   LivePositionsResponse,
 } from "@/lib/types";
 
@@ -829,6 +836,97 @@ export async function setBinanceCredential(
 
 export async function deleteBinanceCredential(env: string): Promise<{ ok: boolean }> {
   return json(`/api/backend/api/me/binance-keys/${env}`, { method: "DELETE" });
+}
+
+// ── Sub-account wallet topology ─────────────────────────────────────────
+
+export async function listWalletAccounts(
+  env?: BinanceCredentialEnv,
+): Promise<WalletAccount[]> {
+  const qs = env ? `?env=${encodeURIComponent(env)}` : "";
+  return json<WalletAccount[]>(`/api/backend/api/me/wallets${qs}`);
+}
+
+export async function getWalletAccount(walletId: string): Promise<WalletAccount> {
+  return json<WalletAccount>(
+    `/api/backend/api/me/wallets/${encodeURIComponent(walletId)}`,
+  );
+}
+
+export async function createSubAccount(
+  body: CreateSubAccountInput,
+): Promise<WalletAccount> {
+  return json<WalletAccount>("/api/backend/api/me/wallets/subaccounts", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateWalletKeys(
+  walletId: string,
+  body: UpdateWalletKeysInput,
+): Promise<WalletAccount> {
+  return json<WalletAccount>(
+    `/api/backend/api/me/wallets/${encodeURIComponent(walletId)}/keys`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+}
+
+export async function updateWalletStatus(
+  walletId: string,
+  status: WalletAccountStatus,
+): Promise<WalletAccount> {
+  return json<WalletAccount>(
+    `/api/backend/api/me/wallets/${encodeURIComponent(walletId)}/status`,
+    { method: "PUT", body: JSON.stringify({ status }) },
+  );
+}
+
+export async function deleteWalletAccount(
+  walletId: string,
+): Promise<void> {
+  await fetch(
+    `/api/backend/api/me/wallets/${encodeURIComponent(walletId)}`,
+    { method: "DELETE", cache: "no-store" },
+  );
+}
+
+export async function getJobAllocation(
+  jobId: string,
+): Promise<StrategyAllocation | null> {
+  return json<StrategyAllocation | null>(
+    `/api/backend/api/me/jobs/${encodeURIComponent(jobId)}/allocation`,
+  );
+}
+
+export async function upsertJobAllocation(
+  jobId: string,
+  body: {
+    wallet_account_id: string;
+    allocated_usdt: number;
+    allocation_mode?: string;
+    max_drawdown_pct?: number | null;
+  },
+): Promise<StrategyAllocation> {
+  return json<StrategyAllocation>(
+    `/api/backend/api/me/jobs/${encodeURIComponent(jobId)}/allocation`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+}
+
+export async function deleteJobAllocation(jobId: string): Promise<void> {
+  await fetch(
+    `/api/backend/api/me/jobs/${encodeURIComponent(jobId)}/allocation`,
+    { method: "DELETE", cache: "no-store" },
+  );
+}
+
+export async function listWalletTransfers(
+  limit = 50,
+): Promise<WalletTransferRecord[]> {
+  return json<WalletTransferRecord[]>(
+    `/api/backend/api/me/wallet-transfers?limit=${encodeURIComponent(String(limit))}`,
+  );
 }
 
 /**
