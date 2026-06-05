@@ -3927,6 +3927,14 @@ def create_app() -> FastAPI:
             "display_name": profile.display_name,
         }
 
+    from api.wallets import register_wallet_routes
+
+    register_wallet_routes(
+        app,
+        require_auth_dep=require_auth,
+        db_session_dep=_db_session,
+    )
+
     return app
 
 
