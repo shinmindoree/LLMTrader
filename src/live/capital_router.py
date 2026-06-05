@@ -1,29 +1,26 @@
-"""Capital Router — master↔sub fund routing engine (skeleton).
+"""Capital Router — master↔sub fund routing engine.
 
-This module owns the periodic *fund-flow* layer of the sub-account
-topology. In its final form it will subsume :mod:`live.auto_sweep_engine`
-and add policy-driven routing across multiple sub-accounts. For now we
-land just the scaffolding so other components (allocator, API routes)
-can integrate without waiting on the full migration.
-
-Included in this skeleton:
+Owns the periodic *fund-flow* layer of the sub-account topology:
 
 * :class:`RoutingPolicy` — per-user configuration knobs.
 * :class:`CapitalRouter` — long-lived engine with ``start`` / ``stop``
-  hooks and a placeholder ``cycle`` method.
+  hooks and a real ``cycle`` that absorbs the legacy auto-sweep loop.
 * :meth:`CapitalRouter.transfer` — the idempotent ``universal_transfer``
   helper. Every fund movement initiated by the router (or, in Phase 1,
   ad-hoc by the API) flows through this helper so we get a single audit
   trail (``wallet_transfers``) and consistent duplicate detection.
 
-Deliberately *not* in this commit:
+``cycle`` handles two topologies:
 
-* Auto-sweep policy (Earn ↔ Futures rebalancing).
-* Multi-sub topup decisions.
-* Background loop body — the loop currently just logs a heartbeat.
-
-Those land in a follow-up commit once we've validated this contract
-against the API/UI layer.
+* **Master-only (legacy)** — user has no sub wallets. The cycle runs the
+  exact Futures↔Spot↔SimpleEarn flow that ``live.auto_sweep_engine``
+  used, against the master's Binance keys. Existing single-account users
+  see no behaviour change.
+* **Sub-aware** — user has one or more active sub wallets. The cycle
+  inspects each sub's Futures balance via the master sub-account API,
+  and rebalances master↔sub through :meth:`transfer` (audited /
+  idempotent via ``wallet_transfers``). SimpleEarn subscribe/redeem
+  still happens on the master side.
 """
 
 from __future__ import annotations
@@ -33,6 +30,7 @@ import contextlib
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -44,31 +42,55 @@ from binance.client_factory import (
     BinanceClientFactoryError,
     get_client_factory,
 )
+from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
 from binance.subaccount_client import (
     VALID_WALLET_TYPES,
     BinanceSubAccountClient,
     BinanceSubAccountClientError,
     WalletType,
 )
+from common.crypto import get_crypto_service
 from control.models import (
+    UserProfile,
     WalletAccount,
+    WalletAccountStatus,
     WalletRole,
     WalletTransfer,
     WalletTransferStatus,
 )
 from control.repo import (
     create_wallet_transfer,
+    get_account_snapshot,
+    get_binance_credential,
     get_master_wallet_account,
+    get_user_profile,
     get_wallet_account,
     get_wallet_transfer_by_client_id,
+    list_auto_sweep_enabled_users,
+    list_wallet_accounts,
     mark_wallet_transfer_failed,
     mark_wallet_transfer_succeeded,
+    upsert_account_snapshot,
 )
 
 _log = logging.getLogger("llmtrader.capital_router")
 
 _DEFAULT_POLL_INTERVAL_SEC = 60
 _DEFAULT_MIN_TRANSFER_USDT = Decimal("1")
+_MIN_LEGACY_TXN_USDT = 1.0
+
+
+def _snapshot_key(user_id: str) -> str:
+    """Snapshot key shared with the legacy auto-sweep engine.
+
+    Kept identical so the existing ``/api/me/auto-sweep/status`` endpoint
+    keeps returning the same payload shape.
+    """
+    return f"auto_sweep:{user_id}"
+
+
+def _status_value(status: Any) -> str:
+    return status.value if hasattr(status, "value") else status
 
 
 class CapitalRouterError(RuntimeError):
@@ -173,9 +195,9 @@ def _generate_client_tran_id(user_id: str, reason: str) -> str:
 class CapitalRouter:
     """Long-lived router engine.
 
-    The current implementation only exposes the transfer helper and a
-    no-op cycle loop. Future commits flesh out :meth:`cycle` with the
-    auto-sweep and multi-sub topup logic.
+    The cycle loop processes every user with ``auto_sweep_enabled=true``
+    and rebalances either a single master account (legacy topology) or
+    each active sub wallet (topology after onboarding).
     """
 
     def __init__(
@@ -184,10 +206,12 @@ class CapitalRouter:
         session_maker: async_sessionmaker[AsyncSession],
         client_factory: BinanceClientFactory | None = None,
         poll_interval_sec: int = _DEFAULT_POLL_INTERVAL_SEC,
+        policy: RoutingPolicy | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._client_factory = client_factory or get_client_factory()
         self._poll_interval_sec = poll_interval_sec
+        self._policy = policy or RoutingPolicy()
         self._task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
 
@@ -228,13 +252,446 @@ class CapitalRouter:
                 )
 
     async def cycle(self) -> None:
-        """One sweep pass.
+        """One sweep pass across every user with auto-sweep enabled.
 
-        Placeholder implementation: emits a heartbeat log so operators can
-        confirm the engine is wired up. Replaced in a follow-up commit
-        with policy-driven routing.
+        Absorbs the legacy ``auto_sweep_engine`` loop. Per user, isolates
+        failures via try/except so one bad account never blocks the rest.
         """
-        _log.debug("CapitalRouter heartbeat")
+        async with self._session_maker() as session:
+            users = await list_auto_sweep_enabled_users(session)
+        if not users:
+            return
+        _log.info("CapitalRouter cycle: %d user(s)", len(users))
+        for user in users:
+            try:
+                await self.process_user(user)
+            except Exception as exc:  # noqa: BLE001
+                _log.exception("router cycle failed for user=%s: %s", user.user_id, exc)
+                await self._record_error(user.user_id, str(exc))
+
+    async def process_user(self, user: UserProfile) -> None:
+        """Run one cycle for a single user.
+
+        Routes to either the legacy single-account flow or the sub-aware
+        flow depending on whether sub wallets exist for this user.
+        """
+        async with self._session_maker() as session:
+            wallets = await list_wallet_accounts(
+                session, user_id=user.user_id, env="mainnet"
+            )
+        subs = [
+            w
+            for w in wallets
+            if _role_value(w.role) == WalletRole.SUB.value
+            and _status_value(w.status) == WalletAccountStatus.ACTIVE.value
+        ]
+        master = next(
+            (w for w in wallets if _role_value(w.role) == WalletRole.MASTER.value),
+            None,
+        )
+
+        if subs and master is not None:
+            await self._process_user_with_subs(user, master=master, subs=subs)
+        else:
+            await self._process_user_legacy(user)
+
+    # ── legacy single-account flow ────────────────────────────────
+
+    async def _process_user_legacy(self, user: UserProfile) -> None:
+        async with self._session_maker() as session:
+            cred = await get_binance_credential(
+                session, user_id=user.user_id, env="mainnet"
+            )
+        if not cred:
+            await self._record_error(
+                user.user_id, "Auto-sweep disabled: mainnet keys required"
+            )
+            return
+
+        crypto = get_crypto_service()
+        try:
+            api_key = crypto.decrypt(cred.api_key_enc)
+            api_secret = crypto.decrypt(cred.api_secret_enc)
+        except Exception as exc:  # noqa: BLE001
+            await self._record_error(
+                user.user_id, f"Key decryption failed: {exc}"
+            )
+            return
+
+        futures_buffer = float(user.auto_sweep_futures_buffer_usdt)
+        sweep_threshold = float(user.auto_sweep_sweep_threshold_usdt)
+
+        earn = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+        try:
+            futures_usdt = await earn.fetch_futures_available_balance()
+            earn_usdt = 0.0
+            try:
+                earn_usdt = await earn.fetch_flexible_position_usdt()
+            except BinanceEarnClientError as exc:
+                _log.warning(
+                    "flex position fetch failed user=%s: %s", user.user_id, exc
+                )
+
+            action, detail = await self._legacy_rebalance(
+                earn,
+                user_id=user.user_id,
+                futures_usdt=futures_usdt,
+                earn_usdt=earn_usdt,
+                futures_buffer=futures_buffer,
+                sweep_threshold=sweep_threshold,
+            )
+            await self._record_success(
+                user.user_id,
+                payload={
+                    "topology": "master-only",
+                    "futures_usdt": futures_usdt,
+                    "earn_usdt": earn_usdt,
+                    "futures_buffer_usdt": futures_buffer,
+                    "sweep_threshold_usdt": sweep_threshold,
+                    "last_action": action,
+                    "detail": detail,
+                },
+            )
+        finally:
+            await earn.aclose()
+
+    async def _legacy_rebalance(  # noqa: PLR0913 — kwargs collect distinct inputs for one decision
+        self,
+        earn: BinanceEarnClient,
+        *,
+        user_id: str,
+        futures_usdt: float,
+        earn_usdt: float,
+        futures_buffer: float,
+        sweep_threshold: float,
+    ) -> tuple[str, dict[str, Any]]:
+        action = "noop"
+        detail: dict[str, Any] = {}
+
+        if futures_usdt > futures_buffer + sweep_threshold:
+            transfer_amount = futures_usdt - futures_buffer
+            if transfer_amount >= _MIN_LEGACY_TXN_USDT:
+                await earn.transfer_futures_to_spot(transfer_amount)
+                _log.info(
+                    "legacy: Futures→Spot user=%s amount=%.2f",
+                    user_id, transfer_amount,
+                )
+                product_id = await earn.get_usdt_flexible_product_id()
+                if not product_id:
+                    raise BinanceEarnClientError(
+                        "No USDT Flexible product available"
+                    )
+                detail = await earn.subscribe(transfer_amount, product_id)
+                action = "subscribed"
+        elif futures_usdt < futures_buffer and earn_usdt > 0:
+            need = min(futures_buffer - futures_usdt, earn_usdt)
+            if need >= _MIN_LEGACY_TXN_USDT:
+                product_id = await earn.get_usdt_flexible_product_id()
+                if not product_id:
+                    raise BinanceEarnClientError(
+                        "No USDT Flexible product available"
+                    )
+                detail = await earn.redeem(need, product_id)
+                await earn.transfer_spot_to_futures(need)
+                action = "redeemed"
+
+        return action, detail
+
+    # ── sub-aware flow ───────────────────────────────────────────
+
+    async def _process_user_with_subs(
+        self,
+        user: UserProfile,
+        *,
+        master: WalletAccount,
+        subs: list[WalletAccount],
+    ) -> None:
+        """Per-sub rebalance via master's sub-account API + universal_transfer.
+
+        For each sub:
+
+        * Query the sub's Futures available USDT via the master key.
+        * If ``available > buffer + threshold`` → sweep excess
+          ``sub futures → master spot`` via :meth:`transfer`.
+        * If ``available < buffer`` → top up master spot → sub futures
+          (after optionally redeeming SimpleEarn on the master side).
+
+        After per-sub rebalances, parks any excess master spot in
+        SimpleEarn so idle capital still yields.
+        """
+        try:
+            async with self._session_maker() as bootstrap_session:
+                sub_client = await self._client_factory.get_master_subaccount_client(
+                    bootstrap_session,
+                    user_id=user.user_id,
+                    env="mainnet",
+                )
+        except BinanceClientFactoryError as exc:
+            await self._record_error(user.user_id, f"master client unavailable: {exc}")
+            return
+
+        sub_results: list[dict[str, Any]] = []
+        topup_needed: list[tuple[WalletAccount, float]] = []
+        sweep_amount_total = 0.0
+
+        for sub in subs:
+            try:
+                avail = await self._fetch_sub_futures_available(sub_client, sub)
+            except (BinanceSubAccountClientError, httpx.HTTPError) as exc:
+                _log.warning(
+                    "futures balance fetch failed user=%s sub=%s: %s",
+                    user.user_id, sub.alias, exc,
+                )
+                sub_results.append(
+                    {"alias": sub.alias, "error": str(exc), "action": "skipped"}
+                )
+                continue
+
+            buffer = float(user.auto_sweep_futures_buffer_usdt)
+            threshold = float(user.auto_sweep_sweep_threshold_usdt)
+
+            entry: dict[str, Any] = {
+                "alias": sub.alias,
+                "futures_usdt": avail,
+                "buffer_usdt": buffer,
+                "threshold_usdt": threshold,
+                "action": "noop",
+            }
+
+            if avail > buffer + threshold:
+                excess = avail - buffer
+                if excess >= float(self._policy.min_transfer_usdt):
+                    moved = await self._safe_transfer(
+                        user_id=user.user_id,
+                        from_wallet=sub,
+                        to_wallet=master,
+                        from_type="USDT_FUTURE",
+                        to_type="SPOT",
+                        amount=excess,
+                        reason="autosweep_sub_to_master",
+                    )
+                    if moved:
+                        entry["action"] = "swept_to_master"
+                        entry["amount"] = float(excess)
+                        sweep_amount_total += float(excess)
+                    else:
+                        entry["action"] = "sweep_failed"
+            elif avail < buffer:
+                need = buffer - avail
+                if need >= float(self._policy.min_transfer_usdt):
+                    topup_needed.append((sub, need))
+                    entry["action"] = "pending_topup"
+                    entry["needed_usdt"] = float(need)
+
+            sub_results.append(entry)
+
+        await self._handle_master_earn(
+            user,
+            master=master,
+            topups=topup_needed,
+            sweep_amount=sweep_amount_total,
+            sub_results=sub_results,
+        )
+
+    async def _handle_master_earn(  # noqa: PLR0913, PLR0912 — single-shot cycle aggregation
+        self,
+        user: UserProfile,
+        *,
+        master: WalletAccount,
+        topups: list[tuple[WalletAccount, float]],
+        sweep_amount: float,
+        sub_results: list[dict[str, Any]],
+    ) -> None:
+        """Handle SimpleEarn subscribe/redeem + master→sub topups."""
+        api_key, api_secret = await self._decrypt_wallet_keys(master)
+        if api_key is None or api_secret is None:
+            await self._record_error(
+                user.user_id, "master key decryption failed; skipping earn step"
+            )
+            return
+
+        earn = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+        master_action: dict[str, Any] = {"subscribed": 0.0, "redeemed": 0.0}
+        try:
+            # Top-ups first: redeem from Earn if master spot is short.
+            total_topup = sum(amount for _, amount in topups)
+            if total_topup > 0:
+                master_spot = await earn.fetch_spot_usdt_balance()
+                if master_spot < total_topup:
+                    earn_pos = 0.0
+                    with contextlib.suppress(BinanceEarnClientError):
+                        earn_pos = await earn.fetch_flexible_position_usdt()
+                    need = total_topup - master_spot
+                    if earn_pos > 0 and need > 0:
+                        product_id = await earn.get_usdt_flexible_product_id()
+                        if product_id:
+                            redeem_amount = min(need, earn_pos)
+                            await earn.redeem(redeem_amount, product_id)
+                            master_action["redeemed"] = float(redeem_amount)
+
+                for sub, amount in topups:
+                    moved = await self._safe_transfer(
+                        user_id=user.user_id,
+                        from_wallet=master,
+                        to_wallet=sub,
+                        from_type="SPOT",
+                        to_type="USDT_FUTURE",
+                        amount=amount,
+                        reason="autosweep_master_to_sub",
+                    )
+                    for entry in sub_results:
+                        if entry.get("alias") == sub.alias and entry.get(
+                            "action"
+                        ) == "pending_topup":
+                            entry["action"] = (
+                                "topped_up" if moved else "topup_failed"
+                            )
+
+            # Park sweep proceeds in SimpleEarn.
+            if sweep_amount >= float(self._policy.earn_min_subscribe_usdt):
+                product_id = await earn.get_usdt_flexible_product_id()
+                if product_id:
+                    try:
+                        await earn.subscribe(sweep_amount, product_id)
+                        master_action["subscribed"] = float(sweep_amount)
+                    except BinanceEarnClientError as exc:
+                        _log.warning(
+                            "earn subscribe failed user=%s amount=%.2f: %s",
+                            user.user_id, sweep_amount, exc,
+                        )
+        finally:
+            await earn.aclose()
+
+        await self._record_success(
+            user.user_id,
+            payload={
+                "topology": "sub-aware",
+                "subs": sub_results,
+                "master_earn": master_action,
+                "sweep_amount_usdt": sweep_amount,
+            },
+        )
+
+    async def _fetch_sub_futures_available(
+        self,
+        sub_client: BinanceSubAccountClient,
+        sub: WalletAccount,
+    ) -> float:
+        data = await sub_client.get_sub_futures_account(
+            email=sub.sub_account_email
+        )
+        for key in ("availableBalance", "totalMarginBalance", "totalWalletBalance"):
+            value = data.get(key) if isinstance(data, dict) else None
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+        assets = data.get("assets") if isinstance(data, dict) else None
+        if isinstance(assets, list):
+            for entry in assets:
+                if isinstance(entry, dict) and entry.get("asset") == "USDT":
+                    for k in ("availableBalance", "walletBalance"):
+                        v = entry.get(k)
+                        if v is not None:
+                            try:
+                                return float(v)
+                            except (TypeError, ValueError):
+                                continue
+        return 0.0
+
+    async def _decrypt_wallet_keys(
+        self, wallet: WalletAccount
+    ) -> tuple[str | None, str | None]:
+        if not wallet.api_key_enc or not wallet.api_secret_enc:
+            return None, None
+        try:
+            crypto = get_crypto_service()
+            return crypto.decrypt(wallet.api_key_enc), crypto.decrypt(
+                wallet.api_secret_enc
+            )
+        except Exception:  # noqa: BLE001
+            return None, None
+
+    async def _safe_transfer(  # noqa: PLR0913 — gateway to the audited transfer
+        self,
+        *,
+        user_id: str,
+        from_wallet: WalletAccount,
+        to_wallet: WalletAccount,
+        from_type: WalletType,
+        to_type: WalletType,
+        amount: float,
+        reason: str,
+    ) -> bool:
+        """Wrap :meth:`transfer` and swallow non-fatal errors.
+
+        Returns True on success, False on failure (after logging).
+        """
+        async with self._session_maker() as session:
+            try:
+                await self.transfer(
+                    session,
+                    user_id=user_id,
+                    env="mainnet",
+                    from_wallet_account_id=(
+                        None
+                        if _role_value(from_wallet.role) == WalletRole.MASTER.value
+                        else str(from_wallet.id)
+                    ),
+                    to_wallet_account_id=(
+                        None
+                        if _role_value(to_wallet.role) == WalletRole.MASTER.value
+                        else str(to_wallet.id)
+                    ),
+                    from_wallet_type=from_type,
+                    to_wallet_type=to_type,
+                    asset="USDT",
+                    amount=Decimal(str(amount)),
+                    reason=reason,
+                )
+                return True
+            except CapitalRouterError as exc:
+                _log.warning(
+                    "auto-sweep transfer failed user=%s reason=%s: %s",
+                    user_id, reason, exc,
+                )
+                return False
+
+    # ── snapshot persistence (same key as legacy engine) ─────────
+
+    async def _record_success(
+        self, user_id: str, *, payload: dict[str, Any]
+    ) -> None:
+        body = {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "last_action": payload.get("last_action", "completed"),
+            "last_error": None,
+        }
+        body.update(payload)
+        async with self._session_maker() as session:
+            await upsert_account_snapshot(
+                session, key=_snapshot_key(user_id), data_json=body
+            )
+            await session.commit()
+
+    async def _record_error(self, user_id: str, message: str) -> None:
+        async with self._session_maker() as session:
+            existing = await get_account_snapshot(
+                session, key=_snapshot_key(user_id)
+            )
+            base = dict(existing.data_json) if existing and existing.data_json else {}
+            base.update(
+                {
+                    "last_run_at": datetime.now(UTC).isoformat(),
+                    "last_action": "error",
+                    "last_error": message,
+                }
+            )
+            await upsert_account_snapshot(
+                session, key=_snapshot_key(user_id), data_json=base
+            )
+            await session.commit()
 
     # ── idempotent transfer helper ───────────────────────────────
 
@@ -468,3 +925,47 @@ async def stop_capital_router() -> None:
     router = _router
     _router = None
     await router.stop()
+
+
+# ── one-shot helpers (backward compatible with auto_sweep_engine) ─────
+
+
+async def trigger_user_cycle(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    user_id: str,
+) -> None:
+    """Run a single router cycle immediately for one user.
+
+    Used by the API right after a user enables auto-sweep so the change
+    takes effect without waiting for the next polling cycle. Failures
+    are isolated and persisted to the per-user snapshot instead of being
+    Failures are isolated and persisted to the per-user snapshot instead
+    of being raised to the caller.
+    """
+    router = get_capital_router(session_maker)
+    try:
+        async with session_maker() as session:
+            user = await get_user_profile(session, user_id=user_id)
+        if user is None or not user.auto_sweep_enabled:
+            return
+        await router.process_user(user)
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("immediate router cycle failed for user=%s: %s", user_id, exc)
+        with contextlib.suppress(Exception):
+            await router._record_error(user_id, str(exc))  # noqa: SLF001 — same module helper
+
+
+async def get_user_status(
+    session: AsyncSession, *, user_id: str
+) -> dict[str, Any] | None:
+    """Return the last router cycle snapshot for ``user_id``.
+
+    Backwards compatible with ``auto_sweep_engine.get_user_status`` —
+    same snapshot key, same payload shape (plus extra fields for the
+    new sub-aware topology).
+    """
+    snap = await get_account_snapshot(session, key=_snapshot_key(user_id))
+    if not snap:
+        return None
+    return snap.data_json

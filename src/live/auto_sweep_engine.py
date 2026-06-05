@@ -1,272 +1,65 @@
-"""Auto-Sweep background engine — Futures-wallet based.
+"""Backwards-compatibility shim for the old auto-sweep engine.
 
-Every 5 minutes:
-  1. List all users with `auto_sweep_enabled = true`
-  2. For each user (isolated via try/except):
-     - Decrypt mainnet Binance keys (skip testnet)
-     - Fetch Futures available_balance + current Simple Earn position
-     - Decide:
-         futures > futures_buffer + sweep_threshold
-             → transfer excess Futures → Spot, then subscribe to Simple Earn
-         futures < futures_buffer and earn > 0
-             → redeem from Simple Earn, then transfer Spot → Futures to top up
-         otherwise → noop
-     - Persist outcome to account_snapshots["auto_sweep:{user_id}"]
+The auto-sweep loop now lives inside :mod:`live.capital_router` so it
+can share the audited transfer/idempotency layer with the rest of the
+sub-account topology. This module preserves the import surface that
+``api.main`` (and any external callers) used to consume so the cutover
+is invisible.
+
+Every name below delegates to its capital-router counterpart:
+
+* :func:`start_engine` → :func:`capital_router.start_capital_router`
+* :func:`stop_engine` → :func:`capital_router.stop_capital_router`
+* :func:`trigger_user_sweep` → :func:`capital_router.trigger_user_cycle`
+* :func:`get_user_status` → :func:`capital_router.get_user_status`
+* :func:`snapshot_key` → :func:`capital_router._snapshot_key`
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
-from common.crypto import get_crypto_service
-from control.models import UserProfile
-from control.repo import (
-    get_account_snapshot,
-    list_auto_sweep_enabled_users,
-    upsert_account_snapshot,
+from live.capital_router import (
+    _snapshot_key,
+    start_capital_router,
+    stop_capital_router,
+    trigger_user_cycle,
 )
-
-_log = logging.getLogger("llmtrader.auto_sweep")
-
-_POLL_INTERVAL_SEC = 60  # 1 minute
-_MIN_TXN_USDT = 1.0  # minimum transaction size to avoid dust transfers
+from live.capital_router import (
+    get_user_status as _get_user_status,
+)
 
 
 def snapshot_key(user_id: str) -> str:
-    return f"auto_sweep:{user_id}"
-
-
-@dataclass
-class _EngineState:
-    running: bool = False
-    _task: asyncio.Task[None] | None = field(default=None, repr=False, compare=False)
-
-
-_state = _EngineState()
-
-
-# ── Public interface ───────────────────────────────────────
+    return _snapshot_key(user_id)
 
 
 async def start_engine(session_maker: async_sessionmaker[AsyncSession]) -> None:
-    global _state  # noqa: PLW0603
-    if _state.running:
-        _log.warning("Auto-sweep engine already running")
-        return
-    _state = _EngineState(running=True)
-    _state._task = asyncio.create_task(_loop(session_maker), name="auto_sweep_engine")
-    _log.info("Auto-sweep engine started (interval=%ds)", _POLL_INTERVAL_SEC)
+    await start_capital_router(session_maker)
 
 
 async def stop_engine() -> None:
-    if not _state.running:
-        return
-    _state.running = False
-    if _state._task and not _state._task.done():
-        _state._task.cancel()
-        try:
-            await _state._task
-        except asyncio.CancelledError:
-            pass
-    _log.info("Auto-sweep engine stopped")
-
-
-async def get_user_status(session: AsyncSession, *, user_id: str) -> dict[str, Any] | None:
-    snap = await get_account_snapshot(session, key=snapshot_key(user_id))
-    if not snap:
-        return None
-    return snap.data_json
+    await stop_capital_router()
 
 
 async def trigger_user_sweep(
     session_maker: async_sessionmaker[AsyncSession], *, user_id: str
 ) -> None:
-    """Run a single auto-sweep cycle immediately for one user.
-
-    Used after a user saves/enables their auto-sweep settings so the change
-    takes effect right away instead of waiting for the next polling cycle.
-    Isolated via try/except so API responses are never blocked by failures.
-    """
-    from control.repo import get_user_profile
-
-    try:
-        async with session_maker() as session:
-            user = await get_user_profile(session, user_id=user_id)
-        if user is None or not user.auto_sweep_enabled:
-            return
-        await _process_user(session_maker, user)
-    except Exception as exc:  # noqa: BLE001
-        _log.exception("immediate auto-sweep failed for user=%s: %s", user_id, exc)
-        await _record_error(session_maker, user_id, str(exc))
+    await trigger_user_cycle(session_maker, user_id=user_id)
 
 
-# ── Loop ───────────────────────────────────────────────────
+async def get_user_status(
+    session: AsyncSession, *, user_id: str
+) -> dict[str, Any] | None:
+    return await _get_user_status(session, user_id=user_id)
 
 
-async def _loop(session_maker: async_sessionmaker[AsyncSession]) -> None:
-    while _state.running:
-        try:
-            await _run_cycle(session_maker)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            _log.exception("auto-sweep cycle failed: %s", exc)
-        try:
-            await asyncio.sleep(_POLL_INTERVAL_SEC)
-        except asyncio.CancelledError:
-            raise
-
-
-async def _run_cycle(session_maker: async_sessionmaker[AsyncSession]) -> None:
-    async with session_maker() as session:
-        users = await list_auto_sweep_enabled_users(session)
-    if not users:
-        return
-    _log.info("auto-sweep cycle: %d user(s)", len(users))
-    for user in users:
-        try:
-            await _process_user(session_maker, user)
-        except Exception as exc:  # noqa: BLE001
-            _log.exception("auto-sweep failed for user=%s: %s", user.user_id, exc)
-            await _record_error(session_maker, user.user_id, str(exc))
-
-
-async def _process_user(
-    session_maker: async_sessionmaker[AsyncSession], user: UserProfile
-) -> None:
-    from control.repo import get_binance_credential
-
-    async with session_maker() as session:
-        cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
-    if not cred:
-        await _record_error(
-            session_maker, user.user_id, "Auto-sweep disabled: mainnet keys required"
-        )
-        return
-
-    crypto = get_crypto_service()
-    try:
-        api_key = crypto.decrypt(cred.api_key_enc)
-        api_secret = crypto.decrypt(cred.api_secret_enc)
-    except Exception as exc:  # noqa: BLE001
-        await _record_error(session_maker, user.user_id, f"Key decryption failed: {exc}")
-        return
-
-    futures_buffer = float(user.auto_sweep_futures_buffer_usdt)
-    sweep_threshold = float(user.auto_sweep_sweep_threshold_usdt)
-
-    client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
-    try:
-        futures_usdt = await client.fetch_futures_available_balance()
-        earn_usdt = 0.0
-        try:
-            earn_usdt = await client.fetch_flexible_position_usdt()
-        except BinanceEarnClientError as exc:
-            _log.warning("flex position fetch failed user=%s: %s", user.user_id, exc)
-
-        action = "noop"
-        detail: dict[str, Any] = {}
-
-        if futures_usdt > futures_buffer + sweep_threshold:
-            # Sweep excess: Futures → Spot → Simple Earn
-            transfer_amount = futures_usdt - futures_buffer
-            if transfer_amount >= _MIN_TXN_USDT:
-                await client.transfer_futures_to_spot(transfer_amount)
-                _log.info(
-                    "transferred Futures→Spot user=%s amount=%.2f",
-                    user.user_id, transfer_amount,
-                )
-                product_id = await client.get_usdt_flexible_product_id()
-                if not product_id:
-                    raise BinanceEarnClientError("No USDT Flexible product available")
-                detail = await client.subscribe(transfer_amount, product_id)
-                action = "subscribed"
-                _log.info(
-                    "subscribed user=%s amount=%.2f product=%s",
-                    user.user_id, transfer_amount, product_id,
-                )
-
-        elif futures_usdt < futures_buffer and earn_usdt > 0:
-            # Top up: Simple Earn → Spot → Futures
-            need = min(futures_buffer - futures_usdt, earn_usdt)
-            if need >= _MIN_TXN_USDT:
-                product_id = await client.get_usdt_flexible_product_id()
-                if not product_id:
-                    raise BinanceEarnClientError("No USDT Flexible product available")
-                detail = await client.redeem(need, product_id)
-                _log.info(
-                    "redeemed user=%s amount=%.2f product=%s",
-                    user.user_id, need, product_id,
-                )
-                await client.transfer_spot_to_futures(need)
-                _log.info(
-                    "transferred Spot→Futures user=%s amount=%.2f",
-                    user.user_id, need,
-                )
-                action = "redeemed"
-
-        await _record_success(
-            session_maker,
-            user.user_id,
-            futures_usdt=futures_usdt,
-            earn_usdt=earn_usdt,
-            futures_buffer_usdt=futures_buffer,
-            sweep_threshold_usdt=sweep_threshold,
-            action=action,
-            detail=detail,
-        )
-    finally:
-        await client.aclose()
-
-
-# ── Snapshot persistence ───────────────────────────────────
-
-
-async def _record_success(
-    session_maker: async_sessionmaker[AsyncSession],
-    user_id: str,
-    *,
-    futures_usdt: float,
-    earn_usdt: float,
-    futures_buffer_usdt: float,
-    sweep_threshold_usdt: float,
-    action: str,
-    detail: dict[str, Any],
-) -> None:
-    payload = {
-        "last_run_at": datetime.now(timezone.utc).isoformat(),
-        "futures_usdt": futures_usdt,
-        "earn_usdt": earn_usdt,
-        "futures_buffer_usdt": futures_buffer_usdt,
-        "sweep_threshold_usdt": sweep_threshold_usdt,
-        "last_action": action,
-        "last_error": None,
-        "detail": detail,
-    }
-    async with session_maker() as session:
-        await upsert_account_snapshot(session, key=snapshot_key(user_id), data_json=payload)
-        await session.commit()
-
-
-async def _record_error(
-    session_maker: async_sessionmaker[AsyncSession], user_id: str, message: str
-) -> None:
-    async with session_maker() as session:
-        existing = await get_account_snapshot(session, key=snapshot_key(user_id))
-        base = dict(existing.data_json) if existing and existing.data_json else {}
-        base.update(
-            {
-                "last_run_at": datetime.now(timezone.utc).isoformat(),
-                "last_action": "error",
-                "last_error": message,
-            }
-        )
-        await upsert_account_snapshot(session, key=snapshot_key(user_id), data_json=base)
-        await session.commit()
+__all__ = [
+    "get_user_status",
+    "snapshot_key",
+    "start_engine",
+    "stop_engine",
+    "trigger_user_sweep",
+]

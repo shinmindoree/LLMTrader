@@ -280,7 +280,7 @@ def register_wallet_routes(  # noqa: PLR0915 — single registration point for a
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         try:
-            email = await sub_client.create_virtual_subaccount(alias=body.alias)
+            email = await sub_client.create_virtual_subaccount(alias_string=body.alias)
             if body.enable_futures:
                 await sub_client.enable_futures(email)
             if body.enable_options:
