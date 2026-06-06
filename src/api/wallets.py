@@ -12,6 +12,7 @@ Auth model mirrors the existing per-user routes: every endpoint requires
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
@@ -49,6 +50,8 @@ from control.repo import (
 
 AuthDep = Callable[..., Awaitable[Any]]
 SessionDep = Callable[..., Awaitable[AsyncSession]]
+
+logger = logging.getLogger("llmtrader.api.wallets")
 
 
 # ── schemas ──────────────────────────────────────────────────────────
@@ -356,10 +359,20 @@ def register_wallet_routes(  # noqa: PLR0915 — single registration point for a
                 await master_client.add_ip_restriction(
                     email=wallet.sub_account_email,
                     sub_api_key=body.api_key,
-                    ips=body.ip_whitelist,
+                    ip_addresses=body.ip_whitelist,
                 )
-            except (BinanceClientFactoryError, BinanceSubAccountClientError):
-                pass
+            except (BinanceClientFactoryError, BinanceSubAccountClientError) as exc:
+                logger.warning(
+                    "IP whitelist push to Binance failed for wallet %s: %s",
+                    wid,
+                    exc,
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort; never 500 from here
+                logger.exception(
+                    "Unexpected error pushing IP whitelist for wallet %s: %s",
+                    wid,
+                    exc,
+                )
 
         await _factory_invalidate(wallet_account_id)
         await session.commit()
