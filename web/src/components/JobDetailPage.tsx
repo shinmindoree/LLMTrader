@@ -232,8 +232,7 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
 
       {job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
-      {(job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
-      (job?.type === "LIVE" && (trades.length > 0 || (finished && job.result && isRecord(job.result)))) &&
+      {job?.type === "LIVE" && (trades.length > 0 || (finished && job.result && isRecord(job.result))) &&
       !hasTrades ? (
         <section className="mt-6 rounded border border-[#2a2e39] bg-[#1e222d] p-4">
           <div className="mb-2 text-sm font-medium text-[#d1d4dc]">{t.jobDetail.tradeResultSummary}</div>

@@ -173,8 +173,7 @@ export function LatestJobResult({ jobType, focusJobId, title, showPendingSpinner
         {!showPlaceholderGauge && job ? <JobProgressGauge jobId={job.job_id} jobType={job.type} status={job.status} /> : null}
 
         {!showPlaceholderGauge &&
-        ((job?.type === "BACKTEST" && finished && job.result && isRecord(job.result)) ||
-        (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result))))) &&
+        (job?.type === "LIVE" && (hasLiveTrades || (finished && job.result && isRecord(job.result)))) &&
         !hasTrades ? (
           <JobResultSummary
             type={job!.type}
