@@ -134,4 +134,5 @@ jobs:
             OI_PARQUET_BLOB_CONTAINER="${OI_BLOB_CONTAINER}" \
             OI_PARQUET_BLOB_NAME_BTCUSDT="${OI_BLOB_NAME_BTCUSDT}" \
             RUNNER_ROLE=live \
-            AUTO_ALEMBIC_UPGRADE=false
+            AUTO_ALEMBIC_UPGRADE=false \
+            SLACK_WEBHOOK_URL=secretref:slack-webhook-url
