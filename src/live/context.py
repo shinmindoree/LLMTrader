@@ -130,6 +130,10 @@ class LiveContext:
         # 가드에 막혀 사라지지 않도록, 청산이 완전히 끝난 시점에
         # 안전하게 호출되도록 한다.
         self._pending_after_fill: list[Callable[[], None]] = []
+        # 신호(진입/청산/플립 결정) 발생 시 Slack 알림을 보낼 때, FLIP 처럼
+        # 내부적으로 close+entry 를 연쇄 호출하는 경로에서 중복 알림이 가지
+        # 않도록 일시적으로 신호 알림을 억제하는 플래그.
+        self._suppress_signal_notify: bool = False
         
         self._last_account_update_time: float = 0.0
         self._min_account_update_interval: float = 1.0
@@ -1086,6 +1090,12 @@ class LiveContext:
         if self.position.size == 0:
             return
         
+        self._notify_signal(
+            kind="CLOSE",
+            side="SELL" if self.position.size > 0 else "BUY",
+            reason=reason,
+            extra=f"exit: {exit_reason}" if exit_reason else None,
+        )
         if self.position.size > 0:
             self.sell(abs(self.position.size), reason=reason, exit_reason=exit_reason, use_chase=use_chase)
         else:
@@ -1802,6 +1812,45 @@ class LiveContext:
             print(f"⚠️ Slack 알림 실패: {e}")
             import traceback
             traceback.print_exc()
+
+    def _notify_signal(
+        self,
+        *,
+        kind: str,
+        side: str | None = None,
+        reason: str | None = None,
+        extra: str | None = None,
+    ) -> None:
+        """전략이 트레이드 신호를 낸 '결정 시점'에 Slack 알림을 보낸다.
+
+        기존 ENTRY/EXIT 알림은 주문이 '체결'된 뒤 발송되므로, 신호는 떴는데
+        체결이 누락되면 아무 알림도 가지 않는다. 이 메서드는 체결 여부와
+        무관하게 신호 발생 즉시(가드 통과 전) 알림을 보내, 누락을 바로
+        알아챌 수 있게 한다.
+
+        Args:
+            kind: 신호 종류 ("FLIP" / "ENTRY" / "CLOSE")
+            side: 방향 라벨 (예: "LONG" / "SHORT" / "BUY" / "SELL")
+            reason: 신호 사유
+            extra: 부가 정보 한 줄
+        """
+        if self._suppress_signal_notify:
+            return
+        if not self.notifier:
+            return
+        text = f"🔔 *SIGNAL* ({self.env}) {self.symbol}\n- type: {kind}\n"
+        if side:
+            text += f"- side: {side}\n"
+        text += f"- candle-interval: {self.candle_interval}\n"
+        if extra:
+            text += f"- {extra}\n"
+        if reason:
+            text += f"- reason: {reason}\n"
+        try:
+            asyncio.create_task(self._send_notification_safe(text, "warning"))
+        except RuntimeError:
+            # 실행 중인 이벤트 루프가 없으면(테스트 등) 조용히 건너뛴다.
+            pass
 
     def _adjust_quantity(self, quantity: float) -> Decimal:
         """수량을 거래소 step_size 배수로 내림 처리.
@@ -2666,6 +2715,7 @@ class LiveContext:
         use_chase: bool | None = None,
     ) -> None:
         """시스템 리스크 설정 기반으로 롱 진입."""
+        self._notify_signal(kind="ENTRY", side="LONG", reason=reason)
         if not self._is_effectively_flat():
             return
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
@@ -2680,6 +2730,7 @@ class LiveContext:
         use_chase: bool | None = None,
     ) -> None:
         """시스템 리스크 설정 기반으로 숏 진입."""
+        self._notify_signal(kind="ENTRY", side="SHORT", reason=reason)
         if not self._is_effectively_flat():
             return
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
@@ -2728,21 +2779,40 @@ class LiveContext:
         if current_sign == target_side:
             return
 
+        # 실제 FLIP(반대 방향 전환) — 신호 발생 시점에 한 번만 알림을 보낸다.
+        # 내부적으로 호출되는 close_position/enter_* 의 중복 신호 알림은 억제한다.
+        self._notify_signal(
+            kind="FLIP",
+            side="LONG" if target_side == 1 else "SHORT",
+            reason=entry_reason,
+            extra=f"pos: {current_sign:+d} -> {target_side:+d} | close: {close_reason}",
+        )
+
         # 반대 방향 → 청산 + 청산 체결 후 신규 진입을 큐잉
         def _enter_after_close() -> None:
             # 청산이 정상 체결되었다면 ``position.size`` 는 0 근처여야 한다.
             # ``enter_long``/``enter_short`` 가 자체적으로 가드하므로 추가
-            # 체크는 불필요하다.
-            if target_side == 1:
-                self.enter_long(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
-            else:
-                self.enter_short(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
+            # 체크는 불필요하다. FLIP 신호 알림은 위에서 이미 보냈으므로
+            # 반대 진입의 중복 신호 알림은 억제한다.
+            self._suppress_signal_notify = True
+            try:
+                if target_side == 1:
+                    self.enter_long(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
+                else:
+                    self.enter_short(reason=entry_reason, entry_pct=entry_pct, use_chase=use_chase)
+            finally:
+                self._suppress_signal_notify = False
 
         # 청산 발주가 가드(예: 이미 inflight, position 0 등)에 막혀
         # 실제 주문이 나가지 않으면 콜백이 영원히 실행되지 않는다.
         # ``_order_inflight`` 상태 변화로 발주 여부를 판정한다.
+        # 청산(close_position)의 중복 신호 알림은 억제한다.
         before_inflight = self._order_inflight
-        self.close_position(reason=close_reason, exit_reason="FLIP", use_chase=use_chase)
+        self._suppress_signal_notify = True
+        try:
+            self.close_position(reason=close_reason, exit_reason="FLIP", use_chase=use_chase)
+        finally:
+            self._suppress_signal_notify = False
         if self._order_inflight and not before_inflight:
             # 정상적으로 청산 주문이 큐에 들어감 → 후속 진입을 등록
             self._pending_after_fill.append(_enter_after_close)

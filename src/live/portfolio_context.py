@@ -110,14 +110,18 @@ class _SymbolTradingProxy:
 
     def enter_long(self, reason: str | None = None, entry_pct: float | None = None) -> None:
         # Direct synchronous entry. ``buy`` applies the portfolio pre-trade
-        # risk check via the wrapper.
+        # risk check via the wrapper. Emit the decision-time signal alert here
+        # because this path does not delegate to ``LiveContext.enter_long``.
+        self._ctx._notify_signal(kind="ENTRY", side="LONG", reason=reason)
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty > 0:
             self.buy(qty, reason=reason)
 
     def enter_short(self, reason: str | None = None, entry_pct: float | None = None) -> None:
         # Direct synchronous entry. ``sell`` applies the portfolio pre-trade
-        # risk check via the wrapper.
+        # risk check via the wrapper. Emit the decision-time signal alert here
+        # because this path does not delegate to ``LiveContext.enter_short``.
+        self._ctx._notify_signal(kind="ENTRY", side="SHORT", reason=reason)
         qty = self.calc_entry_quantity(entry_pct=entry_pct)
         if qty > 0:
             self.sell(qty, reason=reason)

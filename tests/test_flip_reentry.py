@@ -149,7 +149,19 @@ class FakeClient:
         return {}
 
 
-def _make_ctx(client: FakeClient) -> LiveContext:
+class RecordingNotifier:
+    """Captures Slack messages instead of sending them."""
+
+    webhook_url = "https://hooks.slack.test/xxx"
+
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, str | None]] = []
+
+    async def send(self, text: str, color: str | None = None) -> None:
+        self.messages.append((text, color))
+
+
+def _make_ctx(client: FakeClient, notifier: RecordingNotifier | None = None) -> LiveContext:
     risk = LiveRiskManager(
         RiskConfig(
             max_position_size=1.0,
@@ -158,7 +170,14 @@ def _make_ctx(client: FakeClient) -> LiveContext:
             max_order_size=0.5,
         )
     )
-    ctx = LiveContext(client=client, risk_manager=risk, symbol=SYMBOL, leverage=1, env="test")
+    ctx = LiveContext(
+        client=client,
+        risk_manager=risk,
+        symbol=SYMBOL,
+        leverage=1,
+        env="test",
+        notifier=notifier,
+    )
     ctx._use_user_stream = False
     ctx.balance = 5000.0
     ctx.available_balance = 5000.0
@@ -279,3 +298,92 @@ async def test_flip_survives_post_only_5022_on_close() -> None:
     # Despite the rejection churn, the reverse short leg is open.
     assert ctx.position.size < -1e-9, f"reverse leg missing: size={ctx.position.size}"
     assert client.position < -1e-9
+
+
+def _signal_msgs(notifier: RecordingNotifier) -> list[str]:
+    return [text for text, _ in notifier.messages if "*SIGNAL*" in text]
+
+
+@pytest.mark.asyncio
+async def test_flip_emits_single_signal_alert() -> None:
+    """A FLIP fires exactly one decision-time SIGNAL alert (not one per
+    internal close + reverse-entry), and it is typed FLIP."""
+    notifier = RecordingNotifier()
+    client = FakeClient(price=PRICE)
+    ctx = _make_ctx(client, notifier)
+
+    ctx.position.size = 0.016
+    ctx.position.entry_price = PRICE
+    client.position = 0.016
+    client.entry_price = PRICE
+
+    ctx.flip_position(
+        target_side=-1,
+        close_reason="MFP: net direction flip (long->short)",
+        entry_reason="MFP: net short",
+    )
+    await _pump()
+
+    signals = _signal_msgs(notifier)
+    assert len(signals) == 1, f"expected 1 SIGNAL alert, got {len(signals)}: {signals}"
+    assert "type: FLIP" in signals[0]
+    assert "SHORT" in signals[0]
+
+
+@pytest.mark.asyncio
+async def test_plain_entry_emits_entry_signal() -> None:
+    """A flat entry fires one ENTRY SIGNAL alert before the fill."""
+    notifier = RecordingNotifier()
+    client = FakeClient(price=PRICE)
+    ctx = _make_ctx(client, notifier)
+
+    ctx.enter_long(reason="MFP: net long (3>0)")
+    await _pump()
+
+    signals = _signal_msgs(notifier)
+    assert len(signals) == 1, f"expected 1 ENTRY SIGNAL, got: {signals}"
+    assert "type: ENTRY" in signals[0]
+    assert "LONG" in signals[0]
+    assert ctx.position.size > 1e-9
+
+
+@pytest.mark.asyncio
+async def test_signal_alert_fires_even_when_entry_is_dropped() -> None:
+    """The whole point: if an entry signal fires but is dropped by a guard
+    (here: zero usable balance => qty<=0), the SIGNAL alert must still be sent
+    so the drop is visible."""
+    notifier = RecordingNotifier()
+    client = FakeClient(price=PRICE)
+    ctx = _make_ctx(client, notifier)
+    ctx.balance = 0.0  # forces calc_entry_quantity -> 0 (entry dropped)
+    ctx.available_balance = 0.0
+
+    ctx.enter_short(reason="MFP: net short (2>0)")
+    await _pump()
+
+    signals = _signal_msgs(notifier)
+    assert len(signals) == 1, f"signal must fire despite drop, got: {signals}"
+    assert "type: ENTRY" in signals[0]
+    # No order actually placed (the entry was dropped at the qty guard).
+    assert client.placed == []
+    assert abs(ctx.position.size) < 1e-12
+
+
+@pytest.mark.asyncio
+async def test_plain_close_emits_close_signal() -> None:
+    """A pure close fires one CLOSE SIGNAL alert."""
+    notifier = RecordingNotifier()
+    client = FakeClient(price=PRICE)
+    ctx = _make_ctx(client, notifier)
+
+    ctx.position.size = 0.02
+    ctx.position.entry_price = PRICE
+    client.position = 0.02
+    client.entry_price = PRICE
+
+    ctx.close_position(reason="MFP: net flat (2=2)")
+    await _pump()
+
+    signals = _signal_msgs(notifier)
+    assert len(signals) == 1, f"expected 1 CLOSE SIGNAL, got: {signals}"
+    assert "type: CLOSE" in signals[0]
