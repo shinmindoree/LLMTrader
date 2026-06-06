@@ -867,14 +867,24 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
     let cum = 0;
     let peak = 0;
     let maxDd = 0;
+    let peakAtMaxDd = 0; // cumulative-PnL peak at the moment of the worst drawdown
     for (const p of positionPnls) {
       cum += p;
       if (cum > peak) peak = cum;
       const dd = peak - cum;
-      if (dd > maxDd) maxDd = dd;
+      if (dd > maxDd) {
+        maxDd = dd;
+        peakAtMaxDd = peak;
+      }
     }
-    return { amount: maxDd };
-  }, [positionPnls]);
+    // Express the drawdown as a % of the equity peak it was measured from.
+    // Equity peak = initialEquity + cumulative-PnL peak. Falls back to null
+    // when the initial balance is unknown/non-positive (e.g. some live jobs).
+    const peakEquity =
+      initialEquity != null && initialEquity > 0 ? initialEquity + peakAtMaxDd : null;
+    const pct = peakEquity != null && peakEquity > 0 ? (maxDd / peakEquity) * 100 : null;
+    return { amount: maxDd, pct };
+  }, [positionPnls, initialEquity]);
 
   // Recovery factor = net profit / max drawdown. Higher = better risk-adjusted
   // recovery. Null when there has been no drawdown yet.
@@ -1229,7 +1239,7 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
               <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
                   label={t.tradeAnalysis.maxDrawdown}
-                  value={maxDrawdown.amount > 0 ? formatSigned(-maxDrawdown.amount, "USDT") : "-"}
+                  value={maxDrawdown.amount > 0 ? `${formatSigned(-maxDrawdown.amount, "USDT")}${maxDrawdown.pct !== null ? ` (${formatNumber(maxDrawdown.pct)}%)` : ""}` : "-"}
                   tone={maxDrawdown.amount > 0 ? "negative" : "neutral"}
                   info={t.tradeAnalysis.tips.maxDrawdown}
                 />

@@ -107,11 +107,9 @@ export function ActiveJobCard({
   }, [trades, leverage]);
 
   const netPnl = useMemo(() => {
-    if (trades.length === 0) return null;
-    const totalPnl = trades.reduce((s, tr) => s + (tr.realized_pnl ?? 0), 0);
-    const totalCommission = trades.reduce((s, tr) => s + (tr.commission ?? 0), 0);
-    return totalPnl - totalCommission;
-  }, [trades]);
+    if (closedPositionsList.length === 0) return null;
+    return closedPositionsList.reduce((s, p) => s + p.realizedPnl, 0);
+  }, [closedPositionsList]);
 
   const numTrades = closedPositionsList.length;
   const winCount = closedPositionsList.filter((p) => p.realizedPnl > 0).length;
