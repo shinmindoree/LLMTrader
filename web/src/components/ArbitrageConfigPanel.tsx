@@ -912,7 +912,7 @@ function FundingSymbolDetailPanel({ symbol }: { symbol: string }) {
     <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
       <div className="mb-2 flex items-center justify-between">
         <p className="text-xs font-semibold text-[#d1d4dc]">
-          📊 {symbol} 펀딩비 상세 (최근 1년, 운영망)
+          📊 {symbol} 펀딩비 상세 (전체 기간, 운영망)
         </p>
         {data?.n_samples ? (
           <p className="text-[10px] text-[#555]">표본 {data.n_samples}회</p>
@@ -962,14 +962,14 @@ function FundingSymbolDetailPanel({ symbol }: { symbol: string }) {
           {/* 최대 / 최소 */}
           <div className="mt-2 grid grid-cols-2 gap-2">
             <div className="rounded border border-[#26a69a]/30 bg-[#26a69a]/5 p-2">
-              <p className="text-[10px] text-[#868993]">최대 펀딩비 (1년 내)</p>
+              <p className="text-[10px] text-[#868993]">최대 펀딩비 (전체 기간)</p>
               <p className="mt-0.5 font-mono text-sm font-semibold text-[#26a69a]">
                 {fmtWinPct(data.max?.rate_pct)}
               </p>
               <p className="text-[10px] text-[#555]">{fmtTs(data.max?.ts)}</p>
             </div>
             <div className="rounded border border-[#ef5350]/30 bg-[#ef5350]/5 p-2">
-              <p className="text-[10px] text-[#868993]">최소 펀딩비 (1년 내)</p>
+              <p className="text-[10px] text-[#868993]">최소 펀딩비 (전체 기간)</p>
               <p className="mt-0.5 font-mono text-sm font-semibold text-[#ef5350]">
                 {fmtWinPct(data.min?.rate_pct)}
               </p>
@@ -980,7 +980,7 @@ function FundingSymbolDetailPanel({ symbol }: { symbol: string }) {
           {/* 시계열 차트 */}
           <div className="mt-3">
             <p className="mb-1 text-[10px] text-[#868993]">
-              펀딩비 시계열 (정산당 %, 0 기준선)
+              펀딩비 시계열 (전체 기간, 정산당 %, 0 기준선)
             </p>
             <FundingSeriesChart data={data} />
           </div>

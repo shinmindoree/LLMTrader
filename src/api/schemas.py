@@ -523,11 +523,11 @@ class FundingExtremePoint(BaseModel):
 class FundingSymbolDetailResponse(BaseModel):
     symbol: str
     as_of: datetime
-    n_samples: int                          # 전체 표본 수 (최근 ≤ 365일)
+    n_samples: int                          # 전체 표본 수 (계약 상장 이후 전체 기간)
     window_stats: list[FundingWindowStat]   # 1w / 1m / 6m / 1y / all
-    max: FundingExtremePoint | None         # 최근 1년 내 최대 펀딩비
-    min: FundingExtremePoint | None         # 최근 1년 내 최소 펀딩비
-    series: list[FundingSymbolDetailPoint]  # 차트용 (downsample 가능)
+    max: FundingExtremePoint | None         # 전체 기간 내 최대 펀딩비
+    min: FundingExtremePoint | None         # 전체 기간 내 최소 펀딩비
+    series: list[FundingSymbolDetailPoint]  # 차트용 (전체 기간, 다운샘플)
     error: str | None = None
 
 

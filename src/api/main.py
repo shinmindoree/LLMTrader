@@ -375,7 +375,7 @@ async def _fetch_market_caps() -> dict[str, float]:
 # 만들기 때문에 1시간 캐시한다(펀딩 주기 8h이므로 충분).
 _SYMBOL_DETAIL_CACHE: dict[str, tuple[float, Any]] = {}
 _SYMBOL_DETAIL_TTL = 3600.0
-_SYMBOL_DETAIL_MAX_POINTS = 365  # 차트 다운샘플 상한
+_SYMBOL_DETAIL_MAX_POINTS = 500  # 차트 다운샘플 상한(전체 기간 ≈ 5~7년)
 
 
 async def _funding_symbol_detail_cached(symbol: str) -> Any:
@@ -398,7 +398,7 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
     if cached and (now - cached[0]) < _SYMBOL_DETAIL_TTL:
         return cached[1]
 
-    rows = await _fetch_funding_history(symbol, days=365)
+    rows = await _fetch_funding_history(symbol, days=None)  # 전체 기간
     as_of = datetime.now(_tz.utc)
 
     if not rows:
@@ -452,11 +452,9 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
             )
         )
 
-    # 최대/최소: 최근 1년 윈도우 안에서 (윈도우가 비어있으면 전체에서).
-    cutoff_1y = now_ms - 365 * 24 * 3600 * 1000
-    scope = [r for r in rows if r[0] >= cutoff_1y] or rows
-    max_row = max(scope, key=lambda r: r[1])
-    min_row = min(scope, key=lambda r: r[1])
+    # 최대/최소: 전체 기간(계약 상장 이후 전체) 기준.
+    max_row = max(rows, key=lambda r: r[1])
+    min_row = min(rows, key=lambda r: r[1])
     max_pt = FundingExtremePoint(
         rate_pct=round(max_row[1] * 100.0, 5),
         ts=datetime.fromtimestamp(max_row[0] / 1000.0, tz=_tz.utc),
@@ -466,10 +464,8 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
         ts=datetime.fromtimestamp(min_row[0] / 1000.0, tz=_tz.utc),
     )
 
-    # 차트 시계열: 최근 1년치만, 균등 간격으로 다운샘플하여 ≤ 365 포인트.
-    series_raw = [r for r in rows if r[0] >= cutoff_1y]
-    if not series_raw:
-        series_raw = rows
+    # 차트 시계열: 전체 기간을 균등 간격으로 다운샘플하여 ≤ _SYMBOL_DETAIL_MAX_POINTS 포인트.
+    series_raw = rows
     if len(series_raw) > _SYMBOL_DETAIL_MAX_POINTS:
         step = len(series_raw) / _SYMBOL_DETAIL_MAX_POINTS
         sampled_idx = {int(i * step) for i in range(_SYMBOL_DETAIL_MAX_POINTS)}
@@ -498,27 +494,34 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
 
 
 async def _fetch_funding_history(
-    symbol: str, *, days: int = 365
+    symbol: str, *, days: int | None = None
 ) -> list[tuple[int, float]]:
-    """운영망 fapi.binance.com에서 ``symbol``의 펀딩비 이력을 ``days``일 가져온다.
+    """운영망 fapi.binance.com에서 ``symbol``의 펀딩비 이력을 가져온다.
+
+    ``days``가 None이면 계약 상장 이후 **전체 기간**을 수집한다(예: BTCUSDT
+    ≈ 7,400행, 약 5~6년). ``days``가 정수면 최근 ``days``일만 가져온다.
 
     반환: ``[(funding_time_ms, funding_rate_as_decimal), ...]`` (오름차순).
     실패 시 빈 리스트.
 
-    페이지네이션: 한 번에 최대 1000행 → 1년치(약 1095행)는 2회 호출.
+    페이지네이션: 한 번에 최대 1000행 → 전체는 ~10페이지 이내.
     """
     PATH = "/fapi/v1/fundingRate"
     LIMIT = 1000
     end_ms = int(datetime.now().timestamp() * 1000)
-    start_ms = end_ms - days * 24 * 3600 * 1000
+    if days is None:
+        start_ms = 0  # 계약 상장 이후 전체 (Binance가 자동으로 첫 페이지부터 반환)
+    else:
+        start_ms = max(0, end_ms - days * 24 * 3600 * 1000)
 
     out: list[tuple[int, float]] = []
     cursor = start_ms
     try:
         async with httpx.AsyncClient(
-            base_url="https://fapi.binance.com", timeout=15.0
+            base_url="https://fapi.binance.com", timeout=20.0
         ) as client:
-            for _ in range(5):  # 안전상 최대 5페이지(=5000행)
+            # 안전상 최대 30페이지(=30,000행 ≈ 27년) — 어떤 영구계약도 충분히 커버.
+            for _ in range(30):
                 resp = await client.get(
                     PATH,
                     params={
@@ -1640,13 +1643,13 @@ def create_app() -> FastAPI:
         symbol: str,
         user: AuthenticatedUser = Depends(require_auth),  # noqa: ARG001
     ) -> FundingSymbolDetailResponse:
-        """심볼별 펀딩비 상세 통계 + 시계열 (최근 1년).
+        """심볼별 펀딩비 상세 통계 + 시계열 (계약 상장 이후 전체 기간).
 
-        Binance USD-M ``/fapi/v1/fundingRate`` 운영망에서 최대 1095회 정산
-        (≈365일)을 페이지네이션으로 가져와 다음을 계산한다:
+        Binance USD-M ``/fapi/v1/fundingRate`` 운영망에서 전체 기간을
+        페이지네이션으로 가져와 다음을 계산한다:
           - 윈도우 평균(7일/30일/180일/365일/전체)
-          - 최근 1년 내 최대/최소 펀딩비와 그 시점
-          - 차트용 시계열(원본을 다운샘플하여 ≤ 365 포인트)
+          - 전체 기간 내 최대/최소 펀딩비와 그 시점
+          - 차트용 시계열(전체 기간을 균등 다운샘플하여 ≤ 500 포인트)
 
         결과는 1시간 캐시한다(펀딩 정산이 8시간 주기이므로 충분).
         Testnet은 펀딩비 이력이 의미 없으므로 항상 운영망(fapi.binance.com)
