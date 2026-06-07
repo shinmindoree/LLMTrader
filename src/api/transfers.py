@@ -44,6 +44,11 @@ from binance.client_factory import (
     get_client_factory,
 )
 from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
+from binance.futures_balance import (
+    BinanceFuturesBalanceError,
+    fetch_cm_futures_account,
+    fetch_um_futures_account,
+)
 from binance.options_client import (
     BinanceOptionsClient,
     BinanceOptionsClientError,
@@ -918,18 +923,24 @@ def _cells_from_options(snapshot: dict[str, Any]) -> list[WalletBalanceCell]:
     return out
 
 
-async def _fetch_master_balances(
+async def _fetch_master_balances(  # noqa: PLR0915 — multiple sibling fetchers, one per wallet type
     master_client: BinanceSubAccountClient,
     *,
     env: str,
     earn_client: BinanceEarnClient | None = None,
+    master_api_key: str | None = None,
+    master_api_secret: str | None = None,
 ) -> tuple[dict[str, list[WalletBalanceCell]], dict[str, str]]:
     """Return ``(balances, errors)`` for the master account.
 
     Each wallet type is fetched concurrently and any individual failure
     is captured in ``errors`` so the UI can still render the rest. When
     ``earn_client`` is provided we additionally fetch the USDT Flexible
-    position; otherwise the EARN_FLEXIBLE column is left blank.
+    position; otherwise the EARN_FLEXIBLE column is left blank. When
+    ``master_api_key``/``master_api_secret`` are provided we also fetch
+    USDⓈ-M Futures, COIN-M Futures, and Options snapshots — each on its
+    own (one-shot) httpx client because Binance hosts these on distinct
+    base URLs (``fapi``/``dapi``/``eapi``).
     """
     balances: dict[str, list[WalletBalanceCell]] = {}
     errors: dict[str, str] = {}
@@ -964,14 +975,51 @@ async def _fetch_master_balances(
         except Exception as exc:  # noqa: BLE001
             errors["EARN_FLEXIBLE"] = str(exc)
 
-    await asyncio.gather(_spot(), _margin(), _earn())
-    # Master futures + options need separate clients (different base URLs).
-    # We keep it light: skip if the calls would fail rather than gather them
-    # in this minimal v1 — the UI shows balances best-effort.
+    async def _futures_um() -> None:
+        if not (master_api_key and master_api_secret):
+            return
+        try:
+            data = await fetch_um_futures_account(
+                api_key=master_api_key, api_secret=master_api_secret
+            )
+            balances["USDT_FUTURE"] = _cells_from_futures(data)
+        except (BinanceFuturesBalanceError, Exception) as exc:  # noqa: BLE001
+            errors["USDT_FUTURE"] = str(exc)
+
+    async def _futures_cm() -> None:
+        if not (master_api_key and master_api_secret):
+            return
+        try:
+            data = await fetch_cm_futures_account(
+                api_key=master_api_key, api_secret=master_api_secret
+            )
+            balances["COIN_FUTURE"] = _cells_from_futures(data)
+        except (BinanceFuturesBalanceError, Exception) as exc:  # noqa: BLE001
+            errors["COIN_FUTURE"] = str(exc)
+
+    async def _options() -> None:
+        if not (master_api_key and master_api_secret):
+            return
+        client = BinanceOptionsClient(
+            api_key=master_api_key,
+            api_secret=master_api_secret,
+            base_url=resolve_options_base_url(env),
+        )
+        try:
+            data = await client.fetch_account()
+            balances["OPTION"] = _cells_from_options(data)
+        except (BinanceOptionsClientError, Exception) as exc:  # noqa: BLE001
+            errors["OPTION"] = str(exc)
+        finally:
+            await client.aclose()
+
+    await asyncio.gather(
+        _spot(), _margin(), _earn(), _futures_um(), _futures_cm(), _options()
+    )
     return balances, errors
 
 
-async def _fetch_sub_balances(
+async def _fetch_sub_balances(  # noqa: PLR0915 — multiple sibling fetchers, one per wallet type
     master_client: BinanceSubAccountClient,
     *,
     wallet: WalletAccount,
@@ -1009,6 +1057,34 @@ async def _fetch_sub_balances(
         except Exception as exc:  # noqa: BLE001
             errors["COIN_FUTURE"] = str(exc)
 
+    async def _options() -> None:
+        # Sub-account Options requires the sub's own API key (master key
+        # cannot read /eapi/v1/account for a sub).
+        if wallet.enabled_wallets and wallet.enabled_wallets.get("options") is False:
+            return
+        if not wallet.api_key_enc or not wallet.api_secret_enc:
+            return
+        crypto = get_crypto_service()
+        try:
+            api_key = crypto.decrypt(wallet.api_key_enc)
+            api_secret = crypto.decrypt(wallet.api_secret_enc)
+        except Exception as exc:  # noqa: BLE001
+            errors["OPTION"] = f"decrypt: {exc}"
+            return
+        env_str = (wallet.env.value if hasattr(wallet.env, "value") else wallet.env) or "mainnet"
+        client = BinanceOptionsClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=resolve_options_base_url(str(env_str)),
+        )
+        try:
+            data = await client.fetch_account()
+            balances["OPTION"] = _cells_from_options(data)
+        except (BinanceOptionsClientError, Exception) as exc:  # noqa: BLE001
+            errors["OPTION"] = str(exc)
+        finally:
+            await client.aclose()
+
     async def _earn() -> None:
         # Sub-account Earn positions are only readable with the sub's own
         # key. Skip silently when the key is missing so the row stays clean;
@@ -1035,7 +1111,9 @@ async def _fetch_sub_balances(
         finally:
             await client.aclose()
 
-    await asyncio.gather(_spot_margin(), _futures_um(), _futures_cm(), _earn())
+    await asyncio.gather(
+        _spot_margin(), _futures_um(), _futures_cm(), _options(), _earn()
+    )
     return balances, errors
 
 
@@ -1092,6 +1170,8 @@ def register_transfer_routes(  # noqa: PLR0915 — single function defines all w
         if master is not None:
             # Best-effort Earn client built from the master credential.
             earn_client: BinanceEarnClient | None = None
+            master_api_key: str | None = None
+            master_api_secret: str | None = None
             if (
                 env == "mainnet"
                 and master.api_key_enc
@@ -1099,15 +1179,23 @@ def register_transfer_routes(  # noqa: PLR0915 — single function defines all w
             ):
                 try:
                     crypto = get_crypto_service()
+                    master_api_key = crypto.decrypt(master.api_key_enc)
+                    master_api_secret = crypto.decrypt(master.api_secret_enc)
                     earn_client = BinanceEarnClient(
-                        api_key=crypto.decrypt(master.api_key_enc),
-                        api_secret=crypto.decrypt(master.api_secret_enc),
+                        api_key=master_api_key,
+                        api_secret=master_api_secret,
                     )
                 except Exception:  # noqa: BLE001
                     earn_client = None
+                    master_api_key = None
+                    master_api_secret = None
             try:
                 mb, me = await _fetch_master_balances(
-                    master_client, env=env, earn_client=earn_client
+                    master_client,
+                    env=env,
+                    earn_client=earn_client,
+                    master_api_key=master_api_key,
+                    master_api_secret=master_api_secret,
                 )
             finally:
                 if earn_client is not None:
