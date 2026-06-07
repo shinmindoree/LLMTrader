@@ -17,7 +17,6 @@ import type {
   UserProfile,
   WalletAccount,
 } from "@/lib/types";
-import { WalletSyncCard } from "@/components/wallets/WalletSyncCard";
 
 const ENV_ORDER: BinanceCredentialEnv[] = ["mainnet", "testnet"];
 
@@ -388,9 +387,6 @@ function SubAccountSection(): React.JSX.Element {
             </div>
           </>
         )}
-      </div>
-      <div className="mt-3">
-        <WalletSyncCard compact />
       </div>
     </section>
   );
