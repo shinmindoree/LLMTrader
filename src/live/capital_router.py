@@ -595,17 +595,25 @@ class CapitalRouter:
         sub_client: BinanceSubAccountClient,
         sub: WalletAccount,
     ) -> float:
-        data = await sub_client.get_sub_futures_account(
+        raw = await sub_client.get_sub_futures_account(
             email=sub.sub_account_email
         )
+        # V2 sub-account/futures/account nests under futureAccountResp
+        # (USD-M) or deliveryAccountResp (COIN-M).
+        data: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        for nested_key in ("futureAccountResp", "deliveryAccountResp"):
+            nested = data.get(nested_key)
+            if isinstance(nested, dict):
+                data = nested
+                break
         for key in ("availableBalance", "totalMarginBalance", "totalWalletBalance"):
-            value = data.get(key) if isinstance(data, dict) else None
+            value = data.get(key)
             if value is not None:
                 try:
                     return float(value)
                 except (TypeError, ValueError):
                     continue
-        assets = data.get("assets") if isinstance(data, dict) else None
+        assets = data.get("assets")
         if isinstance(assets, list):
             for entry in assets:
                 if isinstance(entry, dict) and entry.get("asset") == "USDT":

@@ -416,3 +416,13 @@ class BinanceSubAccountClient:
     async def get_margin_account(self) -> dict[str, Any]:
         """``GET /sapi/v1/margin/account`` — master cross-margin snapshot."""
         return await self._signed("GET", "/sapi/v1/margin/account")
+
+    async def get_sub_margin_account(self, email: str) -> dict[str, Any]:
+        """``GET /sapi/v1/sub-account/margin/account`` — sub cross-margin snapshot.
+
+        Response shape includes ``marginUserAssetVoList``: a list of
+        ``{asset, free, locked, borrowed, interest, netAsset}`` entries.
+        """
+        return await self._signed(
+            "GET", "/sapi/v1/sub-account/margin/account", {"email": email}
+        )

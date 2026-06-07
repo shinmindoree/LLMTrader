@@ -869,7 +869,13 @@ def _cells_from_spot(rows: list[dict[str, Any]]) -> list[WalletBalanceCell]:
 
 
 def _cells_from_margin(snapshot: dict[str, Any]) -> list[WalletBalanceCell]:
-    rows = snapshot.get("userAssets") or []
+    # Master cross-margin uses ``userAssets``; sub-account margin uses
+    # ``marginUserAssetVoList`` — handle both.
+    rows = (
+        snapshot.get("userAssets")
+        or snapshot.get("marginUserAssetVoList")
+        or []
+    )
     out: list[WalletBalanceCell] = []
     for row in rows:
         asset = str(row.get("asset") or "")
@@ -886,9 +892,17 @@ def _cells_from_margin(snapshot: dict[str, Any]) -> list[WalletBalanceCell]:
 
 
 def _cells_from_futures(snapshot: dict[str, Any]) -> list[WalletBalanceCell]:
-    # ``/sapi/v2/sub-account/futures/account`` returns ``{assets: [...]}``
-    # while master's ``/fapi/v2/account`` returns the same shape.
-    rows = snapshot.get("assets") or []
+    # Binance returns ``/fapi/v2/account`` (master) flat with ``assets``,
+    # but ``/sapi/v2/sub-account/futures/account`` nests under
+    # ``futureAccountResp`` (USD-M) or ``deliveryAccountResp`` (COIN-M).
+    # Unwrap defensively so the same parser works for either shape.
+    payload: dict[str, Any] = snapshot
+    for nested_key in ("futureAccountResp", "deliveryAccountResp"):
+        nested = snapshot.get(nested_key)
+        if isinstance(nested, dict):
+            payload = nested
+            break
+    rows = payload.get("assets") or []
     out: list[WalletBalanceCell] = []
     for row in rows:
         asset = str(row.get("asset") or "")
@@ -1035,6 +1049,17 @@ async def _fetch_sub_balances(  # noqa: PLR0915 — multiple sibling fetchers, o
         except Exception as exc:  # noqa: BLE001
             errors["SPOT"] = str(exc)
 
+    async def _margin() -> None:
+        # ``/sapi/v3/sub-account/assets`` only returns Spot — sub Margin needs
+        # its own ``/sapi/v1/sub-account/margin/account`` call.
+        if wallet.enabled_wallets and wallet.enabled_wallets.get("margin") is False:
+            return
+        try:
+            data = await master_client.get_sub_margin_account(email)
+            balances["MARGIN"] = _cells_from_margin(data)
+        except Exception as exc:  # noqa: BLE001
+            errors["MARGIN"] = str(exc)
+
     async def _futures_um() -> None:
         if wallet.enabled_wallets and wallet.enabled_wallets.get("futures_um") is False:
             return
@@ -1112,7 +1137,7 @@ async def _fetch_sub_balances(  # noqa: PLR0915 — multiple sibling fetchers, o
             await client.aclose()
 
     await asyncio.gather(
-        _spot_margin(), _futures_um(), _futures_cm(), _options(), _earn()
+        _spot_margin(), _margin(), _futures_um(), _futures_cm(), _options(), _earn()
     )
     return balances, errors
 
