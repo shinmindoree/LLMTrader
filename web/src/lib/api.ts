@@ -827,7 +827,7 @@ export async function listBinanceCredentials(): Promise<BinanceCredential[]> {
 
 export async function setBinanceCredential(
   env: string,
-  body: { api_key: string; api_secret: string },
+  body: { api_key: string; api_secret: string; ip_whitelist?: string[] | string },
 ): Promise<BinanceCredential> {
   return json<BinanceCredential>(`/api/backend/api/me/binance-keys/${env}`, {
     method: "PUT",
@@ -854,6 +854,12 @@ export async function getWalletAccount(walletId: string): Promise<WalletAccount>
   );
 }
 
+/**
+ * @deprecated Sub-account creation now happens on Binance directly.
+ * The backend route returns 410 Gone; the new Settings → Sub account
+ * page uses {@link syncWalletAccounts} + {@link listWalletAccounts}
+ * instead. Kept here only so legacy imports compile while we tree-shake.
+ */
 export async function createSubAccount(
   body: CreateSubAccountInput,
 ): Promise<WalletAccount> {
@@ -869,6 +875,20 @@ export async function updateWalletKeys(
 ): Promise<WalletAccount> {
   return json<WalletAccount>(
     `/api/backend/api/me/wallets/${encodeURIComponent(walletId)}/keys`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+}
+
+export async function updateWalletMeta(
+  walletId: string,
+  body: {
+    purpose?: string;
+    enabled_wallets?: Record<string, boolean>;
+    ip_whitelist?: string[];
+  },
+): Promise<WalletAccount> {
+  return json<WalletAccount>(
+    `/api/backend/api/me/wallets/${encodeURIComponent(walletId)}/meta`,
     { method: "PUT", body: JSON.stringify(body) },
   );
 }

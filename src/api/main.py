@@ -2655,7 +2655,15 @@ def create_app() -> FastAPI:
                     masked = _mask_key(raw_key)
                 except Exception:  # noqa: BLE001
                     masked = "***decryption_error***"
-                result.append(BinanceCredentialStatus(env=env, configured=True, api_key_masked=masked))
+                ip_list = list(cred.ip_whitelist or [])
+                result.append(
+                    BinanceCredentialStatus(
+                        env=env,
+                        configured=True,
+                        api_key_masked=masked,
+                        ip_whitelist=ip_list,
+                    )
+                )
         return result
 
     @app.put("/api/me/binance-keys/{env}", response_model=BinanceCredentialStatus)
@@ -2671,6 +2679,26 @@ def create_app() -> FastAPI:
         api_secret = str(body.get("api_secret") or "").strip()
         if not api_key or not api_secret:
             raise HTTPException(status_code=422, detail="api_key and api_secret are required")
+
+        # Optional IP whitelist memo (operator-supplied; mainnet only).
+        # Accepted shapes: list[str] or comma/whitespace-separated string.
+        ip_whitelist_raw = body.get("ip_whitelist")
+        ip_whitelist: list[str] | None = None
+        if ip_whitelist_raw is not None:
+            if isinstance(ip_whitelist_raw, str):
+                parts = [p.strip() for p in ip_whitelist_raw.replace(",", " ").split()]
+            elif isinstance(ip_whitelist_raw, list):
+                parts = [str(p).strip() for p in ip_whitelist_raw]
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail="ip_whitelist must be a list[str] or comma-separated string",
+                )
+            ip_whitelist = [p for p in parts if p]
+            if env != "mainnet" and ip_whitelist:
+                # Testnet keys don't have a real Binance-side IP whitelist;
+                # silently drop instead of erroring so the UI can be uniform.
+                ip_whitelist = []
 
         base_url = _BINANCE_CRED_ENVS[env]
 
@@ -2699,9 +2727,15 @@ def create_app() -> FastAPI:
             env=env,
             api_key_enc=api_key_enc,
             api_secret_enc=api_secret_enc,
+            ip_whitelist=ip_whitelist,
         )
         await session.commit()
-        return BinanceCredentialStatus(env=env, configured=True, api_key_masked=_mask_key(api_key))
+        return BinanceCredentialStatus(
+            env=env,
+            configured=True,
+            api_key_masked=_mask_key(api_key),
+            ip_whitelist=ip_whitelist or [],
+        )
 
     @app.delete("/api/me/binance-keys/{env}")
     async def delete_binance_key(

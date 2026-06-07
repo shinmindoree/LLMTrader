@@ -279,6 +279,10 @@ export type BinanceCredential = {
   env: BinanceCredentialEnv;
   configured: boolean;
   api_key_masked?: string;
+  /** Operator-supplied memo of the IPs registered on Binance for this
+   *  master key. Backend never enforces — Binance does — but storing
+   *  it lets the UI surface drift between intent and reality. */
+  ip_whitelist?: string[];
 };
 
 export type WalletRole = "master" | "sub";
@@ -321,6 +325,8 @@ export type WalletSyncSummary = {
   marked_missing: string[];
   marked_disabled: string[];
   cleared_missing: string[];
+  auto_created: string[];
+  permissions_synced: string[];
   unmanaged_binance_subs: string[];
   error: string | null;
 };

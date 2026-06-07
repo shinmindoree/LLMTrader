@@ -3,16 +3,26 @@
 Binance does **not** expose a sub-account delete API, nor does it push
 state changes via webhook. To keep ``wallet_accounts`` honest, we
 periodically pull the master's view of the sub-account roster and
-reconcile against the DB:
+reconcile against the DB.
+
+Since the new UX disallows creating sub-accounts from the app (the user
+must do it on Binance), Binance is the **source of truth** for the
+sub-account roster *and* their per-wallet enablement flags:
 
 * DB sub *not* present in Binance list → ``status='binance_missing'``
 * DB sub present + ``isFreeze=true`` → ``status='disabled'``
-* DB sub present + ``isFreeze=false`` → leave status untouched
-  (don't fight the operator if they marked it ``disabled`` on purpose;
-  only auto-recover when keys re-verify)
-* Binance sub *not* present in DB → record in
-  ``unmanaged_binance_subs`` summary but **do not auto-create** —
-  the user might own unrelated sub-accounts.
+* DB sub present + ``isFreeze=false`` → leave operator-driven states
+  (``disabled``, ``key_missing``, ``key_invalid``) alone; only clear
+  stale ``binance_missing``.
+* Binance sub *not* present in DB → **auto-INSERT** a row with
+  ``alias`` derived from the email local-part, ``purpose='generic'``,
+  ``status='key_missing'``. The user can rename / repurpose / supply
+  keys later from the Sub-account detail page.
+
+Additionally, the reconciler calls ``get_status()`` to mirror the
+Binance-side wallet toggles (``isMarginEnabled`` / ``isFutureEnabled``)
+into each DB row's ``enabled_wallets`` JSON. This lets the UI render
+permission badges that match what the operator sees on Binance.
 
 The summary is persisted to ``account_snapshots`` under the key
 ``wallet_reconcile:<user_id>`` so the UI can render "last sync 3m ago"
@@ -23,6 +33,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -38,11 +49,14 @@ from binance.subaccount_client import BinanceSubAccountClientError
 from control.models import (
     WalletAccount,
     WalletAccountStatus,
+    WalletPurpose,
     WalletRole,
 )
 from control.repo import (
+    create_wallet_account,
     get_account_snapshot,
     list_wallet_accounts,
+    update_wallet_account_meta,
     update_wallet_account_status,
     upsert_account_snapshot,
 )
@@ -50,6 +64,11 @@ from control.repo import (
 _log = logging.getLogger("llmtrader.wallet_reconciler")
 
 _RECON_SNAPSHOT_KEY_FMT = "wallet_reconcile:{user_id}"
+
+# Aliases collide on (user_id, env, alias), so we sanitise the email
+# local-part to a safe slug, then append a numeric suffix if needed.
+_ALIAS_SAFE_RE = re.compile(r"[^a-z0-9_-]+")
+_ALIAS_MAX_LEN = 48  # leaves headroom for "-NN" disambiguation suffix
 
 
 def _role_value(role: Any) -> str:
@@ -77,6 +96,11 @@ class ReconcileSummary:
     marked_missing: list[str] = field(default_factory=list)
     marked_disabled: list[str] = field(default_factory=list)
     cleared_missing: list[str] = field(default_factory=list)
+    auto_created: list[str] = field(default_factory=list)
+    permissions_synced: list[str] = field(default_factory=list)
+    # Retained for backward-compatibility with persisted snapshots that
+    # were written before auto-create became the default. New runs will
+    # leave it empty.
     unmanaged_binance_subs: list[str] = field(default_factory=list)
     error: str | None = None
 
@@ -145,6 +169,31 @@ class WalletReconciler:
                     binance_by_email[email] = r
             summary.binance_subs = len(binance_by_email)
 
+            # Best-effort permission snapshot — Binance returns one row
+            # per sub from /sapi/v1/sub-account/status with the flags we
+            # need (isFutureEnabled / isMarginEnabled). If it fails we
+            # skip permission sync but keep the rest of the cycle going.
+            status_by_email: dict[str, dict[str, Any]] = {}
+            try:
+                for s in await master_client.get_status():
+                    se = str(s.get("email") or "").strip().lower()
+                    if se:
+                        status_by_email[se] = s
+            except BinanceSubAccountClientError as exc:
+                _log.warning(
+                    "sub-account status fetch failed for user=%s env=%s: %s",
+                    user_id,
+                    env,
+                    exc,
+                )
+            except Exception as exc:  # noqa: BLE001 — defensive
+                _log.warning(
+                    "sub-account status fetch unexpected error user=%s env=%s: %s",
+                    user_id,
+                    env,
+                    exc,
+                )
+
             db_subs = [
                 w
                 for w in await list_wallet_accounts(
@@ -159,12 +208,26 @@ class WalletReconciler:
                 for w in db_subs
                 if w.sub_account_email
             }
+            taken_aliases = {w.alias for w in db_subs}
 
             for w in db_subs:
-                await self._reconcile_one(session, w, binance_by_email, summary)
+                await self._reconcile_one(
+                    session, w, binance_by_email, status_by_email, summary
+                )
 
             for email in sorted(set(binance_by_email) - db_emails):
-                summary.unmanaged_binance_subs.append(email)
+                created = await self._auto_create(
+                    session,
+                    user_id=user_id,
+                    env=env,
+                    email=email,
+                    binance_row=binance_by_email[email],
+                    status_row=status_by_email.get(email),
+                    taken_aliases=taken_aliases,
+                )
+                if created is not None:
+                    taken_aliases.add(created.alias)
+                    summary.auto_created.append(email)
 
             await self._persist_summary(session, summary)
             await session.commit()
@@ -194,9 +257,10 @@ class WalletReconciler:
         session: AsyncSession,
         wallet: WalletAccount,
         binance_by_email: dict[str, dict[str, Any]],
+        status_by_email: dict[str, dict[str, Any]],
         summary: ReconcileSummary,
     ) -> None:
-        """Update one DB sub's status based on the Binance row (if any)."""
+        """Update one DB sub's status + permissions based on Binance."""
         email = (wallet.sub_account_email or "").strip().lower()
         if not email:
             return  # cannot match; nothing to do
@@ -241,6 +305,139 @@ class WalletReconciler:
                 status=new_status,
             )
             summary.cleared_missing.append(email)
+
+        # Mirror Binance-side permission flags into enabled_wallets.
+        status_row = status_by_email.get(email)
+        synced = await self._sync_permissions(
+            session,
+            wallet=wallet,
+            binance_row=b_row,
+            status_row=status_row,
+        )
+        if synced:
+            summary.permissions_synced.append(email)
+
+    @staticmethod
+    def _derive_permissions(
+        binance_row: dict[str, Any] | None,
+        status_row: dict[str, Any] | None,
+    ) -> dict[str, bool]:
+        """Project Binance flags into the ``enabled_wallets`` schema.
+
+        Spot is always enabled on a sub-account; futures/margin reflect
+        ``isFutureEnabled`` / ``isMarginEnabled`` from
+        ``/sapi/v1/sub-account/status`` (preferred) or the ``list`` row
+        as a fallback. Options requires a dedicated endpoint we don't
+        call here, so it stays at whatever the DB already has; the
+        caller merges into the existing dict.
+        """
+        flags: dict[str, bool] = {"spot": True}
+        src: dict[str, Any] = {}
+        if status_row:
+            src.update(status_row)
+        if binance_row:
+            for k, v in binance_row.items():
+                src.setdefault(k, v)
+        if "isFutureEnabled" in src:
+            flags["futures_um"] = bool(src.get("isFutureEnabled"))
+        if "isMarginEnabled" in src:
+            flags["margin"] = bool(src.get("isMarginEnabled"))
+        return flags
+
+    async def _sync_permissions(
+        self,
+        session: AsyncSession,
+        *,
+        wallet: WalletAccount,
+        binance_row: dict[str, Any] | None,
+        status_row: dict[str, Any] | None,
+    ) -> bool:
+        derived = self._derive_permissions(binance_row, status_row)
+        if not derived:
+            return False
+        existing = dict(wallet.enabled_wallets or {})
+        merged = {**existing, **derived}
+        if merged == existing:
+            return False
+        await update_wallet_account_meta(
+            session,
+            wallet_account_id=wallet.id,
+            enabled_wallets=merged,
+        )
+        # Reflect back on the in-memory row so downstream code in the
+        # same cycle sees the new state.
+        wallet.enabled_wallets = merged
+        return True
+
+    @staticmethod
+    def _alias_from_email(email: str, taken: set[str]) -> str:
+        """Derive a Binance-style alias from the email local-part.
+
+        ``directional_001@xxx.local`` → ``directional_001``. If the
+        slug collides with an existing alias for the same user/env we
+        append ``-2``, ``-3``, … until unique.
+        """
+        local = email.split("@", 1)[0].lower() if "@" in email else email.lower()
+        slug = _ALIAS_SAFE_RE.sub("-", local).strip("-_")
+        if not slug:
+            slug = "sub"
+        slug = slug[:_ALIAS_MAX_LEN]
+        if slug not in taken:
+            return slug
+        for n in range(2, 1000):
+            candidate = f"{slug}-{n}"
+            if candidate not in taken:
+                return candidate
+        # extreme fallback — extremely unlikely
+        return f"{slug}-{datetime.now(UTC).strftime('%H%M%S')}"
+
+    async def _auto_create(  # noqa: PLR0913 — each kwarg maps to a distinct column / Binance field
+        self,
+        session: AsyncSession,
+        *,
+        user_id: str,
+        env: str,
+        email: str,
+        binance_row: dict[str, Any],
+        status_row: dict[str, Any] | None,
+        taken_aliases: set[str],
+    ) -> WalletAccount | None:
+        """Insert a DB row for a Binance-only sub-account.
+
+        Binance is the source of truth; the app simply mirrors its
+        roster. ``status`` starts as ``key_missing`` because the user
+        still has to paste a sub-account API key from Binance before
+        any trading can happen.
+        """
+        alias = self._alias_from_email(email, taken_aliases)
+        permissions = self._derive_permissions(binance_row, status_row)
+        is_freeze = bool(binance_row.get("isFreeze"))
+        initial_status = (
+            WalletAccountStatus.DISABLED
+            if is_freeze
+            else WalletAccountStatus.KEY_MISSING
+        )
+        try:
+            return await create_wallet_account(
+                session,
+                user_id=user_id,
+                env=env,
+                role=WalletRole.SUB,
+                alias=alias,
+                purpose=WalletPurpose.GENERIC.value,
+                sub_account_email=email,
+                enabled_wallets=permissions,
+                status=initial_status,
+            )
+        except Exception as exc:  # noqa: BLE001 — defensive; one bad row
+            _log.warning(
+                "auto-create failed for user=%s env=%s email=%s: %s",
+                user_id,
+                env,
+                email,
+                exc,
+            )
+            return None
 
     async def _persist_summary(
         self, session: AsyncSession, summary: ReconcileSummary

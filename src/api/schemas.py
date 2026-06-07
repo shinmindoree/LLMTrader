@@ -460,6 +460,7 @@ class BinanceCredentialStatus(BaseModel):
     env: str
     configured: bool
     api_key_masked: str | None = None
+    ip_whitelist: list[str] = Field(default_factory=list)
 
 
 class FundingArbitrageParams(BaseModel):

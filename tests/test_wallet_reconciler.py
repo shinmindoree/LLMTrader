@@ -30,7 +30,7 @@ from live.wallet_reconciler import (
 class _FakeWallet:
     """Minimal stand-in for the SQLAlchemy ``WalletAccount`` model."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — mirrors the SQLAlchemy model surface
         self,
         *,
         wid: str,
@@ -38,12 +38,20 @@ class _FakeWallet:
         email: str | None = None,
         status: str = "active",
         api_key_enc: str | None = "enc::xyz",
+        alias: str | None = None,
+        purpose: str = "generic",
+        enabled_wallets: dict[str, Any] | None = None,
     ) -> None:
         self.id = wid
         self.role = role
         self.sub_account_email = email
         self.status = status
         self.api_key_enc = api_key_enc
+        self.alias = alias or (
+            email.split("@", 1)[0] if email else f"sub-{wid}"
+        )
+        self.purpose = purpose
+        self.enabled_wallets = dict(enabled_wallets or {})
 
 
 class _FakeSnapshot:
@@ -82,7 +90,9 @@ def _patch_repo(monkeypatch: pytest.MonkeyPatch, *, db_subs: list[_FakeWallet]):
     """Stub out the repo / factory functions the reconciler depends on."""
     list_calls: list[dict[str, Any]] = []
     status_updates: list[tuple[str, str]] = []
+    meta_updates: list[dict[str, Any]] = []
     snapshots: list[tuple[str, dict[str, Any]]] = []
+    created: list[dict[str, Any]] = []
 
     async def fake_list_wallet_accounts(_session, *, user_id, env):
         list_calls.append({"user_id": user_id, "env": env})
@@ -99,6 +109,71 @@ def _patch_repo(monkeypatch: pytest.MonkeyPatch, *, db_subs: list[_FakeWallet]):
                 w.status = status_value
                 break
 
+    async def fake_update_meta(
+        _session,
+        *,
+        wallet_account_id,
+        enabled_wallets=None,
+        ip_whitelist=None,
+        purpose=None,
+    ):
+        meta_updates.append(
+            {
+                "wallet_account_id": wallet_account_id,
+                "enabled_wallets": enabled_wallets,
+                "ip_whitelist": ip_whitelist,
+                "purpose": purpose,
+            }
+        )
+        for w in db_subs:
+            if w.id == wallet_account_id:
+                if enabled_wallets is not None:
+                    w.enabled_wallets = enabled_wallets
+                break
+
+    async def fake_create_wallet_account(  # noqa: PLR0913 — mirrors repo
+        _session,
+        *,
+        user_id,
+        env,
+        role,
+        alias,
+        purpose="generic",
+        sub_account_email=None,
+        api_key_enc=None,
+        api_secret_enc=None,
+        enabled_wallets=None,
+        ip_whitelist=None,
+        status=None,
+    ):
+        role_value = role.value if hasattr(role, "value") else role
+        status_value = status.value if hasattr(status, "value") else status
+        new = _FakeWallet(
+            wid=f"new-{len(created) + 1}",
+            role=role_value,
+            email=sub_account_email,
+            status=status_value or "key_missing",
+            api_key_enc=api_key_enc,
+            alias=alias,
+            purpose=purpose,
+            enabled_wallets=enabled_wallets or {},
+        )
+        created.append(
+            {
+                "user_id": user_id,
+                "env": env,
+                "role": role_value,
+                "alias": alias,
+                "purpose": purpose,
+                "email": sub_account_email,
+                "enabled_wallets": enabled_wallets,
+                "ip_whitelist": ip_whitelist,
+                "status": status_value,
+            }
+        )
+        db_subs.append(new)
+        return new
+
     async def fake_upsert_snapshot(_session, *, key, data_json):
         snapshots.append((key, data_json))
 
@@ -110,13 +185,17 @@ def _patch_repo(monkeypatch: pytest.MonkeyPatch, *, db_subs: list[_FakeWallet]):
 
     monkeypatch.setattr(wr, "list_wallet_accounts", fake_list_wallet_accounts)
     monkeypatch.setattr(wr, "update_wallet_account_status", fake_update_status)
+    monkeypatch.setattr(wr, "update_wallet_account_meta", fake_update_meta)
+    monkeypatch.setattr(wr, "create_wallet_account", fake_create_wallet_account)
     monkeypatch.setattr(wr, "upsert_account_snapshot", fake_upsert_snapshot)
     monkeypatch.setattr(wr, "get_account_snapshot", fake_get_snapshot)
 
     return {
         "list_calls": list_calls,
         "status_updates": status_updates,
+        "meta_updates": meta_updates,
         "snapshots": snapshots,
+        "created": created,
     }
 
 
@@ -126,6 +205,10 @@ def _make_reconciler(
     class _FakeFactory:
         get_master_subaccount_client = AsyncMock(return_value=master_client)
 
+    # Make sure permission-sync's get_status() call never blows up the
+    # cycle for tests that don't care about permissions.
+    if not hasattr(master_client, "get_status"):
+        master_client.get_status = AsyncMock(return_value=[])
     factory = _FakeFactory()
     return WalletReconciler(
         session_maker=_make_session_maker(session),  # type: ignore[arg-type]
@@ -277,12 +360,22 @@ async def test_reconcile_leaves_operator_disabled_state_alone(
 
 
 @pytest.mark.asyncio
-async def test_reconcile_reports_unmanaged_binance_subs(
+async def test_reconcile_auto_creates_binance_only_subs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Binance has subs the DB has never heard of → surface, don't auto-add."""
+    """Binance has subs the DB has never heard of → mirror into DB.
+
+    Aliases derive from the email local-part (Binance UX convention),
+    and collisions get a numeric suffix so the unique constraint never
+    fires.
+    """
     db_subs = [
-        _FakeWallet(wid="w1", email="dir_001@subs.binance.com", status="active"),
+        _FakeWallet(
+            wid="w1",
+            email="dir_001@subs.binance.com",
+            status="active",
+            alias="dir_001",
+        ),
     ]
     tracking = _patch_repo(monkeypatch, db_subs=db_subs)
 
@@ -291,6 +384,17 @@ async def test_reconcile_reports_unmanaged_binance_subs(
         return_value=[
             {"email": "dir_001@subs.binance.com", "isFreeze": False},
             {"email": "extra_999@subs.binance.com", "isFreeze": False},
+            # collision with existing alias "dir_001" — must dedupe
+            {"email": "dir_001@othersubs.binance.com", "isFreeze": False},
+        ]
+    )
+    master_client.get_status = AsyncMock(
+        return_value=[
+            {
+                "email": "extra_999@subs.binance.com",
+                "isFutureEnabled": True,
+                "isMarginEnabled": False,
+            }
         ]
     )
 
@@ -302,9 +406,136 @@ async def test_reconcile_reports_unmanaged_binance_subs(
     summary = await rec.reconcile_user(user_id="u1")
 
     assert summary.ok is True
-    assert summary.unmanaged_binance_subs == ["extra_999@subs.binance.com"]
-    # no DB changes for the unmanaged row — DB never knew about it
-    assert tracking["status_updates"] == []
+    assert summary.unmanaged_binance_subs == []  # field retained but unused
+    created_emails = sorted(c["email"] for c in tracking["created"])
+    assert created_emails == [
+        "dir_001@othersubs.binance.com",
+        "extra_999@subs.binance.com",
+    ]
+    # alias collision was resolved with -2 suffix
+    aliases = {c["email"]: c["alias"] for c in tracking["created"]}
+    assert aliases["extra_999@subs.binance.com"] == "extra_999"
+    assert aliases["dir_001@othersubs.binance.com"] == "dir_001-2"
+    # auto-created rows arrive in key_missing with derived enabled_wallets
+    extra = next(c for c in tracking["created"] if c["email"].startswith("extra_999"))
+    assert extra["status"] == WalletAccountStatus.KEY_MISSING.value
+    assert extra["enabled_wallets"]["futures_um"] is True
+    assert extra["enabled_wallets"]["margin"] is False
+    assert sorted(summary.auto_created) == created_emails
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_auto_created_disabled_when_binance_freeze(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Newly-discovered subs that come in frozen should land as ``disabled``."""
+    db_subs: list[_FakeWallet] = []
+    tracking = _patch_repo(monkeypatch, db_subs=db_subs)
+
+    master_client = AsyncMock()
+    master_client.list_subaccounts = AsyncMock(
+        return_value=[
+            {"email": "frozen_001@subs.binance.com", "isFreeze": True},
+        ]
+    )
+    master_client.get_status = AsyncMock(return_value=[])
+
+    session = _FakeSession()
+    rec = _make_reconciler(
+        session=session, master_client=master_client, monkeypatch=monkeypatch
+    )
+
+    summary = await rec.reconcile_user(user_id="u1")
+
+    assert summary.ok is True
+    assert tracking["created"][0]["status"] == WalletAccountStatus.DISABLED.value
+    assert summary.auto_created == ["frozen_001@subs.binance.com"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_syncs_permissions_from_binance_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """isFutureEnabled / isMarginEnabled flow into enabled_wallets."""
+    db_subs = [
+        _FakeWallet(
+            wid="w1",
+            email="dir_001@subs.binance.com",
+            status="active",
+            enabled_wallets={"spot": True, "futures_um": False, "margin": False},
+        ),
+    ]
+    tracking = _patch_repo(monkeypatch, db_subs=db_subs)
+
+    master_client = AsyncMock()
+    master_client.list_subaccounts = AsyncMock(
+        return_value=[{"email": "dir_001@subs.binance.com", "isFreeze": False}]
+    )
+    master_client.get_status = AsyncMock(
+        return_value=[
+            {
+                "email": "dir_001@subs.binance.com",
+                "isFutureEnabled": True,
+                "isMarginEnabled": True,
+            }
+        ]
+    )
+
+    session = _FakeSession()
+    rec = _make_reconciler(
+        session=session, master_client=master_client, monkeypatch=monkeypatch
+    )
+
+    summary = await rec.reconcile_user(user_id="u1")
+
+    assert summary.ok is True
+    assert summary.permissions_synced == ["dir_001@subs.binance.com"]
+    assert tracking["meta_updates"][-1]["enabled_wallets"] == {
+        "spot": True,
+        "futures_um": True,
+        "margin": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_permission_write_when_already_in_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Idempotent — same permissions in DB should not generate a write."""
+    db_subs = [
+        _FakeWallet(
+            wid="w1",
+            email="dir_001@subs.binance.com",
+            status="active",
+            enabled_wallets={"spot": True, "futures_um": True, "margin": False},
+        ),
+    ]
+    tracking = _patch_repo(monkeypatch, db_subs=db_subs)
+
+    master_client = AsyncMock()
+    master_client.list_subaccounts = AsyncMock(
+        return_value=[{"email": "dir_001@subs.binance.com", "isFreeze": False}]
+    )
+    master_client.get_status = AsyncMock(
+        return_value=[
+            {
+                "email": "dir_001@subs.binance.com",
+                "isFutureEnabled": True,
+                "isMarginEnabled": False,
+            }
+        ]
+    )
+
+    session = _FakeSession()
+    rec = _make_reconciler(
+        session=session, master_client=master_client, monkeypatch=monkeypatch
+    )
+
+    summary = await rec.reconcile_user(user_id="u1")
+
+    assert summary.ok is True
+    assert summary.permissions_synced == []
+    assert tracking["meta_updates"] == []
 
 
 @pytest.mark.asyncio
@@ -422,6 +653,8 @@ def test_reconcile_summary_payload_round_trips() -> None:
         "marked_missing",
         "marked_disabled",
         "cleared_missing",
+        "auto_created",
+        "permissions_synced",
         "unmanaged_binance_subs",
         "error",
     }

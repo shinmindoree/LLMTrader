@@ -123,21 +123,31 @@ async def upsert_binance_credential(
     env: str,
     api_key_enc: str,
     api_secret_enc: str,
+    ip_whitelist: list[str] | None = None,
 ) -> None:
     now = datetime.now()
+    values: dict[str, Any] = {
+        "user_id": user_id,
+        "env": env,
+        "api_key_enc": api_key_enc,
+        "api_secret_enc": api_secret_enc,
+        "created_at": now,
+        "updated_at": now,
+    }
+    update_set: dict[str, Any] = {
+        "api_key_enc": api_key_enc,
+        "api_secret_enc": api_secret_enc,
+        "updated_at": now,
+    }
+    if ip_whitelist is not None:
+        values["ip_whitelist"] = list(ip_whitelist)
+        update_set["ip_whitelist"] = list(ip_whitelist)
     stmt = (
         insert(BinanceApiCredential)
-        .values(
-            user_id=user_id,
-            env=env,
-            api_key_enc=api_key_enc,
-            api_secret_enc=api_secret_enc,
-            created_at=now,
-            updated_at=now,
-        )
+        .values(**values)
         .on_conflict_do_update(
             constraint="uq_binance_cred_user_env",
-            set_={"api_key_enc": api_key_enc, "api_secret_enc": api_secret_enc, "updated_at": now},
+            set_=update_set,
         )
     )
     await session.execute(stmt)

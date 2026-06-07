@@ -30,14 +30,11 @@ from control.models import (
     WalletAccount,
     WalletAccountStatus,
     WalletPurpose,
-    WalletRole,
     WalletTransfer,
 )
 from control.repo import (
-    create_wallet_account,
     delete_strategy_allocation,
     delete_wallet_account,
-    get_master_wallet_account,
     get_strategy_allocation,
     get_wallet_account,
     list_wallet_accounts,
@@ -271,74 +268,32 @@ def register_wallet_routes(  # noqa: PLR0915 — single registration point for a
         "/api/me/wallets/subaccounts",
         response_model=WalletAccountOut,
         status_code=201,
+        deprecated=True,
     )
     async def create_subaccount(
         body: CreateSubAccountIn,
         user: Any = _auth_param,
         session: AsyncSession = _session_param,
     ) -> WalletAccountOut:
-        master = await get_master_wallet_account(
-            session, user_id=user.user_id, env=body.env
+        """Deprecated: sub-accounts are now created on Binance directly.
+
+        The new UX (Settings → Sub account) treats Binance as the source
+        of truth: the user creates / freezes sub-accounts on Binance,
+        and the reconciler mirrors them into ``wallet_accounts``. This
+        endpoint is kept only so older clients fail fast with a clear
+        message instead of silently doing the wrong thing.
+        """
+        # Avoid unused-param warnings while still keeping the original
+        # signature stable for any external callers that introspect.
+        del body, session, user
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Sub-account creation via the app is no longer supported. "
+                "Create the sub-account on Binance (Account → Sub-Accounts), "
+                "then click 'Binance와 동기화' in Settings → Sub account."
+            ),
         )
-        if master is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Master wallet not configured for this env; add it first.",
-            )
-
-        existing = [
-            w
-            for w in await list_wallet_accounts(
-                session, user_id=user.user_id, env=body.env
-            )
-            if w.alias.lower() == body.alias.lower()
-        ]
-        if existing:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Wallet alias '{body.alias}' already exists in {body.env}",
-            )
-
-        factory = get_client_factory()
-        try:
-            sub_client = await factory.get_master_subaccount_client(
-                session, user_id=user.user_id, env=body.env
-            )
-        except BinanceClientFactoryError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        try:
-            email = await sub_client.create_virtual_subaccount(alias_string=body.alias)
-            if body.enable_futures:
-                await sub_client.enable_futures(email)
-            if body.enable_options:
-                await sub_client.enable_options(email)
-        except BinanceSubAccountClientError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Binance sub-account API rejected request: {exc}",
-            ) from exc
-
-        wallet = await create_wallet_account(
-            session,
-            user_id=user.user_id,
-            env=body.env,
-            role=WalletRole.SUB,
-            alias=body.alias,
-            purpose=body.purpose.value,
-            sub_account_email=email,
-            api_key_enc=None,
-            api_secret_enc=None,
-            status=WalletAccountStatus.KEY_MISSING,
-            enabled_wallets={
-                "futures_um": body.enable_futures,
-                "options": body.enable_options,
-                "spot": True,
-            },
-            ip_whitelist=[],
-        )
-        await session.commit()
-        return _wallet_to_out(wallet)
 
     @app.put(
         "/api/me/wallets/{wallet_account_id}/keys",

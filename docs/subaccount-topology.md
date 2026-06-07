@@ -76,45 +76,54 @@ UserProfile (user_id)
 
 ## 4. Onboarding (one-time, ~5 min)
 
-The wizard at **`/onboarding/wallets`** drives the full flow:
+> **Design change (June 2026):** sub-accounts are now created on the
+> **Binance console** rather than via the app. The app is a *mirror*:
+> a background reconciler (5-minute cadence) pulls the authoritative
+> sub-account roster + permissions from Binance and writes them into
+> `wallet_accounts`. This avoids two-way drift (the old
+> `/onboarding/wallets` wizard could create rows the operator later
+> deleted on Binance, and vice versa).
 
-1. **Step 1 — Master key.**
-   Register a *mainnet* Binance API key with only these permissions:
-   - Read
-   - Enable Internal Transfer
-   - Enable Universal Transfer
-   - **NO** trade / withdraw / margin permissions
-   - IP whitelist enabled (the worker IP must be allowed)
+The flow lives at **`/settings`** with two tabs:
 
-2. **Step 2 — Auto-create subs.**
-   The wizard calls `POST /api/me/wallets/subaccounts` once per
-   template (`directional`, `arbitrage`, `derivatives`, `earn`),
-   which in turn:
-   - Calls Binance `POST /sapi/v1/sub-account/virtualSubAccount`
-   - Calls `POST /sapi/v1/sub-account/futures/enable` (if needed)
-   - Calls `POST /sapi/v1/sub-account/eoptions/enable` (if needed)
-   - Inserts a `wallet_accounts` row with `status='key_missing'`
+1. **Main account tab.**
+   - Register a *mainnet* Binance API key with at minimum:
+     - Read
+     - Enable Internal Transfer / Universal Transfer
+     - Enable Sub-Account Management
+     - **NO** withdraw permissions
+     - IP whitelist enabled on the Binance side (the worker IP must
+       be allowed). The same list can be stored in the app as a memo
+       — it is **not** enforced by the platform, only by Binance.
+   - Optional: register a separate *testnet* key (no IP whitelist; the
+     testnet does not enforce IP restrictions).
 
-   Subs are *idempotent by alias*: re-running the wizard with the
-   same alias is a no-op rather than a duplicate.
+2. **Sub account tab.**
+   - **Create the sub on Binance** at
+     <https://www.binance.com/en/my/security/api-management> (or the
+     sub-account dashboard). Enable Futures / Margin / Options on the
+     Binance side as needed.
+   - In the app, click **"Sync from Binance"**. The reconciler:
+     - Calls `GET /sapi/v1/sub-account/list` + `/status`.
+     - **Auto-inserts** any sub-account it has never seen (alias =
+       email local-part, with `-2`, `-3`, … suffixes on collision).
+     - Re-syncs `enabled_wallets` (`spot`, `futures_um`, `margin`)
+       from the Binance status payload. Options permissions are
+       merged so manually-set values are preserved.
+     - Disables (`status='disabled'`) any sub that Binance reports as
+       frozen.
+   - Click the synced row to open the detail page and paste the
+     **per-sub trading API key + secret + IP whitelist**. Binance does
+     **not** let the master programmatically create trading keys for
+     a sub, so this step stays manual. On save the backend calls
+     `POST /sapi/v1/sub-account/subAccountApi/ipRestriction/ipList`
+     to apply the whitelist automatically and flips `status='active'`.
 
-3. **Step 3 — Per-sub trading keys.**
-   Binance does **not** let the master programmatically create trading
-   keys for a sub (this is a Binance security policy, not a platform
-   limitation). The user must:
-   - Open
-     https://www.binance.com/en/my/security/api-management
-   - Switch to the sub account
-   - Create an API key with **only** the permissions that strategy
-     needs (e.g. Enable Futures, but not Enable Withdrawals)
-   - Paste key + secret into the wizard
+The legacy `POST /api/me/wallets/subaccounts` endpoint now returns
+**410 Gone** — it exists only to fail loudly if an old client tries
+to create subs from the app side.
 
-   On save, the backend calls
-   `POST /sapi/v1/sub-account/subAccountApi/ipRestriction/ipList` to
-   apply the IP whitelist automatically, then flips
-   `status='active'`.
-
-After Step 3, the sub is fully usable. Allocations can be set per-job
+After this, the sub is fully usable. Allocations can be set per-job
 from the Jobs UI (or via `PUT /api/me/jobs/{job_id}/allocation`).
 
 ---

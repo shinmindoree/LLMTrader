@@ -295,6 +295,13 @@ class BinanceApiCredential(Base):
     env: Mapped[str] = mapped_column(String(32), nullable=False)  # 'mainnet' | 'testnet' (Demo Mode)
     api_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
     api_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    # Operator-supplied memo of which IPs they registered on Binance for
+    # this key. The backend never enforces this — Binance does — but
+    # storing it lets the UI surface what the user *thinks* is whitelisted
+    # so drift between their notes and reality can be spotted.
+    ip_whitelist: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default="[]", default=list
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
