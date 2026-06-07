@@ -72,6 +72,11 @@ from control.repo import (
     mark_wallet_transfer_succeeded,
     upsert_account_snapshot,
 )
+from live.wallet_reconciler import (
+    ReconcileSummary,
+    WalletReconciler,
+    get_wallet_reconciler,
+)
 
 _log = logging.getLogger("llmtrader.capital_router")
 
@@ -116,6 +121,7 @@ class RoutingPolicy:
     sub_futures_topup_threshold_usdt: dict[str, float] = field(default_factory=dict)
     max_transfers_per_cycle: int = 5
     min_transfer_usdt: Decimal = _DEFAULT_MIN_TRANSFER_USDT
+    reconcile_interval_sec: int = 300
 
     def buffer_for(self, alias: str, default: float = 50.0) -> float:
         return float(self.sub_futures_min_buffer_usdt.get(alias, default))
@@ -207,6 +213,7 @@ class CapitalRouter:
         client_factory: BinanceClientFactory | None = None,
         poll_interval_sec: int = _DEFAULT_POLL_INTERVAL_SEC,
         policy: RoutingPolicy | None = None,
+        reconciler: WalletReconciler | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._client_factory = client_factory or get_client_factory()
@@ -214,6 +221,12 @@ class CapitalRouter:
         self._policy = policy or RoutingPolicy()
         self._task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
+        self._reconciler = reconciler or get_wallet_reconciler(
+            session_maker=session_maker,
+            client_factory=self._client_factory,
+            min_interval_sec=self._policy.reconcile_interval_sec,
+        )
+        self._last_reconcile_at: dict[str, datetime] = {}
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -273,8 +286,13 @@ class CapitalRouter:
         """Run one cycle for a single user.
 
         Routes to either the legacy single-account flow or the sub-aware
-        flow depending on whether sub wallets exist for this user.
+        flow depending on whether sub wallets exist for this user. First
+        runs the wallet reconciler (rate-limited per user) so the active
+        sub list reflects whatever happened on Binance since the last
+        pass.
         """
+        await self._maybe_reconcile(user.user_id)
+
         async with self._session_maker() as session:
             wallets = await list_wallet_accounts(
                 session, user_id=user.user_id, env="mainnet"
@@ -674,6 +692,46 @@ class CapitalRouter:
                 session, key=_snapshot_key(user_id), data_json=body
             )
             await session.commit()
+
+    async def _maybe_reconcile(self, user_id: str) -> ReconcileSummary | None:
+        """Run the wallet reconciler, but no more than once per interval."""
+        interval = max(0, int(self._policy.reconcile_interval_sec))
+        now = datetime.now(UTC)
+        last = self._last_reconcile_at.get(user_id)
+        if interval > 0 and last is not None:
+            elapsed = (now - last).total_seconds()
+            if elapsed < interval:
+                return None
+        try:
+            summary = await self._reconciler.reconcile_user(user_id=user_id)
+        except Exception as exc:  # noqa: BLE001 — reconciler is best-effort
+            _log.warning(
+                "reconciler raised for user=%s; continuing cycle: %s",
+                user_id,
+                exc,
+            )
+            return None
+        self._last_reconcile_at[user_id] = now
+        if summary.error:
+            _log.info(
+                "reconcile soft-failed user=%s: %s", user_id, summary.error
+            )
+        elif (
+            summary.marked_missing
+            or summary.marked_disabled
+            or summary.cleared_missing
+            or summary.unmanaged_binance_subs
+        ):
+            _log.info(
+                "reconcile user=%s: missing=%d disabled=%d cleared=%d "
+                "unmanaged=%d",
+                user_id,
+                len(summary.marked_missing),
+                len(summary.marked_disabled),
+                len(summary.cleared_missing),
+                len(summary.unmanaged_binance_subs),
+            )
+        return summary
 
     async def _record_error(self, user_id: str, message: str) -> None:
         async with self._session_maker() as session:

@@ -362,6 +362,8 @@ class WalletAccountStatus(str, enum.Enum):
     ACTIVE = "active"
     DISABLED = "disabled"
     KEY_MISSING = "key_missing"
+    KEY_INVALID = "key_invalid"
+    BINANCE_MISSING = "binance_missing"
 
 
 class WalletAccount(Base):

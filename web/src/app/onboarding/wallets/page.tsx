@@ -19,6 +19,7 @@ import type {
   WalletAccountStatus,
   WalletPurpose,
 } from "@/lib/types";
+import { WalletSyncCard } from "@/components/wallets/WalletSyncCard";
 
 // ── templates ────────────────────────────────────────────────────────
 
@@ -82,6 +83,10 @@ function statusBadge(status: WalletAccountStatus): React.JSX.Element {
     },
     key_invalid: {
       label: "Key Invalid",
+      cls: "border-[#ef5350]/30 bg-[#ef5350]/10 text-[#ef5350]",
+    },
+    binance_missing: {
+      label: "Binance Missing",
       cls: "border-[#ef5350]/30 bg-[#ef5350]/10 text-[#ef5350]",
     },
   };
@@ -679,6 +684,7 @@ export default function WalletOnboardingPage(): React.JSX.Element {
 
       <div className="space-y-5">
         <ProgressSummary wallets={wallets ?? []} hasMasterKey={hasMasterKey} />
+        <WalletSyncCard onSynced={() => void handleChanged()} />
         <MasterKeyStep
           mainnetCred={mainnetCred}
           onChanged={() => void handleChanged()}

@@ -271,6 +271,30 @@ user entirely without touching wallets.
 * Universal Transfer is UID-weight 360 — bursts above ~10 transfers
   per minute will hit Binance's per-UID limit. The router caps at
   `max_transfers_per_cycle=5` by default.
+* **Binance does not expose a sub-account delete endpoint and does
+  not push state changes via webhook.** We therefore treat Binance as
+  the source of truth and run a polling reconciler
+  (`src/live/wallet_reconciler.py`) on every router cycle, capped at
+  one reconcile per user per `RoutingPolicy.reconcile_interval_sec`
+  (default 300 s). Operators can force-sync from the Settings page
+  or the onboarding wizard via `POST /api/me/wallets/sync`.
+
+### 9.1 Wallet reconcile decision table
+
+| Binance | DB                 | Action                                       |
+|---------|--------------------|----------------------------------------------|
+| absent  | active             | DB → `binance_missing`                       |
+| absent  | binance_missing    | no-op                                        |
+| present (freeze) | active    | DB → `disabled`                              |
+| present (freeze) | disabled  | no-op                                        |
+| present (live)   | binance_missing | DB → `active` (or `key_missing` if no key) |
+| present (live)   | active/disabled/key_missing | no-op (operator-driven)        |
+| present (live)   | (no DB row)    | reported as `unmanaged_binance_subs`         |
+
+The reconciler **never auto-creates** DB rows for unknown Binance
+sub-accounts — operators may own subs unrelated to llmtrader.
+Onboarding creates the row first, *then* Binance, so a row missing in
+DB is always a deliberate signal.
 
 ---
 
@@ -282,5 +306,7 @@ user entirely without touching wallets.
 * Repo CRUD: `src/control/repo.py` (lines ~1284–1660)
 * Routes: `src/api/wallets.py`
 * Engine: `src/live/capital_router.py`
+* Reconciler: `src/live/wallet_reconciler.py`
 * Gate: `src/live/allocator.py`
 * Web wizard: `web/src/app/onboarding/wallets/page.tsx`
+* Sync card: `web/src/components/wallets/WalletSyncCard.tsx`

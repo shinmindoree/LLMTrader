@@ -145,16 +145,45 @@ class BinanceSubAccountClient:
         return email
 
     async def list_subaccounts(
-        self, *, email: str | None = None, is_freeze: bool | None = None
+        self,
+        *,
+        email: str | None = None,
+        is_freeze: bool | None = None,
+        page_size: int = 200,
     ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {}
-        if email:
-            params["email"] = email
-        if is_freeze is not None:
-            params["isFreeze"] = "true" if is_freeze else "false"
-        data = await self._signed("GET", "/sapi/v1/sub-account/list", params)
-        rows = data.get("subAccounts") if isinstance(data, dict) else None
-        return list(rows or [])
+        """Return all sub-accounts (paginated under the hood).
+
+        Binance caps ``limit`` at 200; this helper transparently iterates
+        pages until an empty page is returned. ``email`` and ``is_freeze``
+        narrow the result set server-side.
+        """
+        if page_size < 1 or page_size > 200:  # noqa: PLR2004 — Binance hard limit
+            raise BinanceSubAccountClientError(
+                "page_size must be between 1 and 200"
+            )
+        all_rows: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            params: dict[str, Any] = {"page": page, "limit": page_size}
+            if email:
+                params["email"] = email
+            if is_freeze is not None:
+                params["isFreeze"] = "true" if is_freeze else "false"
+            data = await self._signed(
+                "GET", "/sapi/v1/sub-account/list", params
+            )
+            rows = data.get("subAccounts") if isinstance(data, dict) else None
+            rows = list(rows or [])
+            if not rows:
+                break
+            all_rows.extend(rows)
+            if len(rows) < page_size:
+                break
+            page += 1
+            if page > 50:  # noqa: PLR2004 — sanity stop at 10000 subs
+                _log.warning("list_subaccounts hit page cap (50); truncating")
+                break
+        return all_rows
 
     async def enable_futures(self, email: str) -> dict[str, Any]:
         return await self._signed(

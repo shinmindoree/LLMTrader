@@ -17,6 +17,7 @@ import type {
   UserProfile,
   WalletAccount,
 } from "@/lib/types";
+import { WalletSyncCard } from "@/components/wallets/WalletSyncCard";
 
 const ENV_ORDER: BinanceCredentialEnv[] = ["mainnet", "testnet"];
 
@@ -363,7 +364,9 @@ function SubAccountSection(): React.JSX.Element {
                           ? "border-[#F0B90B]/30 bg-[#F0B90B]/10 text-[#F0B90B]"
                           : w.status === "key_invalid"
                             ? "border-[#ef5350]/30 bg-[#ef5350]/10 text-[#ef5350]"
-                            : "border-[#868993]/30 bg-[#868993]/10 text-[#868993]"
+                            : w.status === "binance_missing"
+                              ? "border-[#ef5350]/30 bg-[#ef5350]/10 text-[#ef5350]"
+                              : "border-[#868993]/30 bg-[#868993]/10 text-[#868993]"
                     }`}
                   >
                     {w.status}
@@ -385,6 +388,9 @@ function SubAccountSection(): React.JSX.Element {
             </div>
           </>
         )}
+      </div>
+      <div className="mt-3">
+        <WalletSyncCard compact />
       </div>
     </section>
   );

@@ -293,7 +293,8 @@ export type WalletAccountStatus =
   | "active"
   | "disabled"
   | "key_missing"
-  | "key_invalid";
+  | "key_invalid"
+  | "binance_missing";
 
 export type WalletAccount = {
   id: string;
@@ -308,6 +309,20 @@ export type WalletAccount = {
   ip_whitelist: string[] | null;
   created_at: string | null;
   updated_at: string | null;
+};
+
+export type WalletSyncSummary = {
+  user_id: string;
+  env: string;
+  ok: boolean;
+  ts: string;
+  binance_subs: number;
+  db_subs: number;
+  marked_missing: string[];
+  marked_disabled: string[];
+  cleared_missing: string[];
+  unmanaged_binance_subs: string[];
+  error: string | null;
 };
 
 export type CreateSubAccountInput = {

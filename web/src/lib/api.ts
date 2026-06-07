@@ -42,6 +42,7 @@ import type {
   WalletAccount,
   WalletAccountStatus,
   WalletOverview,
+  WalletSyncSummary,
   WalletTransferRecord,
   LivePositionsResponse,
 } from "@/lib/types";
@@ -888,6 +889,21 @@ export async function deleteWalletAccount(
   await fetch(
     `/api/backend/api/me/wallets/${encodeURIComponent(walletId)}`,
     { method: "DELETE", cache: "no-store" },
+  );
+}
+
+export async function syncWalletAccounts(
+  env: BinanceCredentialEnv = "mainnet",
+): Promise<WalletSyncSummary> {
+  return json<WalletSyncSummary>(
+    `/api/backend/api/me/wallets/sync?env=${encodeURIComponent(env)}`,
+    { method: "POST" },
+  );
+}
+
+export async function getWalletSyncStatus(): Promise<WalletSyncSummary | null> {
+  return json<WalletSyncSummary | null>(
+    `/api/backend/api/me/wallets/sync/status`,
   );
 }
 

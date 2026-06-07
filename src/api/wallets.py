@@ -47,6 +47,11 @@ from control.repo import (
     update_wallet_account_status,
     upsert_strategy_allocation,
 )
+from live.wallet_reconciler import (
+    ReconcileSummary,
+    WalletReconciler,
+    get_wallet_reconciler,
+)
 
 AuthDep = Callable[..., Awaitable[Any]]
 SessionDep = Callable[..., Awaitable[AsyncSession]]
@@ -203,6 +208,26 @@ def _transfer_to_out(transfer: WalletTransfer) -> WalletTransferOut:
         created_at=transfer.created_at.isoformat() if transfer.created_at else None,
         completed_at=transfer.completed_at.isoformat() if transfer.completed_at else None,
     )
+
+
+class WalletSyncSummaryOut(BaseModel):
+    """Public payload mirror of :class:`ReconcileSummary`."""
+
+    user_id: str
+    env: str
+    ok: bool
+    ts: str
+    binance_subs: int = 0
+    db_subs: int = 0
+    marked_missing: list[str] = Field(default_factory=list)
+    marked_disabled: list[str] = Field(default_factory=list)
+    cleared_missing: list[str] = Field(default_factory=list)
+    unmanaged_binance_subs: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+def _summary_to_out(summary: ReconcileSummary) -> WalletSyncSummaryOut:
+    return WalletSyncSummaryOut(**summary.to_payload())
 
 
 # ── route registration ──────────────────────────────────────────────
@@ -443,6 +468,51 @@ def register_wallet_routes(  # noqa: PLR0915 — single registration point for a
         await delete_wallet_account(session, wallet_account_id=wid)
         await _factory_invalidate(wallet_account_id)
         await session.commit()
+
+    # ── reconciler / drift sync ──────────────────────────────────
+
+    @app.post(
+        "/api/me/wallets/sync",
+        response_model=WalletSyncSummaryOut,
+    )
+    async def sync_wallets(
+        env: str = "mainnet",
+        user: Any = _auth_param,
+    ) -> WalletSyncSummaryOut:
+        """Force a wallet reconcile against Binance for the current user."""
+        try:
+            reconciler: WalletReconciler = get_wallet_reconciler()
+        except RuntimeError as exc:
+            logger.warning("reconciler not initialised: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="wallet reconciler not ready",
+            ) from exc
+        summary = await reconciler.reconcile_user(
+            user_id=user.user_id, env=env
+        )
+        return _summary_to_out(summary)
+
+    @app.get(
+        "/api/me/wallets/sync/status",
+        response_model=WalletSyncSummaryOut | None,
+    )
+    async def get_sync_status(
+        user: Any = _auth_param,
+    ) -> WalletSyncSummaryOut | None:
+        """Return the most recent reconcile summary, if any."""
+        try:
+            reconciler = get_wallet_reconciler()
+        except RuntimeError:
+            return None
+        payload = await reconciler.get_last_summary(user_id=user.user_id)
+        if payload is None:
+            return None
+        try:
+            return WalletSyncSummaryOut(**payload)
+        except Exception as exc:  # noqa: BLE001 — defensive: schema drift
+            logger.warning("stale sync snapshot for %s: %s", user.user_id, exc)
+            return None
 
     # ── strategy allocations ─────────────────────────────────────
 
