@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactElement } from "react";
+import { Fragment, useMemo, useState, type ReactElement } from "react";
 import useSWR from "swr";
 import {
   executeWalletTransfer,
@@ -147,61 +147,94 @@ function BalanceGrid({
           {data.rows.map((row) => {
             const rowId = row.wallet_account_id;
             const label = row.role === "master" ? "Master" : row.alias;
+            const errorEntries = Object.entries(row.errors ?? {}) as [
+              UiWalletType,
+              string,
+            ][];
             return (
-              <tr
-                key={`${row.role}:${rowId ?? "master"}`}
-                className="border-b border-[#2a2e39]/50"
-              >
-                <td className="px-4 py-2 text-[#d1d4dc]">
-                  <div className="font-medium">{label}</div>
-                  {row.email && (
-                    <div className="text-xs text-[#4a4f5e]">{row.email}</div>
-                  )}
-                </td>
-                {WALLET_TYPE_ORDER.map((wt) => {
-                  const enabled = isCellSelectable(row, wt, asset);
-                  const assetOk = isAssetAllowed(wt, asset);
-                  const cell = findCell(row, wt, asset);
-                  const value = cell?.free ?? 0;
-                  const total = cell?.total ?? 0;
-                  const reason = !assetOk
-                    ? `${WALLET_TYPE_LABEL[wt]} 지갑은 ${asset} 미지원`
-                    : !isWalletEnabled(row, wt)
-                      ? "wallet 비활성"
-                      : "이 셀을 출발지로 선택";
-                  return (
-                    <td
-                      key={wt}
-                      className={[
-                        "px-4 py-2 text-right font-mono",
-                        enabled
-                          ? "text-[#d1d4dc]"
-                          : "text-[#3a3f4e] line-through",
-                      ].join(" ")}
-                    >
-                      <button
-                        type="button"
-                        disabled={!enabled}
-                        onClick={() => onPick(rowId, wt)}
+              <Fragment key={`${row.role}:${rowId ?? "master"}`}>
+                <tr className="border-b border-[#2a2e39]/50">
+                  <td className="px-4 py-2 text-[#d1d4dc]">
+                    <div className="font-medium">{label}</div>
+                    {row.email && (
+                      <div className="text-xs text-[#4a4f5e]">{row.email}</div>
+                    )}
+                  </td>
+                  {WALLET_TYPE_ORDER.map((wt) => {
+                    const enabled = isCellSelectable(row, wt, asset);
+                    const assetOk = isAssetAllowed(wt, asset);
+                    const cell = findCell(row, wt, asset);
+                    const value = cell?.free ?? 0;
+                    const total = cell?.total ?? 0;
+                    const cellError = row.errors?.[wt];
+                    const reason = cellError
+                      ? `${WALLET_TYPE_LABEL[wt]}: ${cellError}`
+                      : !assetOk
+                        ? `${WALLET_TYPE_LABEL[wt]} 지갑은 ${asset} 미지원`
+                        : !isWalletEnabled(row, wt)
+                          ? "wallet 비활성"
+                          : "이 셀을 출발지로 선택";
+                    return (
+                      <td
+                        key={wt}
                         className={[
-                          "rounded px-2 py-1 transition-colors",
+                          "px-4 py-2 text-right font-mono",
                           enabled
-                            ? "hover:bg-[#2a2e39]"
-                            : "cursor-not-allowed",
+                            ? "text-[#d1d4dc]"
+                            : "text-[#3a3f4e] line-through",
                         ].join(" ")}
-                        title={reason}
                       >
-                        {value > 0 ? fmtAmount(value, asset) : "—"}
-                        {total > value && (
-                          <span className="ml-1 text-xs text-[#868993]">
-                            (잠금 {fmtAmount(total - value, asset)})
+                        <button
+                          type="button"
+                          disabled={!enabled}
+                          onClick={() => onPick(rowId, wt)}
+                          className={[
+                            "rounded px-2 py-1 transition-colors",
+                            enabled
+                              ? "hover:bg-[#2a2e39]"
+                              : "cursor-not-allowed",
+                          ].join(" ")}
+                          title={reason}
+                        >
+                          {value > 0 ? (
+                            fmtAmount(value, asset)
+                          ) : cellError ? (
+                            <span className="text-[#f59e0b]" title={cellError}>
+                              !
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                          {total > value && (
+                            <span className="ml-1 text-xs text-[#868993]">
+                              (잠금 {fmtAmount(total - value, asset)})
+                            </span>
+                          )}
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+                {errorEntries.length > 0 && (
+                  <tr className="border-b border-[#2a2e39]/30 bg-[#1a1d28]">
+                    <td
+                      colSpan={WALLET_TYPE_ORDER.length + 1}
+                      className="px-4 py-1.5 text-xs text-[#f59e0b]"
+                    >
+                      <span className="font-semibold">⚠ {label}:</span>{" "}
+                      {errorEntries.map(([wt, err], idx) => (
+                        <span key={wt}>
+                          {idx > 0 && " · "}
+                          <span className="font-medium text-[#fbbf24]">
+                            {WALLET_TYPE_LABEL[wt]}
                           </span>
-                        )}
-                      </button>
+                          <span className="text-[#868993]"> {err}</span>
+                        </span>
+                      ))}
                     </td>
-                  );
-                })}
-              </tr>
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
         </tbody>
