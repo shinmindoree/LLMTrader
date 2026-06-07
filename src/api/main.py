@@ -4358,6 +4358,14 @@ def create_app() -> FastAPI:
         db_session_dep=_db_session,
     )
 
+    from api.transfers import register_transfer_routes
+
+    register_transfer_routes(
+        app,
+        require_auth_dep=require_auth,
+        db_session_dep=_db_session,
+    )
+
     return app
 
 

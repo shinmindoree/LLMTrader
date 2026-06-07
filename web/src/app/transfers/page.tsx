@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
 import {
   getUpbitKeysStatus,
@@ -13,6 +14,7 @@ import {
   syncTransferStatus,
 } from "@/lib/api";
 import type { UpbitKeysStatus, UpbitAccount, BridgeTransfer } from "@/lib/api";
+import { InternalTransferTab } from "@/components/transfers/InternalTransferTab";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -436,16 +438,71 @@ function TransferHistory() {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+type TabKey = "internal" | "bridge";
+
+function isTabKey(value: string | null): value is TabKey {
+  return value === "internal" || value === "bridge";
+}
+
 export default function TransfersPage() {
-  const { data: keysStatus } = useSWR<UpbitKeysStatus>("upbitKeysStatus", getUpbitKeysStatus);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const tab: TabKey = isTabKey(rawTab) ? rawTab : "internal";
+
+  function setTab(next: TabKey) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", next);
+    router.replace(`/transfers?${params.toString()}`, { scroll: false });
+  }
+
+  return (
+    <main className="mx-auto max-w-5xl space-y-6 px-4 py-8">
+      <div>
+        <h1 className="text-xl font-bold text-[#d1d4dc]">이체</h1>
+        <p className="mt-1 text-sm text-[#868993]">
+          Binance 내 지갑 간 자금 이동 및 거래소 간 USDT 이체를 관리합니다.
+        </p>
+      </div>
+
+      <div className="flex gap-1 border-b border-[#2a2e39]">
+        {(
+          [
+            { key: "internal", label: "Binance Wallet 내부 이체" },
+            { key: "bridge", label: "거래소간 이체" },
+          ] as const
+        ).map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={[
+              "px-4 py-2 text-sm font-medium transition-colors",
+              tab === key
+                ? "border-b-2 border-[#2962ff] text-[#d1d4dc]"
+                : "text-[#868993] hover:text-[#d1d4dc]",
+            ].join(" ")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "internal" ? <InternalTransferTab /> : <BridgeTabContent />}
+    </main>
+  );
+}
+
+function BridgeTabContent() {
+  const { data: keysStatus } = useSWR<UpbitKeysStatus>(
+    "upbitKeysStatus",
+    getUpbitKeysStatus,
+  );
   const upbitConfigured = keysStatus?.configured ?? false;
 
   return (
-    <main className="mx-auto max-w-4xl space-y-6 px-4 py-8">
-      <div>
-        <h1 className="text-xl font-bold text-[#d1d4dc]">거래소 이체</h1>
-        <p className="mt-1 text-sm text-[#868993]">업비트 ↔ 바이낸스 간 USDT를 직접 이체합니다.</p>
-      </div>
+    <div className="space-y-6">
+      <p className="text-sm text-[#868993]">업비트 ↔ 바이낸스 간 USDT를 직접 이체합니다.</p>
 
       <UpbitKeysSection />
 
@@ -457,6 +514,6 @@ export default function TransfersPage() {
       )}
 
       <TransferHistory />
-    </main>
+    </div>
   );
 }

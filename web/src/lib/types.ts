@@ -375,6 +375,74 @@ export type WalletTransferRecord = {
   completed_at: string | null;
 };
 
+// ── Wallet internal transfer (Binance internal) ──────────────────────
+
+export type UiWalletType =
+  | "SPOT"
+  | "USDT_FUTURE"
+  | "COIN_FUTURE"
+  | "MARGIN"
+  | "OPTION";
+
+export type WalletBalanceCell = {
+  asset: string;
+  free: number;
+  locked: number;
+  total: number;
+};
+
+export type WalletBalanceRow = {
+  wallet_account_id: string | null; // null = master
+  role: "master" | "sub";
+  alias: string;
+  env: string;
+  email: string | null;
+  enabled_wallets: Record<string, unknown>;
+  balances: Partial<Record<UiWalletType, WalletBalanceCell[]>>;
+  errors: Partial<Record<UiWalletType, string>>;
+};
+
+export type WalletBalancesResponse = {
+  ts: string;
+  rows: WalletBalanceRow[];
+};
+
+export type TransferIntentInput = {
+  from_wallet_account_id: string | null;
+  to_wallet_account_id: string | null;
+  from_wallet_type: UiWalletType;
+  to_wallet_type: UiWalletType;
+  asset: string;
+  amount: number;
+  env?: "mainnet" | "testnet";
+};
+
+export type TransferLegRecord = {
+  id: string;
+  leg_index: number;
+  leg_total: number;
+  from_wallet_account_id: string | null;
+  to_wallet_account_id: string | null;
+  from_wallet_type: string;
+  to_wallet_type: string;
+  asset: string;
+  amount: number;
+  status: string;
+  binance_tran_id: string | null;
+  client_tran_id: string | null;
+  error_message: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+};
+
+export type TransferIntentResult = {
+  ok: boolean;
+  intent_id: string;
+  leg_total: number;
+  legs: TransferLegRecord[];
+  error: string | null;
+};
+
 export type UserProfile = {
   user_id: string;
   email: string;

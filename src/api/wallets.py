@@ -38,7 +38,6 @@ from control.repo import (
     get_strategy_allocation,
     get_wallet_account,
     list_wallet_accounts,
-    list_wallet_transfers,
     update_wallet_account_keys,
     update_wallet_account_meta,
     update_wallet_account_status,
@@ -536,21 +535,12 @@ def register_wallet_routes(  # noqa: PLR0915 — single registration point for a
         await session.commit()
 
     # ── wallet transfers (audit log) ─────────────────────────────
-
-    @app.get(
-        "/api/me/wallet-transfers",
-        response_model=list[WalletTransferOut],
-    )
-    async def list_transfers(
-        limit: int = 50,
-        user: Any = _auth_param,
-        session: AsyncSession = _session_param,
-    ) -> list[WalletTransferOut]:
-        limit = max(1, min(int(limit), 500))
-        transfers = await list_wallet_transfers(
-            session, user_id=user.user_id, limit=limit
-        )
-        return [_transfer_to_out(t) for t in transfers]
+    #
+    # NOTE: the public ``GET /api/me/wallet-transfers`` and
+    # ``POST /api/me/wallet-transfers`` are now owned by
+    # :mod:`api.transfers` which adds multi-leg awareness and the manual
+    # transfer execution path. This module keeps the historical
+    # ``WalletTransferOut`` schema for downstream consumers.
 
 
 def _parse_uuid(value: str, *, label: str) -> uuid.UUID:

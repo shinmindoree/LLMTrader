@@ -41,9 +41,13 @@ import type {
   AutoSweepSettingsInput,
   WalletAccount,
   WalletAccountStatus,
+  WalletBalancesResponse,
   WalletOverview,
   WalletSyncSummary,
   WalletTransferRecord,
+  TransferIntentInput,
+  TransferIntentResult,
+  TransferLegRecord,
   LivePositionsResponse,
 } from "@/lib/types";
 
@@ -968,6 +972,36 @@ export async function listWalletTransfers(
   limit = 50,
 ): Promise<WalletTransferRecord[]> {
   return json<WalletTransferRecord[]>(
+    `/api/backend/api/me/wallet-transfers?limit=${encodeURIComponent(String(limit))}`,
+  );
+}
+
+// ── Binance internal wallet transfer (Settings 이체 → 내부 이체) ────────
+
+export async function getWalletBalances(
+  env: "mainnet" | "testnet" = "mainnet",
+): Promise<WalletBalancesResponse> {
+  return json<WalletBalancesResponse>(
+    `/api/backend/api/me/wallet-balances?env=${encodeURIComponent(env)}`,
+  );
+}
+
+export async function executeWalletTransfer(
+  body: TransferIntentInput,
+): Promise<TransferIntentResult> {
+  return json<TransferIntentResult>(
+    "/api/backend/api/me/wallet-transfers",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function listWalletTransferLegs(
+  limit = 50,
+): Promise<TransferLegRecord[]> {
+  return json<TransferLegRecord[]>(
     `/api/backend/api/me/wallet-transfers?limit=${encodeURIComponent(String(limit))}`,
   );
 }

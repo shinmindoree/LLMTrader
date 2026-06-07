@@ -338,3 +338,81 @@ class BinanceSubAccountClient:
                     return list(data[key])
             return []
         return list(data) if isinstance(data, list) else []
+
+    # ── master internal transfer (asset/transfer) ─────────
+    #
+    # ``/sapi/v1/sub-account/universalTransfer`` does not support OPTION as
+    # a wallet type. For master-internal moves involving Options (e.g.
+    # Master Spot ↔ Master Options) we fall back to the master-only
+    # ``/sapi/v1/asset/transfer`` endpoint, which exposes the full matrix
+    # via its ``type`` parameter (MAIN_OPTION, OPTION_MAIN, UMFUTURE_OPTION,
+    # OPTION_UMFUTURE, MARGIN_OPTION, OPTION_MARGIN, …).
+    #
+    # NOTE: this endpoint moves funds within the SAME account only — when
+    # the source or destination is a sub-account, callers must orchestrate
+    # multiple legs (asset/transfer → universalTransfer → asset/transfer
+    # using the sub's own key for the final Spot→Options hop).
+
+    async def master_asset_transfer(  # noqa: PLR0913 — distinct API params
+        self,
+        *,
+        transfer_type: str,
+        asset: str,
+        amount: Decimal | float,
+        from_symbol: str | None = None,
+        to_symbol: str | None = None,
+        client_tran_id: str | None = None,
+    ) -> dict[str, Any]:
+        """``POST /sapi/v1/asset/transfer`` — master-account internal move.
+
+        ``transfer_type`` is Binance's enumerated string (e.g.
+        ``MAIN_UMFUTURE``, ``UMFUTURE_MAIN``, ``MAIN_OPTION``,
+        ``OPTION_MAIN``, ``MAIN_MARGIN``, ``MARGIN_MAIN``). The full list
+        is in the Binance asset/transfer docs.
+
+        ``from_symbol`` / ``to_symbol`` are required only when one side is
+        ``ISOLATEDMARGIN`` (the symbol pair to scope the isolated wallet).
+
+        ``client_tran_id`` is forwarded as Binance's idempotency key when
+        provided.
+        """
+        amt = Decimal(str(amount))
+        if amt <= 0:
+            raise BinanceSubAccountClientError("amount must be > 0")
+        payload: dict[str, Any] = {
+            "type": transfer_type,
+            "asset": asset,
+            "amount": format(amt, "f"),
+        }
+        if from_symbol:
+            payload["fromSymbol"] = from_symbol
+        if to_symbol:
+            payload["toSymbol"] = to_symbol
+        return await self._signed("POST", "/sapi/v1/asset/transfer", payload)
+
+    # ── balance helpers (master-side aggregation) ─────────
+
+    async def get_user_asset(
+        self,
+        *,
+        asset: str | None = None,
+        need_btc_valuation: bool = False,
+    ) -> list[dict[str, Any]]:
+        """``POST /sapi/v3/asset/getUserAsset`` — master Spot/Funding balances.
+
+        Returns the master account's spendable balances. Use this together
+        with the per-wallet endpoints to build a complete balance grid.
+        """
+        params: dict[str, Any] = {}
+        if asset:
+            params["asset"] = asset
+        if need_btc_valuation:
+            params["needBtcValuation"] = "true"
+        data = await self._signed(
+            "POST", "/sapi/v3/asset/getUserAsset", params
+        )
+        return list(data) if isinstance(data, list) else []
+
+    async def get_margin_account(self) -> dict[str, Any]:
+        """``GET /sapi/v1/margin/account`` — master cross-margin snapshot."""
+        return await self._signed("GET", "/sapi/v1/margin/account")

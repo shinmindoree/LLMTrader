@@ -247,6 +247,41 @@ class BinanceOptionsClient:
             )
         return data
 
+    async def fetch_account(self) -> dict[str, Any]:
+        """``GET /eapi/v1/account`` — 옵션 지갑 잔고/마진/포지션 스냅샷.
+
+        반환 본문에는 ``asset`` 배열이 포함되며 각 항목은 ``asset`` (예:
+        ``USDT``), ``equity`` (총 자기자본), ``available`` (사용 가능 잔고),
+        ``locked`` (담보로 잠긴 잔고) 필드를 가진다. 키 자체는 마스터/서브
+        구분 없이 호출한 키의 옵션 지갑을 가리킨다.
+        """
+        if not self._api_key or not self._api_secret:
+            raise BinanceOptionsClientError("api_key/secret required for /account")
+        signed = self._attach_signature({})
+        try:
+            response = await self._client.get(
+                "/eapi/v1/account",
+                params=signed,
+                headers={"X-MBX-APIKEY": self._api_key},
+            )
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text.strip()
+            preview = body[:300] + ("..." if len(body) > 300 else "")
+            raise BinanceOptionsClientError(
+                f"Options /account error: {exc.response.status_code} | body={preview}"
+            ) from exc
+        except (httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+            raise BinanceOptionsClientError(
+                f"Options /account timeout: {type(exc).__name__}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise BinanceOptionsClientError(
+                f"Unexpected /account response type: {type(data).__name__}"
+            )
+        return data
+
     # ── internal HTTP helpers ─────────────────────────────────────────
 
     async def _public_get(
