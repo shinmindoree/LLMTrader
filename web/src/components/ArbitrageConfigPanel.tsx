@@ -17,7 +17,8 @@ const VERIFY_ENTRY_PCT = 0.0001;
 const VERIFY_EXIT_PCT = 0.00005;
 
 function computeDeadband(item: FundingScreenerItem, holdDays: number) {
-  const entry = ROUNDTRIP_COST_PCT / item.half_life_settlements;
+  const hl = item.half_life_settlements ?? 1; // 통계 없으면 보수적으로 1회 가정
+  const entry = ROUNDTRIP_COST_PCT / hl;
   const exit = entry * (EXIT_RATIOS[holdDays] ?? 0.30);
   return { entry, exit };
 }
@@ -29,6 +30,15 @@ function fmt2(v: number) {
 function fmtPct(v: number | null | undefined, digits = 2) {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${v.toFixed(digits)}%`;
+}
+
+function fmtCompactUsd(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v) || v <= 0) return "—";
+  if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
+  return `$${v.toFixed(0)}`;
 }
 
 function fmtCountdown(targetIso: string | null | undefined, nowMs: number): string | null {
@@ -45,7 +55,10 @@ function fmtCountdown(targetIso: string | null | undefined, nowMs: number): stri
   return `${m}분 ${s}초`;
 }
 
-function ScoreBar({ score }: { score: number }) {
+function ScoreBar({ score }: { score: number | null | undefined }) {
+  if (score == null || !Number.isFinite(score)) {
+    return <span className="text-xs font-mono text-[#555]">—</span>;
+  }
   const capped = Math.min(score, 5);
   const pct = (capped / 5) * 100;
   const color = score >= 2 ? "#26a69a" : score >= 1 ? "#f0b90b" : "#ef5350";
@@ -58,6 +71,48 @@ function ScoreBar({ score }: { score: number }) {
         {score.toFixed(1)}×
       </span>
     </div>
+  );
+}
+
+function SortableTh<K extends string>({
+  label,
+  sortKey,
+  currentKey,
+  dir,
+  onClick,
+  align = "right",
+}: {
+  label: string;
+  sortKey: K;
+  currentKey: K;
+  dir: "asc" | "desc";
+  onClick: (k: K) => void;
+  align?: "left" | "right";
+}) {
+  const active = currentKey === sortKey;
+  const arrow = !active ? "↕" : dir === "desc" ? "▼" : "▲";
+  return (
+    <th
+      onClick={() => onClick(sortKey)}
+      className={`cursor-pointer select-none px-3 py-2 text-[10px] font-medium uppercase tracking-wide ${
+        align === "left" ? "text-left" : "text-right"
+      } ${active ? "text-[#d1d4dc]" : "text-[#555] hover:text-[#9aa0ad]"}`}
+      title={`정렬: ${label}`}
+    >
+      <span className="inline-flex items-center gap-1">
+        {align === "left" ? (
+          <>
+            {label}
+            <span className={`text-[9px] ${active ? "text-[#f0b90b]" : "opacity-50"}`}>{arrow}</span>
+          </>
+        ) : (
+          <>
+            <span className={`text-[9px] ${active ? "text-[#f0b90b]" : "opacity-50"}`}>{arrow}</span>
+            {label}
+          </>
+        )}
+      </span>
+    </th>
   );
 }
 
@@ -78,18 +133,54 @@ export function ArbitrageConfigPanel() {
   });
   const { data: screener, isLoading: screenerLoading } = useSWR(
     ["funding-arb-screener", env],
-    () => getFundingScreener(5, env),
+    () => getFundingScreener(20, env),
     { refreshInterval: SCREENER_REFRESH_MS },
   );
+
+  type SortKey =
+    | "symbol"
+    | "current_rate_pct"
+    | "annualized_pct"
+    | "half_life_settlements"
+    | "score"
+    | "quote_volume_24h"
+    | "market_cap_usd";
+  const [sortKey, setSortKey] = useState<SortKey>("score");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = (k: SortKey) => {
+    if (sortKey === k) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(k);
+      // 텍스트 컬럼은 asc 기본, 숫자 컬럼은 desc 기본
+      setSortDir(k === "symbol" ? "asc" : "desc");
+    }
+  };
 
   const running = status?.running ?? false;
   const deadband = selected ? computeDeadband(selected, holdDays) : null;
 
-  const screenerItems = screener?.items ?? [];
+  const rawItems = screener?.items ?? [];
+  const screenerItems = (() => {
+    const dir = sortDir === "desc" ? -1 : 1;
+    return [...rawItems].sort((a, b) => {
+      if (sortKey === "symbol") {
+        return dir * a.symbol.localeCompare(b.symbol);
+      }
+      const av = (a as unknown as Record<string, number | null>)[sortKey];
+      const bv = (b as unknown as Record<string, number | null>)[sortKey];
+      // null/undefined은 항상 뒤로 배치
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return dir * (av - bv);
+    });
+  })();
   const hasScreenerItems = screenerItems.length > 0;
-  const profitableCount = screenerItems.filter((i) => i.score >= 1).length;
+  const profitableCount = screenerItems.filter((i) => (i.score ?? 0) >= 1).length;
   const noProfitable = hasScreenerItems && profitableCount === 0;
-  const selectedBelowThreshold = selected != null && selected.score < 1;
+  const selectedBelowThreshold =
+    selected != null && (selected.score ?? 0) < 1;
   const awaitingEntry = running && !status?.spot_qty;
 
   const annPct = status?.annualized_funding_pct;
@@ -182,7 +273,7 @@ export function ArbitrageConfigPanel() {
             <div className="mb-2 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#9aa0ad]">
-                  🔍 실시간 스크리너 — Top 5
+                  🔍 실시간 스크리너 — Top 20
                 </p>
                 <button
                   type="button"
@@ -226,21 +317,68 @@ export function ArbitrageConfigPanel() {
                 현재 기준 충족 종목 없음 (모든 종목 펀딩비 ≤ 0)
               </p>
             )}
-            {screener && screener.items.length > 0 && (
-              <div className="overflow-hidden rounded border border-[#2a2e39]">
+            {screener && screenerItems.length > 0 && (
+              <div className="max-h-[480px] overflow-auto rounded border border-[#2a2e39]">
                 <table className="w-full text-xs">
-                  <thead>
+                  <thead className="sticky top-0 z-10">
                     <tr className="border-b border-[#2a2e39] bg-[#131722]">
-                      <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-[#555]">종목</th>
-                      <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-[#555]">현재 펀딩비</th>
-                      <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-[#555]">연환산</th>
-                      <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-[#555]">Half-life</th>
-                      <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-[#555]">Score</th>
+                      <SortableTh
+                        label="종목"
+                        sortKey="symbol"
+                        currentKey={sortKey}
+                        dir={sortDir}
+                        onClick={toggleSort}
+                        align="left"
+                      />
+                      <SortableTh
+                        label="현재 펀딩비"
+                        sortKey="current_rate_pct"
+                        currentKey={sortKey}
+                        dir={sortDir}
+                        onClick={toggleSort}
+                      />
+                      <SortableTh
+                        label="연환산"
+                        sortKey="annualized_pct"
+                        currentKey={sortKey}
+                        dir={sortDir}
+                        onClick={toggleSort}
+                      />
+                      <SortableTh
+                        label="Half-life"
+                        sortKey="half_life_settlements"
+                        currentKey={sortKey}
+                        dir={sortDir}
+                        onClick={toggleSort}
+                      />
+                      <SortableTh
+                        label="24h 거래대금"
+                        sortKey="quote_volume_24h"
+                        currentKey={sortKey}
+                        dir={sortDir}
+                        onClick={toggleSort}
+                      />
+                      <SortableTh
+                        label="시가총액"
+                        sortKey="market_cap_usd"
+                        currentKey={sortKey}
+                        dir={sortDir}
+                        onClick={toggleSort}
+                      />
+                      <SortableTh
+                        label="Score"
+                        sortKey="score"
+                        currentKey={sortKey}
+                        dir={sortDir}
+                        onClick={toggleSort}
+                        align="left"
+                      />
                     </tr>
                   </thead>
                   <tbody>
-                    {screener.items.map((item, i) => {
+                    {screenerItems.map((item, i) => {
                       const isSelected = selected?.symbol === item.symbol;
+                      const hasScore = item.score != null && Number.isFinite(item.score);
                       return (
                         <tr
                           key={item.symbol}
@@ -269,20 +407,38 @@ export function ArbitrageConfigPanel() {
                             {item.annualized_pct.toFixed(1)}%
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-[#9aa0ad]">
-                            {item.half_life_settlements.toFixed(1)}회
+                            {item.half_life_settlements != null
+                              ? `${item.half_life_settlements.toFixed(1)}회`
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-[#9aa0ad]">
+                            {fmtCompactUsd(item.quote_volume_24h)}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-[#9aa0ad]">
+                            {fmtCompactUsd(item.market_cap_usd)}
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <ScoreBar score={item.score} />
-                              <span
-                                className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${
-                                  item.score >= 1
-                                    ? "bg-[#26a69a]/15 text-[#26a69a]"
-                                    : "bg-[#2a2e39] text-[#868993]"
-                                }`}
-                              >
-                                {item.score >= 1 ? "진입 가능" : "대기"}
-                              </span>
+                              {hasScore && (
+                                <span
+                                  className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${
+                                    (item.score as number) >= 1
+                                      ? "bg-[#26a69a]/15 text-[#26a69a]"
+                                      : "bg-[#2a2e39] text-[#868993]"
+                                  }`}
+                                >
+                                  {(item.score as number) >= 1 ? "진입 가능" : "대기"}
+                                </span>
+                              )}
+                              {!hasScore && (
+                                <span
+                                  className="rounded px-1.5 py-0.5 text-[9px] font-medium bg-[#2a2e39] text-[#555]"
+                                  title="AR(1)/OU 통계 데이터가 아직 없는 종목 (oi-ingestor가 수집 중)"
+                                >
+                                  통계 없음
+                                </span>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -312,7 +468,9 @@ export function ArbitrageConfigPanel() {
                 <div className="text-right">
                   <p className="text-xs text-[#868993]">Half-life</p>
                   <p className="text-sm font-semibold text-[#d1d4dc]">
-                    {selected.half_life_settlements.toFixed(1)} 회
+                    {selected.half_life_settlements != null
+                      ? `${selected.half_life_settlements.toFixed(1)} 회`
+                      : "—"}
                   </p>
                 </div>
                 <button
@@ -369,7 +527,7 @@ export function ArbitrageConfigPanel() {
                   </div>
                   <div className="col-span-2 mt-1 border-t border-[#2a2e39] pt-2">
                     <p className="text-[10px] text-[#555]">
-                      왕복 수수료 {ROUNDTRIP_COST_PCT.toFixed(2)}% ÷ half-life {selected.half_life_settlements.toFixed(1)}회
+                      왕복 수수료 {ROUNDTRIP_COST_PCT.toFixed(2)}% ÷ half-life {selected.half_life_settlements != null ? `${selected.half_life_settlements.toFixed(1)}회` : "1회(기본)"}
                       = 진입 임계치 {(deadband.entry).toFixed(5)}%
                     </p>
                   </div>
@@ -479,7 +637,7 @@ export function ArbitrageConfigPanel() {
               {/* Start button */}
               {!verifyMode && selectedBelowThreshold && (
                 <p className="rounded border border-[#f0b90b]/30 bg-[#f0b90b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#f0b90b]">
-                  ⏳ 현재 {selected.symbol} 펀딩비(score {selected.score.toFixed(2)}×)가 진입 임계치 미만입니다.
+                  ⏳ 현재 {selected.symbol} 펀딩비(score {selected.score != null ? `${selected.score.toFixed(2)}×` : "통계 없음"})가 진입 임계치 미만입니다.
                   지금 시작해도 즉시 진입하지 않고, 펀딩비가 임계치를 넘을 때까지 대기합니다.
                 </p>
               )}

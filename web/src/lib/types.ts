@@ -611,11 +611,13 @@ export type FundingScreenerItem = {
   symbol: string;
   current_rate_pct: number;   // 마지막 정산 펀딩비 (%)
   annualized_pct: number;     // 연환산 (%)
-  half_life_settlements: number;
-  entry_threshold_pct: number;
-  score: number;              // >1 = 수익 가능
-  avg_rate_pct: number;
+  half_life_settlements: number | null;
+  entry_threshold_pct: number | null;
+  score: number | null;       // >1 = 수익 가능. half-life 통계 없으면 null
+  avg_rate_pct: number | null;
   n_samples: number;
+  quote_volume_24h: number | null;  // 24h 현물 거래대금 (USDT)
+  market_cap_usd: number | null;    // 현물 시가총액 (USD)
 };
 
 export type FundingScreenerResponse = {

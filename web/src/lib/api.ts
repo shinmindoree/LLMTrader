@@ -712,7 +712,7 @@ export async function stopFundingArb(): Promise<
 }
 
 export async function getFundingScreener(
-  topN = 5,
+  topN = 20,
   env: "mainnet" | "testnet" = "mainnet",
 ): Promise<import("@/lib/types").FundingScreenerResponse> {
   return json(`/api/backend/api/funding-arb/screener?top_n=${topN}&env=${env}`);

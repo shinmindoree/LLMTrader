@@ -487,11 +487,13 @@ class FundingScreenerItem(BaseModel):
     symbol: str
     current_rate_pct: float        # 마지막 정산 펀딩비 (%)
     annualized_pct: float          # 연환산 펀딩비 (%)
-    half_life_settlements: float   # AR(1)/OU half-life (정산 횟수 단위)
-    entry_threshold_pct: float     # 최소 진입 임계치 (%/정산)
-    score: float                   # current_rate / entry_threshold (> 1 = 수익 가능)
-    avg_rate_pct: float            # 과거 평균 펀딩비 (%)
-    n_samples: int                 # 통계 산출에 사용된 데이터 포인트 수
+    half_life_settlements: float | None = None  # AR(1)/OU half-life (정산 횟수 단위). 통계 없으면 None
+    entry_threshold_pct: float | None = None    # 최소 진입 임계치 (%/정산). half-life가 있을 때만 산출
+    score: float | None = None                  # current_rate / entry_threshold (> 1 = 수익 가능)
+    avg_rate_pct: float | None = None           # 과거 평균 펀딩비 (%)
+    n_samples: int = 0                          # 통계 산출에 사용된 데이터 포인트 수
+    quote_volume_24h: float | None = None   # 24h 현물 거래대금 (USDT)
+    market_cap_usd: float | None = None     # 현물 시가총액 (USD, CoinGecko)
 
 
 class FundingScreenerResponse(BaseModel):

@@ -254,6 +254,119 @@ async def _fetch_tradable_spot_symbols(testnet: bool = False) -> set[str]:
         return cached["symbols"]
 
 
+# 24h 현물 거래대금(quoteVolume) 캐시: /api/v3/ticker/24hr 한 번에 전체 마켓 반환.
+# 페이로드가 크고 분 단위로만 갱신되어도 충분하므로 5분 캐시.
+_SPOT_24H_CACHE: dict[str, Any] = {}
+_SPOT_24H_TTL = 300.0
+
+
+async def _fetch_spot_24h_quote_volume(testnet: bool = False) -> dict[str, float]:
+    """심볼별 24시간 현물 거래대금(USDT) 매핑을 반환(5분 캐시).
+
+    Binance는 운영 mainnet의 24h 통계만 의미가 있다. testnet은 거래량이 없고
+    데모 환경의 ticker는 시가총액·거래량 의사결정에 부적합하므로 두 환경
+    모두 mainnet(api.binance.com)을 조회한다. 캐시 키는 단일.
+    """
+    import time as _time
+
+    now = _time.time()
+    cached = _SPOT_24H_CACHE.setdefault("mainnet", {"data": {}, "ts": 0.0})
+    if cached["data"] and (now - cached["ts"]) < _SPOT_24H_TTL:
+        return cached["data"]
+    try:
+        async with httpx.AsyncClient(
+            base_url="https://api.binance.com", timeout=10.0
+        ) as client:
+            resp = await client.get("/api/v3/ticker/24hr")
+            resp.raise_for_status()
+            out: dict[str, float] = {}
+            for row in resp.json():
+                if not isinstance(row, dict):
+                    continue
+                sym = row.get("symbol")
+                if not isinstance(sym, str):
+                    continue
+                try:
+                    out[sym] = float(row.get("quoteVolume") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+        if out:
+            cached["data"] = out
+            cached["ts"] = now
+        return out
+    except Exception:
+        _log.warning("Failed to fetch 24h quote volume", exc_info=True)
+        return cached["data"]
+
+
+# 시가총액(CoinGecko) 캐시. /coins/markets는 페이지당 250개·USD 시가총액 반환.
+# 무료 API rate limit(분당 ~30회)를 고려해 1시간 캐시. 4페이지(=1000개)면 Binance
+# 상장 종목 대부분을 커버한다. 외부 의존이라 실패해도 None으로 우아하게 누락한다.
+_MARKET_CAP_CACHE: dict[str, Any] = {"data": {}, "ts": 0.0}
+_MARKET_CAP_TTL = 3600.0
+_COINGECKO_PAGES = 4
+
+
+async def _fetch_market_caps() -> dict[str, float]:
+    """심볼(대문자, 예: 'BTC')→USD 시가총액 매핑을 반환(1시간 캐시).
+
+    CoinGecko /coins/markets에서 시가총액 내림차순으로 상위 ``_COINGECKO_PAGES * 250``
+    종목을 받아 ``symbol`` 필드(소문자)를 대문자로 정규화해 매핑한다. 심볼이 중복되는
+    경우(예: 'BNB'가 여러 코인) 시가총액이 큰 첫 항목이 유지된다(API가 이미 desc 정렬).
+    외부 호출이 실패하면 마지막 캐시(없으면 빈 dict)를 반환한다.
+    """
+    import time as _time
+
+    now = _time.time()
+    if _MARKET_CAP_CACHE["data"] and (now - _MARKET_CAP_CACHE["ts"]) < _MARKET_CAP_TTL:
+        return _MARKET_CAP_CACHE["data"]
+    out: dict[str, float] = {}
+    try:
+        async with httpx.AsyncClient(
+            base_url="https://api.coingecko.com", timeout=15.0
+        ) as client:
+            for page in range(1, _COINGECKO_PAGES + 1):
+                resp = await client.get(
+                    "/api/v3/coins/markets",
+                    params={
+                        "vs_currency": "usd",
+                        "order": "market_cap_desc",
+                        "per_page": 250,
+                        "page": page,
+                        "sparkline": "false",
+                    },
+                )
+                if resp.status_code != 200:
+                    _log.warning(
+                        "CoinGecko markets page=%d status=%d", page, resp.status_code
+                    )
+                    break
+                rows = resp.json()
+                if not isinstance(rows, list) or not rows:
+                    break
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    sym = row.get("symbol")
+                    mcap = row.get("market_cap")
+                    if not isinstance(sym, str) or mcap is None:
+                        continue
+                    key = sym.upper()
+                    if key in out:
+                        continue
+                    try:
+                        out[key] = float(mcap)
+                    except (TypeError, ValueError):
+                        continue
+        if out:
+            _MARKET_CAP_CACHE["data"] = out
+            _MARKET_CAP_CACHE["ts"] = now
+        return out
+    except Exception:
+        _log.warning("Failed to fetch market caps from CoinGecko", exc_info=True)
+        return _MARKET_CAP_CACHE["data"]
+
+
 def _public_job_config(config: Any) -> dict[str, Any]:
     if not isinstance(config, dict):
         return {}
@@ -1158,14 +1271,24 @@ def create_app() -> FastAPI:
 
     @app.get("/api/funding-arb/screener", response_model=FundingScreenerResponse)
     async def funding_arb_screener(
-        top_n: int = 5,
+        top_n: int = 20,
         env: str = "mainnet",
         user: AuthenticatedUser = Depends(require_auth),  # noqa: ARG001
     ) -> FundingScreenerResponse:
-        """현재 펀딩비가 높고 통계적으로 유리한 종목 Top-N 스크리너.
+        """현재 펀딩비가 양수인 현물·선물 동시 상장 종목의 Top-N 스크리너.
 
-        Redis에 캐시된 AR(1)/OU half-life 통계를 읽고, Binance /fapi/v1/premiumIndex로
-        실시간 펀딩비를 조회하여 score = current_rate / entry_threshold 기준으로 정렬.
+        유니버스 정의:
+          ``현물 USDT 상장(TRADING)`` ∩ ``선물 USDT 상장(premiumIndex)`` 전체.
+          Redis 통계 표본이 없는 종목도 포함하여 시장 전체 후보를 노출한다.
+          단 펀딩비 ≤ 0인 종목은 차익거래 손실 구조라 자동 제외한다.
+
+        종목별 score:
+          ``score = current_rate / (ROUNDTRIP / half_life)``
+          half-life 통계가 있을 때만 산출되며, 없으면 ``None``. score ≥ 1.0×에서 진입.
+
+        부가 컬럼(정렬용):
+          - ``quote_volume_24h``: Binance mainnet 현물 24h 거래대금(USDT)
+          - ``market_cap_usd``: CoinGecko 시가총액(USD)
 
         ``env`` 가 ``testnet`` 이면 데모 트레이딩(testnet.binancefuture.com 선물 +
         demo-api.binance.com 현물)의 실제 펀딩비·상장을 반영한다. Testnet 펀딩비는
@@ -1186,52 +1309,33 @@ def create_app() -> FastAPI:
         DEFAULT_INTERVAL_H = 8.0
         PPY = (365 * 24) / DEFAULT_INTERVAL_H  # 1095 (정산 횟수/년)
 
-        rd = _make_funding_redis()
-        if rd is None:
-            return FundingScreenerResponse(
-                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
-                error="Redis가 구성되지 않았습니다.",
-                as_of=datetime.now(timezone.utc),
-            )
-
-        try:
-            univ_raw = rd.get("funding:stats:_universe")
-            if not univ_raw:
-                return FundingScreenerResponse(
-                    items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
-                    error="펀딩 통계 데이터가 아직 없습니다. oi-ingestor가 첫 수집을 완료할 때까지 기다려 주세요.",
-                    as_of=datetime.now(timezone.utc),
-                )
-            parsed = _json.loads(univ_raw)
-            if isinstance(parsed, dict):
-                universe: list[str] = list(parsed.get("symbols", []))
-            else:
-                universe = list(parsed)
-        except Exception as exc:
-            return FundingScreenerResponse(
-                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
-                error=str(exc), as_of=datetime.now(timezone.utc),
-            )
-
-        # Redis MGET로 모든 종목 통계를 한 번에 읽기
-        keys = [f"funding:stats:{sym}" for sym in universe]
-        try:
-            raw_vals = rd.mget(keys)
-        except Exception as exc:
-            return FundingScreenerResponse(
-                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
-                error=str(exc), as_of=datetime.now(timezone.utc),
-            )
-
+        # 1) 통계(Redis, optional). 통계가 없는 종목도 유니버스에 포함되어야 하므로
+        #    Redis 부재 시에도 에러 대신 빈 dict로 진행한다.
         stats_map: dict[str, dict] = {}
-        for sym, raw in zip(universe, raw_vals):
-            if raw:
-                try:
-                    stats_map[sym] = _json.loads(raw)
-                except Exception:
-                    pass
+        rd = _make_funding_redis()
+        if rd is not None:
+            try:
+                univ_raw = rd.get("funding:stats:_universe")
+                stat_symbols: list[str] = []
+                if univ_raw:
+                    parsed = _json.loads(univ_raw)
+                    if isinstance(parsed, dict):
+                        stat_symbols = list(parsed.get("symbols", []))
+                    else:
+                        stat_symbols = list(parsed)
+                if stat_symbols:
+                    keys = [f"funding:stats:{sym}" for sym in stat_symbols]
+                    raw_vals = rd.mget(keys)
+                    for sym, raw in zip(stat_symbols, raw_vals):
+                        if raw:
+                            try:
+                                stats_map[sym] = _json.loads(raw)
+                            except Exception:  # noqa: BLE001
+                                pass
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("Funding stats fetch failed: %s", exc)
 
-        # Binance /fapi/v1/premiumIndex (인수 없이 호출 시 전체 종목 반환)
+        # 2) 선물 premiumIndex (전체 펀딩비)
         try:
             async with httpx.AsyncClient(
                 base_url=fut_base, timeout=10.0
@@ -1243,42 +1347,82 @@ def create_app() -> FastAPI:
                     for row in resp.json()
                     if isinstance(row, dict)
                 }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return FundingScreenerResponse(
                 items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
                 error=f"Binance API 오류: {exc}", as_of=datetime.now(timezone.utc),
             )
 
-        # 현물 시장에도 상장된 심볼만 후보로 사용 (현물 롱 + 선물 숏 모두 체결 가능해야 함).
+        # 3) 현물 상장 + 24h 거래대금 + 시가총액 (모두 캐시)
         spot_symbols = await _fetch_tradable_spot_symbols(testnet=is_testnet)
+        quote_volumes = await _fetch_spot_24h_quote_volume(testnet=is_testnet)
+        market_caps = await _fetch_market_caps()
+
+        # 4) 유니버스 = 현물 ∩ 선물 (USDT). 둘 다 상장된 종목만 차익거래 가능.
+        if not spot_symbols:
+            return FundingScreenerResponse(
+                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
+                error="현물 상장 목록을 가져오지 못했습니다.",
+                as_of=datetime.now(timezone.utc),
+            )
+        universe = sorted(
+            sym for sym in rates
+            if sym.endswith("USDT") and sym in spot_symbols
+        )
 
         items: list[FundingScreenerItem] = []
-        for sym, stat in stats_map.items():
-            hl = float(stat.get("half_life_settlements") or 0)
-            if hl <= 0:
-                continue
+        for sym in universe:
             current_rate = rates.get(sym, 0.0)
+            # 펀딩비가 0 이하인 종목은 현물 롱 + 선물 숏 구조에서 손실 → 제외.
             if current_rate <= 0:
                 continue
-            # 현물 미상장(선물 전용) 심볼은 차익거래 불가 → 제외. (필터 조회 실패 시 건너뜀)
-            if spot_symbols and sym not in spot_symbols:
-                continue
-            entry_threshold_pct = (ROUNDTRIP / hl) * 100
-            score = (current_rate * 100) / entry_threshold_pct
+
+            stat = stats_map.get(sym, {})
+            hl_raw = stat.get("half_life_settlements")
+            hl: float | None
+            entry_threshold_pct: float | None
+            score: float | None
+            try:
+                hl_val = float(hl_raw) if hl_raw is not None else 0.0
+            except (TypeError, ValueError):
+                hl_val = 0.0
+            if hl_val > 0:
+                hl = round(hl_val, 2)
+                entry_threshold_pct = round((ROUNDTRIP / hl_val) * 100, 5)
+                score = round((current_rate * 100) / entry_threshold_pct, 2)
+            else:
+                hl = None
+                entry_threshold_pct = None
+                score = None
+
+            base = sym.removesuffix("USDT")
             items.append(FundingScreenerItem(
                 symbol=sym,
                 current_rate_pct=round(current_rate * 100, 5),
                 annualized_pct=round(current_rate * PPY * 100, 2),
-                half_life_settlements=round(hl, 2),
-                entry_threshold_pct=round(entry_threshold_pct, 5),
-                score=round(score, 2),
-                avg_rate_pct=round(float(stat.get("avg_rate", 0.0)), 5),
-                n_samples=int(stat.get("n_samples", 0)),
+                half_life_settlements=hl,
+                entry_threshold_pct=entry_threshold_pct,
+                score=score,
+                avg_rate_pct=(
+                    round(float(stat.get("avg_rate", 0.0)), 5)
+                    if stat else None
+                ),
+                n_samples=int(stat.get("n_samples", 0)) if stat else 0,
+                quote_volume_24h=(
+                    quote_volumes.get(sym) if quote_volumes else None
+                ),
+                market_cap_usd=market_caps.get(base.upper()) if market_caps else None,
             ))
 
-        items.sort(key=lambda x: x.score, reverse=True)
+        # 기본 정렬: score 내림차순(None은 뒤). 프론트엔드가 컬럼별로 재정렬한다.
+        items.sort(
+            key=lambda x: (x.score if x.score is not None else float("-inf")),
+            reverse=True,
+        )
+        # top_n은 200으로 상한(과도한 페이로드 방지).
+        capped = max(1, min(int(top_n or 20), 200))
         return FundingScreenerResponse(
-            items=items[:top_n],
+            items=items[:capped],
             roundtrip_cost_pct=round(ROUNDTRIP * 100, 2),
             as_of=datetime.now(timezone.utc),
         )
