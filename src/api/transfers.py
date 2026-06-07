@@ -43,6 +43,7 @@ from binance.client_factory import (
     BinanceClientFactoryError,
     get_client_factory,
 )
+from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
 from binance.options_client import (
     BinanceOptionsClient,
     BinanceOptionsClientError,
@@ -71,16 +72,28 @@ SessionDep = Callable[..., Awaitable[AsyncSession]]
 
 logger = logging.getLogger("llmtrader.api.transfers")
 
-# Wallet types we expose in the UI. ``OPTION`` is *not* in
-# :data:`VALID_WALLET_TYPES` because Binance's sub-account universal
-# transfer rejects it — we handle it through ``/sapi/v1/asset/transfer``.
+# Wallet types we expose in the UI. ``OPTION`` and ``EARN_FLEXIBLE`` are
+# *not* in :data:`VALID_WALLET_TYPES` because Binance's sub-account
+# universal transfer rejects them — we handle them via dedicated paths
+# (``/sapi/v1/asset/transfer`` for Options; ``/sapi/v1/simple-earn/*`` for
+# Simple Earn Flexible).
 UI_WALLET_TYPES: tuple[str, ...] = (
     "SPOT",
     "USDT_FUTURE",
     "COIN_FUTURE",
     "MARGIN",
     "OPTION",
+    "EARN_FLEXIBLE",
 )
+
+# Wallet types that don't participate in Binance's universal-transfer
+# graph and therefore have to be reached/left by funneling through SPOT.
+NEEDS_FUNNEL_WALLETS: frozenset[str] = frozenset({"OPTION", "EARN_FLEXIBLE"})
+
+# Simple Earn Flexible is currently USDT-only on our backend (the
+# :class:`BinanceEarnClient` only knows the USDT product). Reject other
+# assets early to avoid mid-plan failures.
+EARN_SUPPORTED_ASSETS: frozenset[str] = frozenset({"USDT"})
 
 # Supported assets in v1. Adding new symbols requires double-checking that
 # the asset is enabled on every wallet type we support.
@@ -218,6 +231,12 @@ class _PlannedLeg:
     * ``"sub_universal"`` — master ``/sapi/v1/sub-account/universalTransfer``
     * ``"sub_internal"`` — sub key ``/sapi/v1/asset/transfer`` (e.g.
       Spot ↔ Options inside a single sub)
+    * ``"earn_subscribe"`` — master key ``/sapi/v1/simple-earn/flexible/subscribe``
+      (SPOT → EARN_FLEXIBLE on master)
+    * ``"earn_redeem"`` — master key ``/sapi/v1/simple-earn/flexible/redeem``
+      (EARN_FLEXIBLE → SPOT on master)
+    * ``"sub_earn_subscribe"`` — sub key Simple-Earn subscribe (sub SPOT → sub EARN)
+    * ``"sub_earn_redeem"`` — sub key Simple-Earn redeem (sub EARN → sub SPOT)
     """
 
     __slots__ = ("from_ep", "kind", "to_ep")
@@ -228,7 +247,29 @@ class _PlannedLeg:
         self.to_ep = to_ep
 
 
-def _build_plan(
+def _funnel_out_kind(ep: _Endpoint) -> str:
+    """Return the leg kind that moves funds from ``ep`` to its account's SPOT."""
+    wt = ep.wallet_type
+    is_master = ep.is_master
+    if wt == "OPTION":
+        return "master_internal" if is_master else "sub_internal"
+    if wt == "EARN_FLEXIBLE":
+        return "earn_redeem" if is_master else "sub_earn_redeem"
+    raise ValueError(f"unexpected funnel-out wallet: {wt}")
+
+
+def _funnel_in_kind(ep: _Endpoint) -> str:
+    """Return the leg kind that moves funds from the account's SPOT into ``ep``."""
+    wt = ep.wallet_type
+    is_master = ep.is_master
+    if wt == "OPTION":
+        return "master_internal" if is_master else "sub_internal"
+    if wt == "EARN_FLEXIBLE":
+        return "earn_subscribe" if is_master else "sub_earn_subscribe"
+    raise ValueError(f"unexpected funnel-in wallet: {wt}")
+
+
+def _build_plan(  # noqa: PLR0912 — explicit decision tree is more readable than a graph search
     from_ep: _Endpoint, to_ep: _Endpoint
 ) -> list[_PlannedLeg]:
     """Decompose an intent into the minimum number of legs.
@@ -236,10 +277,14 @@ def _build_plan(
     The decision tree is purposely explicit (no graph search) — there are
     only a handful of cases and they map directly onto the rules in §11
     of ``plan.md``.
+
+    OPTION and EARN_FLEXIBLE both sit outside Binance's universal-transfer
+    graph and therefore route through SPOT.  We treat them uniformly via
+    :func:`_funnel_in_kind` / :func:`_funnel_out_kind`.
     """
     f_master, t_master = from_ep.is_master, to_ep.is_master
-    f_opt = from_ep.wallet_type == "OPTION"
-    t_opt = to_ep.wallet_type == "OPTION"
+    f_funnel = from_ep.wallet_type in NEEDS_FUNNEL_WALLETS
+    t_funnel = to_ep.wallet_type in NEEDS_FUNNEL_WALLETS
     same_account = (
         from_ep.account_id == to_ep.account_id
     )  # both None (master) or same UUID
@@ -250,43 +295,54 @@ def _build_plan(
             status_code=400, detail="source and destination are identical"
         )
 
-    # Case 1: same account, both non-Options → 1 leg
-    if same_account and not f_opt and not t_opt:
+    # Case 1: same account, neither side needs the SPOT funnel → 1 leg
+    if same_account and not f_funnel and not t_funnel:
         if f_master:
             return [_PlannedLeg("master_internal", from_ep, to_ep)]
-        # sub internal w/o options: universalTransfer w/ from_email==to_email
+        # sub internal w/o funnel wallets: universalTransfer w/ from_email==to_email
         return [_PlannedLeg("sub_universal", from_ep, to_ep)]
 
-    # Case 2: same account, Options involved → asset/transfer with the
-    # account's own key (master uses master key; sub uses sub key)
-    if same_account and (f_opt or t_opt):
-        kind = "master_internal" if f_master else "sub_internal"
-        return [_PlannedLeg(kind, from_ep, to_ep)]
+    # Case 2: same account, at least one side needs the funnel.
+    # Walk source → SPOT → destination, skipping the trivial hops.
+    if same_account:
+        legs: list[_PlannedLeg] = []
+        spot = _Endpoint(from_ep.account, "SPOT")
+        # leave source
+        if f_funnel:
+            legs.append(_PlannedLeg(_funnel_out_kind(from_ep), from_ep, spot))
+        elif from_ep.wallet_type != "SPOT":
+            # source is non-SPOT, non-funnel (e.g. USDT_FUTURE) and dst
+            # is a funnel wallet → first hop is an asset/transfer
+            kind = "master_internal" if f_master else "sub_internal"
+            legs.append(_PlannedLeg(kind, from_ep, spot))
+        # enter destination
+        if t_funnel:
+            legs.append(_PlannedLeg(_funnel_in_kind(to_ep), spot, to_ep))
+        elif to_ep.wallet_type != "SPOT":
+            kind = "master_internal" if t_master else "sub_internal"
+            legs.append(_PlannedLeg(kind, spot, to_ep))
+        return legs
 
-    # Case 3: cross-account, neither side Options → universalTransfer 1 leg
-    if not same_account and not f_opt and not t_opt:
+    # Case 3: cross-account, neither side needs the funnel → universalTransfer 1 leg
+    if not f_funnel and not t_funnel:
         return [_PlannedLeg("sub_universal", from_ep, to_ep)]
 
-    # Cases 4-6: cross-account with Options on one or both sides → 2-3 legs.
-    # We always funnel through Spot:
-    #   src_opt → src_spot     (sub_internal or master_internal)
-    #   src_spot → dst_spot    (sub_universal)
-    #   dst_spot → dst_opt     (sub_internal or master_internal)
-    legs: list[_PlannedLeg] = []
+    # Case 4: cross-account, funnel involved → src → src.SPOT → dst.SPOT → dst
+    legs = []
     src_spot = _Endpoint(from_ep.account, "SPOT")
     dst_spot = _Endpoint(to_ep.account, "SPOT")
 
-    if f_opt:
+    if f_funnel:
+        legs.append(_PlannedLeg(_funnel_out_kind(from_ep), from_ep, src_spot))
+    elif from_ep.wallet_type != "SPOT":
         kind = "master_internal" if f_master else "sub_internal"
         legs.append(_PlannedLeg(kind, from_ep, src_spot))
 
-    # Cross-account Spot↔Spot (universalTransfer). Skip if both endpoints
-    # are already on the same account (won't happen here — same_account is
-    # False — but keeps the function correct under future refactors).
-    if from_ep.account_id != to_ep.account_id:
-        legs.append(_PlannedLeg("sub_universal", src_spot, dst_spot))
+    legs.append(_PlannedLeg("sub_universal", src_spot, dst_spot))
 
-    if t_opt:
+    if t_funnel:
+        legs.append(_PlannedLeg(_funnel_in_kind(to_ep), dst_spot, to_ep))
+    elif to_ep.wallet_type != "SPOT":
         kind = "master_internal" if t_master else "sub_internal"
         legs.append(_PlannedLeg(kind, dst_spot, to_ep))
 
@@ -448,6 +504,125 @@ async def _sub_universal_transfer(
     )
 
 
+def _earn_endpoint(leg: _PlannedLeg) -> _Endpoint:
+    """The ``_Endpoint`` whose key owns the Simple Earn position.
+
+    For an ``earn_subscribe`` leg the destination is the EARN side; for an
+    ``earn_redeem`` leg the source is the EARN side.
+    """
+    if leg.from_ep.wallet_type == "EARN_FLEXIBLE":
+        return leg.from_ep
+    return leg.to_ep
+
+
+async def _resolve_earn_keys(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    env: str,
+    earn_ep: _Endpoint,
+) -> tuple[str, str]:
+    """Return ``(api_key, api_secret)`` for the wallet that holds the Earn position.
+
+    Master uses the master credential; sub uses the sub's own credential.
+    Raises a 400 ``HTTPException`` with an actionable message when keys
+    are missing.
+    """
+    crypto = get_crypto_service()
+    if earn_ep.is_master:
+        master = await get_master_wallet_account(
+            session, user_id=user_id, env=env
+        )
+        if master is None or not master.api_key_enc or not master.api_secret_enc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"master wallet for env={env} has no API key configured "
+                    "— Simple Earn transfers require an authenticated master "
+                    "credential."
+                ),
+            )
+        return crypto.decrypt(master.api_key_enc), crypto.decrypt(
+            master.api_secret_enc
+        )
+
+    sub_account = earn_ep.account
+    if (
+        sub_account is None
+        or not sub_account.api_key_enc
+        or not sub_account.api_secret_enc
+    ):
+        alias = sub_account.alias if sub_account else "?"
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"sub-account '{alias}' has no API key configured — Simple "
+                "Earn transfers require the sub's own key. Add one under "
+                "Settings → Sub account → (row)."
+            ),
+        )
+    return (
+        crypto.decrypt(sub_account.api_key_enc),
+        crypto.decrypt(sub_account.api_secret_enc),
+    )
+
+
+async def _earn_transfer(  # noqa: PLR0913 — every kwarg is required
+    *,
+    session: AsyncSession,
+    user_id: str,
+    env: str,
+    leg: _PlannedLeg,
+    asset: str,
+    amount: Decimal,
+) -> dict[str, Any]:
+    """Subscribe to or redeem from Simple Earn Flexible.
+
+    ``leg.kind`` is one of ``earn_subscribe`` / ``earn_redeem`` /
+    ``sub_earn_subscribe`` / ``sub_earn_redeem``. The direction determines
+    which Binance endpoint we call; the *_sub variants merely use the sub's
+    own key instead of the master's.
+    """
+    if asset not in EARN_SUPPORTED_ASSETS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Simple Earn transfers currently only support: "
+                f"{', '.join(sorted(EARN_SUPPORTED_ASSETS))} "
+                f"(received {asset})."
+            ),
+        )
+
+    earn_ep = _earn_endpoint(leg)
+    api_key, api_secret = await _resolve_earn_keys(
+        session, user_id=user_id, env=env, earn_ep=earn_ep
+    )
+    if env != "mainnet":
+        raise HTTPException(
+            status_code=400,
+            detail="Simple Earn transfers are only available on mainnet.",
+        )
+
+    client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+    try:
+        product_id = await client.get_usdt_flexible_product_id()
+        if not product_id:
+            raise HTTPException(
+                status_code=502,
+                detail="Could not resolve USDT Flexible product on Binance.",
+            )
+        if leg.kind in ("earn_subscribe", "sub_earn_subscribe"):
+            return await client.subscribe(
+                amount=float(amount), product_id=product_id
+            )
+        # redeem
+        return await client.redeem(
+            amount=float(amount), product_id=product_id, redeem_all=False
+        )
+    finally:
+        await client.aclose()
+
+
 def _extract_tran_id(response: dict[str, Any] | None) -> str | None:
     if not response:
         return None
@@ -543,11 +718,29 @@ async def _execute_leg(  # noqa: PLR0913 — every kwarg is required
                 amount=amount,
                 client_tran_id=client_tran_id,
             )
+        elif leg.kind in (
+            "earn_subscribe",
+            "earn_redeem",
+            "sub_earn_subscribe",
+            "sub_earn_redeem",
+        ):
+            response = await _earn_transfer(
+                session=session,
+                user_id=user_id,
+                env=env,
+                leg=leg,
+                asset=asset,
+                amount=amount,
+            )
         else:  # pragma: no cover — exhaustive
             raise HTTPException(
                 status_code=500, detail=f"unknown leg kind: {leg.kind}"
             )
-    except (BinanceSubAccountClientError, BinanceOptionsClientError) as exc:
+    except (
+        BinanceSubAccountClientError,
+        BinanceOptionsClientError,
+        BinanceEarnClientError,
+    ) as exc:
         msg = str(exc)
         try:
             await mark_wallet_transfer_failed(
@@ -729,11 +922,14 @@ async def _fetch_master_balances(
     master_client: BinanceSubAccountClient,
     *,
     env: str,
+    earn_client: BinanceEarnClient | None = None,
 ) -> tuple[dict[str, list[WalletBalanceCell]], dict[str, str]]:
     """Return ``(balances, errors)`` for the master account.
 
     Each wallet type is fetched concurrently and any individual failure
-    is captured in ``errors`` so the UI can still render the rest.
+    is captured in ``errors`` so the UI can still render the rest. When
+    ``earn_client`` is provided we additionally fetch the USDT Flexible
+    position; otherwise the EARN_FLEXIBLE column is left blank.
     """
     balances: dict[str, list[WalletBalanceCell]] = {}
     errors: dict[str, str] = {}
@@ -752,7 +948,23 @@ async def _fetch_master_balances(
         except Exception as exc:  # noqa: BLE001
             errors["MARGIN"] = str(exc)
 
-    await asyncio.gather(_spot(), _margin())
+    async def _earn() -> None:
+        if earn_client is None:
+            return
+        try:
+            usdt = await earn_client.fetch_flexible_position_usdt()
+            if usdt > 0:
+                balances["EARN_FLEXIBLE"] = [
+                    WalletBalanceCell(
+                        asset="USDT", free=usdt, locked=0.0, total=usdt
+                    )
+                ]
+            else:
+                balances["EARN_FLEXIBLE"] = []
+        except Exception as exc:  # noqa: BLE001
+            errors["EARN_FLEXIBLE"] = str(exc)
+
+    await asyncio.gather(_spot(), _margin(), _earn())
     # Master futures + options need separate clients (different base URLs).
     # We keep it light: skip if the calls would fail rather than gather them
     # in this minimal v1 — the UI shows balances best-effort.
@@ -797,7 +1009,33 @@ async def _fetch_sub_balances(
         except Exception as exc:  # noqa: BLE001
             errors["COIN_FUTURE"] = str(exc)
 
-    await asyncio.gather(_spot_margin(), _futures_um(), _futures_cm())
+    async def _earn() -> None:
+        # Sub-account Earn positions are only readable with the sub's own
+        # key. Skip silently when the key is missing so the row stays clean;
+        # otherwise reuse the EARN client to fetch the USDT Flexible balance.
+        if not wallet.api_key_enc or not wallet.api_secret_enc:
+            return
+        crypto = get_crypto_service()
+        try:
+            api_key = crypto.decrypt(wallet.api_key_enc)
+            api_secret = crypto.decrypt(wallet.api_secret_enc)
+        except Exception as exc:  # noqa: BLE001
+            errors["EARN_FLEXIBLE"] = f"decrypt: {exc}"
+            return
+        client = BinanceEarnClient(api_key=api_key, api_secret=api_secret)
+        try:
+            usdt = await client.fetch_flexible_position_usdt()
+            balances["EARN_FLEXIBLE"] = (
+                [WalletBalanceCell(asset="USDT", free=usdt, locked=0.0, total=usdt)]
+                if usdt > 0
+                else []
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors["EARN_FLEXIBLE"] = str(exc)
+        finally:
+            await client.aclose()
+
+    await asyncio.gather(_spot_margin(), _futures_um(), _futures_cm(), _earn())
     return balances, errors
 
 
@@ -806,7 +1044,7 @@ async def _fetch_sub_balances(
 # ─────────────────────────────────────────────────────────────────────
 
 
-def register_transfer_routes(
+def register_transfer_routes(  # noqa: PLR0915 — single function defines all wallet-transfer routes
     app: FastAPI,
     *,
     require_auth_dep: AuthDep,
@@ -852,7 +1090,28 @@ def register_transfer_routes(
         )
         rows: list[WalletBalanceRow] = []
         if master is not None:
-            mb, me = await _fetch_master_balances(master_client, env=env)
+            # Best-effort Earn client built from the master credential.
+            earn_client: BinanceEarnClient | None = None
+            if (
+                env == "mainnet"
+                and master.api_key_enc
+                and master.api_secret_enc
+            ):
+                try:
+                    crypto = get_crypto_service()
+                    earn_client = BinanceEarnClient(
+                        api_key=crypto.decrypt(master.api_key_enc),
+                        api_secret=crypto.decrypt(master.api_secret_enc),
+                    )
+                except Exception:  # noqa: BLE001
+                    earn_client = None
+            try:
+                mb, me = await _fetch_master_balances(
+                    master_client, env=env, earn_client=earn_client
+                )
+            finally:
+                if earn_client is not None:
+                    await earn_client.aclose()
             rows.append(
                 WalletBalanceRow(
                     wallet_account_id=None,
@@ -866,6 +1125,7 @@ def register_transfer_routes(
                         "futures_cm": True,
                         "margin": True,
                         "options": True,
+                        "earn": True,
                     },
                     balances=mb,
                     errors=me,

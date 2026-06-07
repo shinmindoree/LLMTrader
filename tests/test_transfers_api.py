@@ -110,6 +110,66 @@ def test_plan_identical_endpoint_is_rejected() -> None:
     assert ei.value.status_code == 400
 
 
+# ── planner (Earn) ──────────────────────────────────────────────────
+
+
+def test_plan_master_spot_to_earn_is_single_subscribe() -> None:
+    plan = t._build_plan(_ep(None, "SPOT"), _ep(None, "EARN_FLEXIBLE"))
+    assert [leg.kind for leg in plan] == ["earn_subscribe"]
+
+
+def test_plan_master_earn_to_spot_is_single_redeem() -> None:
+    plan = t._build_plan(_ep(None, "EARN_FLEXIBLE"), _ep(None, "SPOT"))
+    assert [leg.kind for leg in plan] == ["earn_redeem"]
+
+
+def test_plan_master_earn_to_futures_funnels_through_spot() -> None:
+    plan = t._build_plan(
+        _ep(None, "EARN_FLEXIBLE"), _ep(None, "USDT_FUTURE")
+    )
+    assert [leg.kind for leg in plan] == ["earn_redeem", "master_internal"]
+
+
+def test_plan_master_futures_to_earn_funnels_through_spot() -> None:
+    plan = t._build_plan(
+        _ep(None, "USDT_FUTURE"), _ep(None, "EARN_FLEXIBLE")
+    )
+    assert [leg.kind for leg in plan] == ["master_internal", "earn_subscribe"]
+
+
+def test_plan_sub_spot_to_sub_earn_is_single_sub_subscribe() -> None:
+    sub = _FakeWallet(wid="sub-a")
+    plan = t._build_plan(_ep(sub, "SPOT"), _ep(sub, "EARN_FLEXIBLE"))
+    assert [leg.kind for leg in plan] == ["sub_earn_subscribe"]
+
+
+def test_plan_master_earn_to_sub_spot_is_two_legs() -> None:
+    sub = _FakeWallet(wid="sub-a")
+    plan = t._build_plan(
+        _ep(None, "EARN_FLEXIBLE"), _ep(sub, "SPOT")
+    )
+    assert [leg.kind for leg in plan] == ["earn_redeem", "sub_universal"]
+
+
+def test_plan_master_earn_to_sub_earn_is_three_legs() -> None:
+    sub = _FakeWallet(wid="sub-a")
+    plan = t._build_plan(
+        _ep(None, "EARN_FLEXIBLE"), _ep(sub, "EARN_FLEXIBLE")
+    )
+    assert [leg.kind for leg in plan] == [
+        "earn_redeem",
+        "sub_universal",
+        "sub_earn_subscribe",
+    ]
+
+
+def test_plan_earn_to_option_same_master_funnels_through_spot() -> None:
+    plan = t._build_plan(
+        _ep(None, "EARN_FLEXIBLE"), _ep(None, "OPTION")
+    )
+    assert [leg.kind for leg in plan] == ["earn_redeem", "master_internal"]
+
+
 # ── asset/transfer type mapping ─────────────────────────────────────
 
 

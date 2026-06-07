@@ -23,6 +23,7 @@ const WALLET_TYPE_LABEL: Record<UiWalletType, string> = {
   COIN_FUTURE: "COIN-M Futures",
   MARGIN: "Margin",
   OPTION: "Options",
+  EARN_FLEXIBLE: "Simple Earn",
 };
 
 const WALLET_TYPE_ORDER: UiWalletType[] = [
@@ -31,6 +32,7 @@ const WALLET_TYPE_ORDER: UiWalletType[] = [
   "COIN_FUTURE",
   "MARGIN",
   "OPTION",
+  "EARN_FLEXIBLE",
 ];
 
 const ENABLED_FLAG_KEY: Record<UiWalletType, string | null> = {
@@ -39,9 +41,21 @@ const ENABLED_FLAG_KEY: Record<UiWalletType, string | null> = {
   COIN_FUTURE: "futures_cm",
   MARGIN: "margin",
   OPTION: "options",
+  EARN_FLEXIBLE: "earn",
 };
 
 const SUPPORTED_ASSETS = ["USDT", "USDC", "BTC", "ETH", "BNB"];
+
+// Wallet types that only accept a restricted asset list. Cells for other
+// assets are rendered as disabled.
+const WALLET_ASSET_WHITELIST: Partial<Record<UiWalletType, string[]>> = {
+  EARN_FLEXIBLE: ["USDT"],
+};
+
+function isAssetAllowed(wallet: UiWalletType, asset: string): boolean {
+  const allow = WALLET_ASSET_WHITELIST[wallet];
+  return allow ? allow.includes(asset) : true;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────
 
@@ -68,6 +82,17 @@ function isWalletEnabled(row: WalletBalanceRow, wallet: UiWalletType): boolean {
   if (!flag) return true;
   const value = row.enabled_wallets[flag];
   return value !== false;
+}
+
+// Cells / wallet options that require a more restricted asset than what
+// the user picked are rendered as inert but still visible so the user
+// understands the wallet exists and just doesn't support this asset.
+function isCellSelectable(
+  row: WalletBalanceRow,
+  wallet: UiWalletType,
+  asset: string,
+): boolean {
+  return isWalletEnabled(row, wallet) && isAssetAllowed(wallet, asset);
 }
 
 function statusBadge(status: string): ReactElement {
@@ -134,10 +159,16 @@ function BalanceGrid({
                   )}
                 </td>
                 {WALLET_TYPE_ORDER.map((wt) => {
-                  const enabled = isWalletEnabled(row, wt);
+                  const enabled = isCellSelectable(row, wt, asset);
+                  const assetOk = isAssetAllowed(wt, asset);
                   const cell = findCell(row, wt, asset);
                   const value = cell?.free ?? 0;
                   const total = cell?.total ?? 0;
+                  const reason = !assetOk
+                    ? `${WALLET_TYPE_LABEL[wt]} 지갑은 ${asset} 미지원`
+                    : !isWalletEnabled(row, wt)
+                      ? "wallet 비활성"
+                      : "이 셀을 출발지로 선택";
                   return (
                     <td
                       key={wt}
@@ -158,7 +189,7 @@ function BalanceGrid({
                             ? "hover:bg-[#2a2e39]"
                             : "cursor-not-allowed",
                         ].join(" ")}
-                        title={enabled ? "이 셀을 출발지로 선택" : "wallet 비활성"}
+                        title={reason}
                       >
                         {value > 0 ? fmtAmount(value, asset) : "—"}
                         {total > value && (
@@ -257,6 +288,16 @@ function TransferForm({
       setMsg({ type: "err", text: "출발지와 도착지가 동일합니다." });
       return;
     }
+    if (
+      !isAssetAllowed(form.fromWallet, form.asset) ||
+      !isAssetAllowed(form.toWallet, form.asset)
+    ) {
+      setMsg({
+        type: "err",
+        text: `${form.asset} 자산은 Simple Earn 지갑에서 지원되지 않습니다 (USDT만 가능).`,
+      });
+      return;
+    }
     if (available > 0 && amt > available) {
       setMsg({
         type: "err",
@@ -325,10 +366,11 @@ function TransferForm({
           >
             {WALLET_TYPE_ORDER.map((wt) => {
               const enabled = fromRow ? isWalletEnabled(fromRow, wt) : true;
+              const assetOk = isAssetAllowed(wt, form.asset);
               return (
-                <option key={wt} value={wt} disabled={!enabled}>
+                <option key={wt} value={wt} disabled={!enabled || !assetOk}>
                   {WALLET_TYPE_LABEL[wt]}
-                  {!enabled ? " (비활성)" : ""}
+                  {!enabled ? " (비활성)" : !assetOk ? ` (${form.asset} 미지원)` : ""}
                 </option>
               );
             })}
@@ -367,10 +409,11 @@ function TransferForm({
           >
             {WALLET_TYPE_ORDER.map((wt) => {
               const enabled = toRow ? isWalletEnabled(toRow, wt) : true;
+              const assetOk = isAssetAllowed(wt, form.asset);
               return (
-                <option key={wt} value={wt} disabled={!enabled}>
+                <option key={wt} value={wt} disabled={!enabled || !assetOk}>
                   {WALLET_TYPE_LABEL[wt]}
-                  {!enabled ? " (비활성)" : ""}
+                  {!enabled ? " (비활성)" : !assetOk ? ` (${form.asset} 미지원)` : ""}
                 </option>
               );
             })}
@@ -446,11 +489,16 @@ function TransferForm({
         {loading ? "이체 처리 중…" : "이체 실행"}
       </button>
 
-      {form.fromWallet === "OPTION" || form.toWallet === "OPTION" ? (
+      {form.fromWallet === "OPTION" ||
+      form.toWallet === "OPTION" ||
+      form.fromWallet === "EARN_FLEXIBLE" ||
+      form.toWallet === "EARN_FLEXIBLE" ? (
         <p className="rounded bg-[#2a2000]/40 px-3 py-2 text-xs text-[#F0B90B]">
-          Options 지갑은 Binance 정책상 sub-account universal transfer 를 지원하지
-          않습니다. 시스템이 자동으로 Spot 경유 multi-leg 이체로 분해합니다.
+          Options · Simple Earn 지갑은 Binance 정책상 universal transfer 가 지원되지
+          않습니다. 시스템이 자동으로 Spot 경유 multi-leg 이체로 분해합니다
+          (Earn 은 subscribe/redeem, Options 는 asset/transfer 호출).
           Sub-account 의 경우 해당 sub 의 거래용 API key 가 등록되어 있어야 합니다.
+          Simple Earn 은 현재 USDT 만 지원하며 mainnet 전용입니다.
         </p>
       ) : null}
     </form>

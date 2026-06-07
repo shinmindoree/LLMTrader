@@ -382,7 +382,8 @@ export type UiWalletType =
   | "USDT_FUTURE"
   | "COIN_FUTURE"
   | "MARGIN"
-  | "OPTION";
+  | "OPTION"
+  | "EARN_FLEXIBLE";
 
 export type WalletBalanceCell = {
   asset: string;
