@@ -1,9 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
-import { getFundingArbStatus, getFundingScreener, startFundingArb, stopFundingArb } from "@/lib/api";
-import type { FundingArbitrageParams, FundingScreenerItem } from "@/lib/types";
+import {
+  getFundingArbStatus,
+  getFundingScreener,
+  getFundingSymbolDetail,
+  startFundingArb,
+  stopFundingArb,
+} from "@/lib/api";
+import type {
+  FundingArbitrageParams,
+  FundingScreenerItem,
+  FundingSymbolDetailResponse,
+  FundingWindowStat,
+} from "@/lib/types";
+import {
+  createChart,
+  ColorType,
+  CrosshairMode,
+  type IChartApi,
+  type ISeriesApi,
+  type Time,
+} from "lightweight-charts";
 
 const REFRESH_MS = 15_000;
 // 봇 가동 중에는 진입/청산이 거의 실시간으로 화면에 반영되도록 빠르게 폴링한다.
@@ -482,6 +501,9 @@ export function ArbitrageConfigPanel() {
                 </button>
               </div>
 
+              {/* 종목별 펀딩비 상세 통계 + 시계열 차트 (최근 1년 운영망 기준) */}
+              <FundingSymbolDetailPanel symbol={selected.symbol} />
+
               {/* Hold days selector (검증 모드에서는 숨김) */}
               {!verifyMode && (
               <Field label="목표 유지 기간" description="기간에 따라 진입·청산 임계치가 자동 조정됩니다.">
@@ -832,5 +854,221 @@ function Field({
       {children}
     </div>
   );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 종목별 펀딩비 상세 패널
+// ──────────────────────────────────────────────────────────────────────────────
+
+const WINDOW_LABELS: Record<FundingWindowStat["label"], string> = {
+  "1w": "최근 1주",
+  "1m": "최근 1개월",
+  "6m": "최근 6개월",
+  "1y": "최근 1년",
+  "all": "전체 기간",
+};
+
+function fmtWinPct(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(4)}%`;
+}
+
+function fmtAnnPct(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
+function fmtTs(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day} ${hh}:${mm}`;
+}
+
+function FundingSymbolDetailPanel({ symbol }: { symbol: string }) {
+  const { data, isLoading, error } = useSWR<FundingSymbolDetailResponse>(
+    symbol ? ["funding-symbol-detail", symbol] : null,
+    () => getFundingSymbolDetail(symbol),
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      dedupingInterval: 60_000,
+    },
+  );
+
+  // window_stats를 라벨별 lookup으로
+  const stats = useMemo(() => {
+    const out: Partial<Record<FundingWindowStat["label"], FundingWindowStat>> = {};
+    for (const s of data?.window_stats ?? []) out[s.label] = s;
+    return out;
+  }, [data]);
+
+  return (
+    <div className="rounded border border-[#2a2e39] bg-[#131722] p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-xs font-semibold text-[#d1d4dc]">
+          📊 {symbol} 펀딩비 상세 (최근 1년, 운영망)
+        </p>
+        {data?.n_samples ? (
+          <p className="text-[10px] text-[#555]">표본 {data.n_samples}회</p>
+        ) : null}
+      </div>
+
+      {isLoading && (
+        <p className="py-4 text-center text-[11px] text-[#868993]">불러오는 중…</p>
+      )}
+      {error && (
+        <p className="py-4 text-center text-[11px] text-[#ef5350]">
+          상세 데이터를 가져오지 못했습니다.
+        </p>
+      )}
+      {data?.error && (
+        <p className="py-4 text-center text-[11px] text-[#ef5350]">{data.error}</p>
+      )}
+
+      {data && !data.error && (
+        <>
+          {/* 윈도우별 이동평균 */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {(["1w", "1m", "6m", "1y", "all"] as const).map((k) => {
+              const s = stats[k];
+              return (
+                <div
+                  key={k}
+                  className="rounded border border-[#2a2e39] bg-[#0d1117] p-2"
+                >
+                  <p className="text-[10px] text-[#868993]">{WINDOW_LABELS[k]}</p>
+                  <p
+                    className={`mt-0.5 font-mono text-xs font-semibold ${
+                      (s?.avg_pct ?? 0) >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"
+                    }`}
+                  >
+                    {fmtWinPct(s?.avg_pct)}
+                  </p>
+                  <p className="text-[10px] text-[#555]">
+                    연환산 {fmtAnnPct(s?.annualized_pct)}
+                  </p>
+                  <p className="text-[10px] text-[#555]">n={s?.n_samples ?? 0}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 최대 / 최소 */}
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="rounded border border-[#26a69a]/30 bg-[#26a69a]/5 p-2">
+              <p className="text-[10px] text-[#868993]">최대 펀딩비 (1년 내)</p>
+              <p className="mt-0.5 font-mono text-sm font-semibold text-[#26a69a]">
+                {fmtWinPct(data.max?.rate_pct)}
+              </p>
+              <p className="text-[10px] text-[#555]">{fmtTs(data.max?.ts)}</p>
+            </div>
+            <div className="rounded border border-[#ef5350]/30 bg-[#ef5350]/5 p-2">
+              <p className="text-[10px] text-[#868993]">최소 펀딩비 (1년 내)</p>
+              <p className="mt-0.5 font-mono text-sm font-semibold text-[#ef5350]">
+                {fmtWinPct(data.min?.rate_pct)}
+              </p>
+              <p className="text-[10px] text-[#555]">{fmtTs(data.min?.ts)}</p>
+            </div>
+          </div>
+
+          {/* 시계열 차트 */}
+          <div className="mt-3">
+            <p className="mb-1 text-[10px] text-[#868993]">
+              펀딩비 시계열 (정산당 %, 0 기준선)
+            </p>
+            <FundingSeriesChart data={data} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function FundingSeriesChart({ data }: { data: FundingSymbolDetailResponse }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const zeroSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+  // 차트 생성 (마운트 시 1회)
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      width: containerRef.current.clientWidth,
+      height: 200,
+      layout: {
+        background: { type: ColorType.Solid, color: "#131722" },
+        textColor: "#9aa0ad",
+        fontSize: 10,
+      },
+      grid: {
+        vertLines: { color: "#1f2333" },
+        horzLines: { color: "#1f2333" },
+      },
+      timeScale: { borderColor: "#2a2e39", timeVisible: false },
+      rightPriceScale: { borderColor: "#2a2e39" },
+      crosshair: { mode: CrosshairMode.Normal },
+    });
+    const series = chart.addLineSeries({
+      color: "#2962ff",
+      lineWidth: 2,
+      priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+    });
+    const zero = chart.addLineSeries({
+      color: "#555",
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    chartRef.current = chart;
+    seriesRef.current = series;
+    zeroSeriesRef.current = zero;
+
+    const ro = new ResizeObserver(() => {
+      if (containerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({
+          width: containerRef.current.clientWidth,
+        });
+      }
+    });
+    ro.observe(containerRef.current);
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+      zeroSeriesRef.current = null;
+    };
+  }, []);
+
+  // 데이터 갱신 시 시리즈 업데이트
+  useEffect(() => {
+    if (!seriesRef.current || !zeroSeriesRef.current) return;
+    const points = (data.series ?? []).map((p) => ({
+      time: Math.floor(p.t / 1000) as Time,
+      value: p.r,
+    }));
+    seriesRef.current.setData(points);
+    if (points.length > 0) {
+      zeroSeriesRef.current.setData([
+        { time: points[0].time, value: 0 },
+        { time: points[points.length - 1].time, value: 0 },
+      ]);
+    } else {
+      zeroSeriesRef.current.setData([]);
+    }
+    chartRef.current?.timeScale().fitContent();
+  }, [data]);
+
+  return <div ref={containerRef} className="w-full" style={{ height: 200 }} />;
 }
 

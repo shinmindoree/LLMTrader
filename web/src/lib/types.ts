@@ -626,3 +626,31 @@ export type FundingScreenerResponse = {
   error: string | null;
   as_of: string;
 };
+
+export type FundingWindowStat = {
+  label: "1w" | "1m" | "6m" | "1y" | "all";
+  avg_pct: number | null;
+  annualized_pct: number | null;
+  n_samples: number;
+};
+
+export type FundingExtremePoint = {
+  rate_pct: number;
+  ts: string;
+};
+
+export type FundingSymbolDetailPoint = {
+  t: number;   // 정산 시각 (ms, UTC epoch)
+  r: number;   // 펀딩비 (%, percent per settlement)
+};
+
+export type FundingSymbolDetailResponse = {
+  symbol: string;
+  as_of: string;
+  n_samples: number;
+  window_stats: FundingWindowStat[];
+  max: FundingExtremePoint | null;
+  min: FundingExtremePoint | null;
+  series: FundingSymbolDetailPoint[];
+  error: string | null;
+};

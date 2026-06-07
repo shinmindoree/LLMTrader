@@ -503,6 +503,34 @@ class FundingScreenerResponse(BaseModel):
     as_of: datetime
 
 
+class FundingSymbolDetailPoint(BaseModel):
+    t: int     # 정산 시각 (ms, UTC epoch)
+    r: float   # 펀딩비 (%, percent per settlement)
+
+
+class FundingWindowStat(BaseModel):
+    label: str                  # "1w" / "1m" / "6m" / "1y" / "all"
+    avg_pct: float | None       # 윈도우 평균 펀딩비 (%)
+    annualized_pct: float | None  # 연환산 평균 (%)
+    n_samples: int              # 윈도우 안에 포함된 정산 수
+
+
+class FundingExtremePoint(BaseModel):
+    rate_pct: float
+    ts: datetime
+
+
+class FundingSymbolDetailResponse(BaseModel):
+    symbol: str
+    as_of: datetime
+    n_samples: int                          # 전체 표본 수 (최근 ≤ 365일)
+    window_stats: list[FundingWindowStat]   # 1w / 1m / 6m / 1y / all
+    max: FundingExtremePoint | None         # 최근 1년 내 최대 펀딩비
+    min: FundingExtremePoint | None         # 최근 1년 내 최소 펀딩비
+    series: list[FundingSymbolDetailPoint]  # 차트용 (downsample 가능)
+    error: str | None = None
+
+
 class FundingArbitrageStatusResponse(BaseModel):
     running: bool
     symbol: str | None = None

@@ -135,6 +135,10 @@ from api.schemas import (
     FundingArbitrageStatusResponse,
     FundingScreenerItem,
     FundingScreenerResponse,
+    FundingSymbolDetailResponse,
+    FundingWindowStat,
+    FundingExtremePoint,
+    FundingSymbolDetailPoint,
     AutoSweepSettingsRequest,
     AutoSweepStatusResponse,
     WalletBalance,
@@ -365,6 +369,207 @@ async def _fetch_market_caps() -> dict[str, float]:
     except Exception:
         _log.warning("Failed to fetch market caps from CoinGecko", exc_info=True)
         return _MARKET_CAP_CACHE["data"]
+
+
+# 종목별 펀딩비 상세 응답 캐시. 페이로드는 운영망 fapi를 두 번 호출(1095행)해서
+# 만들기 때문에 1시간 캐시한다(펀딩 주기 8h이므로 충분).
+_SYMBOL_DETAIL_CACHE: dict[str, tuple[float, Any]] = {}
+_SYMBOL_DETAIL_TTL = 3600.0
+_SYMBOL_DETAIL_MAX_POINTS = 365  # 차트 다운샘플 상한
+
+
+async def _funding_symbol_detail_cached(symbol: str) -> Any:
+    """``funding_arb_symbol_detail`` 핸들러용 캐시 래퍼.
+
+    심볼별로 응답 객체를 1시간 캐시. 동시 요청이 들어와도 멱등하게 동작한다.
+    """
+    import time as _time
+    from datetime import timezone as _tz
+
+    from api.schemas import (
+        FundingExtremePoint,
+        FundingSymbolDetailPoint,
+        FundingSymbolDetailResponse,
+        FundingWindowStat,
+    )
+
+    now = _time.time()
+    cached = _SYMBOL_DETAIL_CACHE.get(symbol)
+    if cached and (now - cached[0]) < _SYMBOL_DETAIL_TTL:
+        return cached[1]
+
+    rows = await _fetch_funding_history(symbol, days=365)
+    as_of = datetime.now(_tz.utc)
+
+    if not rows:
+        resp = FundingSymbolDetailResponse(
+            symbol=symbol,
+            as_of=as_of,
+            n_samples=0,
+            window_stats=[],
+            max=None,
+            min=None,
+            series=[],
+            error="펀딩비 이력을 가져오지 못했습니다.",
+        )
+        # 실패 응답은 짧게 캐시(60초)하여 외부 장애 시 폭주 방지.
+        _SYMBOL_DETAIL_CACHE[symbol] = (now - (_SYMBOL_DETAIL_TTL - 60), resp)
+        return resp
+
+    DEFAULT_INTERVAL_H = 8.0
+    PPY = (365 * 24) / DEFAULT_INTERVAL_H
+
+    now_ms = int(as_of.timestamp() * 1000)
+    WINDOWS = (
+        ("1w", 7),
+        ("1m", 30),
+        ("6m", 180),
+        ("1y", 365),
+        ("all", None),  # 받은 데이터 전체
+    )
+
+    window_stats: list[FundingWindowStat] = []
+    for label, days in WINDOWS:
+        if days is None:
+            window = rows
+        else:
+            cutoff = now_ms - days * 24 * 3600 * 1000
+            window = [r for r in rows if r[0] >= cutoff]
+        n = len(window)
+        if n == 0:
+            window_stats.append(
+                FundingWindowStat(
+                    label=label, avg_pct=None, annualized_pct=None, n_samples=0
+                )
+            )
+            continue
+        avg = sum(r[1] for r in window) / n  # 소수 단위 (예: 0.0001 = 0.01%)
+        avg_pct = round(avg * 100.0, 5)
+        ann = round(avg * PPY * 100.0, 2)
+        window_stats.append(
+            FundingWindowStat(
+                label=label, avg_pct=avg_pct, annualized_pct=ann, n_samples=n
+            )
+        )
+
+    # 최대/최소: 최근 1년 윈도우 안에서 (윈도우가 비어있으면 전체에서).
+    cutoff_1y = now_ms - 365 * 24 * 3600 * 1000
+    scope = [r for r in rows if r[0] >= cutoff_1y] or rows
+    max_row = max(scope, key=lambda r: r[1])
+    min_row = min(scope, key=lambda r: r[1])
+    max_pt = FundingExtremePoint(
+        rate_pct=round(max_row[1] * 100.0, 5),
+        ts=datetime.fromtimestamp(max_row[0] / 1000.0, tz=_tz.utc),
+    )
+    min_pt = FundingExtremePoint(
+        rate_pct=round(min_row[1] * 100.0, 5),
+        ts=datetime.fromtimestamp(min_row[0] / 1000.0, tz=_tz.utc),
+    )
+
+    # 차트 시계열: 최근 1년치만, 균등 간격으로 다운샘플하여 ≤ 365 포인트.
+    series_raw = [r for r in rows if r[0] >= cutoff_1y]
+    if not series_raw:
+        series_raw = rows
+    if len(series_raw) > _SYMBOL_DETAIL_MAX_POINTS:
+        step = len(series_raw) / _SYMBOL_DETAIL_MAX_POINTS
+        sampled_idx = {int(i * step) for i in range(_SYMBOL_DETAIL_MAX_POINTS)}
+        # 마지막 포인트는 반드시 포함.
+        sampled_idx.add(len(series_raw) - 1)
+        series_pts = [series_raw[i] for i in sorted(sampled_idx)]
+    else:
+        series_pts = series_raw
+    series = [
+        FundingSymbolDetailPoint(t=int(t), r=round(r * 100.0, 5))
+        for t, r in series_pts
+    ]
+
+    resp = FundingSymbolDetailResponse(
+        symbol=symbol,
+        as_of=as_of,
+        n_samples=len(rows),
+        window_stats=window_stats,
+        max=max_pt,
+        min=min_pt,
+        series=series,
+        error=None,
+    )
+    _SYMBOL_DETAIL_CACHE[symbol] = (now, resp)
+    return resp
+
+
+async def _fetch_funding_history(
+    symbol: str, *, days: int = 365
+) -> list[tuple[int, float]]:
+    """운영망 fapi.binance.com에서 ``symbol``의 펀딩비 이력을 ``days``일 가져온다.
+
+    반환: ``[(funding_time_ms, funding_rate_as_decimal), ...]`` (오름차순).
+    실패 시 빈 리스트.
+
+    페이지네이션: 한 번에 최대 1000행 → 1년치(약 1095행)는 2회 호출.
+    """
+    PATH = "/fapi/v1/fundingRate"
+    LIMIT = 1000
+    end_ms = int(datetime.now().timestamp() * 1000)
+    start_ms = end_ms - days * 24 * 3600 * 1000
+
+    out: list[tuple[int, float]] = []
+    cursor = start_ms
+    try:
+        async with httpx.AsyncClient(
+            base_url="https://fapi.binance.com", timeout=15.0
+        ) as client:
+            for _ in range(5):  # 안전상 최대 5페이지(=5000행)
+                resp = await client.get(
+                    PATH,
+                    params={
+                        "symbol": symbol,
+                        "limit": LIMIT,
+                        "startTime": cursor,
+                        "endTime": end_ms,
+                    },
+                )
+                if resp.status_code != 200:
+                    _log.warning(
+                        "fundingRate fetch failed symbol=%s status=%d body=%s",
+                        symbol,
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+                    break
+                rows = resp.json()
+                if not isinstance(rows, list) or not rows:
+                    break
+                last_ts = cursor
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        ts = int(row["fundingTime"])
+                        rate = float(row["fundingRate"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    out.append((ts, rate))
+                    if ts > last_ts:
+                        last_ts = ts
+                if len(rows) < LIMIT:
+                    break
+                # 다음 페이지: 마지막 ts + 1ms 부터
+                cursor = last_ts + 1
+                if cursor >= end_ms:
+                    break
+    except Exception:  # noqa: BLE001
+        _log.warning("fundingRate fetch error symbol=%s", symbol, exc_info=True)
+        return out
+
+    # 중복 제거 + 시간순 정렬
+    seen: set[int] = set()
+    dedup: list[tuple[int, float]] = []
+    for ts, r in sorted(out, key=lambda x: x[0]):
+        if ts in seen:
+            continue
+        seen.add(ts)
+        dedup.append((ts, r))
+    return dedup
 
 
 def _public_job_config(config: Any) -> dict[str, Any]:
@@ -1426,6 +1631,43 @@ def create_app() -> FastAPI:
             roundtrip_cost_pct=round(ROUNDTRIP * 100, 2),
             as_of=datetime.now(timezone.utc),
         )
+
+    @app.get(
+        "/api/funding-arb/symbol-detail",
+        response_model=FundingSymbolDetailResponse,
+    )
+    async def funding_arb_symbol_detail(
+        symbol: str,
+        user: AuthenticatedUser = Depends(require_auth),  # noqa: ARG001
+    ) -> FundingSymbolDetailResponse:
+        """심볼별 펀딩비 상세 통계 + 시계열 (최근 1년).
+
+        Binance USD-M ``/fapi/v1/fundingRate`` 운영망에서 최대 1095회 정산
+        (≈365일)을 페이지네이션으로 가져와 다음을 계산한다:
+          - 윈도우 평균(7일/30일/180일/365일/전체)
+          - 최근 1년 내 최대/최소 펀딩비와 그 시점
+          - 차트용 시계열(원본을 다운샘플하여 ≤ 365 포인트)
+
+        결과는 1시간 캐시한다(펀딩 정산이 8시간 주기이므로 충분).
+        Testnet은 펀딩비 이력이 의미 없으므로 항상 운영망(fapi.binance.com)
+        을 조회한다.
+        """
+        from datetime import timezone as _tz
+
+        sym = (symbol or "").strip().upper()
+        if not sym or not sym.isalnum() or len(sym) > 32:
+            return FundingSymbolDetailResponse(
+                symbol=sym,
+                as_of=datetime.now(_tz.utc),
+                n_samples=0,
+                window_stats=[],
+                max=None,
+                min=None,
+                series=[],
+                error="잘못된 심볼입니다.",
+            )
+
+        return await _funding_symbol_detail_cached(sym)
 
     @app.post("/api/funding-arb/start", response_model=FundingArbitrageStatusResponse)
     async def funding_arb_start(

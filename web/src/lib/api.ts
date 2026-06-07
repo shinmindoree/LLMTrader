@@ -718,6 +718,13 @@ export async function getFundingScreener(
   return json(`/api/backend/api/funding-arb/screener?top_n=${topN}&env=${env}`);
 }
 
+export async function getFundingSymbolDetail(
+  symbol: string,
+): Promise<import("@/lib/types").FundingSymbolDetailResponse> {
+  const s = encodeURIComponent(symbol.trim().toUpperCase());
+  return json(`/api/backend/api/funding-arb/symbol-detail?symbol=${s}`);
+}
+
 export async function listFuturesSymbols(): Promise<string[]> {
   return json<string[]>("/api/backend/api/binance/futures/symbols");
 }
