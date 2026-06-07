@@ -908,7 +908,27 @@ def _cells_from_futures(snapshot: dict[str, Any]) -> list[WalletBalanceCell]:
         asset = str(row.get("asset") or "")
         if asset not in SUPPORTED_ASSETS:
             continue
-        free = float(row.get("availableBalance", row.get("free", 0)) or 0)
+        # Master ``/fapi/v2/account`` exposes ``availableBalance`` directly.
+        # Sub-account ``/sapi/v2/sub-account/futures/account`` omits that
+        # field and instead returns ``maxWithdrawAmount`` (free) plus
+        # ``marginBalance``/``walletBalance``. Fall through these so the
+        # cell shows the actual withdrawable balance rather than treating
+        # the whole wallet as locked.
+        for key in (
+            "availableBalance",
+            "maxWithdrawAmount",
+            "marginBalance",
+            "free",
+        ):
+            value = row.get(key)
+            if value is not None:
+                try:
+                    free = float(value)
+                    break
+                except (TypeError, ValueError):
+                    continue
+        else:
+            free = 0.0
         total = float(row.get("walletBalance", free) or free)
         locked = max(0.0, total - free)
         if total > 0:
