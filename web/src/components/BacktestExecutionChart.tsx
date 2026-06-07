@@ -105,7 +105,23 @@ function nearestCandleIdx(candleSecs: number[], tSec: number): number {
 // so it's the canonical signal. A non-zero pnl is kept as a fallback
 // exit indicator for legacy trades that pre-date the ``exit_reason``
 // plumbing.
+//
+// Legacy fallback: the live runner used to stamp ``exit_reason="Manual
+// order in Binance"`` on every external (manual) order including fresh
+// entries. Those rows have ``pnl === 0`` because Binance only reports a
+// realized PnL when a position is reduced/closed. Treat zero-PnL manual
+// rows as entries so they render with SE/LE arrows instead of Exit.
+// (The runner side was fixed in src/live/context.py::_classify_external_trade;
+// this guard recovers historical trades already persisted with the old
+// labelling.)
 function isExitTrade(t: MarkerTrade): boolean {
+  if (
+    t.exitReason &&
+    /manual order/i.test(t.exitReason) &&
+    (t.pnl == null || t.pnl === 0)
+  ) {
+    return false;
+  }
   return t.exitReason != null || (t.pnl != null && t.pnl !== 0);
 }
 

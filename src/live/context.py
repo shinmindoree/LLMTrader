@@ -3066,15 +3066,33 @@ class LiveContext:
         return oid not in self._placed_order_ids
 
     def _classify_external_trade(self, trade: dict[str, Any]) -> tuple[str | None, str | None]:
-        """체결 정보를 보고 외부(수동) 청산 여부를 판정한다.
+        """체결 정보를 보고 외부(수동) 주문이 '진입'인지 '청산'인지 판정한다.
+
+        과거에는 외부 주문 전부에 ``exit_reason`` 을 채워 넣어, 매뉴얼로 신규
+        포지션을 잡은 케이스도 차트에서 'Exit' 화살표로 보이는 문제가 있었다.
+        Binance ``realizedPnl`` 은 진입 체결에서는 0, 포지션을 줄이거나 닫는
+        체결에서만 0이 아닌 값으로 들어오므로 이 값으로 갈라준다.
+
+        - 매뉴얼 진입 (``realizedPnl == 0``):
+          ``("Manual order in Binance", None)`` — UI Reason 컬럼은 ``reason``
+          으로 표시되고, 차트는 진입(SE/LE) 화살표로 그린다.
+        - 매뉴얼 청산/감소 (``realizedPnl != 0``):
+          ``("Manual order in Binance", "Manual order in Binance")`` — 차트는
+          Exit 화살표로 그린다.
 
         Returns:
-            (reason, exit_reason). 전략 발주 체결이면 (None, None).
-            사용자가 Binance에서 수동 주문한 경우 ("manual_close_binance", "Manual order in Binance").
+            ``(reason, exit_reason)``. 전략 발주 체결이면 ``(None, None)``.
         """
-        if self._is_external_order_id(trade.get("orderId")):
-            return "manual_close_binance", "Manual order in Binance"
-        return None, None
+        if not self._is_external_order_id(trade.get("orderId")):
+            return None, None
+        label = "Manual order in Binance"
+        try:
+            realized_pnl = float(trade.get("realizedPnl", 0) or 0)
+        except (TypeError, ValueError):
+            realized_pnl = 0.0
+        if abs(realized_pnl) > 1e-9:
+            return label, label
+        return label, None
 
     def _augment_trades_with_external_reason(
         self,
