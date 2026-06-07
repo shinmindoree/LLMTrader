@@ -493,6 +493,7 @@ async def test_reconcile_syncs_permissions_from_binance_status(
     assert tracking["meta_updates"][-1]["enabled_wallets"] == {
         "spot": True,
         "futures_um": True,
+        "futures_cm": True,
         "margin": True,
     }
 
@@ -507,7 +508,12 @@ async def test_reconcile_skips_permission_write_when_already_in_sync(
             wid="w1",
             email="dir_001@subs.binance.com",
             status="active",
-            enabled_wallets={"spot": True, "futures_um": True, "margin": False},
+            enabled_wallets={
+                "spot": True,
+                "futures_um": True,
+                "futures_cm": True,
+                "margin": False,
+            },
         ),
     ]
     tracking = _patch_repo(monkeypatch, db_subs=db_subs)

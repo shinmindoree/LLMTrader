@@ -45,7 +45,13 @@ from binance.client_factory import (
     BinanceClientFactoryError,
     get_client_factory,
 )
+from binance.options_client import (
+    BinanceOptionsClient,
+    BinanceOptionsClientError,
+    resolve_options_base_url,
+)
 from binance.subaccount_client import BinanceSubAccountClientError
+from common.crypto import get_crypto_service
 from control.models import (
     WalletAccount,
     WalletAccountStatus,
@@ -327,9 +333,8 @@ class WalletReconciler:
         Spot is always enabled on a sub-account; futures/margin reflect
         ``isFutureEnabled`` / ``isMarginEnabled`` from
         ``/sapi/v1/sub-account/status`` (preferred) or the ``list`` row
-        as a fallback. Options requires a dedicated endpoint we don't
-        call here, so it stays at whatever the DB already has; the
-        caller merges into the existing dict.
+        as a fallback. Options is **not** reported by either endpoint, so
+        the caller must probe it separately via the sub's own API key.
         """
         flags: dict[str, bool] = {"spot": True}
         src: dict[str, Any] = {}
@@ -340,9 +345,60 @@ class WalletReconciler:
                 src.setdefault(k, v)
         if "isFutureEnabled" in src:
             flags["futures_um"] = bool(src.get("isFutureEnabled"))
+            flags["futures_cm"] = bool(src.get("isFutureEnabled"))
         if "isMarginEnabled" in src:
             flags["margin"] = bool(src.get("isMarginEnabled"))
         return flags
+
+    async def _probe_options_enabled(
+        self, wallet: WalletAccount
+    ) -> bool | None:
+        """Best-effort probe: can the sub's API key call ``/eapi/v1/marginAccount``?
+
+        Returns ``True``/``False`` when the probe completes, or ``None`` when
+        we cannot probe (missing/undecryptable sub key) — in which case the
+        existing flag in the DB is preserved.
+        """
+        api_key_enc = getattr(wallet, "api_key_enc", None)
+        api_secret_enc = getattr(wallet, "api_secret_enc", None)
+        if not api_key_enc or not api_secret_enc:
+            return None
+        try:
+            crypto = get_crypto_service()
+            api_key = crypto.decrypt(api_key_enc)
+            api_secret = crypto.decrypt(api_secret_enc)
+        except Exception:  # noqa: BLE001
+            return None
+        env_str = (
+            wallet.env.value if hasattr(wallet.env, "value") else wallet.env
+        ) or "mainnet"
+        client = BinanceOptionsClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=resolve_options_base_url(str(env_str)),
+        )
+        try:
+            await client.fetch_account()
+            return True
+        except BinanceOptionsClientError as exc:
+            # 401/403/404 from eapi mean the key cannot use Options (either
+            # the underlying account never enabled European Options, or the
+            # key lacks the Options permission). Treat all as ``False``.
+            _log.debug(
+                "options probe failed for %s: %s",
+                wallet.sub_account_email,
+                exc,
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "options probe error for %s: %s",
+                wallet.sub_account_email,
+                exc,
+            )
+            return None
+        finally:
+            await client.aclose()
 
     async def _sync_permissions(
         self,
@@ -353,6 +409,12 @@ class WalletReconciler:
         status_row: dict[str, Any] | None,
     ) -> bool:
         derived = self._derive_permissions(binance_row, status_row)
+        # Options is not exposed by /sub-account/status; probe via the
+        # sub's own key so the badge matches reality. Only override the
+        # existing value when the probe returned a definitive answer.
+        options_enabled = await self._probe_options_enabled(wallet)
+        if options_enabled is not None:
+            derived["options"] = options_enabled
         if not derived:
             return False
         existing = dict(wallet.enabled_wallets or {})
