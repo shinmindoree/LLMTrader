@@ -531,6 +531,8 @@ const ko: TranslationKeys = {
     recoveryFactor: "회복 계수",
     feeAfter: "수수료 차감 후",
     feeBefore: "수수료 차감 전",
+    zoomHint: "스크롤=확대/축소 · 드래그=이동 · 더블클릭=초기화",
+    resetZoom: "줌 초기화",
     groupProfitability: "수익성",
     groupWinConsistency: "승률 & 일관성",
     groupRiskCost: "리스크 & 비용",

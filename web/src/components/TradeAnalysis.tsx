@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { Job, Trade } from "@/lib/types";
@@ -594,6 +594,92 @@ function Chart({
   const [hoveredPoint, setHoveredPoint] = useState<ChartPoint | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
+  const width = 900;
+  const height = 320;
+  const padding = 36;
+  const plotWidth = width - padding * 2;
+  const plotHeight = height - padding * 2;
+
+  const totalRange = Math.max(1, points.length - 1);
+
+  const [visibleRange, setVisibleRange] = useState<[number, number] | null>(null);
+  const visibleRangeRef = useRef<[number, number] | null>(null);
+  useEffect(() => {
+    visibleRangeRef.current = visibleRange;
+  }, [visibleRange]);
+
+  // Reset zoom only when the dataset shrinks (e.g., switching jobs). When
+  // new live trades append (length grows), keep the current zoom window —
+  // clampRange below extends the default range automatically when not zoomed.
+  // Uses the React 19 "set state during render" pattern to avoid an extra
+  // paint with a stale window.
+  const [lastPointsLen, setLastPointsLen] = useState(points.length);
+  if (lastPointsLen !== points.length) {
+    if (points.length < lastPointsLen) {
+      setVisibleRange(null);
+    }
+    setLastPointsLen(points.length);
+  }
+
+  const svgRef = useRef<SVGSVGElement>(null);
+  const panStateRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startVStart: number;
+    startVEnd: number;
+    moved: boolean;
+  } | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+
+  const clampRange = useCallback(
+    (start: number, end: number): [number, number] => {
+      const minSpan = Math.min(1, totalRange);
+      const span = Math.max(minSpan, Math.min(totalRange, end - start));
+      let s = start;
+      let e = s + span;
+      if (s < 0) {
+        s = 0;
+        e = s + span;
+      }
+      if (e > totalRange) {
+        e = totalRange;
+        s = e - span;
+      }
+      if (s < 0) s = 0;
+      return [s, e];
+    },
+    [totalRange],
+  );
+
+  // Attach a non-passive wheel listener so we can preventDefault and zoom.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (points.length < 2) return;
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const xVB = ((e.clientX - rect.left) / rect.width) * width;
+      const xPlot = Math.max(padding, Math.min(width - padding, xVB));
+      const xRel = plotWidth > 0 ? (xPlot - padding) / plotWidth : 0;
+      const [cs, ce] = visibleRangeRef.current ?? [0, totalRange];
+      const range = Math.max(ce - cs, 0.0001);
+      const idxAtCursor = cs + xRel * range;
+      const zoomFactor = e.deltaY < 0 ? 0.85 : 1.18;
+      const minRange = Math.min(2, totalRange);
+      const newRange = Math.max(minRange, Math.min(totalRange, range * zoomFactor));
+      let newStart = idxAtCursor - xRel * newRange;
+      let newEnd = newStart + newRange;
+      [newStart, newEnd] = clampRange(newStart, newEnd);
+      setVisibleRange([newStart, newEnd]);
+    };
+
+    svg.addEventListener("wheel", handleWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", handleWheel);
+  }, [points.length, totalRange, padding, plotWidth, width, clampRange]);
+
   const hasAnyCommission = points.some((p) => p.commission > 0);
 
   if (!points.length) {
@@ -604,39 +690,108 @@ function Chart({
     );
   }
 
-  const width = 900;
-  const height = 320;
-  const padding = 36;
-  const plotWidth = width - padding * 2;
-  const plotHeight = height - padding * 2;
-  const step = points.length > 1 ? plotWidth / (points.length - 1) : plotWidth;
-  const barWidth = Math.max(4, Math.min(18, step * 0.6));
+  const [vStartRaw, vEndRaw] = visibleRange ?? [0, totalRange];
+  const [vStart, vEnd] = clampRange(vStartRaw, vEndRaw);
+  const visibleSpan = Math.max(vEnd - vStart, 0.0001);
+  const isZoomed =
+    visibleRange !== null && (vStart > 0.0001 || vEnd < totalRange - 0.0001);
+  const step = plotWidth / Math.max(visibleSpan, 1);
+  const barWidth = Math.max(2, Math.min(24, step * 0.6));
+
+  const xForIndex = (idx: number) =>
+    padding + ((idx - vStart) / visibleSpan) * plotWidth;
 
   const getPnl = (p: ChartPoint) => (afterFees ? p.pnlNet : p.pnl);
   const getEquity = (p: ChartPoint) => (afterFees ? p.equity : p.equityGross);
 
-  const pnlValues = points.map(getPnl);
-  const maxAbsPnl = Math.max(...pnlValues.map((v) => Math.abs(v)), 1);
+  // Restrict y-range calculations to the visible window so zooming reveals
+  // detail in calm regions (Binance-style autoscale).
+  const visibleStartIdx = Math.max(0, Math.floor(vStart));
+  const visibleEndIdx = Math.min(points.length - 1, Math.ceil(vEnd));
+  const visiblePoints = points.slice(visibleStartIdx, visibleEndIdx + 1);
+  const visiblePnlValues = visiblePoints.map(getPnl);
+  const maxAbsPnl = Math.max(...visiblePnlValues.map((v) => Math.abs(v)), 1);
   const yZero = padding + plotHeight / 2;
   const pnlScale = plotHeight / (2 * maxAbsPnl);
 
-  const equityValues = points.map(getEquity);
-  const eqMin = Math.min(...equityValues);
-  const eqMax = Math.max(...equityValues);
+  const visibleEquityValues = visiblePoints.map(getEquity);
+  const eqMin = visibleEquityValues.length ? Math.min(...visibleEquityValues) : 0;
+  const eqMax = visibleEquityValues.length ? Math.max(...visibleEquityValues) : 1;
   const eqRange = Math.max(eqMax - eqMin, 1);
 
   const yPnl = (value: number) => yZero - value * pnlScale;
   const yEq = (value: number) => padding + ((eqMax - value) / eqRange) * plotHeight;
 
-  const linePath = points
+  const linePath = visiblePoints
     .map((p, idx) => {
-      const x = padding + idx * step;
+      const absoluteIdx = visibleStartIdx + idx;
+      const x = xForIndex(absoluteIdx);
       const y = yEq(getEquity(p));
       return `${idx === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(" ");
 
   const symbolLabel = (p: ChartPoint) => p.symbol ?? backtestSymbol ?? "-";
+
+  const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
+    if (points.length < 2) return;
+    panStateRef.current = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startVStart: vStart,
+      startVEnd: vEnd,
+      moved: false,
+    };
+    setHoveredPoint(null);
+    try {
+      (e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId);
+    } catch {
+      // setPointerCapture can throw if the pointer is no longer active; ignore.
+    }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const state = panStateRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const pxPerUnit = (rect.width * (plotWidth / width)) / visibleSpan;
+    if (pxPerUnit <= 0) return;
+    const dx = e.clientX - state.startClientX;
+    if (!state.moved && Math.abs(dx) > 3) {
+      state.moved = true;
+      setIsPanning(true);
+    }
+    if (!state.moved) return;
+    const deltaIdx = -dx / pxPerUnit;
+    let newStart = state.startVStart + deltaIdx;
+    let newEnd = state.startVEnd + deltaIdx;
+    [newStart, newEnd] = clampRange(newStart, newEnd);
+    setVisibleRange([newStart, newEnd]);
+  };
+
+  const finishPan = (e: React.PointerEvent<SVGSVGElement>) => {
+    const state = panStateRef.current;
+    if (!state) return;
+    if (state.pointerId === e.pointerId) {
+      panStateRef.current = null;
+      setIsPanning(false);
+      try {
+        (e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore release errors
+      }
+    }
+  };
+
+  const handleDoubleClick = () => {
+    setVisibleRange(null);
+  };
+
+  const cursorClass = isPanning ? "cursor-grabbing" : "cursor-grab";
 
   return (
     <div
@@ -653,11 +808,27 @@ function Chart({
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span>{points.length} positions - PnL range +/-{formatNumber(maxAbsPnl, 2)} USDT</span>
+          <span>
+            {isZoomed
+              ? `${visiblePoints.length}/${points.length} positions`
+              : `${points.length} positions`}
+            {` - PnL range +/-${formatNumber(maxAbsPnl, 2)} USDT`}
+          </span>
           {hasAnyCommission && (
             <span className={afterFees ? "text-[#d1d4dc]" : "text-[#868993]"}>
               {afterFees ? t.tradeAnalysis.feeAfter : t.tradeAnalysis.feeBefore}
             </span>
+          )}
+          {isZoomed ? (
+            <button
+              type="button"
+              onClick={handleDoubleClick}
+              className="rounded border border-[#2a2e39] bg-[#1e222d] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#d1d4dc] hover:bg-[#252a37]"
+            >
+              {t.tradeAnalysis.resetZoom}
+            </button>
+          ) : (
+            <span className="text-[10px] text-[#5d6275]">{t.tradeAnalysis.zoomHint}</span>
           )}
         </div>
       </div>
@@ -691,71 +862,94 @@ function Chart({
         </div>
       ) : null}
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
-        className="w-full"
+        className={`w-full touch-none select-none ${cursorClass}`}
         role="img"
         aria-label="Trade PnL and equity chart"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={finishPan}
+        onPointerCancel={finishPan}
+        onDoubleClick={handleDoubleClick}
       >
+        <defs>
+          <clipPath id="pnl-chart-plot-area">
+            <rect x={padding} y={padding} width={plotWidth} height={plotHeight} />
+          </clipPath>
+        </defs>
         <rect x={padding} y={padding} width={plotWidth} height={plotHeight} fill="#0f141f" />
         <line x1={padding} y1={yZero} x2={width - padding} y2={yZero} stroke="#2a2e39" strokeWidth={1} />
-        {points.map((p, idx) => {
-          const xCenter = padding + idx * step;
-          const pnlVal = getPnl(p);
-          const y = yPnl(pnlVal);
-          const barHeight = Math.max(2, Math.abs(y - yZero));
-          const yTop = pnlVal >= 0 ? y : yZero;
-          const color = pnlVal >= 0 ? "#26a69a" : "#ef5350";
-          return (
-            <g
-              key={`bar-${p.index}`}
-              onMouseEnter={(e) => {
-                setHoveredPoint(p);
-                setTooltipPos({ x: e.clientX, y: e.clientY });
-              }}
-              onMouseMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
-            >
-              <rect
-                x={xCenter - barWidth / 2}
-                y={yTop}
-                width={barWidth}
-                height={barHeight}
-                fill={color}
-                rx={2}
+        <g clipPath="url(#pnl-chart-plot-area)">
+          {visiblePoints.map((p, idx) => {
+            const absoluteIdx = visibleStartIdx + idx;
+            const xCenter = xForIndex(absoluteIdx);
+            const pnlVal = getPnl(p);
+            const y = yPnl(pnlVal);
+            const barHeight = Math.max(2, Math.abs(y - yZero));
+            const yTop = pnlVal >= 0 ? y : yZero;
+            const color = pnlVal >= 0 ? "#26a69a" : "#ef5350";
+            return (
+              <g
+                key={`bar-${p.index}`}
+                onMouseEnter={(e) => {
+                  if (isPanning) return;
+                  setHoveredPoint(p);
+                  setTooltipPos({ x: e.clientX, y: e.clientY });
+                }}
+                onMouseMove={(e) => {
+                  if (isPanning) return;
+                  setTooltipPos({ x: e.clientX, y: e.clientY });
+                }}
               >
-                <title>
-                  {`#${p.index} ${formatDateTime(p.timestamp)}\nPnL ${formatSigned(pnlVal, "USDT")}`}
-                </title>
-              </rect>
-            </g>
-          );
-        })}
-        {showEquity ? (
-          <>
-            <path d={linePath} fill="none" stroke="#42a5f5" strokeWidth={2} />
-            {points.map((p, idx) => {
-              const x = padding + idx * step;
-              const eqVal = getEquity(p);
-              const y = yEq(eqVal);
-              return (
-                <g
-                  key={`pt-${p.index}`}
-                  onMouseEnter={(e) => {
-                    setHoveredPoint(p);
-                    setTooltipPos({ x: e.clientX, y: e.clientY });
-                  }}
-                  onMouseMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
+                <rect
+                  x={xCenter - barWidth / 2}
+                  y={yTop}
+                  width={barWidth}
+                  height={barHeight}
+                  fill={color}
+                  rx={2}
                 >
-                  <circle cx={x} cy={y} r={8} fill="transparent" />
-                  <circle cx={x} cy={y} r={3} fill="#42a5f5">
-                    <title>
-                      {`#${p.index} ${formatDateTime(p.timestamp)}\nEquity ${formatSigned(eqVal, "USDT")}`}
-                    </title>
-                  </circle>
-                </g>
-              );
-            })}
-          </>
-        ) : null}
+                  <title>
+                    {`#${p.index} ${formatDateTime(p.timestamp)}\nPnL ${formatSigned(pnlVal, "USDT")}`}
+                  </title>
+                </rect>
+              </g>
+            );
+          })}
+          {showEquity ? (
+            <>
+              <path d={linePath} fill="none" stroke="#42a5f5" strokeWidth={2} />
+              {visiblePoints.map((p, idx) => {
+                const absoluteIdx = visibleStartIdx + idx;
+                const x = xForIndex(absoluteIdx);
+                const eqVal = getEquity(p);
+                const y = yEq(eqVal);
+                return (
+                  <g
+                    key={`pt-${p.index}`}
+                    onMouseEnter={(e) => {
+                      if (isPanning) return;
+                      setHoveredPoint(p);
+                      setTooltipPos({ x: e.clientX, y: e.clientY });
+                    }}
+                    onMouseMove={(e) => {
+                      if (isPanning) return;
+                      setTooltipPos({ x: e.clientX, y: e.clientY });
+                    }}
+                  >
+                    <circle cx={x} cy={y} r={8} fill="transparent" />
+                    <circle cx={x} cy={y} r={3} fill="#42a5f5">
+                      <title>
+                        {`#${p.index} ${formatDateTime(p.timestamp)}\nEquity ${formatSigned(eqVal, "USDT")}`}
+                      </title>
+                    </circle>
+                  </g>
+                );
+              })}
+            </>
+          ) : null}
+        </g>
       </svg>
       {!showEquity ? (
         <div className="mt-2 text-xs text-[#868993]">

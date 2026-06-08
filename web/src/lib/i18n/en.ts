@@ -528,6 +528,8 @@ const en = {
     recoveryFactor: "Recovery Factor",
     feeAfter: "After fees",
     feeBefore: "Before fees",
+    zoomHint: "Scroll = zoom · Drag = pan · Double-click = reset",
+    resetZoom: "Reset zoom",
     groupProfitability: "Profitability",
     groupWinConsistency: "Win Rate & Consistency",
     groupRiskCost: "Risk & Cost",
