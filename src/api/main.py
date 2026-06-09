@@ -139,6 +139,11 @@ from api.schemas import (
     FundingWindowStat,
     FundingExtremePoint,
     FundingSymbolDetailPoint,
+    KimpFxRateResponse,
+    KimpHistoryPoint,
+    KimpHistoryResponse,
+    KimpScreenerItem,
+    KimpScreenerResponse,
     AutoSweepSettingsRequest,
     AutoSweepStatusResponse,
     WalletBalance,
@@ -1165,6 +1170,17 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("Funding-arb auto-restore failed to schedule: %s", exc)
 
+        # 김프 스냅샷 1분 콜렉터: 백테스트/시계열 차트/30일 통계의 원천 데이터를
+        # 적재한다. 외부 API/DB 실패는 콜렉터 내부에서 로깅만 하고 다음 사이클로
+        # 넘어가므로 API startup 을 막지 않는다.
+        try:
+            from live.kimp_history import start_collector as _start_kimp_collector
+
+            _start_kimp_collector(session_maker)
+            _logger.info("Kimp snapshot collector scheduled (60s interval)")
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Kimp snapshot collector failed to schedule: %s", exc)
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         nonlocal _keepalive_task, _runner_task, _runner_worker, _db_init_task
@@ -1172,6 +1188,12 @@ def create_app() -> FastAPI:
             from live.auto_sweep_engine import stop_engine as _stop_auto_sweep
 
             await _stop_auto_sweep()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from live.kimp_history import stop_collector as _stop_kimp_collector
+
+            await _stop_kimp_collector()
         except Exception:  # noqa: BLE001
             pass
         if _runner_worker is not None:
@@ -1753,6 +1775,131 @@ def create_app() -> FastAPI:
         from live.funding_arbitrage_engine import stop_engine, get_engine_status_persisted
         await stop_engine(user.user_id, session_maker=session_maker)
         return await get_engine_status_persisted(session, user.user_id)
+
+    # ── Kimchi Premium (김프) Arbitrage ────────────────────────────
+    # Phase 1: 모니터링(읽기 전용) — fx 환율 / 스크리너 / 시계열 히스토리
+
+    @app.get("/api/kimp-arb/fx", response_model=KimpFxRateResponse)
+    async def kimp_fx_rate(
+        force_refresh: bool = False,
+        _: AuthenticatedUser = Depends(require_auth),
+    ) -> KimpFxRateResponse:
+        """USD/KRW 환율 (Naver FX, 60s TTL).
+
+        ``stale=true`` 이면 외부 소스 호출 실패로 직전 캐시 값을 그대로 사용한 상태.
+        """
+        from live.fx_feed import get_fx_rate
+
+        fx = await get_fx_rate(force_refresh=force_refresh)
+        return KimpFxRateResponse(
+            rate=fx.rate,
+            source=fx.source,
+            fetched_at=fx.fetched_at,
+            stale=fx.stale,
+        )
+
+    @app.get("/api/kimp-arb/screener", response_model=KimpScreenerResponse)
+    async def kimp_screener(
+        symbols: str | None = None,
+        session: AsyncSession = Depends(_db_session),
+        _: AuthenticatedUser = Depends(require_auth),
+    ) -> KimpScreenerResponse:
+        """심볼별 김프율 + 30일 평균/표준편차/z-score 스크리너.
+
+        ``symbols`` 쿼리는 쉼표 구분 (예: ``BTC,ETH``). 미지정 시 기본 8종.
+        """
+        from live.kimp_calculator import DEFAULT_SYMBOLS, compute_kimp_snapshot
+        from live.kimp_history import window_stats
+
+        if symbols:
+            requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        else:
+            requested = list(DEFAULT_SYMBOLS)
+
+        snapshot = await compute_kimp_snapshot(requested or None)
+
+        items: list[KimpScreenerItem] = []
+        for row in snapshot.rows:
+            stats = await window_stats(session, row.symbol, days=30)
+            mean_pct = stats.get("mean")
+            std_pct = stats.get("std")
+            n = int(stats.get("n") or 0)
+            z = None
+            if (
+                mean_pct is not None
+                and std_pct is not None
+                and float(std_pct) > 0
+            ):
+                z = (row.kimp_pct - float(mean_pct)) / float(std_pct)
+            items.append(
+                KimpScreenerItem(
+                    symbol=row.symbol,
+                    upbit_krw_price=row.upbit_krw_price,
+                    binance_usdt_price=row.binance_usdt_price,
+                    usd_krw_rate=row.usd_krw_rate,
+                    kimp_pct=row.kimp_pct,
+                    mean_30d_pct=float(mean_pct) if mean_pct is not None else None,
+                    std_30d_pct=float(std_pct) if std_pct is not None else None,
+                    zscore_30d=z,
+                    n_samples_30d=n,
+                )
+            )
+
+        fx_payload = KimpFxRateResponse(
+            rate=snapshot.fx.rate,
+            source=snapshot.fx.source,
+            fetched_at=snapshot.fx.fetched_at,
+            stale=snapshot.fx.stale,
+        )
+        return KimpScreenerResponse(
+            items=items,
+            fx=fx_payload,
+            errors=list(snapshot.errors),
+            as_of=snapshot.as_of,
+        )
+
+    @app.get("/api/kimp-arb/history", response_model=KimpHistoryResponse)
+    async def kimp_history(
+        symbol: str,
+        range: Literal["1H", "1D", "7D", "30D"] = "1D",
+        session: AsyncSession = Depends(_db_session),
+        _: AuthenticatedUser = Depends(require_auth),
+    ) -> KimpHistoryResponse:
+        """심볼별 김프 시계열. ``range`` 에 따라 1H/1D/7D/30D 윈도우."""
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+        from datetime import timezone as _tz
+
+        from live.kimp_history import recent_series, window_stats
+
+        sym = symbol.strip().upper()
+        if not sym:
+            raise HTTPException(status_code=400, detail="symbol is required")
+
+        windows = {
+            "1H": _td(hours=1),
+            "1D": _td(days=1),
+            "7D": _td(days=7),
+            "30D": _td(days=30),
+        }
+        delta = windows[range]
+        now = _dt.now(_tz.utc)
+        since = now - delta
+
+        series = await recent_series(session, sym, since=since, max_points=2000)
+        stats = await window_stats(session, sym, days=max(1, int(delta.total_seconds() // 86400) or 1))
+        points = [
+            KimpHistoryPoint(t=int(ts.timestamp() * 1000), p=float(p)) for ts, p in series
+        ]
+        return KimpHistoryResponse(
+            symbol=sym,
+            range=range,
+            as_of=now,
+            mean_pct=(float(stats["mean"]) if stats.get("mean") is not None else None),
+            std_pct=(float(stats["std"]) if stats.get("std") is not None else None),
+            n_samples=int(stats.get("n") or 0),
+            series=points,
+        )
 
     @app.get(
         "/api/binance/futures/symbols",

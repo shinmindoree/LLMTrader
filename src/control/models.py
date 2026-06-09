@@ -217,6 +217,29 @@ class AccountSnapshot(Base):
     )
 
 
+class KimpSnapshot(Base):
+    """김치 프리미엄 시계열 1분 스냅샷.
+
+    엔진/스크리너에서 30일 평균·표준편차(±1σ/±2σ) 밴드 산출 및
+    시계열 차트(1H/1D/7D/30D) 데이터로 사용된다.
+    """
+
+    __tablename__ = "kimp_snapshots"
+    __table_args__ = (
+        UniqueConstraint("symbol", "ts", name="uq_kimp_symbol_ts"),
+        Index("ix_kimp_symbol_ts", "symbol", "ts"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(16), nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    upbit_krw_price: Mapped[float] = mapped_column(Float, nullable=False)
+    binance_usdt_price: Mapped[float] = mapped_column(Float, nullable=False)
+    usd_krw_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    kimp_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    fx_source: Mapped[str] = mapped_column(String(16), nullable=False, default="naver")
+
+
 class StrategyQualityLog(Base):
     __tablename__ = "strategy_quality_logs"
 

@@ -548,6 +548,51 @@ class FundingArbitrageStatusResponse(BaseModel):
     last_error: str | None = None
 
 
+# ── Kimchi Premium (김프) Arbitrage ─────────────────────────
+
+
+class KimpFxRateResponse(BaseModel):
+    pair: Literal["USD/KRW"] = "USD/KRW"
+    rate: float
+    source: str
+    fetched_at: datetime
+    stale: bool
+
+
+class KimpScreenerItem(BaseModel):
+    symbol: str                       # 예: "BTC"
+    upbit_krw_price: float
+    binance_usdt_price: float
+    usd_krw_rate: float
+    kimp_pct: float                   # 0.0345 == 3.45%
+    mean_30d_pct: float | None = None
+    std_30d_pct: float | None = None
+    zscore_30d: float | None = None   # (kimp - mean) / std
+    n_samples_30d: int = 0
+
+
+class KimpScreenerResponse(BaseModel):
+    items: list[KimpScreenerItem]
+    fx: KimpFxRateResponse
+    errors: list[str] = Field(default_factory=list)
+    as_of: datetime
+
+
+class KimpHistoryPoint(BaseModel):
+    t: int     # epoch ms (UTC)
+    p: float   # kimp 비율 (예: 0.0345)
+
+
+class KimpHistoryResponse(BaseModel):
+    symbol: str
+    range: Literal["1H", "1D", "7D", "30D"]
+    as_of: datetime
+    mean_pct: float | None
+    std_pct: float | None
+    n_samples: int
+    series: list[KimpHistoryPoint]
+
+
 # ── Quick Backtest ──────────────────────────────────────────
 
 

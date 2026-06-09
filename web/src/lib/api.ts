@@ -733,6 +733,32 @@ export async function listFuturesSymbols(): Promise<string[]> {
   return json<string[]>("/api/backend/api/binance/futures/symbols");
 }
 
+// ── Kimchi Premium (김프) Arbitrage ───────────────────────────────
+
+export async function getKimpFx(
+  forceRefresh = false,
+): Promise<import("@/lib/types").KimpFxRateResponse> {
+  const qs = forceRefresh ? "?force_refresh=true" : "";
+  return json(`/api/backend/api/kimp-arb/fx${qs}`);
+}
+
+export async function getKimpScreener(
+  symbols?: string[],
+): Promise<import("@/lib/types").KimpScreenerResponse> {
+  const qs = symbols && symbols.length > 0
+    ? `?symbols=${encodeURIComponent(symbols.join(","))}`
+    : "";
+  return json(`/api/backend/api/kimp-arb/screener${qs}`);
+}
+
+export async function getKimpHistory(
+  symbol: string,
+  range: import("@/lib/types").KimpHistoryRange = "1D",
+): Promise<import("@/lib/types").KimpHistoryResponse> {
+  const s = encodeURIComponent(symbol.trim().toUpperCase());
+  return json(`/api/backend/api/kimp-arb/history?symbol=${s}&range=${range}`);
+}
+
 export async function getJob(jobId: string): Promise<Job> {
   return json<Job>(`/api/backend/api/jobs/${jobId}`);
 }
