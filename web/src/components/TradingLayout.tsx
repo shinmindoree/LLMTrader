@@ -7,6 +7,10 @@ import {
   DirectionalAlphaTabs,
   isDirectionalAlphaPath,
 } from "@/components/DirectionalAlphaTabs";
+import {
+  ArbitrageTabs,
+  isArbitragePath,
+} from "@/components/ArbitrageTabs";
 const TradingViewChart = dynamic(
   () => import("@/components/TradingViewChart").then((mod) => mod.TradingViewChart),
   { ssr: false },
@@ -30,6 +34,7 @@ function TradingLayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isChartTab = pathname === "/chart" || pathname.startsWith("/chart/");
   const isDirectionalAlpha = isDirectionalAlphaPath(pathname);
+  const isArbitrage = isArbitragePath(pathname);
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-[#131722]">
@@ -52,6 +57,7 @@ function TradingLayoutInner({ children }: { children: React.ReactNode }) {
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#131722]">
           {isDirectionalAlpha ? <DirectionalAlphaTabs /> : null}
+          {isArbitrage ? <ArbitrageTabs /> : null}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-[#131722]">
             {children}
           </div>

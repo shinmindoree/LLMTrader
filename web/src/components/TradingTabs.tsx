@@ -12,7 +12,11 @@ const TABS = [
     labelKey: "directionalAlpha" as const,
     match: ["/strategies", "/backtest", "/live"],
   },
-  { href: "/arbitrage", labelKey: "arbitrage" as const },
+  {
+    href: "/arbitrage",
+    labelKey: "arbitrage" as const,
+    match: ["/arbitrage"],
+  },
   { href: "/yield", labelKey: "yield" as const },
   { href: "/social", labelKey: "social" as const },
 ];

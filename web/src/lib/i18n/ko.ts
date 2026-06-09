@@ -96,6 +96,13 @@ const ko: TranslationKeys = {
     settings: "설정",
     strategies: "전략",
     arbitrage: "차익거래",
+    arbitrageOverview: "개요",
+    arbitrageKimp: "김프 차익거래",
+    arbitrageFunding: "펀딩비",
+    arbitrageBasis: "베이시스",
+    arbitrageStatistical: "통계적",
+    arbitrageTriangular: "삼각",
+    arbitrageOptionsDelta: "옵션 델타",
     yield: "일드&잉여자금 운용",
     social: "소셜&카피트레이딩",
     modules: "전략 모듈",
@@ -810,10 +817,28 @@ const ko: TranslationKeys = {
     arbitrage: {
       title: "차익거래",
       subtitle: "펀딩비, 스프레드, 거래소 간 가격 비효율을 포착하는 시장 중립 전략을 운용합니다.",
+      overview: {
+        title: "차익거래 전략 개요",
+        subtitle: "운영 중인 전략과 준비 중인 전략을 한눈에 확인하세요.",
+        configureLink: "설정하기",
+      },
+      plannedPage: {
+        title: "개발 예정",
+        description: "이 전략은 현재 개발 중입니다. 설정 및 실행 기능을 곧 제공합니다.",
+        backToOverview: "차익거래 개요로 돌아가기",
+      },
       funding: {
         name: "펀딩비 차익거래",
         badge: "시장 중립",
         desc: "현물 롱 + 무기한 선물 숏 델타 중립 포지션으로 펀딩비를 자동 수취합니다.",
+      },
+      kimp: {
+        name: "김프 차익거래",
+        badge: "거래소 간 (KR↔Global)",
+        desc: "Upbit(KRW) ↔ Binance(USDT) 김치 프리미엄을 헷지 포지션으로 수익화합니다.",
+        title: "김프 차익거래",
+        subtitle: "Upbit와 Binance 간 김치 프리미엄을 모니터링하고 헷지 사이클로 진입/청산을 자동화합니다.",
+        comingSoonNote: "모니터링 대시보드와 자동 헷지 엔진을 단계적으로 제공할 예정입니다.",
       },
       basis: {
         name: "베이시스 & 캘린더 스프레드",

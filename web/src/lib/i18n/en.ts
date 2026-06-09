@@ -92,6 +92,13 @@ const en = {
     settings: "Settings",
     strategies: "Strategies",
     arbitrage: "Arbitrage",
+    arbitrageOverview: "Overview",
+    arbitrageKimp: "Kimchi Premium",
+    arbitrageFunding: "Funding",
+    arbitrageBasis: "Basis",
+    arbitrageStatistical: "Statistical",
+    arbitrageTriangular: "Triangular",
+    arbitrageOptionsDelta: "Options Delta",
     yield: "Yield & Treasury",
     social: "Social & Copy",
     modules: "Modules",
@@ -807,10 +814,28 @@ const en = {
     arbitrage: {
       title: "Arbitrage",
       subtitle: "Market-neutral strategies that capture pricing inefficiencies across funding, spreads, and venues.",
+      overview: {
+        title: "Arbitrage Strategies Overview",
+        subtitle: "See active and planned arbitrage strategies at a glance.",
+        configureLink: "Configure",
+      },
+      plannedPage: {
+        title: "Planned",
+        description: "This strategy is under development. Configuration and execution will be available soon.",
+        backToOverview: "Back to Arbitrage Overview",
+      },
       funding: {
         name: "Funding Rate Arbitrage",
         badge: "Market Neutral",
         desc: "Spot long + perpetual short delta-neutral position that harvests funding payments automatically.",
+      },
+      kimp: {
+        name: "Kimchi Premium Arbitrage",
+        badge: "Cross-Venue (KR↔Global)",
+        desc: "Monetize the Kimchi Premium between Upbit (KRW) and Binance (USDT) through hedged cycles.",
+        title: "Kimchi Premium Arbitrage",
+        subtitle: "Monitor the Kimchi Premium between Upbit and Binance and automate hedged entry/exit cycles.",
+        comingSoonNote: "Monitoring dashboard and the auto-hedge engine will be rolled out in phases.",
       },
       basis: {
         name: "Basis & Calendar Spread",
