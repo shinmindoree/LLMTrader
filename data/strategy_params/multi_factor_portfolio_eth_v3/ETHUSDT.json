@@ -1,0 +1,200 @@
+{
+  "strategy_id": "multi_factor_portfolio_eth_v3",
+  "symbol": "ETHUSDT",
+  "status": "promoted",
+  "version": 3,
+  "params": {
+    "discovery": "scripts/_alpha_lab/_eth_v3_random.py (REAL majority-vote single-position, random-restart)",
+    "execution_model": "majority-vote single 1x position (parent strategy). NOT per-leg averaged sleeves.",
+    "objective": "minimise MDD; trade frequency in (0,1]/day; every calendar year positive; steady monthly uptrend.",
+    "n_legs": 4,
+    "legs": [
+      {
+        "family": "ensemble_meanrev",
+        "config": {
+          "interval_min": 15,
+          "bb_period": 20,
+          "bb_std": 2.0,
+          "rsi_period": 14,
+          "rsi_long": 40.0,
+          "rsi_short": 70.0,
+          "oi_lb": 96,
+          "oi_drop": -0.025,
+          "oi_pop": 0.03,
+          "taker_lb": 96,
+          "taker_long_max": 0.93,
+          "taker_short_min": 1.07,
+          "lsr_z_lookback": 480,
+          "lsr_z_long": -1.5,
+          "lsr_z_short": 1.0,
+          "min_votes": 3,
+          "use_trend_filter": true,
+          "trend_ema": 200,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
+          "tp_pct": 0.025,
+          "sl_pct": 0.012,
+          "max_hold_h": 16,
+          "side": "both"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 120,
+          "dc_period": 192,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.04,
+          "sl_pct": 0.015,
+          "max_hold_h": 72,
+          "side": "long_only"
+        }
+      },
+      {
+        "family": "ensemble_meanrev",
+        "config": {
+          "interval_min": 15,
+          "bb_period": 20,
+          "bb_std": 2.0,
+          "rsi_period": 14,
+          "rsi_long": 30.0,
+          "rsi_short": 70.0,
+          "oi_lb": 96,
+          "oi_drop": -0.025,
+          "oi_pop": 0.03,
+          "taker_lb": 96,
+          "taker_long_max": 0.93,
+          "taker_short_min": 1.07,
+          "lsr_z_lookback": 480,
+          "lsr_z_long": -1.5,
+          "lsr_z_short": 1.0,
+          "min_votes": 3,
+          "use_trend_filter": true,
+          "trend_ema": 200,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
+          "tp_pct": 0.025,
+          "sl_pct": 0.008,
+          "max_hold_h": 16,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "lsr_taker_confluence",
+        "config": {
+          "interval_min": 60,
+          "lsr_lb": 240,
+          "z_lsr_long": -1.0,
+          "z_lsr_short": 1.0,
+          "use_taker": false,
+          "taker_lb": 240,
+          "z_taker_long": -1.0,
+          "z_taker_short": 1.0,
+          "lsr_col": "lsr_count",
+          "use_rsi": true,
+          "rsi_long": 40.0,
+          "rsi_short": 65.0,
+          "tp_pct": 0.025,
+          "sl_pct": 0.012,
+          "max_hold_h": 8,
+          "side": "long_only"
+        }
+      }
+    ]
+  },
+  "backtest": {
+    "commission": 0.0004,
+    "model": "real single-position",
+    "full": {
+      "window": [
+        "2022-01-01",
+        "2026-06-10"
+      ],
+      "ret_pct": 49.22,
+      "max_dd_pct": 16.104,
+      "pos_months_pct": 51.852,
+      "worst_month_pct": -7.981,
+      "trades_per_day": 0.429
+    },
+    "train": {
+      "window": [
+        "2022-01-01",
+        "2024-09-30"
+      ],
+      "ret_pct": 23.822,
+      "max_dd_pct": 14.788,
+      "pos_months_pct": 51.515,
+      "worst_month_pct": -5.928,
+      "trades_per_day": 0.432
+    },
+    "val": {
+      "window": [
+        "2024-10-01",
+        "2024-12-31"
+      ],
+      "ret_pct": 1.924,
+      "max_dd_pct": 8.553,
+      "pos_months_pct": 33.333,
+      "worst_month_pct": -4.305,
+      "trades_per_day": 0.527
+    },
+    "holdout": {
+      "window": [
+        "2025-01-01",
+        "2026-05-31"
+      ],
+      "ret_pct": 18.237,
+      "max_dd_pct": 16.104,
+      "pos_months_pct": 58.824,
+      "worst_month_pct": -7.981,
+      "trades_per_day": 0.412
+    }
+  },
+  "per_year": {
+    "2022": {
+      "ret": 10.456,
+      "mdd": 12.233,
+      "pm": 54.545,
+      "worst": -4.893,
+      "tpd": 0.453
+    },
+    "2023": {
+      "ret": 5.299,
+      "mdd": 12.694,
+      "pm": 58.333,
+      "worst": -5.928,
+      "tpd": 0.448
+    },
+    "2024": {
+      "ret": 8.507,
+      "mdd": 14.788,
+      "pm": 41.667,
+      "worst": -4.305,
+      "tpd": 0.419
+    },
+    "2025": {
+      "ret": 11.464,
+      "mdd": 16.104,
+      "pm": 58.333,
+      "worst": -7.077,
+      "tpd": 0.423
+    },
+    "2026": {
+      "ret": 6.076,
+      "mdd": 9.815,
+      "pm": 60.0,
+      "worst": -7.981,
+      "tpd": 0.379
+    }
+  },
+  "notes": [
+    "v3 trades drawdown-vs-frequency differently from v2: ~0.4 trades/day for a lower MDD (~16% vs v2 ~19%) and steadier months.",
+    "Single 1x directional position cannot reach MDD<=5% with non-trivial frequency; ~16% MDD all-years-positive is the realistic low-drawdown frontier on this model."
+  ]
+}
