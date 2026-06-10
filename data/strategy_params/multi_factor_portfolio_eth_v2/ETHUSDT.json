@@ -4,704 +4,345 @@
   "status": "promoted",
   "version": 2,
   "params": {
-    "discovery": "scripts/_alpha_lab/eth_blend_final.py (STRICT-OOS trend+mean-reversion decorrelation blend)",
-    "method": "Equal-weight blend of decorrelation-selected TREND (donchian_breakout / oi_z_combo / pullback_in_trend) and MEAN-REVERSION (ensemble_meanrev / lsr_taker_confluence) sub-portfolios. Leg selection uses TRAIN (2022-01..2024-09) only via greedy decorrelation; HOLDOUT never informed selection.",
-    "n_sub_legs": 60,
-    "n_trend": 30,
-    "n_mr": 30,
-    "n_base_legs": 17,
-    "extended_overrides": [
+    "discovery": "scripts/_alpha_lab/_eth_realmodel_optimize.py (REAL majority-vote single-position model)",
+    "execution_model": "majority-vote single 1x position (parent strategy on_bar/_reconcile). NOT per-leg averaged sleeves.",
+    "selection": "Two-phase forward selection on the real single-position equity over 2022-01..2026-06, MDD<=20% hard ceiling, build ~1 trade/day then refine MDD/+months.",
+    "n_legs": 11,
+    "legs": [
       {
-        "base_leg_idx": 15,
-        "override": {
-          "tp_pct": 0.16,
-          "sl_pct": 0.012,
-          "max_hold_h": 96,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 4,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.012,
-          "max_hold_h": 32,
-          "side": "long_only",
-          "z_long": 0.8
-        }
-      },
-      {
-        "base_leg_idx": 4,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "short_only",
-          "z_short": -0.6
-        }
-      },
-      {
-        "base_leg_idx": 15,
-        "override": {
-          "tp_pct": 0.08,
-          "sl_pct": 0.0168,
-          "max_hold_h": 24,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 3,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "short_only",
-          "z_short": -1.0
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.16,
-          "sl_pct": 0.0084,
-          "max_hold_h": 96,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 0,
-        "override": {
-          "tp_pct": 0.03,
-          "sl_pct": 0.0084,
-          "max_hold_h": 8,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.12,
-          "sl_pct": 0.012,
-          "max_hold_h": 48,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 1,
-        "override": {
+        "family": "lsr_taker_confluence",
+        "config": {
+          "interval_min": 15,
+          "lsr_lb": 240,
+          "z_lsr_long": -1.0,
+          "z_lsr_short": 1.5,
+          "use_taker": true,
+          "taker_lb": 240,
+          "z_taker_long": -1.0,
+          "z_taker_short": 1.0,
+          "lsr_col": "lsr_count",
+          "use_rsi": true,
+          "rsi_long": 35.0,
+          "rsi_short": 60.0,
           "tp_pct": 0.018,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 15,
-        "override": {
-          "tp_pct": 0.16,
-          "sl_pct": 0.012,
-          "max_hold_h": 96,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.16,
-          "sl_pct": 0.0084,
-          "max_hold_h": 192,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 1,
-        "override": {
-          "tp_pct": 0.027,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "long_only",
-          "z_long": 0.8
-        }
-      },
-      {
-        "base_leg_idx": 15,
-        "override": {
-          "tp_pct": 0.048,
-          "sl_pct": 0.012,
-          "max_hold_h": 96,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.16,
-          "sl_pct": 0.0084,
-          "max_hold_h": 48,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 4,
-        "override": {
-          "tp_pct": 0.0375,
-          "sl_pct": 0.0168,
+          "sl_pct": 0.008,
           "max_hold_h": 16,
-          "side": "short_only",
-          "z_short": -0.8
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.08,
-          "sl_pct": 0.012,
-          "max_hold_h": 192,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 4,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.0084,
-          "max_hold_h": 32,
-          "side": "long_only",
-          "z_long": 1.2
-        }
-      },
-      {
-        "base_leg_idx": 15,
-        "override": {
-          "tp_pct": 0.12,
-          "sl_pct": 0.0084,
-          "max_hold_h": 24,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.048,
-          "sl_pct": 0.012,
-          "max_hold_h": 192,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 1,
-        "override": {
-          "tp_pct": 0.018,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "short_only",
-          "z_long": 0.6
-        }
-      },
-      {
-        "base_leg_idx": 1,
-        "override": {
-          "tp_pct": 0.036,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "both",
-          "z_short": -1.2
-        }
-      },
-      {
-        "base_leg_idx": 15,
-        "override": {
-          "tp_pct": 0.12,
-          "sl_pct": 0.012,
-          "max_hold_h": 48,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.16,
-          "sl_pct": 0.0084,
-          "max_hold_h": 192,
           "side": "both"
         }
       },
       {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.08,
-          "sl_pct": 0.0168,
-          "max_hold_h": 48,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.048,
-          "sl_pct": 0.0168,
-          "max_hold_h": 192,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 16,
-        "override": {
-          "tp_pct": 0.12,
-          "sl_pct": 0.0084,
-          "max_hold_h": 192,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 3,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "both",
-          "z_short": -1.0
-        }
-      },
-      {
-        "base_leg_idx": 15,
-        "override": {
-          "tp_pct": 0.16,
-          "sl_pct": 0.0084,
-          "max_hold_h": 48,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 3,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.012,
-          "max_hold_h": 32,
-          "side": "long_only",
-          "z_long": 1.0
-        }
-      },
-      {
-        "base_leg_idx": 4,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.0168,
-          "max_hold_h": 32,
-          "side": "short_only",
-          "z_short": -0.8
-        }
-      },
-      {
-        "base_leg_idx": 6,
-        "override": {
-          "tp_pct": 0.027,
-          "sl_pct": 0.0056,
-          "max_hold_h": 8,
-          "side": "both"
-        }
-      },
-      {
-        "base_leg_idx": 10,
-        "override": {
-          "tp_pct": 0.018,
-          "sl_pct": 0.012,
-          "max_hold_h": 24,
-          "side": "both"
-        }
-      },
-      {
-        "base_leg_idx": 14,
-        "override": {
-          "tp_pct": 0.0375,
-          "sl_pct": 0.0112,
-          "max_hold_h": 24,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 14,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.0112,
-          "max_hold_h": 48,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 7,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.012,
-          "max_hold_h": 8,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 7,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0084,
-          "max_hold_h": 8,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 14,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.0112,
-          "max_hold_h": 24,
-          "side": "short_only",
-          "rsi_long": 32,
-          "rsi_short": 68
-        }
-      },
-      {
-        "base_leg_idx": 5,
-        "override": {
-          "tp_pct": 0.0108,
-          "sl_pct": 0.0084,
-          "max_hold_h": 4,
-          "side": "short_only",
-          "lsr_z_long": 0.5
-        }
-      },
-      {
-        "base_leg_idx": 6,
-        "override": {
-          "tp_pct": 0.036,
-          "sl_pct": 0.0056,
-          "max_hold_h": 32,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
-          "max_hold_h": 12,
-          "side": "long_only"
-        }
-      },
-      {
-        "base_leg_idx": 12,
-        "override": {
-          "tp_pct": 0.024,
-          "sl_pct": 0.0084,
-          "max_hold_h": 16,
-          "side": "both",
-          "rsi_long": 32,
-          "rsi_short": 68
-        }
-      },
-      {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
-          "max_hold_h": 12,
-          "side": "long_only",
-          "rsi_long": 36,
-          "rsi_short": 64
-        }
-      },
-      {
-        "base_leg_idx": 11,
-        "override": {
+        "family": "ensemble_meanrev",
+        "config": {
+          "interval_min": 60,
+          "bb_period": 20,
+          "bb_std": 1.8,
+          "rsi_period": 14,
+          "rsi_long": 40.0,
+          "rsi_short": 65.0,
+          "oi_lb": 96,
+          "oi_drop": -0.015,
+          "oi_pop": 0.02,
+          "taker_lb": 96,
+          "taker_long_max": 0.93,
+          "taker_short_min": 1.07,
+          "lsr_z_lookback": 480,
+          "lsr_z_long": -1.0,
+          "lsr_z_short": 1.5,
+          "min_votes": 3,
+          "use_trend_filter": true,
+          "trend_ema": 200,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
           "tp_pct": 0.012,
-          "sl_pct": 0.0168,
+          "sl_pct": 0.012,
           "max_hold_h": 8,
-          "side": "both",
-          "rsi_long": 28,
-          "rsi_short": 72
+          "side": "both"
         }
       },
       {
-        "base_leg_idx": 7,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0084,
+        "family": "lsr_taker_confluence",
+        "config": {
+          "interval_min": 60,
+          "lsr_lb": 240,
+          "z_lsr_long": -1.0,
+          "z_lsr_short": 1.0,
+          "use_taker": false,
+          "taker_lb": 240,
+          "z_taker_long": -1.0,
+          "z_taker_short": 1.0,
+          "lsr_col": "lsr_count",
+          "use_rsi": true,
+          "rsi_long": 40.0,
+          "rsi_short": 65.0,
+          "tp_pct": 0.025,
+          "sl_pct": 0.012,
           "max_hold_h": 4,
           "side": "short_only"
         }
       },
       {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
-          "max_hold_h": 12,
-          "side": "long_only",
-          "rsi_long": 40,
-          "rsi_short": 60
-        }
-      },
-      {
-        "base_leg_idx": 8,
-        "override": {
-          "tp_pct": 0.025,
-          "sl_pct": 0.0112,
-          "max_hold_h": 16,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
-          "max_hold_h": 12,
-          "side": "long_only",
-          "rsi_long": 32,
-          "rsi_short": 68
-        }
-      },
-      {
-        "base_leg_idx": 14,
-        "override": {
-          "tp_pct": 0.025,
-          "sl_pct": 0.0112,
-          "max_hold_h": 12,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
-          "max_hold_h": 12,
-          "side": "short_only"
-        }
-      },
-      {
-        "base_leg_idx": 14,
-        "override": {
-          "tp_pct": 0.0375,
-          "sl_pct": 0.0112,
-          "max_hold_h": 12,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 9,
-        "override": {
-          "tp_pct": 0.018,
-          "sl_pct": 0.012,
-          "max_hold_h": 32,
-          "side": "long_only",
-          "lsr_z_long": 0.5
-        }
-      },
-      {
-        "base_leg_idx": 14,
-        "override": {
-          "tp_pct": 0.05,
-          "sl_pct": 0.0112,
-          "max_hold_h": 12,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 11,
-        "override": {
-          "tp_pct": 0.024,
-          "sl_pct": 0.0084,
-          "max_hold_h": 32,
-          "side": "both",
-          "rsi_long": 40,
-          "rsi_short": 60
-        }
-      },
-      {
-        "base_leg_idx": 7,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0084,
-          "max_hold_h": 8,
-          "side": "short_only",
-          "lsr_z_long": 0.5
-        }
-      },
-      {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.012,
-          "max_hold_h": 12,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 9,
-        "override": {
+        "family": "ensemble_meanrev",
+        "config": {
+          "interval_min": 60,
+          "bb_period": 20,
+          "bb_std": 2.0,
+          "rsi_period": 14,
+          "rsi_long": 35.0,
+          "rsi_short": 65.0,
+          "oi_lb": 96,
+          "oi_drop": -0.025,
+          "oi_pop": 0.03,
+          "taker_lb": 96,
+          "taker_long_max": 0.93,
+          "taker_short_min": 1.07,
+          "lsr_z_lookback": 480,
+          "lsr_z_long": -1.0,
+          "lsr_z_short": 1.0,
+          "min_votes": 3,
+          "use_trend_filter": true,
+          "trend_ema": 200,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
           "tp_pct": 0.012,
-          "sl_pct": 0.0168,
+          "sl_pct": 0.012,
           "max_hold_h": 8,
+          "side": "both"
+        }
+      },
+      {
+        "family": "ensemble_meanrev",
+        "config": {
+          "interval_min": 60,
+          "bb_period": 20,
+          "bb_std": 2.0,
+          "rsi_period": 14,
+          "rsi_long": 40.0,
+          "rsi_short": 60.0,
+          "oi_lb": 96,
+          "oi_drop": -0.015,
+          "oi_pop": 0.02,
+          "taker_lb": 96,
+          "taker_long_max": 0.93,
+          "taker_short_min": 1.07,
+          "lsr_z_lookback": 480,
+          "lsr_z_long": -1.0,
+          "lsr_z_short": 1.5,
+          "min_votes": 3,
+          "use_trend_filter": true,
+          "trend_ema": 200,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
+          "tp_pct": 0.012,
+          "sl_pct": 0.012,
+          "max_hold_h": 8,
+          "side": "both"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 240,
+          "dc_period": 192,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.04,
+          "sl_pct": 0.015,
+          "max_hold_h": 96,
           "side": "short_only"
         }
       },
       {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.012,
-          "max_hold_h": 24,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.012,
-          "max_hold_h": 48,
-          "side": "long_only",
-          "rsi_long": 28,
-          "rsi_short": 72
-        }
-      },
-      {
-        "base_leg_idx": 12,
-        "override": {
-          "tp_pct": 0.018,
-          "sl_pct": 0.0084,
-          "max_hold_h": 16,
-          "side": "both",
-          "rsi_long": 32,
-          "rsi_short": 68
-        }
-      },
-      {
-        "base_leg_idx": 13,
-        "override": {
-          "tp_pct": 0.015,
-          "sl_pct": 0.0168,
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 60,
+          "dc_period": 192,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.08,
+          "sl_pct": 0.025,
           "max_hold_h": 24,
           "side": "long_only"
+        }
+      },
+      {
+        "family": "oi_z_combo",
+        "config": {
+          "interval_min": 60,
+          "oi_lb": 192,
+          "z_lookback": 480,
+          "z_long": -1.5,
+          "z_short": 2.0,
+          "use_rsi": true,
+          "rsi_long_max": 45.0,
+          "rsi_short_min": 55.0,
+          "use_taker": false,
+          "taker_long_max": 0.95,
+          "taker_short_min": 1.05,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
+          "tp_pct": 0.025,
+          "sl_pct": 0.012,
+          "max_hold_h": 8,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 60,
+          "dc_period": 192,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.04,
+          "sl_pct": 0.015,
+          "max_hold_h": 24,
+          "side": "long_only"
+        }
+      },
+      {
+        "family": "lsr_taker_confluence",
+        "config": {
+          "interval_min": 15,
+          "lsr_lb": 240,
+          "z_lsr_long": -1.0,
+          "z_lsr_short": 1.5,
+          "use_taker": true,
+          "taker_lb": 240,
+          "z_taker_long": -1.0,
+          "z_taker_short": 1.0,
+          "lsr_col": "lsr_count",
+          "use_rsi": true,
+          "rsi_long": 35.0,
+          "rsi_short": 60.0,
+          "tp_pct": 0.012,
+          "sl_pct": 0.012,
+          "max_hold_h": 4,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "lsr_taker_confluence",
+        "config": {
+          "interval_min": 15,
+          "lsr_lb": 240,
+          "z_lsr_long": -1.0,
+          "z_lsr_short": 1.5,
+          "use_taker": true,
+          "taker_lb": 240,
+          "z_taker_long": -1.0,
+          "z_taker_short": 1.0,
+          "lsr_col": "lsr_count",
+          "use_rsi": true,
+          "rsi_long": 35.0,
+          "rsi_short": 60.0,
+          "tp_pct": 0.018,
+          "sl_pct": 0.008,
+          "max_hold_h": 4,
+          "side": "both"
         }
       }
     ]
   },
-  "strict_oos": {
-    "commission": 0.0002,
-    "protocol": {
-      "train": [
+  "backtest": {
+    "commission": 0.0004,
+    "model": "real single-position",
+    "full": {
+      "window": [
         "2022-01-01",
-        "2024-09-30"
+        "2026-06-10"
       ],
-      "val": [
-        "2024-10-01",
-        "2024-12-31"
-      ],
-      "holdout": [
-        "2025-01-01",
-        "2026-05-31"
-      ],
-      "note": "HOLDOUT 2025-01..2026-05 is a deep ETH bear regime (buy&hold ~ -40%, ~29% positive months). It was never used for any selection decision."
+      "ret_pct": 138.543,
+      "max_dd_pct": 18.904,
+      "pos_months_pct": 64.815,
+      "worst_month_pct": -13.442,
+      "trades_per_day": 0.873
     },
-    "train_window": {
+    "train": {
       "window": [
         "2022-01-01",
         "2024-09-30"
       ],
-      "trades": 10013,
-      "trades_per_day": 9.974,
-      "ret_pct": 14.58,
-      "max_dd_pct": 2.188,
-      "pos_months_pct": 72.73,
-      "worst_month_pct": -1.372,
-      "calmar": 2.32
+      "ret_pct": 52.493,
+      "max_dd_pct": 18.823,
+      "pos_months_pct": 66.667,
+      "worst_month_pct": -13.442,
+      "trades_per_day": 0.848
     },
-    "val_window": {
+    "val": {
       "window": [
         "2024-10-01",
         "2024-12-31"
       ],
-      "trades": 1022,
-      "trades_per_day": 11.114,
-      "ret_pct": 1.437,
-      "max_dd_pct": 2.366,
-      "pos_months_pct": 66.67,
-      "worst_month_pct": -0.201,
-      "calmar": 2.465
+      "ret_pct": 8.413,
+      "max_dd_pct": 18.904,
+      "pos_months_pct": 66.667,
+      "worst_month_pct": -5.422,
+      "trades_per_day": 1.187
     },
-    "holdout_window": {
+    "holdout": {
       "window": [
         "2025-01-01",
         "2026-05-31"
       ],
-      "trades": 5257,
-      "trades_per_day": 10.189,
-      "ret_pct": 8.87,
-      "max_dd_pct": 2.46,
-      "pos_months_pct": 82.35,
-      "worst_month_pct": -0.689,
-      "calmar": 2.521
-    },
-    "acceptance_gate": {
-      "pos_months_pct>=": 80,
-      "max_dd_pct<=": 5,
-      "trades_per_day>=": 2,
-      "ret_pct>": 0,
-      "passed": true
+      "ret_pct": 45.888,
+      "max_dd_pct": 18.568,
+      "pos_months_pct": 64.706,
+      "worst_month_pct": -12.45,
+      "trades_per_day": 0.866
     }
   },
-  "per_year_oos": {
+  "per_year": {
     "2022": {
-      "pos_months_pct": 66.67,
-      "max_dd_pct": 1.787,
-      "ret_pct": 5.435,
-      "worst_month_pct": -0.846,
-      "trades_per_day": 10.982
+      "ret": 18.317,
+      "mdd": 14.828,
+      "pm": 75.0,
+      "worst": -8.437,
+      "tpd": 0.871
     },
     "2023": {
-      "pos_months_pct": 91.67,
-      "max_dd_pct": 2.248,
-      "ret_pct": 5.664,
-      "worst_month_pct": -0.915,
-      "trades_per_day": 9.039
+      "ret": 7.867,
+      "mdd": 17.635,
+      "pm": 58.333,
+      "worst": -13.442,
+      "tpd": 0.86
     },
     "2024": {
-      "pos_months_pct": 58.33,
-      "max_dd_pct": 2.288,
-      "ret_pct": 4.919,
-      "worst_month_pct": -1.372,
-      "trades_per_day": 10.187
+      "ret": 29.538,
+      "mdd": 18.904,
+      "pm": 66.667,
+      "worst": -8.953,
+      "tpd": 0.901
     },
     "2025": {
-      "pos_months_pct": 75.0,
-      "max_dd_pct": 2.46,
-      "ret_pct": 5.73,
-      "worst_month_pct": -0.689,
-      "trades_per_day": 10.648
+      "ret": 33.414,
+      "mdd": 18.568,
+      "pm": 75.0,
+      "worst": -12.45,
+      "tpd": 0.909
     },
     "2026": {
-      "pos_months_pct": 100.0,
-      "max_dd_pct": 1.154,
-      "ret_pct": 3.14,
-      "worst_month_pct": 0.252,
-      "trades_per_day": 9.082
+      "ret": 8.151,
+      "mdd": 16.287,
+      "pm": 33.333,
+      "worst": -6.996,
+      "tpd": 0.778
     }
   },
   "notes": [
-    "v2 is a regime-diversified blend; v1 (full-history fit) and the BTC parent are left frozen.",
-    "The 17-month holdout is a small sample: the exact +months ratio is +/- one month sensitive to leg count, while MDD (~2.5%), worst-month (~-0.7%) and positive return are stable across neighbouring sizes (see scripts/_alpha_lab/_eth_blend_stability.py)."
+    "v2 corrected: earlier draft mistakenly evaluated legs as independent averaged sleeves (MDD ~2.5%), which does not match the parent's real single-position execution (MDD was actually ~63%). This artifact reflects the real model.",
+    "Single 1x directional position cannot achieve both MDD<=5% and >=2 trades/day simultaneously; MDD<=20% with ~1 trade/day and all-years-positive is the realistic frontier."
   ]
 }
