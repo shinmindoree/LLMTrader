@@ -1,0 +1,707 @@
+{
+  "strategy_id": "multi_factor_portfolio_eth_v2",
+  "symbol": "ETHUSDT",
+  "status": "promoted",
+  "version": 2,
+  "params": {
+    "discovery": "scripts/_alpha_lab/eth_blend_final.py (STRICT-OOS trend+mean-reversion decorrelation blend)",
+    "method": "Equal-weight blend of decorrelation-selected TREND (donchian_breakout / oi_z_combo / pullback_in_trend) and MEAN-REVERSION (ensemble_meanrev / lsr_taker_confluence) sub-portfolios. Leg selection uses TRAIN (2022-01..2024-09) only via greedy decorrelation; HOLDOUT never informed selection.",
+    "n_sub_legs": 60,
+    "n_trend": 30,
+    "n_mr": 30,
+    "n_base_legs": 17,
+    "extended_overrides": [
+      {
+        "base_leg_idx": 15,
+        "override": {
+          "tp_pct": 0.16,
+          "sl_pct": 0.012,
+          "max_hold_h": 96,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 4,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.012,
+          "max_hold_h": 32,
+          "side": "long_only",
+          "z_long": 0.8
+        }
+      },
+      {
+        "base_leg_idx": 4,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "short_only",
+          "z_short": -0.6
+        }
+      },
+      {
+        "base_leg_idx": 15,
+        "override": {
+          "tp_pct": 0.08,
+          "sl_pct": 0.0168,
+          "max_hold_h": 24,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 3,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "short_only",
+          "z_short": -1.0
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.16,
+          "sl_pct": 0.0084,
+          "max_hold_h": 96,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 0,
+        "override": {
+          "tp_pct": 0.03,
+          "sl_pct": 0.0084,
+          "max_hold_h": 8,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.12,
+          "sl_pct": 0.012,
+          "max_hold_h": 48,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 1,
+        "override": {
+          "tp_pct": 0.018,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 15,
+        "override": {
+          "tp_pct": 0.16,
+          "sl_pct": 0.012,
+          "max_hold_h": 96,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.16,
+          "sl_pct": 0.0084,
+          "max_hold_h": 192,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 1,
+        "override": {
+          "tp_pct": 0.027,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "long_only",
+          "z_long": 0.8
+        }
+      },
+      {
+        "base_leg_idx": 15,
+        "override": {
+          "tp_pct": 0.048,
+          "sl_pct": 0.012,
+          "max_hold_h": 96,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.16,
+          "sl_pct": 0.0084,
+          "max_hold_h": 48,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 4,
+        "override": {
+          "tp_pct": 0.0375,
+          "sl_pct": 0.0168,
+          "max_hold_h": 16,
+          "side": "short_only",
+          "z_short": -0.8
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.08,
+          "sl_pct": 0.012,
+          "max_hold_h": 192,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 4,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.0084,
+          "max_hold_h": 32,
+          "side": "long_only",
+          "z_long": 1.2
+        }
+      },
+      {
+        "base_leg_idx": 15,
+        "override": {
+          "tp_pct": 0.12,
+          "sl_pct": 0.0084,
+          "max_hold_h": 24,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.048,
+          "sl_pct": 0.012,
+          "max_hold_h": 192,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 1,
+        "override": {
+          "tp_pct": 0.018,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "short_only",
+          "z_long": 0.6
+        }
+      },
+      {
+        "base_leg_idx": 1,
+        "override": {
+          "tp_pct": 0.036,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "both",
+          "z_short": -1.2
+        }
+      },
+      {
+        "base_leg_idx": 15,
+        "override": {
+          "tp_pct": 0.12,
+          "sl_pct": 0.012,
+          "max_hold_h": 48,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.16,
+          "sl_pct": 0.0084,
+          "max_hold_h": 192,
+          "side": "both"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.08,
+          "sl_pct": 0.0168,
+          "max_hold_h": 48,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.048,
+          "sl_pct": 0.0168,
+          "max_hold_h": 192,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 16,
+        "override": {
+          "tp_pct": 0.12,
+          "sl_pct": 0.0084,
+          "max_hold_h": 192,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 3,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "both",
+          "z_short": -1.0
+        }
+      },
+      {
+        "base_leg_idx": 15,
+        "override": {
+          "tp_pct": 0.16,
+          "sl_pct": 0.0084,
+          "max_hold_h": 48,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 3,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.012,
+          "max_hold_h": 32,
+          "side": "long_only",
+          "z_long": 1.0
+        }
+      },
+      {
+        "base_leg_idx": 4,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.0168,
+          "max_hold_h": 32,
+          "side": "short_only",
+          "z_short": -0.8
+        }
+      },
+      {
+        "base_leg_idx": 6,
+        "override": {
+          "tp_pct": 0.027,
+          "sl_pct": 0.0056,
+          "max_hold_h": 8,
+          "side": "both"
+        }
+      },
+      {
+        "base_leg_idx": 10,
+        "override": {
+          "tp_pct": 0.018,
+          "sl_pct": 0.012,
+          "max_hold_h": 24,
+          "side": "both"
+        }
+      },
+      {
+        "base_leg_idx": 14,
+        "override": {
+          "tp_pct": 0.0375,
+          "sl_pct": 0.0112,
+          "max_hold_h": 24,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 14,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.0112,
+          "max_hold_h": 48,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 7,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.012,
+          "max_hold_h": 8,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 7,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0084,
+          "max_hold_h": 8,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 14,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.0112,
+          "max_hold_h": 24,
+          "side": "short_only",
+          "rsi_long": 32,
+          "rsi_short": 68
+        }
+      },
+      {
+        "base_leg_idx": 5,
+        "override": {
+          "tp_pct": 0.0108,
+          "sl_pct": 0.0084,
+          "max_hold_h": 4,
+          "side": "short_only",
+          "lsr_z_long": 0.5
+        }
+      },
+      {
+        "base_leg_idx": 6,
+        "override": {
+          "tp_pct": 0.036,
+          "sl_pct": 0.0056,
+          "max_hold_h": 32,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 12,
+          "side": "long_only"
+        }
+      },
+      {
+        "base_leg_idx": 12,
+        "override": {
+          "tp_pct": 0.024,
+          "sl_pct": 0.0084,
+          "max_hold_h": 16,
+          "side": "both",
+          "rsi_long": 32,
+          "rsi_short": 68
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 12,
+          "side": "long_only",
+          "rsi_long": 36,
+          "rsi_short": 64
+        }
+      },
+      {
+        "base_leg_idx": 11,
+        "override": {
+          "tp_pct": 0.012,
+          "sl_pct": 0.0168,
+          "max_hold_h": 8,
+          "side": "both",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 7,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0084,
+          "max_hold_h": 4,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 12,
+          "side": "long_only",
+          "rsi_long": 40,
+          "rsi_short": 60
+        }
+      },
+      {
+        "base_leg_idx": 8,
+        "override": {
+          "tp_pct": 0.025,
+          "sl_pct": 0.0112,
+          "max_hold_h": 16,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 12,
+          "side": "long_only",
+          "rsi_long": 32,
+          "rsi_short": 68
+        }
+      },
+      {
+        "base_leg_idx": 14,
+        "override": {
+          "tp_pct": 0.025,
+          "sl_pct": 0.0112,
+          "max_hold_h": 12,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 12,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 14,
+        "override": {
+          "tp_pct": 0.0375,
+          "sl_pct": 0.0112,
+          "max_hold_h": 12,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 9,
+        "override": {
+          "tp_pct": 0.018,
+          "sl_pct": 0.012,
+          "max_hold_h": 32,
+          "side": "long_only",
+          "lsr_z_long": 0.5
+        }
+      },
+      {
+        "base_leg_idx": 14,
+        "override": {
+          "tp_pct": 0.05,
+          "sl_pct": 0.0112,
+          "max_hold_h": 12,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 11,
+        "override": {
+          "tp_pct": 0.024,
+          "sl_pct": 0.0084,
+          "max_hold_h": 32,
+          "side": "both",
+          "rsi_long": 40,
+          "rsi_short": 60
+        }
+      },
+      {
+        "base_leg_idx": 7,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0084,
+          "max_hold_h": 8,
+          "side": "short_only",
+          "lsr_z_long": 0.5
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.012,
+          "max_hold_h": 12,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 9,
+        "override": {
+          "tp_pct": 0.012,
+          "sl_pct": 0.0168,
+          "max_hold_h": 8,
+          "side": "short_only"
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.012,
+          "max_hold_h": 24,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.012,
+          "max_hold_h": 48,
+          "side": "long_only",
+          "rsi_long": 28,
+          "rsi_short": 72
+        }
+      },
+      {
+        "base_leg_idx": 12,
+        "override": {
+          "tp_pct": 0.018,
+          "sl_pct": 0.0084,
+          "max_hold_h": 16,
+          "side": "both",
+          "rsi_long": 32,
+          "rsi_short": 68
+        }
+      },
+      {
+        "base_leg_idx": 13,
+        "override": {
+          "tp_pct": 0.015,
+          "sl_pct": 0.0168,
+          "max_hold_h": 24,
+          "side": "long_only"
+        }
+      }
+    ]
+  },
+  "strict_oos": {
+    "commission": 0.0002,
+    "protocol": {
+      "train": [
+        "2022-01-01",
+        "2024-09-30"
+      ],
+      "val": [
+        "2024-10-01",
+        "2024-12-31"
+      ],
+      "holdout": [
+        "2025-01-01",
+        "2026-05-31"
+      ],
+      "note": "HOLDOUT 2025-01..2026-05 is a deep ETH bear regime (buy&hold ~ -40%, ~29% positive months). It was never used for any selection decision."
+    },
+    "train_window": {
+      "window": [
+        "2022-01-01",
+        "2024-09-30"
+      ],
+      "trades": 10013,
+      "trades_per_day": 9.974,
+      "ret_pct": 14.58,
+      "max_dd_pct": 2.188,
+      "pos_months_pct": 72.73,
+      "worst_month_pct": -1.372,
+      "calmar": 2.32
+    },
+    "val_window": {
+      "window": [
+        "2024-10-01",
+        "2024-12-31"
+      ],
+      "trades": 1022,
+      "trades_per_day": 11.114,
+      "ret_pct": 1.437,
+      "max_dd_pct": 2.366,
+      "pos_months_pct": 66.67,
+      "worst_month_pct": -0.201,
+      "calmar": 2.465
+    },
+    "holdout_window": {
+      "window": [
+        "2025-01-01",
+        "2026-05-31"
+      ],
+      "trades": 5257,
+      "trades_per_day": 10.189,
+      "ret_pct": 8.87,
+      "max_dd_pct": 2.46,
+      "pos_months_pct": 82.35,
+      "worst_month_pct": -0.689,
+      "calmar": 2.521
+    },
+    "acceptance_gate": {
+      "pos_months_pct>=": 80,
+      "max_dd_pct<=": 5,
+      "trades_per_day>=": 2,
+      "ret_pct>": 0,
+      "passed": true
+    }
+  },
+  "per_year_oos": {
+    "2022": {
+      "pos_months_pct": 66.67,
+      "max_dd_pct": 1.787,
+      "ret_pct": 5.435,
+      "worst_month_pct": -0.846,
+      "trades_per_day": 10.982
+    },
+    "2023": {
+      "pos_months_pct": 91.67,
+      "max_dd_pct": 2.248,
+      "ret_pct": 5.664,
+      "worst_month_pct": -0.915,
+      "trades_per_day": 9.039
+    },
+    "2024": {
+      "pos_months_pct": 58.33,
+      "max_dd_pct": 2.288,
+      "ret_pct": 4.919,
+      "worst_month_pct": -1.372,
+      "trades_per_day": 10.187
+    },
+    "2025": {
+      "pos_months_pct": 75.0,
+      "max_dd_pct": 2.46,
+      "ret_pct": 5.73,
+      "worst_month_pct": -0.689,
+      "trades_per_day": 10.648
+    },
+    "2026": {
+      "pos_months_pct": 100.0,
+      "max_dd_pct": 1.154,
+      "ret_pct": 3.14,
+      "worst_month_pct": 0.252,
+      "trades_per_day": 9.082
+    }
+  },
+  "notes": [
+    "v2 is a regime-diversified blend; v1 (full-history fit) and the BTC parent are left frozen.",
+    "The 17-month holdout is a small sample: the exact +months ratio is +/- one month sensitive to leg count, while MDD (~2.5%), worst-month (~-0.7%) and positive return are stable across neighbouring sizes (see scripts/_alpha_lab/_eth_blend_stability.py)."
+  ]
+}
