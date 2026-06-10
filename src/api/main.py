@@ -139,6 +139,12 @@ from api.schemas import (
     FundingWindowStat,
     FundingExtremePoint,
     FundingSymbolDetailPoint,
+    KimpArbitrageParams,
+    KimpArbitrageStatusResponse,
+    KimpBacktestEquityPoint,
+    KimpBacktestMetrics,
+    KimpBacktestRequest,
+    KimpBacktestResponse,
     KimpFxRateResponse,
     KimpHistoryPoint,
     KimpHistoryResponse,
@@ -1170,6 +1176,21 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("Funding-arb auto-restore failed to schedule: %s", exc)
 
+        # 김프 델타-중립 엔진 자동 복원: 재배포 후에도 desired_running=true인 엔진을
+        # 다시 띄워 업비트/바이낸스 양다리 포지션이 고아가 되지 않게 한다.
+        try:
+            from live.kimp_neutral_engine import (
+                restore_engines_on_startup as _restore_kimp_arb,
+            )
+
+            asyncio.create_task(
+                _restore_kimp_arb(session_maker),
+                name="kimp_arb_auto_restore",
+            )
+            _logger.info("Kimp-arb auto-restore task scheduled")
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Kimp-arb auto-restore failed to schedule: %s", exc)
+
         # 김프 스냅샷 1분 콜렉터: 백테스트/시계열 차트/30일 통계의 원천 데이터를
         # 적재한다. 외부 API/DB 실패는 콜렉터 내부에서 로깅만 하고 다음 사이클로
         # 넘어가므로 API startup 을 막지 않는다.
@@ -1899,6 +1920,163 @@ def create_app() -> FastAPI:
             std_pct=(float(stats["std"]) if stats.get("std") is not None else None),
             n_samples=int(stats.get("n") or 0),
             series=points,
+        )
+
+    # ── Kimchi Premium Delta-Neutral Arbitrage (실거래/백테스트) ──
+
+    @app.get("/api/kimp-arb/status", response_model=KimpArbitrageStatusResponse)
+    async def kimp_arb_status(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> KimpArbitrageStatusResponse:
+        from live.kimp_neutral_engine import get_engine_status_persisted
+
+        return await get_engine_status_persisted(session, user.user_id)
+
+    @app.post("/api/kimp-arb/start", response_model=KimpArbitrageStatusResponse)
+    async def kimp_arb_start(
+        params: KimpArbitrageParams,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> KimpArbitrageStatusResponse:
+        """김프 델타-중립 봇 시작 (업비트 현물 롱 + 바이낸스 무기한 숏)."""
+        from common.crypto import get_crypto_service
+        from control.repo import get_binance_credential, get_user_profile
+        from live.kimp_neutral_engine import get_engine_status_persisted, start_engine
+
+        current = await get_engine_status_persisted(session, user.user_id)
+        if current.running:
+            raise HTTPException(
+                status_code=409,
+                detail=f"이미 실행 중입니다 (symbol={current.symbol}). 먼저 정지하세요.",
+            )
+
+        profile = await get_user_profile(session, user_id=user.user_id)
+        if not profile or not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
+            raise HTTPException(status_code=400, detail="Upbit API 키가 설정되지 않았습니다.")
+
+        env = params.env
+        cred = await get_binance_credential(session, user_id=user.user_id, env=env)
+        if not cred:
+            raise HTTPException(
+                status_code=400, detail=f"Binance {env} API 키가 설정되지 않았습니다."
+            )
+
+        crypto = get_crypto_service()
+        await start_engine(
+            user_id=user.user_id,
+            params=params,
+            upbit_access=crypto.decrypt(profile.upbit_api_key_enc),
+            upbit_secret=crypto.decrypt(profile.upbit_api_secret_enc),
+            binance_key=crypto.decrypt(cred.api_key_enc),
+            binance_secret=crypto.decrypt(cred.api_secret_enc),
+            is_testnet=(env == "testnet"),
+            session_maker=session_maker,
+        )
+        return await get_engine_status_persisted(session, user.user_id)
+
+    @app.post("/api/kimp-arb/stop", response_model=KimpArbitrageStatusResponse)
+    async def kimp_arb_stop(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> KimpArbitrageStatusResponse:
+        """김프 델타-중립 봇 정지 (어느 replica에서 실행 중이든 정지·청산)."""
+        from live.kimp_neutral_engine import get_engine_status_persisted, stop_engine
+
+        await stop_engine(user.user_id, session_maker=session_maker)
+        return await get_engine_status_persisted(session, user.user_id)
+
+    @app.post("/api/kimp-arb/backtest", response_model=KimpBacktestResponse)
+    async def kimp_arb_backtest(
+        req: KimpBacktestRequest,
+        session: AsyncSession = Depends(_db_session),
+        _: AuthenticatedUser = Depends(require_auth),
+    ) -> KimpBacktestResponse:
+        """저장된 ``kimp_snapshots`` 시계열로 김프 중립 전략을 백테스트한다."""
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+        from datetime import timezone as _tz
+
+        from sqlalchemy import select as _select
+
+        from control.models import KimpSnapshot
+        from live.kimp_neutral import HedgeMode
+        from live.kimp_neutral_backtest import BacktestConfig, KimpBar, run_kimp_backtest
+
+        sym = req.symbol.strip().upper()
+        now = _dt.now(_tz.utc)
+        if not sym:
+            return KimpBacktestResponse(
+                success=False, error="symbol is required", symbol=sym, as_of=now
+            )
+
+        since = now - _td(days=req.days)
+        stmt = (
+            _select(KimpSnapshot)
+            .where(KimpSnapshot.symbol == sym, KimpSnapshot.ts >= since)
+            .order_by(KimpSnapshot.ts.asc())
+        )
+        rows = (await session.execute(stmt)).scalars().all()
+        if len(rows) < req.z_window_points:
+            return KimpBacktestResponse(
+                success=False,
+                error=(
+                    f"데이터 부족: {len(rows)}개 < z_window {req.z_window_points}. "
+                    "기간(days)을 늘리거나 윈도우를 줄이세요."
+                ),
+                symbol=sym,
+                as_of=now,
+            )
+
+        bars = [
+            KimpBar(
+                ts_ms=int(r.ts.timestamp() * 1000),
+                upbit_krw=float(r.upbit_krw_price),
+                binance_usdt=float(r.binance_usdt_price),
+                usd_krw=float(r.usd_krw_rate),
+            )
+            for r in rows
+        ]
+        cfg = BacktestConfig(
+            gross_cap_krw=req.gross_cap_krw,
+            full_build_z=req.full_build_z,
+            flat_z=req.flat_z,
+            hedge_mode=HedgeMode.DELTA if req.hedge_mode == "delta" else HedgeMode.QUANTITY,
+            leverage=req.leverage,
+            z_window=req.z_window_points,
+            upbit_taker_fee=req.upbit_taker_fee,
+            binance_taker_fee=req.binance_taker_fee,
+        )
+        result = run_kimp_backtest(bars, cfg)
+        m = result.metrics
+
+        equity = result.equity
+        max_points = 2000
+        step = max(1, len(equity) // max_points)
+        curve = [
+            KimpBacktestEquityPoint(
+                t=p.ts_ms,
+                equity_krw=p.equity_krw,
+                kimp_pct=p.kimp * 100.0,
+                zscore=p.zscore,
+                notional_krw=p.notional_krw,
+            )
+            for p in equity[::step]
+        ]
+        metrics = KimpBacktestMetrics(
+            n_bars=m.n_bars,
+            total_return_pct=m.total_return_pct,
+            net_profit_krw=m.net_profit_krw,
+            max_drawdown_pct=m.max_drawdown_pct,
+            sharpe=m.sharpe,
+            n_rebalances=m.n_rebalances,
+            fee_drag_krw=m.fee_drag_krw,
+            avg_kimp_pct=m.avg_kimp_pct,
+            time_in_market_pct=m.time_in_market_pct,
+            final_kimp_pct=m.final_kimp_pct,
+        )
+        return KimpBacktestResponse(
+            success=True, symbol=sym, as_of=now, metrics=metrics, equity_curve=curve
         )
 
     @app.get(

@@ -593,6 +593,108 @@ class KimpHistoryResponse(BaseModel):
     series: list[KimpHistoryPoint]
 
 
+# ── Kimchi Premium Delta-Neutral Arbitrage (실거래/백테스트) ──
+
+
+class KimpArbitrageParams(BaseModel):
+    """김프 델타-중립 봇 파라미터.
+
+    중립북 = 업비트 현물 롱 + 바이낸스 무기한 숏. 김프가 쌀 때(z 낮음) 북을 키우고
+    비쌀 때(z 높음) 줄인다. 두 레그는 항상 대칭 이동한다.
+    """
+
+    symbol: str = "BTC"
+    env: Literal["mainnet", "testnet"] = "testnet"
+    gross_cap_krw: float = Field(
+        default=10_000_000.0, gt=0, description="최대 북 명목(업비트 롱 기준, KRW)"
+    )
+    full_build_z: float = Field(
+        default=-2.0, description="이 z 이하로 김프가 싸지면 풀사이즈 진입"
+    )
+    flat_z: float = Field(default=0.5, description="이 z 이상으로 김프가 비싸지면 청산")
+    hedge_mode: Literal["quantity", "delta"] = Field(
+        default="quantity",
+        description="quantity=수량일치(작은 누수), delta=공통변동 델타 0",
+    )
+    leverage: float = Field(default=1.0, ge=1.0, le=10.0, description="바이낸스 숏 레버리지")
+    z_window_days: int = Field(default=30, ge=1, le=90, description="z-score 통계 윈도우(일)")
+    upbit_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+    binance_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+    margin_alert_ratio: float = Field(
+        default=0.80, gt=0, lt=1.0, description="바이낸스 마진 비율 위험 수위(이상이면 북 축소)"
+    )
+
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+        if self.flat_z <= self.full_build_z:
+            raise ValueError("flat_z 는 full_build_z 보다 커야 합니다")
+
+
+class KimpArbitrageStatusResponse(BaseModel):
+    running: bool
+    symbol: str | None = None
+    upbit_long_qty: float | None = None
+    binance_short_qty: float | None = None
+    kimp_pct: float | None = None          # 현재 김프 (0.0345 == 3.45%)
+    zscore: float | None = None            # 현재 김프 z-score
+    target_notional_krw: float | None = None   # 시그널이 요구하는 목표 북(KRW)
+    current_notional_krw: float | None = None  # 실제 보유 북(KRW)
+    fx_hedge_usd: float | None = None      # 권장 USD 매도 헤지량
+    coin_delta_qty: float | None = None    # 순 코인 델타(롱-숏)
+    price_delta_krw: float | None = None   # 공통 가격변동 방향성 델타(KRW)
+    unrealized_pnl_krw: float | None = None
+    accumulated_fee_krw: float = 0.0
+    binance_margin_ratio: float | None = None
+    last_rebalance_ts: datetime | None = None
+    params: KimpArbitrageParams | None = None
+    last_error: str | None = None
+
+
+class KimpBacktestRequest(BaseModel):
+    symbol: str = "BTC"
+    days: int = Field(default=30, ge=1, le=365, description="kimp_snapshots 조회 기간(일)")
+    gross_cap_krw: float = Field(default=10_000_000.0, gt=0)
+    full_build_z: float = -2.0
+    flat_z: float = 0.5
+    hedge_mode: Literal["quantity", "delta"] = "quantity"
+    leverage: float = Field(default=1.0, ge=1.0, le=10.0)
+    z_window_points: int = Field(
+        default=1440, ge=10, le=43200, description="z-score rolling 윈도우(분 단위 표본 수)"
+    )
+    upbit_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+    binance_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+
+
+class KimpBacktestMetrics(BaseModel):
+    n_bars: int
+    total_return_pct: float        # 투입자본 대비 (gross_cap 기준)
+    net_profit_krw: float
+    max_drawdown_pct: float
+    sharpe: float
+    n_rebalances: int
+    fee_drag_krw: float
+    avg_kimp_pct: float
+    time_in_market_pct: float
+    final_kimp_pct: float
+
+
+class KimpBacktestEquityPoint(BaseModel):
+    t: int       # epoch ms (UTC)
+    equity_krw: float
+    kimp_pct: float
+    zscore: float | None = None
+    notional_krw: float
+
+
+class KimpBacktestResponse(BaseModel):
+    success: bool
+    error: str | None = None
+    symbol: str
+    as_of: datetime
+    metrics: KimpBacktestMetrics | None = None
+    equity_curve: list[KimpBacktestEquityPoint] = Field(default_factory=list)
+
+
 # ── Quick Backtest ──────────────────────────────────────────
 
 
