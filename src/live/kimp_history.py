@@ -146,6 +146,44 @@ async def window_stats(
     }
 
 
+async def window_stats_bulk(
+    session: AsyncSession, symbols: list[str], days: int | None
+) -> dict[str, dict[str, float | int | None]]:
+    """여러 심볼의 윈도우 통계(평균/표준편차/표본수)를 한 번의 집계 쿼리로 반환.
+
+    ``window_stats`` 를 심볼마다 호출하면 유니버스가 커질수록 DB 왕복이 폭증하므로
+    스크리너/스트림 경로는 이 배치 버전을 사용한다. 모집단 표준편차(``stddev_pop``)
+    를 사용해 단건 버전(``pstdev``)과 일치시킨다.
+    """
+    if not symbols:
+        return {}
+    filters = [
+        KimpSnapshot.symbol.in_(symbols),
+        KimpSnapshot.fx_source == USDT_RATE_SOURCE,
+    ]
+    if days is not None:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        filters.append(KimpSnapshot.ts >= since)
+    stmt = (
+        select(
+            KimpSnapshot.symbol,
+            func.count().label("n"),
+            func.avg(KimpSnapshot.kimp_pct).label("mean"),
+            func.stddev_pop(KimpSnapshot.kimp_pct).label("std"),
+        )
+        .where(*filters)
+        .group_by(KimpSnapshot.symbol)
+    )
+    out: dict[str, dict[str, float | int | None]] = {}
+    for symbol, n, mean_val, std_val in (await session.execute(stmt)).all():
+        out[symbol] = {
+            "n": int(n or 0),
+            "mean": float(mean_val) if mean_val is not None else None,
+            "std": float(std_val) if std_val is not None else 0.0,
+        }
+    return out
+
+
 async def recent_series(
     session: AsyncSession,
     symbol: str,
@@ -209,6 +247,7 @@ __all__ = [
     "start_collector",
     "stop_collector",
     "window_stats",
+    "window_stats_bulk",
     "recent_series",
     "last_n_rows",
 ]

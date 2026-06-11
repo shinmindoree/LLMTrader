@@ -786,6 +786,11 @@ export type KimpScreenerItem = {
   std_30d_pct: number | null;
   zscore_30d: number | null;
   n_samples_30d: number;
+  funding_rate_pct?: number | null; // 0.01 == 0.01%
+  funding_interval_hours?: number | null;
+  next_funding_time?: string | null;
+  upbit_quote_volume_krw?: number | null;
+  signal?: "entry" | "exit" | "hold";
 };
 
 export type KimpScreenerResponse = {

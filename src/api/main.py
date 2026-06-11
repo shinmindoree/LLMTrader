@@ -2270,15 +2270,20 @@ def create_app() -> FastAPI:
         session: AsyncSession,
         symbols: str | None,
     ) -> KimpScreenerResponse:
-        from live.kimp_calculator import DEFAULT_SYMBOLS, compute_kimp_snapshot
-        from live.kimp_history import window_stats
+        from live.kimp_calculator import classify_kimp_signal, compute_kimp_snapshot
+        from live.kimp_history import window_stats_bulk
+        from live.kimp_universe import get_kimp_universe
 
-        requested = _parse_kimp_symbols(symbols) or list(DEFAULT_SYMBOLS)
+        requested = _parse_kimp_symbols(symbols) or await get_kimp_universe()
         snapshot = await compute_kimp_snapshot(requested)
+
+        stats_by_symbol = await window_stats_bulk(
+            session, [row.symbol for row in snapshot.rows], days=30
+        )
 
         items: list[KimpScreenerItem] = []
         for row in snapshot.rows:
-            stats = await window_stats(session, row.symbol, days=30)
+            stats = stats_by_symbol.get(row.symbol, {})
             mean_pct = stats.get("mean")
             std_pct = stats.get("std")
             n = int(stats.get("n") or 0)
@@ -2297,6 +2302,11 @@ def create_app() -> FastAPI:
                     std_30d_pct=float(std_pct) if std_pct is not None else None,
                     zscore_30d=z,
                     n_samples_30d=n,
+                    funding_rate_pct=round(row.funding_rate * 100, 5),
+                    funding_interval_hours=row.funding_interval_hours,
+                    next_funding_time=row.next_funding_time,
+                    upbit_quote_volume_krw=row.upbit_quote_volume_krw,
+                    signal=classify_kimp_signal(row.kimp_pct, z),
                 )
             )
 
@@ -2319,9 +2329,11 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
         _: AuthenticatedUser = Depends(require_auth),
     ) -> KimpScreenerResponse:
-        """심볼별 USDT/KRW 기준 김프율 + 30일 평균/표준편차/z-score 스크리너.
+        """심볼별 김프율 + 30일 z-score + 펀딩비 + 시그널 스크리너.
 
-        ``symbols`` 쿼리는 쉼표 구분 (예: ``BTC,ETH``). 미지정 시 기본 8종.
+        김프는 Binance USDT-M 무기한 선물 마크가격 기준으로 계산한다.
+        ``symbols`` 쿼리는 쉼표 구분 (예: ``BTC,ETH``). 미지정 시 Upbit KRW 현물과
+        Binance USDT-M 무기한 선물에 **모두 상장된** 코인 전체를 대상으로 한다.
         """
         return await _build_kimp_screener_response(session, symbols)
 

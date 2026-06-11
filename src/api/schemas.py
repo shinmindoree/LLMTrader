@@ -622,7 +622,7 @@ class KimpFxRateResponse(BaseModel):
 class KimpScreenerItem(BaseModel):
     symbol: str  # 예: "BTC"
     upbit_krw_price: float
-    binance_usdt_price: float
+    binance_usdt_price: float  # Binance USDT-M 무기한 마크가격
     usdt_krw_rate: float
     usd_krw_rate: float | None = None  # backward-compatible alias for older clients
     kimp_pct: float  # 0.0345 == 3.45%
@@ -630,6 +630,11 @@ class KimpScreenerItem(BaseModel):
     std_30d_pct: float | None = None
     zscore_30d: float | None = None  # (kimp - mean) / std
     n_samples_30d: int = 0
+    funding_rate_pct: float | None = None  # 직전 펀딩비(%) (예: 0.01 == 0.01%)
+    funding_interval_hours: float | None = None
+    next_funding_time: datetime | None = None
+    upbit_quote_volume_krw: float | None = None  # Upbit 24h 누적 거래대금(KRW)
+    signal: Literal["entry", "exit", "hold"] = "hold"
 
 
 class KimpScreenerResponse(BaseModel):

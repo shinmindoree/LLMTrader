@@ -10,11 +10,33 @@ type SortKey =
   | "kimp_pct"
   | "zscore_30d"
   | "mean_30d_pct"
-  | "n_samples_30d";
+  | "n_samples_30d"
+  | "funding_rate_pct"
+  | "upbit_quote_volume_krw";
 
 function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${(v * 100).toFixed(digits)}%`;
+}
+
+function fmtFundingPct(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${v.toFixed(4)}%`;
+}
+
+function fmtKrwCompact(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (v >= 1e12) return `₩${(v / 1e12).toFixed(1)}조`;
+  if (v >= 1e8) return `₩${(v / 1e8).toFixed(1)}억`;
+  if (v >= 1e4) return `₩${(v / 1e4).toFixed(0)}만`;
+  return `₩${v.toFixed(0)}`;
+}
+
+function fundingClass(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "text-[#868993]";
+  if (v > 0) return "text-emerald-400";
+  if (v < 0) return "text-rose-400";
+  return "text-[#c3c5cc]";
 }
 
 function fmtKrw(v: number): string {
@@ -136,7 +158,7 @@ export default function KimpScreenerTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left text-xs">
+        <table className="w-full min-w-[960px] text-left text-xs">
           <thead className="bg-[#0e0f14] text-[10px] uppercase tracking-wider text-[#868993]">
             <tr>
               <Th onClick={() => toggleSort("symbol")} arrow={sortArrow("symbol")}>
@@ -151,6 +173,13 @@ export default function KimpScreenerTable({
                 arrow={sortArrow("kimp_pct")}
               >
                 {s.columns.kimp}
+              </Th>
+              <Th
+                align="right"
+                onClick={() => toggleSort("funding_rate_pct")}
+                arrow={sortArrow("funding_rate_pct")}
+              >
+                {s.columns.funding}
               </Th>
               <Th
                 align="right"
@@ -174,18 +203,26 @@ export default function KimpScreenerTable({
               >
                 {s.columns.samples}
               </Th>
+              <Th
+                align="right"
+                onClick={() => toggleSort("upbit_quote_volume_krw")}
+                arrow={sortArrow("upbit_quote_volume_krw")}
+              >
+                {s.columns.volume}
+              </Th>
+              <Th align="right">{s.columns.signal}</Th>
             </tr>
           </thead>
           <tbody>
             {isLoading && !data ? (
               <tr>
-                <td colSpan={9} className="px-4 py-6 text-center text-[#868993]">
+                <td colSpan={12} className="px-4 py-6 text-center text-[#868993]">
                   {t.hubs.arbitrage.kimp.common.loading}
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-4 py-6 text-center text-[#868993]">
+                <td colSpan={12} className="px-4 py-6 text-center text-[#868993]">
                   {s.empty}
                 </td>
               </tr>
@@ -215,6 +252,9 @@ export default function KimpScreenerTable({
                     <td className={`px-3 py-2 text-right font-medium ${kimpClass(it.kimp_pct)}`}>
                       {fmtPct(it.kimp_pct)}
                     </td>
+                    <td className={`px-3 py-2 text-right ${fundingClass(it.funding_rate_pct)}`}>
+                      {fmtFundingPct(it.funding_rate_pct)}
+                    </td>
                     <td className="px-3 py-2 text-right text-[#868993]">
                       {fmtPct(it.mean_30d_pct)}
                     </td>
@@ -226,6 +266,12 @@ export default function KimpScreenerTable({
                     </td>
                     <td className="px-3 py-2 text-right text-[#868993]">
                       {it.n_samples_30d}
+                    </td>
+                    <td className="px-3 py-2 text-right text-[#868993]">
+                      {fmtKrwCompact(it.upbit_quote_volume_krw)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <SignalBadge signal={it.signal} labels={s.signals} />
                     </td>
                   </tr>
                 );
@@ -281,5 +327,27 @@ function Th({
       {children}
       {arrow ? <span className="ml-1 text-[#868993]">{arrow}</span> : null}
     </th>
+  );
+}
+
+function SignalBadge({
+  signal,
+  labels,
+}: {
+  signal?: "entry" | "exit" | "hold";
+  labels: { entry: string; exit: string; hold: string };
+}) {
+  const s = signal ?? "hold";
+  const styles: Record<"entry" | "exit" | "hold", string> = {
+    entry: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+    exit: "bg-rose-500/15 text-rose-400 border-rose-500/30",
+    hold: "bg-[#1a1b22] text-[#868993] border-[#26272d]",
+  };
+  return (
+    <span
+      className={`inline-block rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${styles[s]}`}
+    >
+      {labels[s]}
+    </span>
   );
 }
