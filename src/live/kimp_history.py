@@ -17,7 +17,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from statistics import StatisticsError, mean, pstdev
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -118,15 +118,14 @@ async def stop_collector() -> None:
 
 
 async def window_stats(
-    session: AsyncSession, symbol: str, days: int
+    session: AsyncSession, symbol: str, days: int | None
 ) -> dict[str, float | int | None]:
     """심볼별 윈도우 통계: 평균/표준편차/표본수 + 직전 값."""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    stmt = (
-        select(KimpSnapshot.kimp_pct)
-        .where(KimpSnapshot.symbol == symbol, KimpSnapshot.ts >= since)
-        .order_by(KimpSnapshot.ts.asc())
-    )
+    stmt = select(KimpSnapshot.kimp_pct).where(KimpSnapshot.symbol == symbol)
+    if days is not None:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        stmt = stmt.where(KimpSnapshot.ts >= since)
+    stmt = stmt.order_by(KimpSnapshot.ts.asc())
     rows = (await session.execute(stmt)).scalars().all()
     values = [float(v) for v in rows if v is not None and not math.isnan(v)]
     if not values:
@@ -146,21 +145,42 @@ async def window_stats(
 async def recent_series(
     session: AsyncSession,
     symbol: str,
-    since: datetime,
+    since: datetime | None,
     max_points: int = 2000,
 ) -> list[tuple[datetime, float]]:
-    """``since`` 이후의 시계열을 ts 오름차순으로 반환. ``max_points`` 초과 시 균등 다운샘플."""
-    stmt = (
-        select(KimpSnapshot.ts, KimpSnapshot.kimp_pct)
-        .where(KimpSnapshot.symbol == symbol, KimpSnapshot.ts >= since)
-        .order_by(KimpSnapshot.ts.asc())
-    )
+    """시계열을 ts 오름차순으로 반환. ``max_points`` 초과 시 균등 다운샘플."""
+    filters = [KimpSnapshot.symbol == symbol]
+    if since is not None:
+        filters.append(KimpSnapshot.ts >= since)
+
+    count_stmt = select(func.count()).select_from(KimpSnapshot).where(*filters)
+    n_rows = int((await session.execute(count_stmt)).scalar_one() or 0)
+    if n_rows == 0:
+        return []
+
+    stmt = select(KimpSnapshot.ts, KimpSnapshot.kimp_pct).where(*filters)
+    if n_rows > max_points:
+        step = max(1, math.ceil(n_rows / max_points))
+        ranked = (
+            select(
+                KimpSnapshot.ts.label("ts"),
+                KimpSnapshot.kimp_pct.label("kimp_pct"),
+                func.row_number().over(order_by=KimpSnapshot.ts.asc()).label("rn"),
+            )
+            .where(*filters)
+            .subquery()
+        )
+        stmt = (
+            select(ranked.c.ts, ranked.c.kimp_pct)
+            .where((ranked.c.rn - 1).op("%")(step) == 0)
+            .order_by(ranked.c.ts.asc())
+            .limit(max_points)
+        )
+    else:
+        stmt = stmt.order_by(KimpSnapshot.ts.asc())
+
     rows = (await session.execute(stmt)).all()
-    series: list[tuple[datetime, float]] = [(ts, float(v)) for ts, v in rows]
-    if len(series) <= max_points:
-        return series
-    step = max(1, len(series) // max_points)
-    return series[::step][:max_points]
+    return [(ts, float(v)) for ts, v in rows]
 
 
 async def last_n_rows(

@@ -1,10 +1,10 @@
 """김치 프리미엄(Kimchi Premium) 계산 + Upbit/Binance 공개 가격 조회.
 
 수식:
-    kimp = (upbit_krw_price / (binance_usdt_price * usd_krw_rate)) - 1
+    kimp = (upbit_krw_price / (binance_usdt_price * usdt_krw_rate)) - 1
 
 공개 endpoint 만 사용하므로 인증이 필요 없다.
-- Upbit 시세: ``GET https://api.upbit.com/v1/ticker?markets=KRW-BTC,KRW-ETH``
+- Upbit 시세: ``GET https://api.upbit.com/v1/ticker?markets=KRW-USDT,KRW-BTC``
 - Binance 현물 시세: ``GET https://api.binance.com/api/v3/ticker/price?symbols=...``
 """
 
@@ -17,8 +17,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
-
-from live.fx_feed import FxRate, get_fx_rate
 
 _log = logging.getLogger("llmtrader.kimp_calculator")
 
@@ -34,18 +32,45 @@ class KimpRow:
     symbol: str                 # 예: "BTC"
     upbit_krw_price: float
     binance_usdt_price: float
-    usd_krw_rate: float
+    usdt_krw_rate: float
     kimp_pct: float             # 예: 0.0345 == 3.45%
-    fx_source: str
-    fx_stale: bool
+    rate_source: str
+    rate_stale: bool
+
+    @property
+    def usd_krw_rate(self) -> float:
+        """Backward-compatible alias for DB/API fields that still use the old name."""
+        return self.usdt_krw_rate
+
+    @property
+    def fx_source(self) -> str:
+        return self.rate_source
+
+    @property
+    def fx_stale(self) -> bool:
+        return self.rate_stale
+
+
+@dataclass(frozen=True)
+class KimpRate:
+    pair: str
+    rate: float
+    source: str
+    fetched_at: datetime
+    stale: bool = False
 
 
 @dataclass
 class KimpSnapshot:
     rows: list[KimpRow]
-    fx: FxRate
+    rate: KimpRate
     as_of: datetime
     errors: list[str] = field(default_factory=list)
+
+    @property
+    def fx(self) -> KimpRate:
+        """Backward-compatible alias for callers that still refer to the quote as fx."""
+        return self.rate
 
 
 async def _fetch_upbit_prices(client: httpx.AsyncClient, symbols: list[str]) -> dict[str, float]:
@@ -71,6 +96,22 @@ async def _fetch_upbit_prices(client: httpx.AsyncClient, symbols: list[str]) -> 
             except (TypeError, ValueError):
                 continue
     return out
+
+
+async def get_usdt_krw_rate() -> KimpRate:
+    """Return the tradable USDT/KRW reference price from Upbit KRW-USDT."""
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        prices = await _fetch_upbit_prices(client, ["USDT"])
+    rate = prices.get("USDT")
+    if not rate or rate <= 0:
+        raise RuntimeError("Upbit KRW-USDT price is unavailable")
+    return KimpRate(
+        pair="USDT/KRW",
+        rate=rate,
+        source="upbit",
+        fetched_at=datetime.now(timezone.utc),
+        stale=False,
+    )
 
 
 async def _fetch_binance_prices(client: httpx.AsyncClient, symbols: list[str]) -> dict[str, float]:
@@ -103,23 +144,38 @@ async def compute_kimp_snapshot(symbols: list[str] | None = None) -> KimpSnapsho
 
     실패한 심볼은 ``errors`` 에 기록되고 ``rows`` 에서는 제외된다.
     """
-    target_symbols = list(symbols or DEFAULT_SYMBOLS)
-    fx = await get_fx_rate()
+    target_symbols = [s for s in list(symbols or DEFAULT_SYMBOLS) if s != "USDT"]
     errors: list[str] = []
 
     async with httpx.AsyncClient(timeout=8.0) as client:
-        upbit_task = _fetch_upbit_prices(client, target_symbols)
+        upbit_task = _fetch_upbit_prices(client, ["USDT", *target_symbols])
         binance_task = _fetch_binance_prices(client, target_symbols)
         upbit_prices, binance_prices = await asyncio.gather(upbit_task, binance_task)
+
+    usdt_krw = upbit_prices.get("USDT")
+    as_of = datetime.now(timezone.utc)
+    if not usdt_krw or usdt_krw <= 0:
+        return KimpSnapshot(
+            rows=[],
+            rate=KimpRate(
+                pair="USDT/KRW",
+                rate=0.0,
+                source="upbit",
+                fetched_at=as_of,
+                stale=True,
+            ),
+            as_of=as_of,
+            errors=["USDT/KRW: missing Upbit KRW-USDT price"],
+        )
 
     rows: list[KimpRow] = []
     for sym in target_symbols:
         krw = upbit_prices.get(sym)
         usdt = binance_prices.get(sym)
-        if not krw or not usdt or fx.rate <= 0:
+        if not krw or not usdt:
             errors.append(f"{sym}: missing price data")
             continue
-        denom = usdt * fx.rate
+        denom = usdt * usdt_krw
         if denom <= 0:
             errors.append(f"{sym}: invalid denominator")
             continue
@@ -129,16 +185,22 @@ async def compute_kimp_snapshot(symbols: list[str] | None = None) -> KimpSnapsho
                 symbol=sym,
                 upbit_krw_price=krw,
                 binance_usdt_price=usdt,
-                usd_krw_rate=fx.rate,
+                usdt_krw_rate=usdt_krw,
                 kimp_pct=kimp,
-                fx_source=fx.source,
-                fx_stale=fx.stale,
+                rate_source="upbit",
+                rate_stale=False,
             )
         )
 
     return KimpSnapshot(
         rows=rows,
-        fx=fx,
-        as_of=datetime.now(timezone.utc),
+        rate=KimpRate(
+            pair="USDT/KRW",
+            rate=usdt_krw,
+            source="upbit",
+            fetched_at=as_of,
+            stale=False,
+        ),
+        as_of=as_of,
         errors=errors,
     )

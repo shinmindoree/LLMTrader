@@ -572,7 +572,7 @@ class FundingArbitrageStatusResponse(BaseModel):
 
 
 class KimpFxRateResponse(BaseModel):
-    pair: Literal["USD/KRW"] = "USD/KRW"
+    pair: Literal["USDT/KRW"] = "USDT/KRW"
     rate: float
     source: str
     fetched_at: datetime
@@ -583,7 +583,8 @@ class KimpScreenerItem(BaseModel):
     symbol: str                       # 예: "BTC"
     upbit_krw_price: float
     binance_usdt_price: float
-    usd_krw_rate: float
+    usdt_krw_rate: float
+    usd_krw_rate: float | None = None  # backward-compatible alias for older clients
     kimp_pct: float                   # 0.0345 == 3.45%
     mean_30d_pct: float | None = None
     std_30d_pct: float | None = None
@@ -605,7 +606,7 @@ class KimpHistoryPoint(BaseModel):
 
 class KimpHistoryResponse(BaseModel):
     symbol: str
-    range: Literal["1H", "1D", "7D", "30D"]
+    range: Literal["1H", "1D", "7D", "30D", "ALL"]
     as_of: datetime
     mean_pct: float | None
     std_pct: float | None

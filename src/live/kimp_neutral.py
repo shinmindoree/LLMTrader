@@ -8,7 +8,7 @@
 ------------------------
 - ``upbit_krw``    ``S_u`` : 업비트 가격 (KRW / coin)
 - ``binance_usdt`` ``S_b`` : 바이낸스 무기한 가격 (USDT / coin, USDT ≈ USD 가정)
-- ``usd_krw``      ``e``   : 환율 (KRW / USD)
+- ``usd_krw``      ``e``   : USDT/KRW 기준가 (KRW / USDT, 필드명은 호환성상 유지)
 - 김프            ``k``   : ``k = S_u / (S_b * e) - 1``
 
 중립북은 **항상 하나** 다::
@@ -110,7 +110,7 @@ class KimpQuote:
     symbol: str
     upbit_krw: float      # S_u (KRW / coin)
     binance_usdt: float   # S_b (USDT / coin)
-    usd_krw: float        # e   (KRW / USD)
+    usd_krw: float        # e   (KRW / USDT; legacy field name)
 
     def __post_init__(self) -> None:
         if self.upbit_krw <= 0 or self.binance_usdt <= 0 or self.usd_krw <= 0:

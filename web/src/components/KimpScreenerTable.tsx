@@ -1,12 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
-import { getKimpScreener } from "@/lib/api";
-import type { KimpScreenerItem } from "@/lib/types";
-
-const REFRESH_MS = 30_000;
+import type { KimpScreenerItem, KimpScreenerResponse } from "@/lib/types";
+import type { KimpScreenerStreamStatus } from "@/lib/useKimpScreenerStream";
 
 type SortKey =
   | "symbol"
@@ -15,7 +12,7 @@ type SortKey =
   | "mean_30d_pct"
   | "n_samples_30d";
 
-function fmtPct(v: number | null | undefined, digits = 3): string {
+function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${(v * 100).toFixed(digits)}%`;
 }
@@ -53,21 +50,30 @@ function zClass(v: number | null | undefined): string {
 type Props = {
   symbol: string;
   onSelect: (symbol: string) => void;
+  data: KimpScreenerResponse | null;
+  error: Error | null;
+  isLoading: boolean;
+  isValidating: boolean;
+  status: KimpScreenerStreamStatus;
+  onRefresh: () => void;
 };
 
-export default function KimpScreenerTable({ symbol, onSelect }: Props) {
+export default function KimpScreenerTable({
+  symbol,
+  onSelect,
+  data,
+  error,
+  isLoading,
+  isValidating,
+  status,
+  onRefresh,
+}: Props) {
   const { t } = useI18n();
   const s = t.hubs.arbitrage.kimp.screener;
 
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("kimp_pct");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-
-  const { data, error, isLoading, mutate, isValidating } = useSWR(
-    "kimp:screener",
-    () => getKimpScreener(),
-    { refreshInterval: REFRESH_MS, revalidateOnFocus: false },
-  );
 
   const items = useMemo<KimpScreenerItem[]>(() => {
     if (!data?.items) return [];
@@ -120,7 +126,7 @@ export default function KimpScreenerTable({ symbol, onSelect }: Props) {
           />
           <button
             type="button"
-            onClick={() => mutate()}
+            onClick={onRefresh}
             disabled={isValidating}
             className="rounded-md border border-[#26272d] bg-[#1a1b22] px-2.5 py-1 text-xs text-[#c3c5cc] hover:bg-[#22232b] disabled:opacity-50"
           >
@@ -138,7 +144,7 @@ export default function KimpScreenerTable({ symbol, onSelect }: Props) {
               </Th>
               <Th align="right">{s.columns.upbit}</Th>
               <Th align="right">{s.columns.binance}</Th>
-              <Th align="right">{s.columns.usdKrw}</Th>
+              <Th align="right">{s.columns.usdtKrw}</Th>
               <Th
                 align="right"
                 onClick={() => toggleSort("kimp_pct")}
@@ -204,7 +210,7 @@ export default function KimpScreenerTable({ symbol, onSelect }: Props) {
                       {fmtUsd(it.binance_usdt_price)}
                     </td>
                     <td className="px-3 py-2 text-right text-[#868993]">
-                      {it.usd_krw_rate.toFixed(2)}
+                      {it.usdt_krw_rate.toFixed(2)}
                     </td>
                     <td className={`px-3 py-2 text-right font-medium ${kimpClass(it.kimp_pct)}`}>
                       {fmtPct(it.kimp_pct)}
@@ -237,8 +243,13 @@ export default function KimpScreenerTable({ symbol, onSelect }: Props) {
       ) : null}
 
       {data?.as_of ? (
-        <div className="border-t border-[#26272d] px-4 py-2 text-right text-[10px] text-[#5b5d66]">
-          {s.asOf}: {new Date(data.as_of).toLocaleTimeString()}
+        <div className="flex items-center justify-between border-t border-[#26272d] px-4 py-2 text-[10px] text-[#5b5d66]">
+          <span className={status === "live" ? "text-emerald-400" : "text-amber-400"}>
+            {status === "live" ? s.live : s.fallback}
+          </span>
+          <span>
+            {s.asOf}: {new Date(data.as_of).toLocaleTimeString()}
+          </span>
         </div>
       ) : null}
 

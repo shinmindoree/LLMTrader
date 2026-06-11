@@ -13,20 +13,22 @@ import {
 } from "lightweight-charts";
 import { useI18n } from "@/lib/i18n";
 import { getKimpHistory } from "@/lib/api";
-import type { KimpHistoryRange } from "@/lib/types";
+import type { KimpHistoryRange, KimpScreenerItem } from "@/lib/types";
 
-const RANGES: KimpHistoryRange[] = ["1H", "1D", "7D", "30D"];
+const RANGES: KimpHistoryRange[] = ["1H", "1D", "7D", "30D", "ALL"];
 
-function fmtPct(v: number | null | undefined, digits = 3): string {
+function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${(v * 100).toFixed(digits)}%`;
 }
 
 type Props = {
   symbol: string;
+  latest?: KimpScreenerItem | null;
+  latestAsOf?: string | null;
 };
 
-export default function KimpHistoryChart({ symbol }: Props) {
+export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) {
   const { t } = useI18n();
   const h = t.hubs.arbitrage.kimp.history;
   const [range, setRange] = useState<KimpHistoryRange>("1D");
@@ -43,6 +45,7 @@ export default function KimpHistoryChart({ symbol }: Props) {
   const meanRef = useRef<ISeriesApi<"Line"> | null>(null);
   const upperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const lowerRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const lastFitKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -58,14 +61,21 @@ export default function KimpHistoryChart({ symbol }: Props) {
         horzLines: { color: "#1f2027" },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      timeScale: { borderColor: "#26272d", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "#26272d",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 4,
+      },
       rightPriceScale: { borderColor: "#26272d" },
+      handleScroll: true,
+      handleScale: true,
     });
     chartRef.current = chart;
     lineRef.current = chart.addLineSeries({
       color: "#60a5fa",
       lineWidth: 2,
-      priceFormat: { type: "percent", precision: 3, minMove: 0.0001 },
+      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
     });
     meanRef.current = chart.addLineSeries({
       color: "#868993",
@@ -73,7 +83,7 @@ export default function KimpHistoryChart({ symbol }: Props) {
       lineStyle: LineStyle.Dashed,
       priceLineVisible: false,
       lastValueVisible: false,
-      priceFormat: { type: "percent", precision: 3, minMove: 0.0001 },
+      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
     });
     upperRef.current = chart.addLineSeries({
       color: "#fbbf24",
@@ -81,7 +91,7 @@ export default function KimpHistoryChart({ symbol }: Props) {
       lineStyle: LineStyle.Dotted,
       priceLineVisible: false,
       lastValueVisible: false,
-      priceFormat: { type: "percent", precision: 3, minMove: 0.0001 },
+      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
     });
     lowerRef.current = chart.addLineSeries({
       color: "#fbbf24",
@@ -89,7 +99,7 @@ export default function KimpHistoryChart({ symbol }: Props) {
       lineStyle: LineStyle.Dotted,
       priceLineVisible: false,
       lastValueVisible: false,
-      priceFormat: { type: "percent", precision: 3, minMove: 0.0001 },
+      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
     });
     return () => {
       chart.remove();
@@ -109,10 +119,23 @@ export default function KimpHistoryChart({ symbol }: Props) {
       const tsSec = Math.floor(p.t / 1000);
       map.set(tsSec, p.p * 100); // percent series로 변환
     }
+    if (latest?.symbol === symbol && latestAsOf) {
+      const liveTs = Date.parse(latestAsOf);
+      if (Number.isFinite(liveTs) && Number.isFinite(latest.kimp_pct)) {
+        map.set(Math.floor(liveTs / 1000), latest.kimp_pct * 100);
+      }
+    }
     return Array.from(map.entries())
       .sort((a, b) => a[0] - b[0])
       .map(([ts, value]) => ({ time: ts as Time, value }));
-  }, [data]);
+  }, [data, latest, latestAsOf, symbol]);
+
+  const fitKey = useMemo(() => {
+    const points = data?.series ?? [];
+    const first = points[0]?.t ?? "";
+    const last = points.length > 0 ? points[points.length - 1]?.t : "";
+    return `${symbol}:${range}:${points.length}:${first}:${last}`;
+  }, [data?.series, range, symbol]);
 
   useEffect(() => {
     if (!lineRef.current) return;
@@ -139,12 +162,17 @@ export default function KimpHistoryChart({ symbol }: Props) {
       }
     }
 
-    if (chartRef.current && seriesData.length > 0) {
+    if (
+      chartRef.current
+      && seriesData.length > 0
+      && lastFitKeyRef.current !== fitKey
+    ) {
+      lastFitKeyRef.current = fitKey;
       chartRef.current.timeScale().fitContent();
     }
-  }, [seriesData, data?.mean_pct, data?.std_pct]);
+  }, [seriesData, data?.mean_pct, data?.std_pct, fitKey]);
 
-  const isEmpty = !isLoading && (data?.series?.length ?? 0) === 0;
+  const isEmpty = !isLoading && seriesData.length === 0;
 
   return (
     <div className="rounded-2xl border border-[#26272d] bg-[#13141a]">
@@ -162,6 +190,7 @@ export default function KimpHistoryChart({ symbol }: Props) {
               "1D": h.range1D,
               "7D": h.range7D,
               "30D": h.range30D,
+              ALL: h.rangeAll,
             };
             return (
               <button

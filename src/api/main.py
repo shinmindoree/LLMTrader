@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -1970,46 +1970,44 @@ def create_app() -> FastAPI:
         return await get_engine_status_persisted(session, user.user_id)
 
     # ── Kimchi Premium (김프) Arbitrage ────────────────────────────
-    # Phase 1: 모니터링(읽기 전용) — fx 환율 / 스크리너 / 시계열 히스토리
+    # Phase 1: 모니터링(읽기 전용) — USDT/KRW 기준가 / 스크리너 / 시계열 히스토리
 
     @app.get("/api/kimp-arb/fx", response_model=KimpFxRateResponse)
     async def kimp_fx_rate(
         force_refresh: bool = False,
         _: AuthenticatedUser = Depends(require_auth),
     ) -> KimpFxRateResponse:
-        """USD/KRW 환율 (Naver FX, 60s TTL).
+        """USDT/KRW 기준가 (Upbit KRW-USDT).
 
-        ``stale=true`` 이면 외부 소스 호출 실패로 직전 캐시 값을 그대로 사용한 상태.
+        ``force_refresh`` 는 기존 클라이언트 호환성을 위해 유지하지만 Upbit 공개 시세는
+        매 호출 최신 가격을 조회한다.
         """
-        from live.fx_feed import get_fx_rate
+        from live.kimp_calculator import get_usdt_krw_rate
 
-        fx = await get_fx_rate(force_refresh=force_refresh)
+        _ = force_refresh
+        rate = await get_usdt_krw_rate()
         return KimpFxRateResponse(
-            rate=fx.rate,
-            source=fx.source,
-            fetched_at=fx.fetched_at,
-            stale=fx.stale,
+            rate=rate.rate,
+            source=rate.source,
+            fetched_at=rate.fetched_at,
+            stale=rate.stale,
         )
 
-    @app.get("/api/kimp-arb/screener", response_model=KimpScreenerResponse)
-    async def kimp_screener(
-        symbols: str | None = None,
-        session: AsyncSession = Depends(_db_session),
-        _: AuthenticatedUser = Depends(require_auth),
-    ) -> KimpScreenerResponse:
-        """심볼별 김프율 + 30일 평균/표준편차/z-score 스크리너.
+    def _parse_kimp_symbols(symbols: str | None) -> list[str] | None:
+        if not symbols:
+            return None
+        requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        return requested or None
 
-        ``symbols`` 쿼리는 쉼표 구분 (예: ``BTC,ETH``). 미지정 시 기본 8종.
-        """
+    async def _build_kimp_screener_response(
+        session: AsyncSession,
+        symbols: str | None,
+    ) -> KimpScreenerResponse:
         from live.kimp_calculator import DEFAULT_SYMBOLS, compute_kimp_snapshot
         from live.kimp_history import window_stats
 
-        if symbols:
-            requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-        else:
-            requested = list(DEFAULT_SYMBOLS)
-
-        snapshot = await compute_kimp_snapshot(requested or None)
+        requested = _parse_kimp_symbols(symbols) or list(DEFAULT_SYMBOLS)
+        snapshot = await compute_kimp_snapshot(requested)
 
         items: list[KimpScreenerItem] = []
         for row in snapshot.rows:
@@ -2029,7 +2027,8 @@ def create_app() -> FastAPI:
                     symbol=row.symbol,
                     upbit_krw_price=row.upbit_krw_price,
                     binance_usdt_price=row.binance_usdt_price,
-                    usd_krw_rate=row.usd_krw_rate,
+                    usdt_krw_rate=row.usdt_krw_rate,
+                    usd_krw_rate=row.usdt_krw_rate,
                     kimp_pct=row.kimp_pct,
                     mean_30d_pct=float(mean_pct) if mean_pct is not None else None,
                     std_30d_pct=float(std_pct) if std_pct is not None else None,
@@ -2038,27 +2037,68 @@ def create_app() -> FastAPI:
                 )
             )
 
-        fx_payload = KimpFxRateResponse(
-            rate=snapshot.fx.rate,
-            source=snapshot.fx.source,
-            fetched_at=snapshot.fx.fetched_at,
-            stale=snapshot.fx.stale,
+        rate_payload = KimpFxRateResponse(
+            rate=snapshot.rate.rate,
+            source=snapshot.rate.source,
+            fetched_at=snapshot.rate.fetched_at,
+            stale=snapshot.rate.stale,
         )
         return KimpScreenerResponse(
             items=items,
-            fx=fx_payload,
+            fx=rate_payload,
             errors=list(snapshot.errors),
             as_of=snapshot.as_of,
         )
 
+    @app.get("/api/kimp-arb/screener", response_model=KimpScreenerResponse)
+    async def kimp_screener(
+        symbols: str | None = None,
+        session: AsyncSession = Depends(_db_session),
+        _: AuthenticatedUser = Depends(require_auth),
+    ) -> KimpScreenerResponse:
+        """심볼별 USDT/KRW 기준 김프율 + 30일 평균/표준편차/z-score 스크리너.
+
+        ``symbols`` 쿼리는 쉼표 구분 (예: ``BTC,ETH``). 미지정 시 기본 8종.
+        """
+        return await _build_kimp_screener_response(session, symbols)
+
+    @app.get("/api/kimp-arb/stream", response_class=StreamingResponse)
+    async def kimp_screener_stream(
+        request: Request,
+        symbols: str | None = None,
+        interval_sec: float = Query(default=2.0, ge=1.0, le=10.0),
+        _: AuthenticatedUser = Depends(require_auth),
+    ) -> StreamingResponse:
+        """실시간 표시용 김프 스냅샷 스트림. 각 tick은 DB에 저장하지 않는다."""
+
+        async def gen() -> AsyncIterator[str]:
+            while not await request.is_disconnected():
+                try:
+                    async with session_maker() as stream_session:
+                        payload = await _build_kimp_screener_response(stream_session, symbols)
+                    yield f"data: {payload.model_dump_json()}\n\n"
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    err = json.dumps(
+                        {
+                            "errors": [str(exc)],
+                            "as_of": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    yield f"event: error\ndata: {err}\n\n"
+                await asyncio.sleep(interval_sec)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
     @app.get("/api/kimp-arb/history", response_model=KimpHistoryResponse)
     async def kimp_history(
         symbol: str,
-        range: Literal["1H", "1D", "7D", "30D"] = "1D",
+        range: Literal["1H", "1D", "7D", "30D", "ALL"] = "1D",
         session: AsyncSession = Depends(_db_session),
         _: AuthenticatedUser = Depends(require_auth),
     ) -> KimpHistoryResponse:
-        """심볼별 김프 시계열. ``range`` 에 따라 1H/1D/7D/30D 윈도우."""
+        """심볼별 김프 시계열. ``range`` 에 따라 1H/1D/7D/30D/ALL 윈도우."""
         from datetime import datetime as _dt
         from datetime import timedelta as _td
         from datetime import timezone as _tz
@@ -2075,12 +2115,17 @@ def create_app() -> FastAPI:
             "7D": _td(days=7),
             "30D": _td(days=30),
         }
-        delta = windows[range]
         now = _dt.now(_tz.utc)
-        since = now - delta
+        delta = windows.get(range)
+        since = now - delta if delta is not None else None
 
         series = await recent_series(session, sym, since=since, max_points=2000)
-        stats = await window_stats(session, sym, days=max(1, int(delta.total_seconds() // 86400) or 1))
+        stat_days = (
+            max(1, int(delta.total_seconds() // 86400) or 1)
+            if delta is not None
+            else None
+        )
+        stats = await window_stats(session, sym, days=stat_days)
         points = [
             KimpHistoryPoint(t=int(ts.timestamp() * 1000), p=float(p)) for ts, p in series
         ]

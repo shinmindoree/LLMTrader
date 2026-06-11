@@ -746,7 +746,7 @@ export type FundingSymbolDetailResponse = {
 // ── Kimchi Premium (김프) Arbitrage ───────────────────────────────
 
 export type KimpFxRateResponse = {
-  pair: "USD/KRW";
+  pair: "USDT/KRW";
   rate: number;
   source: string;
   fetched_at: string; // ISO 8601
@@ -757,7 +757,8 @@ export type KimpScreenerItem = {
   symbol: string;
   upbit_krw_price: number;
   binance_usdt_price: number;
-  usd_krw_rate: number;
+  usdt_krw_rate: number;
+  usd_krw_rate?: number | null;
   kimp_pct: number; // 0.0345 == 3.45%
   mean_30d_pct: number | null;
   std_30d_pct: number | null;
@@ -772,7 +773,7 @@ export type KimpScreenerResponse = {
   as_of: string;
 };
 
-export type KimpHistoryRange = "1H" | "1D" | "7D" | "30D";
+export type KimpHistoryRange = "1H" | "1D" | "7D" | "30D" | "ALL";
 
 export type KimpHistoryPoint = {
   t: number; // epoch ms
