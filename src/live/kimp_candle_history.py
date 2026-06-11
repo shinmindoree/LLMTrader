@@ -57,6 +57,13 @@ class KimpCandleHistory:
 
 _MEM_CACHE: dict[str, tuple[float, KimpCandleHistory]] = {}
 
+# Upbit 공개 시세 API는 IP당 초당 요청수를 제한한다(429). 페이지네이션이
+# 많은 큰 기간(7D/30D/ALL)에서 버스트로 막히지 않도록 전역 throttle + 재시도.
+_UPBIT_MIN_INTERVAL_SEC = 0.12
+_UPBIT_MAX_RETRIES = 4
+_upbit_throttle_lock = asyncio.Lock()
+_upbit_last_call_ts = 0.0
+
 
 def _cache_key(symbol: str, range_name: KimpHistoryRange) -> str:
     return f"kimp:history:v2:{symbol}:{range_name}"
@@ -183,6 +190,38 @@ async def _set_cached_history(key: str, history: KimpCandleHistory, ttl_sec: int
         _log.debug("KIMP history cache write failed", exc_info=True)
 
 
+async def _upbit_get(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, Any],
+) -> httpx.Response:
+    """Throttle + 429 재시도가 적용된 Upbit GET.
+
+    전역 lock 으로 호출 간 최소 간격을 강제해 동시/연속 페이지 요청이
+    초당 제한에 걸리지 않게 한다. 429 시 ``Remaining-Req`` / 지수 백오프로 재시도.
+    """
+    global _upbit_last_call_ts
+    last_exc: Exception | None = None
+    for attempt in range(_UPBIT_MAX_RETRIES):
+        async with _upbit_throttle_lock:
+            wait = _UPBIT_MIN_INTERVAL_SEC - (time.monotonic() - _upbit_last_call_ts)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            _upbit_last_call_ts = time.monotonic()
+        resp = await client.get(url, params=params)
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            return resp
+        last_exc = httpx.HTTPStatusError(
+            "429 Too Many Requests", request=resp.request, response=resp
+        )
+        backoff = min(2.0, 0.4 * (2**attempt))
+        await asyncio.sleep(backoff)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("upbit request failed")
+
+
 async def _fetch_upbit_candles(
     client: httpx.AsyncClient,
     market: str,
@@ -197,15 +236,15 @@ async def _fetch_upbit_candles(
     max_pages = max(1, math.ceil(((end_ms - start_ms) / interval) / 200) + 2)
 
     for _ in range(max_pages):
-        resp = await client.get(
+        resp = await _upbit_get(
+            client,
             url,
-            params={
+            {
                 "market": market,
                 "to": cursor.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "count": 200,
             },
         )
-        resp.raise_for_status()
         rows = resp.json()
         if not isinstance(rows, list) or not rows:
             break
