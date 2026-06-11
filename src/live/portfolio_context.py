@@ -48,6 +48,10 @@ class _SymbolTradingProxy:
         return self._ctx.position_size
 
     @property
+    def position(self) -> Any:
+        return self._ctx.position
+
+    @property
     def position_entry_price(self) -> float:
         return self._ctx.position_entry_price
 
@@ -183,6 +187,10 @@ class PortfolioContext:
     @property
     def position_size(self) -> float:
         return self._trade_contexts[self.primary_symbol].position_size
+
+    @property
+    def position(self) -> Any:
+        return self._trade_contexts[self.primary_symbol].position
 
     @property
     def position_entry_price(self) -> float:

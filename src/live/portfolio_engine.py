@@ -52,6 +52,10 @@ class StreamBoundStrategyContext:
         return self._portfolio.for_symbol(self.symbol).position_size
 
     @property
+    def position(self) -> Any:
+        return self._portfolio.for_symbol(self.symbol).position
+
+    @property
     def position_entry_price(self) -> float:
         return self._portfolio.for_symbol(self.symbol).position_entry_price
 
