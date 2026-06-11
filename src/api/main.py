@@ -2098,44 +2098,27 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
         _: AuthenticatedUser = Depends(require_auth),
     ) -> KimpHistoryResponse:
-        """심볼별 김프 시계열. ``range`` 에 따라 1H/1D/7D/30D/ALL 윈도우."""
-        from datetime import datetime as _dt
-        from datetime import timedelta as _td
-        from datetime import timezone as _tz
+        """심볼별 USDT/KRW 기준 김프 시계열.
 
-        from live.kimp_history import recent_series, window_stats
+        외부 캔들(Upbit KRW-코인, Upbit KRW-USDT, Binance 코인USDT)을 조합해
+        선택 심볼 1개만 계산하고, 기간별 결과는 서버 캐시에 저장한다.
+        """
+        from live.kimp_candle_history import get_kimp_candle_history
 
+        _ = session
         sym = symbol.strip().upper()
         if not sym:
             raise HTTPException(status_code=400, detail="symbol is required")
 
-        windows = {
-            "1H": _td(hours=1),
-            "1D": _td(days=1),
-            "7D": _td(days=7),
-            "30D": _td(days=30),
-        }
-        now = _dt.now(_tz.utc)
-        delta = windows.get(range)
-        since = now - delta if delta is not None else None
-
-        series = await recent_series(session, sym, since=since, max_points=2000)
-        stat_days = (
-            max(1, int(delta.total_seconds() // 86400) or 1)
-            if delta is not None
-            else None
-        )
-        stats = await window_stats(session, sym, days=stat_days)
-        points = [
-            KimpHistoryPoint(t=int(ts.timestamp() * 1000), p=float(p)) for ts, p in series
-        ]
+        history = await get_kimp_candle_history(sym, range)
+        points = [KimpHistoryPoint(t=int(ts), p=float(p)) for ts, p in history.series]
         return KimpHistoryResponse(
             symbol=sym,
             range=range,
-            as_of=now,
-            mean_pct=(float(stats["mean"]) if stats.get("mean") is not None else None),
-            std_pct=(float(stats["std"]) if stats.get("std") is not None else None),
-            n_samples=int(stats.get("n") or 0),
+            as_of=history.as_of,
+            mean_pct=history.mean_pct,
+            std_pct=history.std_pct,
+            n_samples=history.n_samples,
             series=points,
         )
 
