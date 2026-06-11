@@ -1,4 +1,4 @@
-"""MFP V3: V2 profit-protect exit + manual-close re-entry guard.
+"""MFP V3: base MFP + manual-close re-entry guard.
 
 Manual-close guard
 ------------------
@@ -23,19 +23,17 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 # Alias parent name so auto-loader does not pick the imported base class first.
-from multi_factor_portfolio_v2_strategy import (  # noqa: E402
-    STRATEGY_PARAM_SCHEMA as _V2_PARAM_SCHEMA,
+from multi_factor_portfolio_strategy import (  # noqa: E402
+    STRATEGY_PARAM_SCHEMA as _BASE_PARAM_SCHEMA,
 )
-from multi_factor_portfolio_v2_strategy import (  # noqa: E402
-    MultiFactorPortfolioV2Strategy as _MFPV2Base,
-)
+from multi_factor_portfolio_strategy import MultiFactorPortfolioStrategy as _MFPBase  # noqa: E402
 
 
-STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = list(_V2_PARAM_SCHEMA)
+STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = list(_BASE_PARAM_SCHEMA)
 
 
-class MultiFactorPortfolioV3Strategy(_MFPV2Base):
-    """MFP V2 with manual flatten suppression for same-side stale targets."""
+class MultiFactorPortfolioV3Strategy(_MFPBase):
+    """Base MFP with manual flatten suppression for same-side stale targets."""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -51,6 +49,19 @@ class MultiFactorPortfolioV3Strategy(_MFPV2Base):
         if normalized != self._manual_close_block_side:
             self._manual_close_block_reported = False
         self._manual_close_block_side = normalized
+
+    @staticmethod
+    def _safe_float(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    def _current_side(self, ctx: Any) -> int:
+        size = self._safe_float(getattr(ctx, "position_size", 0.0), 0.0)
+        if abs(size) < 1e-12:
+            return 0
+        return 1 if size > 0.0 else -1
 
     def _handle_manual_close_guard(
         self,
@@ -89,67 +100,6 @@ class MultiFactorPortfolioV3Strategy(_MFPV2Base):
             return True
         return False
 
-    def _close_for_profit_protect(
-        self,
-        ctx: Any,
-        target: int,
-        long_count: int,
-        short_count: int,
-        ts: int,
-        ratio: float,
-    ) -> bool:
-        activation = float(self.profit_lock_activation_pct)
-        exit_level = float(self.profit_lock_exit_pct)
-        if activation > 0.0 and ratio >= activation:
-            self._profit_lock_armed = True
-
-        if (
-            not self._profit_lock_armed
-            or exit_level < 0.0
-            or ratio > exit_level
-        ):
-            return False
-
-        prev_side = int(self._committed_side)
-        reason = (
-            "MFP V3: profit-protect exit "
-            f"(peak={self._profit_lock_peak_ratio * 100:.3f}%, "
-            f"now={ratio * 100:.3f}%, "
-            f"activation={activation * 100:.3f}%, "
-            f"exit={exit_level * 100:.3f}%)"
-        )
-        try:
-            ctx.close_position(reason=reason)
-        except Exception:  # noqa: BLE001
-            pass
-
-        self._committed_side = 0
-        if prev_side != 0:
-            self._set_manual_close_guard(prev_side)
-        self._emit_event(ctx, "MFP_PROFIT_PROTECT_EXIT", {
-            "ts": ts,
-            "prev_side": prev_side,
-            "target": int(target),
-            "long_legs": int(long_count),
-            "short_legs": int(short_count),
-            "pnl_ratio": ratio,
-            "peak_ratio": float(self._profit_lock_peak_ratio),
-            "activation_ratio": float(activation),
-            "exit_ratio": float(exit_level),
-            "reentry_block_side": int(self._manual_close_block_side),
-        })
-        self._emit_event(ctx, "MFP_FLAT", {
-            "ts": ts,
-            "target": 0,
-            "prev_side": prev_side,
-            "committed_side": 0,
-            "long_legs": int(long_count),
-            "short_legs": int(short_count),
-            "kind": "profit_protect",
-        })
-        self._reset_profit_lock()
-        return True
-
     def _reconcile(
         self,
         ctx: Any,
@@ -160,9 +110,7 @@ class MultiFactorPortfolioV3Strategy(_MFPV2Base):
     ) -> None:
         actual = self._current_side(ctx)
         cached = int(self._committed_side)
-
         if actual == 0:
-            self._reset_profit_lock()
             if cached != 0:
                 self._set_manual_close_guard(cached)
                 self._committed_side = 0
@@ -190,18 +138,6 @@ class MultiFactorPortfolioV3Strategy(_MFPV2Base):
             })
             self._committed_side = int(actual)
         self._clear_manual_close_guard()
-
-        if actual != self._profit_lock_side:
-            self._profit_lock_side = int(actual)
-            self._profit_lock_armed = False
-            self._profit_lock_peak_ratio = 0.0
-
-        ratio = self._current_pnl_ratio(ctx)
-        if ratio > self._profit_lock_peak_ratio:
-            self._profit_lock_peak_ratio = ratio
-
-        if self._close_for_profit_protect(ctx, target, long_count, short_count, ts, ratio):
-            return
 
         self._reconcile_synced(ctx, target, long_count, short_count, ts)
 
