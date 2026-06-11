@@ -56,7 +56,7 @@ function walletHasFutures(wallet: WalletAccount): boolean {
 }
 
 function walletOptionDisabled(wallet: WalletAccount): boolean {
-  return wallet.status !== "active" || !walletHasFutures(wallet);
+  return wallet.status !== "active" || !wallet.api_key_masked || !walletHasFutures(wallet);
 }
 
 function walletLabel(wallet: WalletAccount): string {
@@ -118,14 +118,21 @@ export function LiveForm({
   );
 
   const tradingWallets = (walletAccounts ?? []).filter((wallet) => wallet.env === env);
+  const activeMasterWallet = tradingWallets.find(
+    (wallet) => wallet.role === "master" && !walletOptionDisabled(wallet),
+  );
+  const showDefaultCredentialOption = activeMasterWallet == null;
   const selectedWallet = tradingWallets.find((wallet) => wallet.id === selectedWalletId) ?? null;
   const usingDefaultCredential = selectedWalletId === "";
+  const selectedAccountUsesPrimaryBalance =
+    usingDefaultCredential || selectedWallet?.role === "master";
   const selectedWalletValid =
-    usingDefaultCredential || (selectedWallet !== null && !walletOptionDisabled(selectedWallet));
+    (usingDefaultCredential && showDefaultCredentialOption) ||
+    (selectedWallet !== null && !walletOptionDisabled(selectedWallet));
   const totalWallet = accountSnapshot?.total_wallet_balance ?? null;
   const availableBalance = accountSnapshot?.available_balance ?? null;
   const estimatedPosition =
-    usingDefaultCredential && availableBalance !== null
+    selectedAccountUsesPrimaryBalance && availableBalance !== null
       ? availableBalance * maxPosition * Number(leverage)
       : null;
 
@@ -143,14 +150,23 @@ export function LiveForm({
   }, []);
 
   useEffect(() => {
-    if (!selectedWalletId || !walletAccounts) return;
+    if (!walletAccounts) return;
+    if (!selectedWalletId) {
+      if (!showDefaultCredentialOption && activeMasterWallet) {
+        setSelectedWalletId(activeMasterWallet.id);
+      }
+      return;
+    }
     const stillAvailable = walletAccounts.some(
-      (wallet) => wallet.id === selectedWalletId && wallet.env === env,
+      (wallet) =>
+        wallet.id === selectedWalletId &&
+        wallet.env === env &&
+        !walletOptionDisabled(wallet),
     );
     if (!stillAvailable) {
-      setSelectedWalletId("");
+      setSelectedWalletId(activeMasterWallet?.id ?? "");
     }
-  }, [env, selectedWalletId, walletAccounts]);
+  }, [activeMasterWallet, env, selectedWalletId, showDefaultCredentialOption, walletAccounts]);
 
   const onSubmit = async () => {
     setError(null);
@@ -247,7 +263,7 @@ export function LiveForm({
       ) : null}
 
       {/* Wallet & Position Size Estimator */}
-      {accountSnapshot?.connected && availableBalance !== null && (
+      {accountSnapshot?.connected && selectedAccountUsesPrimaryBalance && availableBalance !== null && (
         <div className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
           <div className="mb-2 grid grid-cols-2 gap-3 text-xs">
             <div>
@@ -315,7 +331,9 @@ export function LiveForm({
             value={selectedWalletId}
             onChange={(e) => setSelectedWalletId(e.target.value)}
           >
-            <option value="" className="bg-[#131722]">기본 Binance API 키</option>
+            {showDefaultCredentialOption ? (
+              <option value="" className="bg-[#131722]">기본 Binance API 키</option>
+            ) : null}
             {tradingWallets.map((wallet) => (
               <option
                 key={wallet.id}
