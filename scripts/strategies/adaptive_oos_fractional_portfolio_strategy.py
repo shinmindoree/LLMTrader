@@ -8,7 +8,8 @@ trades a small quantized fractional exposure during the month.
 
 Runtime contract:
   - Base candle interval: 15m.
-  - Requires the same local/BLOB parquet feeds as MFP for BTCUSDT.
+  - Uses the checked-in strict-OOS exposure cache by default so AlphaWeaver
+    backtests do not rebuild the heavy research model on every run.
   - The first ``warmup_months`` are research warmup; trading starts afterward.
 """
 
@@ -39,6 +40,8 @@ from strategy.base import Strategy  # noqa: E402
 from strategy.context import StrategyContext  # noqa: E402
 
 STRATEGY_PARAMS: dict[str, Any] = {
+    "use_precomputed_cache": True,
+    "allow_slow_rebuild": False,
     "warmup_months": 12,
     "max_weight_per_leg": 0.08,
     "max_selected_legs": 120,
@@ -52,6 +55,8 @@ STRATEGY_PARAMS: dict[str, Any] = {
     "probe_exposure": 0.005,
     "model_commission_rate": 0.0004,
 }
+
+_CACHE_PATH = _THIS_DIR / "_cache" / "adaptive_oos_fractional_model_v1.npz"
 
 
 def _don(
@@ -293,6 +298,22 @@ def _build_monthly_model(
     return ts, base
 
 
+def _load_precomputed_model() -> tuple[np.ndarray, np.ndarray] | None:
+    if not _CACHE_PATH.exists():
+        return None
+    try:
+        with np.load(_CACHE_PATH) as data:
+            ts = np.asarray(data["ts"], dtype="int64")
+            base = np.asarray(data["base"], dtype="f8")
+    except (OSError, KeyError, ValueError) as exc:
+        raise RuntimeError(f"failed to load AOF model cache: {_CACHE_PATH}") from exc
+    if ts.ndim != 1 or base.ndim != 1 or ts.size != base.size:
+        raise RuntimeError(
+            f"invalid AOF model cache shape: ts={ts.shape}, base={base.shape}"
+        )
+    return ts, base
+
+
 class AdaptiveOosFractionalPortfolioStrategy(Strategy):
     """Monthly train-only selector + fractional exposure guard."""
 
@@ -315,8 +336,25 @@ class AdaptiveOosFractionalPortfolioStrategy(Strategy):
                 "AdaptiveOosFractionalPortfolioStrategy currently supports BTCUSDT only"
             )
         self.symbol = symbol
-        unified = mfp._load_unified_dataset(symbol)
-        self._model_ts, self._base_exposure = _build_monthly_model(unified, self.params)
+        cached = (
+            _load_precomputed_model()
+            if bool(self.params["use_precomputed_cache"])
+            else None
+        )
+        if cached is not None:
+            self._model_ts, self._base_exposure = cached
+        else:
+            if not bool(self.params["allow_slow_rebuild"]):
+                raise RuntimeError(
+                    "AOF model cache is missing. Restore "
+                    f"{_CACHE_PATH} or set allow_slow_rebuild=True for a slow "
+                    "research-model rebuild."
+                )
+            unified = mfp._load_unified_dataset(symbol)
+            self._model_ts, self._base_exposure = _build_monthly_model(
+                unified,
+                self.params,
+            )
         self._last_bar_ts = 0
         self._month_key = None
         self._month_start_equity = 0.0
