@@ -553,7 +553,7 @@ const ko: TranslationKeys = {
       payoffRatio: "평균 이익 ÷ 평균 손실. 1보다 크면 이익이 손실보다 큽니다.",
       maxConsecutiveWins: "연속으로 이익이 난 최대 횟수",
       maxConsecutiveLosses: "연속으로 손실이 난 최대 횟수",
-      maxDrawdown: "누적 손익 곡선의 고점 대비 최대 하락폭(USDT)입니다.",
+      maxDrawdown: "자본금 곡선의 고점 대비 하락률이 가장 큰 구간입니다. USDT 값은 같은 구간의 하락액입니다.",
       bestWorst: "단일 포지션의 최대 이익 / 최대 손실",
       recoveryFactor: "순손익 ÷ 최대 낙폭. 클수록 위험 대비 회복력이 좋습니다.",
       totalCommission: "모든 체결의 수수료 합계입니다.",

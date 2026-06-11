@@ -550,7 +550,7 @@ const en = {
       payoffRatio: "Average win ÷ average loss. Above 1 means wins exceed losses.",
       maxConsecutiveWins: "Longest streak of consecutive winning trades.",
       maxConsecutiveLosses: "Longest streak of consecutive losing trades.",
-      maxDrawdown: "Largest peak-to-trough drop of the cumulative PnL curve (USDT).",
+      maxDrawdown: "Largest percentage peak-to-trough drop of the equity curve. The USDT value is from the same interval.",
       bestWorst: "Largest single-position profit / loss.",
       recoveryFactor: "Net profit ÷ max drawdown. Higher means better risk-adjusted recovery.",
       totalCommission: "Sum of commissions across all fills.",

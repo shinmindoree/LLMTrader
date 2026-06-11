@@ -1054,30 +1054,32 @@ export function TradeAnalysis({ job, liveTrades }: { job: Job; liveTrades: Trade
       ? (netProfit / initialEquity) * 100
       : null;
 
-  // Max drawdown (USDT) from the cumulative-PnL curve. Measured peak-to-trough
-  // on cumulative realized PnL (starts at 0), so it does not depend on the
-  // account balance base.
+  // MDD is the largest percentage peak-to-trough drop on the equity curve.
+  // Keep the USDT amount from the same worst-percentage interval; choosing the
+  // largest absolute USDT drop first can understate MDD% after the account grows.
   const maxDrawdown = useMemo(() => {
     let cum = 0;
     let peak = 0;
-    let maxDd = 0;
-    let peakAtMaxDd = 0; // cumulative-PnL peak at the moment of the worst drawdown
+    let maxDdAmount = 0;
+    let maxDdPct: number | null = null;
     for (const p of positionPnls) {
       cum += p;
       if (cum > peak) peak = cum;
-      const dd = peak - cum;
-      if (dd > maxDd) {
-        maxDd = dd;
-        peakAtMaxDd = peak;
+      const ddAmount = peak - cum;
+      const peakEquity =
+        initialEquity != null && initialEquity > 0 ? initialEquity + peak : null;
+      const ddPct =
+        peakEquity != null && peakEquity > 0 ? (ddAmount / peakEquity) * 100 : null;
+      if (ddPct !== null) {
+        if (maxDdPct === null || ddPct > maxDdPct) {
+          maxDdPct = ddPct;
+          maxDdAmount = ddAmount;
+        }
+      } else if (ddAmount > maxDdAmount) {
+        maxDdAmount = ddAmount;
       }
     }
-    // Express the drawdown as a % of the equity peak it was measured from.
-    // Equity peak = initialEquity + cumulative-PnL peak. Falls back to null
-    // when the initial balance is unknown/non-positive (e.g. some live jobs).
-    const peakEquity =
-      initialEquity != null && initialEquity > 0 ? initialEquity + peakAtMaxDd : null;
-    const pct = peakEquity != null && peakEquity > 0 ? (maxDd / peakEquity) * 100 : null;
-    return { amount: maxDd, pct };
+    return { amount: maxDdAmount, pct: maxDdPct };
   }, [positionPnls, initialEquity]);
 
   // Recovery factor = net profit / max drawdown. Higher = better risk-adjusted
