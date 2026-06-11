@@ -678,8 +678,21 @@ export async function getJobCounts(): Promise<JobCounts> {
   return json<JobCounts>("/api/backend/api/jobs/counts");
 }
 
-export async function getBinanceAccountSummary(): Promise<BinanceAccountSummary> {
-  return json<BinanceAccountSummary>("/api/backend/api/binance/account/summary");
+export async function getBinanceAccountSummary(options?: {
+  env?: BinanceCredentialEnv;
+  walletAccountId?: string | null;
+}): Promise<BinanceAccountSummary> {
+  const params = new URLSearchParams();
+  if (options?.env) {
+    params.set("env", options.env);
+  }
+  if (options?.walletAccountId) {
+    params.set("wallet_account_id", options.walletAccountId);
+  }
+  const query = params.toString();
+  return json<BinanceAccountSummary>(
+    `/api/backend/api/binance/account/summary${query ? `?${query}` : ""}`,
+  );
 }
 
 export async function getPortfolioSummary(): Promise<

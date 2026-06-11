@@ -106,11 +106,6 @@ export function LiveForm({
   const slotsAvailable = maxSlots - activeCount;
   const canCreate = slotsAvailable > 0;
 
-  const { data: accountSnapshot } = useSWR<BinanceAccountSummary>(
-    "binanceAccountSummary",
-    () => getBinanceAccountSummary(),
-    { dedupingInterval: 10_000 },
-  );
   const { data: walletAccounts } = useSWR<WalletAccount[]>(
     ["walletAccounts", env],
     () => listWalletAccounts(env),
@@ -124,15 +119,20 @@ export function LiveForm({
   const showDefaultCredentialOption = activeMasterWallet == null;
   const selectedWallet = tradingWallets.find((wallet) => wallet.id === selectedWalletId) ?? null;
   const usingDefaultCredential = selectedWalletId === "";
-  const selectedAccountUsesPrimaryBalance =
-    usingDefaultCredential || selectedWallet?.role === "master";
   const selectedWalletValid =
     (usingDefaultCredential && showDefaultCredentialOption) ||
     (selectedWallet !== null && !walletOptionDisabled(selectedWallet));
+  const { data: accountSnapshot } = useSWR<BinanceAccountSummary>(
+    selectedWalletValid
+      ? ["binanceAccountSummary", env, selectedWalletId || "default"]
+      : null,
+    () => getBinanceAccountSummary({ env, walletAccountId: selectedWalletId || null }),
+    { dedupingInterval: 10_000 },
+  );
   const totalWallet = accountSnapshot?.total_wallet_balance ?? null;
   const availableBalance = accountSnapshot?.available_balance ?? null;
   const estimatedPosition =
-    selectedAccountUsesPrimaryBalance && availableBalance !== null
+    availableBalance !== null
       ? availableBalance * maxPosition * Number(leverage)
       : null;
 
@@ -263,7 +263,7 @@ export function LiveForm({
       ) : null}
 
       {/* Wallet & Position Size Estimator */}
-      {accountSnapshot?.connected && selectedAccountUsesPrimaryBalance && availableBalance !== null && (
+      {accountSnapshot?.connected && availableBalance !== null && (
         <div className="mb-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3">
           <div className="mb-2 grid grid-cols-2 gap-3 text-xs">
             <div>

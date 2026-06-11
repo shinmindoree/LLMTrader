@@ -1338,22 +1338,102 @@ def create_app() -> FastAPI:
         response_model=BinanceAccountSummaryResponse,
     )
     async def binance_account_summary(
+        env: str = Query("mainnet", pattern="^(mainnet|testnet)$"),
+        wallet_account_id: str | None = Query(default=None),
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> BinanceAccountSummaryResponse:
-        from control.repo import get_user_profile
+        def to_response(data: dict[str, Any]) -> BinanceAccountSummaryResponse:
+            assets = [BinanceAssetBalance(**a) for a in data.get("assets", [])]
+            positions = [BinancePositionSummary(**p) for p in data.get("positions", [])]
 
-        profile = await get_user_profile(session, user_id=user.user_id)
+            update_time_raw = data.get("update_time")
+            update_time = datetime.now()
+            if isinstance(update_time_raw, str):
+                try:
+                    update_time = datetime.fromisoformat(update_time_raw)
+                except (ValueError, TypeError):
+                    pass
+
+            return BinanceAccountSummaryResponse(
+                configured=data.get("configured", False),
+                connected=data.get("connected", False),
+                mode=data.get("mode", "testnet"),
+                base_url=data.get("base_url", ""),
+                total_wallet_balance=data.get("total_wallet_balance"),
+                total_wallet_balance_btc=data.get("total_wallet_balance_btc"),
+                total_unrealized_profit=data.get("total_unrealized_profit"),
+                total_margin_balance=data.get("total_margin_balance"),
+                available_balance=data.get("available_balance"),
+                can_trade=data.get("can_trade"),
+                update_time=update_time,
+                assets=assets,
+                positions=positions,
+                error=data.get("error"),
+            )
+
+        base_url = {
+            "mainnet": "https://fapi.binance.com",
+            "testnet": "https://testnet.binancefuture.com",
+        }[env]
+
+        if wallet_account_id:
+            try:
+                wallet_id = uuid.UUID(wallet_account_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="invalid wallet_account_id") from exc
+
+            wallet = await get_wallet_account(session, wallet_account_id=wallet_id)
+            if wallet is None or wallet.user_id != user.user_id:
+                raise HTTPException(status_code=404, detail="Wallet not found")
+            if wallet.env != env:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Wallet env {wallet.env} does not match requested env {env}",
+                )
+            wallet_role = wallet.role.value if hasattr(wallet.role, "value") else wallet.role
+            if (
+                wallet_role == WalletRole.SUB.value
+                and not (wallet.enabled_wallets or {}).get("futures_um")
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Selected sub-account does not have USD-M Futures enabled",
+                )
+
+            from binance.client_factory import BinanceClientFactoryError, get_client_factory
+            from runner.account_snapshot import fetch_snapshot_from_client
+
+            try:
+                client = await get_client_factory().get_trading_client(
+                    session,
+                    wallet_account_id=str(wallet_id),
+                )
+            except BinanceClientFactoryError as exc:
+                return BinanceAccountSummaryResponse(
+                    configured=True,
+                    connected=False,
+                    mode=env,
+                    base_url=base_url,
+                    error=str(exc),
+                )
+
+            data = await fetch_snapshot_from_client(
+                client,
+                base_url=getattr(client, "base_url", base_url),
+            )
+            return to_response(data)
+
         from control.repo import get_binance_credential
 
-        cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
+        cred = await get_binance_credential(session, user_id=user.user_id, env=env)
         if not cred:
             return BinanceAccountSummaryResponse(
                 configured=False,
                 connected=False,
-                mode="mainnet",
+                mode=env,
                 base_url="",
-                error="Binance mainnet API keys are not configured. Go to Settings to set up your keys.",
+                error=f"Binance {env} API keys are not configured. Go to Settings to set up your keys.",
             )
 
         from common.crypto import get_crypto_service
@@ -1365,43 +1445,15 @@ def create_app() -> FastAPI:
             return BinanceAccountSummaryResponse(
                 configured=True,
                 connected=False,
-                mode="mainnet",
-                base_url="https://fapi.binance.com",
+                mode=env,
+                base_url=base_url,
                 error=f"Failed to decrypt keys: {type(exc).__name__}",
             )
 
-        base_url = "https://fapi.binance.com"
-
         from runner.account_snapshot import _fetch_snapshot
+
         data = await _fetch_snapshot(api_key=api_key, api_secret=api_secret, base_url=base_url)
-
-        assets = [BinanceAssetBalance(**a) for a in data.get("assets", [])]
-        positions = [BinancePositionSummary(**p) for p in data.get("positions", [])]
-
-        update_time_raw = data.get("update_time")
-        update_time = datetime.now()
-        if isinstance(update_time_raw, str):
-            try:
-                update_time = datetime.fromisoformat(update_time_raw)
-            except (ValueError, TypeError):
-                pass
-
-        return BinanceAccountSummaryResponse(
-            configured=data.get("configured", False),
-            connected=data.get("connected", False),
-            mode=data.get("mode", "testnet"),
-            base_url=data.get("base_url", ""),
-            total_wallet_balance=data.get("total_wallet_balance"),
-            total_wallet_balance_btc=data.get("total_wallet_balance_btc"),
-            total_unrealized_profit=data.get("total_unrealized_profit"),
-            total_margin_balance=data.get("total_margin_balance"),
-            available_balance=data.get("available_balance"),
-            can_trade=data.get("can_trade"),
-            update_time=update_time,
-            assets=assets,
-            positions=positions,
-            error=data.get("error"),
-        )
+        return to_response(data)
 
     @app.get("/api/portfolio/summary", response_model=PortfolioSummaryResponse)
     async def portfolio_summary(

@@ -36,18 +36,13 @@ def _binance_mode(base_url: str) -> Literal["testnet", "mainnet", "custom"]:
     return "custom"
 
 
-async def _fetch_snapshot(
-    api_key: str,
-    api_secret: str,
-    base_url: str,
+async def fetch_snapshot_from_client(
+    client: BinanceHTTPClient,
+    *,
+    base_url: str | None = None,
 ) -> dict[str, Any]:
+    base_url = base_url or getattr(client, "base_url", "")
     mode = _binance_mode(base_url)
-
-    client = BinanceHTTPClient(
-        api_key=api_key,
-        api_secret=api_secret,
-        base_url=base_url,
-    )
     try:
         account = await client.fetch_account_info()
 
@@ -179,6 +174,20 @@ async def _fetch_snapshot(
             "error": str(exc)[:1000],
             "update_time": datetime.now(timezone.utc).isoformat(),
         }
+
+
+async def _fetch_snapshot(
+    api_key: str,
+    api_secret: str,
+    base_url: str,
+) -> dict[str, Any]:
+    client = BinanceHTTPClient(
+        api_key=api_key,
+        api_secret=api_secret,
+        base_url=base_url,
+    )
+    try:
+        return await fetch_snapshot_from_client(client, base_url=base_url)
     finally:
         await client.aclose()
 

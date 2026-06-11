@@ -33,6 +33,10 @@ function extractSymbols(config: Record<string, unknown> | null | undefined): str
   return syms;
 }
 
+function extractEnv(config: Record<string, unknown> | null | undefined): "mainnet" | "testnet" {
+  return config?.env === "testnet" ? "testnet" : "mainnet";
+}
+
 const formatNumber = (value: number, digits = 2): string =>
   value.toLocaleString(undefined, {
     minimumFractionDigits: digits,
@@ -159,10 +163,13 @@ export function LiveJobPositionPanel({
 }) {
   const isVisible = usePageVisibility();
   const config = isRecord(job.config) ? job.config : null;
+  const accountEnv = useMemo(() => extractEnv(config), [config]);
 
   const { data: snapshot } = useSWR<BinanceAccountSummary>(
-    active && job.type === "LIVE" ? "binanceAccountSummary" : null,
-    () => getBinanceAccountSummary(),
+    active && job.type === "LIVE"
+      ? ["binanceAccountSummary", accountEnv, job.wallet_account_id ?? "default"]
+      : null,
+    () => getBinanceAccountSummary({ env: accountEnv, walletAccountId: job.wallet_account_id }),
     {
       refreshInterval: isVisible ? 15_000 : 30_000,
       dedupingInterval: 5_000,

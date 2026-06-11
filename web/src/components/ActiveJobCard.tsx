@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import useSWR from "swr";
 import { getBinanceAccountSummary, listTrades } from "@/lib/api";
@@ -42,6 +42,10 @@ function extractSymbols(config: Record<string, unknown>): string[] {
   return syms;
 }
 
+function extractEnv(config: Record<string, unknown>): "mainnet" | "testnet" {
+  return config.env === "testnet" ? "testnet" : "mainnet";
+}
+
 const formatNumber = (value: number, digits = 2): string =>
   value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
@@ -63,6 +67,13 @@ export function ActiveJobCard({
   const { t } = useI18n();
   const isVisible = usePageVisibility();
   const isActive = !FINISHED_STATUSES.has(job.status);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isActive) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [isActive]);
 
   const { data: trades = [] } = useSWR<Trade[]>(
     isActive ? ["trades", job.job_id] : null,
@@ -73,9 +84,16 @@ export function ActiveJobCard({
     },
   );
 
+  const accountEnv = useMemo(
+    () => (job.config ? extractEnv(job.config) : "mainnet"),
+    [job.config],
+  );
+
   const { data: snapshot } = useSWR<BinanceAccountSummary>(
-    isActive ? "binanceAccountSummary" : null,
-    () => getBinanceAccountSummary(),
+    isActive
+      ? ["binanceAccountSummary", accountEnv, job.wallet_account_id ?? "default"]
+      : null,
+    () => getBinanceAccountSummary({ env: accountEnv, walletAccountId: job.wallet_account_id }),
     {
       refreshInterval: isVisible ? 15_000 : 30_000,
       dedupingInterval: 5_000,
@@ -129,7 +147,7 @@ export function ActiveJobCard({
   const totalPnl = netPnl !== null ? netPnl + unrealizedPnl : null;
 
   const runningDuration = useMemo(() => {
-    const ms = Date.now() - new Date(job.created_at).getTime();
+    const ms = nowMs - new Date(job.created_at).getTime();
     if (ms < 0) return null;
     const totalMin = Math.floor(ms / 60_000);
     const d = Math.floor(totalMin / 1440);
@@ -138,7 +156,7 @@ export function ActiveJobCard({
     if (d > 0) return `${d}d ${h}h`;
     if (h > 0) return `${h}h ${m}m`;
     return `${m}m`;
-  }, [job.created_at]);
+  }, [job.created_at, nowMs]);
 
   const lastTradeAgo = useMemo(() => {
     if (trades.length === 0) return null;
@@ -150,7 +168,7 @@ export function ActiveJobCard({
       .filter((ts): ts is number => ts !== null && !Number.isNaN(ts));
     if (timestamps.length === 0) return null;
     const last = Math.max(...timestamps);
-    const ms = Date.now() - last;
+    const ms = nowMs - last;
     if (ms < 0) return null;
     const totalMin = Math.floor(ms / 60_000);
     if (totalMin < 1) return "just now";
@@ -158,7 +176,7 @@ export function ActiveJobCard({
     const m = totalMin % 60;
     if (h > 0) return `${h}h ${m}m ago`;
     return `${m}m ago`;
-  }, [trades]);
+  }, [nowMs, trades]);
 
   return (
     <li className="rounded-lg border border-[#2962ff]/30 bg-[#1a2340]/50 px-4 py-3">
