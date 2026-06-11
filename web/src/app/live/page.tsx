@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
 import useSWR, { useSWRConfig } from "swr";
-import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies, listTradesBatch, stopAllJobs, stopJob } from "@/lib/api";
+import { deleteAllJobs, deleteJob, getBillingStatus, getBinanceKeysStatus, getJobCounts, listJobSummaries, listStrategies, listTradesBatch, listWalletAccounts, stopAllJobs, stopJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { BillingStatus, BinanceKeysStatus, Job, JobCounts, JobStatus, JobSummary, StrategyInfo, Trade } from "@/lib/types";
+import type { BillingStatus, BinanceKeysStatus, Job, JobCounts, JobStatus, JobSummary, StrategyInfo, Trade, WalletAccount } from "@/lib/types";
 import { ActiveJobCard } from "@/components/ActiveJobCard";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { RunHistoryTableSkeleton } from "@/components/skeletons/RunHistoryTableSkeleton";
@@ -47,6 +47,11 @@ export default function LiveJobsPage() {
   );
 
   const { data: jobCounts } = useSWR<JobCounts>("jobCounts", () => getJobCounts());
+  const { data: walletAccounts = [] } = useSWR<WalletAccount[]>(
+    "walletAccountsAll",
+    () => listWalletAccounts(),
+    { dedupingInterval: 30_000 },
+  );
 
   const hasActiveItems = (data: JobSummary[]) => data.some((j) => ACTIVE_STATUSES.has(j.status));
 
@@ -85,6 +90,9 @@ export default function LiveJobsPage() {
   const activeJobs = useMemo(() => items.filter((j) => ACTIVE_STATUSES.has(j.status)), [items]);
   const activeCount = activeJobs.length;
   const maxSlots = billing?.limits?.max_live_jobs ?? MAX_SLOTS_FALLBACK;
+  const walletById = useMemo(() => {
+    return new Map(walletAccounts.map((wallet) => [wallet.id, wallet]));
+  }, [walletAccounts]);
 
   const onCreated = (job: Job) => {
     setLatestJob({
@@ -243,7 +251,13 @@ export default function LiveJobsPage() {
           </div>
           <ul className="space-y-2">
             {activeJobs.map((j) => (
-              <ActiveJobCard key={j.job_id} job={j} busy={busy} onStop={onStopJob} />
+              <ActiveJobCard
+                key={j.job_id}
+                job={j}
+                busy={busy}
+                onStop={onStopJob}
+                walletAccount={j.wallet_account_id ? walletById.get(j.wallet_account_id) : undefined}
+              />
             ))}
           </ul>
         </section>
