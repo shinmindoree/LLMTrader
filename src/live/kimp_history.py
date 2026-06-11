@@ -27,6 +27,7 @@ from live.kimp_calculator import DEFAULT_SYMBOLS, compute_kimp_snapshot
 _log = logging.getLogger("llmtrader.kimp_history")
 
 SNAPSHOT_INTERVAL_SEC = 60.0
+USDT_RATE_SOURCE = "upbit"
 
 
 async def collect_once(
@@ -121,7 +122,10 @@ async def window_stats(
     session: AsyncSession, symbol: str, days: int | None
 ) -> dict[str, float | int | None]:
     """심볼별 윈도우 통계: 평균/표준편차/표본수 + 직전 값."""
-    stmt = select(KimpSnapshot.kimp_pct).where(KimpSnapshot.symbol == symbol)
+    stmt = select(KimpSnapshot.kimp_pct).where(
+        KimpSnapshot.symbol == symbol,
+        KimpSnapshot.fx_source == USDT_RATE_SOURCE,
+    )
     if days is not None:
         since = datetime.now(timezone.utc) - timedelta(days=days)
         stmt = stmt.where(KimpSnapshot.ts >= since)
@@ -149,7 +153,10 @@ async def recent_series(
     max_points: int = 2000,
 ) -> list[tuple[datetime, float]]:
     """시계열을 ts 오름차순으로 반환. ``max_points`` 초과 시 균등 다운샘플."""
-    filters = [KimpSnapshot.symbol == symbol]
+    filters = [
+        KimpSnapshot.symbol == symbol,
+        KimpSnapshot.fx_source == USDT_RATE_SOURCE,
+    ]
     if since is not None:
         filters.append(KimpSnapshot.ts >= since)
 

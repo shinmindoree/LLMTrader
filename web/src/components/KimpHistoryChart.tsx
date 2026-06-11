@@ -22,6 +22,18 @@ function fmtPct(v: number | null | undefined, digits = 2): string {
   return `${(v * 100).toFixed(digits)}%`;
 }
 
+function fmtChartPct(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  const rounded = Math.abs(v) < 0.005 ? 0 : v;
+  return `${rounded.toFixed(2)}%`;
+}
+
+const chartPctPriceFormat = {
+  type: "custom" as const,
+  minMove: 0.01,
+  formatter: fmtChartPct,
+};
+
 type Props = {
   symbol: string;
   latest?: KimpScreenerItem | null;
@@ -75,7 +87,7 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
     lineRef.current = chart.addLineSeries({
       color: "#60a5fa",
       lineWidth: 2,
-      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
+      priceFormat: chartPctPriceFormat,
     });
     meanRef.current = chart.addLineSeries({
       color: "#868993",
@@ -83,7 +95,7 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
       lineStyle: LineStyle.Dashed,
       priceLineVisible: false,
       lastValueVisible: false,
-      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
+      priceFormat: chartPctPriceFormat,
     });
     upperRef.current = chart.addLineSeries({
       color: "#fbbf24",
@@ -91,7 +103,7 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
       lineStyle: LineStyle.Dotted,
       priceLineVisible: false,
       lastValueVisible: false,
-      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
+      priceFormat: chartPctPriceFormat,
     });
     lowerRef.current = chart.addLineSeries({
       color: "#fbbf24",
@@ -99,7 +111,7 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
       lineStyle: LineStyle.Dotted,
       priceLineVisible: false,
       lastValueVisible: false,
-      priceFormat: { type: "percent", precision: 2, minMove: 0.01 },
+      priceFormat: chartPctPriceFormat,
     });
     return () => {
       chart.remove();
