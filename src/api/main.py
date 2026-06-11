@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control.alembic_upgrade import run_alembic_upgrade_head
 from control.db import create_async_engine, create_session_maker, init_db
 from control.enums import EventKind, JobStatus, JobType
-from control.models import Job
+from control.models import Job, WalletAccountStatus, WalletRole
 from control.repo import (
     append_event,
     create_job,
@@ -38,6 +38,7 @@ from control.repo import (
     delete_jobs,
     get_account_snapshot,
     get_job,
+    get_wallet_account,
     get_strategy_meta_by_name,
     list_events,
     count_jobs,
@@ -609,6 +610,7 @@ def _job_to_response(job: Any) -> JobResponse:
         type=JobType(str(job.type)),
         status=job.status,
         strategy_path=job.strategy_path,
+        wallet_account_id=getattr(job, "wallet_account_id", None),
         config=_public_job_config(job.config_json),
         result=job.result_json,
         error=job.error,
@@ -637,6 +639,7 @@ def _job_summary_row_to_response(row: Any) -> JobSummary:
         type=JobType(str(row.type)),
         status=row.status,
         strategy_path=row.strategy_path,
+        wallet_account_id=row.wallet_account_id,
         config=_public_job_config(row.config_json),
         result_summary=summary,
         error=row.error,
@@ -2982,6 +2985,42 @@ def create_app() -> FastAPI:
         from api.quota import check_job_quota
         await check_job_quota(session, user_id=user.user_id, plan=user.plan, job_type=body.type)
 
+        wallet_account_id = body.wallet_account_id
+        if wallet_account_id is not None:
+            if body.type != JobType.LIVE:
+                raise HTTPException(
+                    status_code=422,
+                    detail="wallet_account_id is only supported for LIVE jobs.",
+                )
+            wallet = await get_wallet_account(session, wallet_account_id=wallet_account_id)
+            if wallet is None or wallet.user_id != user.user_id:
+                raise HTTPException(status_code=404, detail="Wallet account not found")
+            env = str(body.config.get("env") or "mainnet").strip().lower()
+            if wallet.env != env:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Wallet env({wallet.env}) does not match job env({env}).",
+                )
+            status = wallet.status.value if hasattr(wallet.status, "value") else str(wallet.status)
+            if status != WalletAccountStatus.ACTIVE.value:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Wallet account must be active before live trading (status={status}).",
+                )
+            if not wallet.api_key_enc or not wallet.api_secret_enc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Wallet account must have API keys before live trading.",
+                )
+            role = wallet.role.value if hasattr(wallet.role, "value") else str(wallet.role)
+            if role == WalletRole.SUB.value and not bool(
+                (wallet.enabled_wallets or {}).get("futures_um")
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Selected sub account does not have USD-M futures enabled.",
+                )
+
         try:
             strategy_name, strategy_code = await _resolve_strategy_code_for_user(
                 session=session,
@@ -2999,13 +3038,18 @@ def create_app() -> FastAPI:
             job_type=body.type,
             strategy_path=_logical_strategy_path(strategy_name),
             config_json=config_json,
+            wallet_account_id=wallet_account_id,
         )
         await append_event(
             session,
             job_id=job.job_id,
             kind=EventKind.STATUS,
             message="JOB_CREATED",
-            payload_json={"type": str(body.type), "strategy_path": body.strategy_path},
+            payload_json={
+                "type": str(body.type),
+                "strategy_path": body.strategy_path,
+                "wallet_account_id": str(wallet_account_id) if wallet_account_id else None,
+            },
         )
         if policy.warnings:
             await append_event(

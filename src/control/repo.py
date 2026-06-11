@@ -116,6 +116,8 @@ async def list_binance_credentials(
     return list(result.scalars().all())
 
 
+
+
 async def upsert_binance_credential(
     session: AsyncSession,
     *,
@@ -333,6 +335,7 @@ async def create_job(
     job_type: JobType,
     strategy_path: str,
     config_json: dict[str, Any],
+    wallet_account_id: uuid.UUID | None = None,
 ) -> Job:
     job = Job(
         user_id=user_id,
@@ -340,6 +343,7 @@ async def create_job(
         status=JobStatus.PENDING,
         strategy_path=strategy_path,
         config_json=config_json,
+        wallet_account_id=wallet_account_id,
     )
     session.add(job)
     await session.flush()
@@ -407,6 +411,7 @@ async def list_job_summaries(
         Job.type,
         Job.status,
         Job.strategy_path,
+        Job.wallet_account_id,
         Job.config_json,
         Job.error,
         Job.created_at,
@@ -1668,4 +1673,3 @@ async def list_wallet_transfers(
         .limit(limit)
     )
     return list(result.scalars().all())
-

@@ -5,9 +5,15 @@ import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { InfoTooltip } from "@/components/InfoTooltip";
 import StrategyParamsEditor from "@/components/StrategyParamsEditor";
-import { createJob, getBinanceAccountSummary, listFuturesSymbols, preflightJob } from "@/lib/api";
+import {
+  createJob,
+  getBinanceAccountSummary,
+  listFuturesSymbols,
+  listWalletAccounts,
+  preflightJob,
+} from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import type { BinanceAccountSummary, Job, StrategyInfo } from "@/lib/types";
+import type { BinanceAccountSummary, Job, StrategyInfo, WalletAccount } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
 const LIVE_INTERVALS = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"] as const;
@@ -44,6 +50,21 @@ function formatPolicyMessages(title: string, items: string[]): string {
   return `${title}\n${items.map((item, idx) => `${idx + 1}. ${item}`).join("\n")}`;
 }
 
+function walletHasFutures(wallet: WalletAccount): boolean {
+  if (wallet.role !== "sub") return true;
+  return Boolean((wallet.enabled_wallets ?? {}).futures_um);
+}
+
+function walletOptionDisabled(wallet: WalletAccount): boolean {
+  return wallet.status !== "active" || !walletHasFutures(wallet);
+}
+
+function walletLabel(wallet: WalletAccount): string {
+  const role = wallet.role === "master" ? "Master" : "Sub";
+  const email = wallet.sub_account_email ? ` · ${wallet.sub_account_email}` : "";
+  return `${wallet.alias} (${role}${email})`;
+}
+
 const inputCls =
   "w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none transition-colors";
 
@@ -67,6 +88,7 @@ export function LiveForm({
   const [strategyPath, setStrategyPath] = useState(strategies[0]?.path ?? "");
   const [symbol, setSymbol] = useState(defaults.symbol);
   const [env, setEnv] = useState<"mainnet" | "testnet">("mainnet");
+  const [selectedWalletId, setSelectedWalletId] = useState("");
   const [interval, setInterval] = useState(defaults.interval);
   const [leverage, setLeverage] = useState<number | string>(1);
   const [maxPositionPct, setMaxPositionPct] = useState<number | string>(50);
@@ -89,11 +111,23 @@ export function LiveForm({
     () => getBinanceAccountSummary(),
     { dedupingInterval: 10_000 },
   );
+  const { data: walletAccounts } = useSWR<WalletAccount[]>(
+    ["walletAccounts", env],
+    () => listWalletAccounts(env),
+    { dedupingInterval: 30_000 },
+  );
 
+  const tradingWallets = (walletAccounts ?? []).filter((wallet) => wallet.env === env);
+  const selectedWallet = tradingWallets.find((wallet) => wallet.id === selectedWalletId) ?? null;
+  const usingDefaultCredential = selectedWalletId === "";
+  const selectedWalletValid =
+    usingDefaultCredential || (selectedWallet !== null && !walletOptionDisabled(selectedWallet));
   const totalWallet = accountSnapshot?.total_wallet_balance ?? null;
   const availableBalance = accountSnapshot?.available_balance ?? null;
   const estimatedPosition =
-    availableBalance !== null ? availableBalance * maxPosition * Number(leverage) : null;
+    usingDefaultCredential && availableBalance !== null
+      ? availableBalance * maxPosition * Number(leverage)
+      : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -108,11 +142,25 @@ export function LiveForm({
     };
   }, []);
 
+  useEffect(() => {
+    if (!selectedWalletId || !walletAccounts) return;
+    const stillAvailable = walletAccounts.some(
+      (wallet) => wallet.id === selectedWalletId && wallet.env === env,
+    );
+    if (!stillAvailable) {
+      setSelectedWalletId("");
+    }
+  }, [env, selectedWalletId, walletAccounts]);
+
   const onSubmit = async () => {
     setError(null);
     setSubmitting(true);
     onSubmittingChange?.(true);
     try {
+      if (!selectedWalletValid) {
+        setError("선택한 거래 계정은 LIVE 선물 거래에 사용할 수 없습니다.");
+        return;
+      }
       const config: Record<string, unknown> = {
         streams: [
           {
@@ -149,6 +197,7 @@ export function LiveForm({
       const job = await createJob({
         type: "LIVE",
         strategy_path: strategyPath,
+        ...(selectedWalletId ? { wallet_account_id: selectedWalletId } : {}),
         config,
       });
       if (!job?.job_id || !isUuid(job.job_id)) {
@@ -180,6 +229,11 @@ export function LiveForm({
       <div className="mb-4 flex flex-wrap gap-2">
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{env === "mainnet" ? "Mainnet" : "Testnet"}</span>
+        {selectedWallet ? (
+          <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">
+            {selectedWallet.alias}
+          </span>
+        ) : null}
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{leverage}x</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">Pos {maxPositionPct}%</span>
@@ -253,6 +307,33 @@ export function LiveForm({
             <option value="mainnet" className="bg-[#131722]">Mainnet (실거래)</option>
             <option value="testnet" className="bg-[#131722]">Testnet (Demo Trading)</option>
           </select>
+        </label>
+        <label className="text-sm sm:col-span-2">
+          <div className="mb-1 text-xs text-[#868993]">거래 계정 (Wallet)</div>
+          <select
+            className={inputCls}
+            value={selectedWalletId}
+            onChange={(e) => setSelectedWalletId(e.target.value)}
+          >
+            <option value="" className="bg-[#131722]">기본 Binance API 키</option>
+            {tradingWallets.map((wallet) => (
+              <option
+                key={wallet.id}
+                value={wallet.id}
+                disabled={walletOptionDisabled(wallet)}
+                className="bg-[#131722]"
+              >
+                {walletLabel(wallet)}
+                {walletOptionDisabled(wallet) ? ` — ${wallet.status}` : ""}
+              </option>
+            ))}
+          </select>
+          {selectedWallet ? (
+            <p className="mt-1 text-[11px] text-[#868993]">
+              {selectedWallet.role === "sub" ? "Sub account" : "Master account"}
+              {selectedWallet.api_key_masked ? ` · API ${selectedWallet.api_key_masked}` : ""}
+            </p>
+          ) : null}
         </label>
         <label className="text-sm">
           <div className="mb-1 text-xs text-[#868993]">{t.form.symbol}</div>

@@ -229,6 +229,7 @@ class RunnerWorker:
             strategy_path = job.strategy_path
             config = dict(job.config_json or {})
             user_id = str(getattr(job, "user_id", "legacy") or "legacy")
+            wallet_account_id = getattr(job, "wallet_account_id", None)
 
         sink = DbEventSink(session_maker=self._session_maker, job_id=job_id)
         sink.start()
@@ -253,6 +254,7 @@ class RunnerWorker:
                     user_id=user_id,
                     session_maker=self._session_maker,
                     job_id=job_id,
+                    wallet_account_id=wallet_account_id,
                     should_drain=self._shutting_down,
                 )
 

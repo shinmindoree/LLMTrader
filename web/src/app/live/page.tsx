@@ -92,6 +92,7 @@ export default function LiveJobsPage() {
       type: job.type,
       status: job.status,
       strategy_path: job.strategy_path,
+      wallet_account_id: job.wallet_account_id,
       config: job.config,
       result_summary: job.result,
       error: job.error,

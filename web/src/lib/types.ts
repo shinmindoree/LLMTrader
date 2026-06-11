@@ -190,6 +190,7 @@ export type Job = {
   type: JobType;
   status: JobStatus;
   strategy_path: string;
+  wallet_account_id: string | null;
   config: Record<string, unknown>;
   result: Record<string, unknown> | null;
   error: string | null;
@@ -204,6 +205,7 @@ export type JobSummary = {
   type: JobType;
   status: JobStatus;
   strategy_path: string;
+  wallet_account_id: string | null;
   config: Record<string, unknown>;
   result_summary: Record<string, unknown> | null;
   error: string | null;

@@ -205,6 +205,7 @@ class StrategySyntaxCheckResponse(BaseModel):
 class JobCreateRequest(BaseModel):
     type: JobType
     strategy_path: str
+    wallet_account_id: uuid.UUID | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -230,6 +231,7 @@ class JobSummary(BaseModel):
     type: JobType
     status: JobStatus
     strategy_path: str
+    wallet_account_id: uuid.UUID | None = None
     config: dict[str, Any]
     result_summary: dict[str, Any] | None
     error: str | None
@@ -243,6 +245,7 @@ class JobResponse(BaseModel):
     type: JobType
     status: JobStatus
     strategy_path: str
+    wallet_account_id: uuid.UUID | None = None
     config: dict[str, Any]
     result: dict[str, Any] | None
     error: str | None

@@ -839,6 +839,7 @@ export async function listTradesBatch(jobIds: string[]): Promise<Record<string, 
 export async function createJob(body: {
   type: "BACKTEST" | "LIVE";
   strategy_path: string;
+  wallet_account_id?: string;
   config: Record<string, unknown>;
 }): Promise<Job> {
   return json<Job>("/api/backend/api/jobs", { method: "POST", body: JSON.stringify(body) });

@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from binance.client import BinanceHTTPClient
+from binance.client_factory import get_client_factory
 from common.risk import RiskConfig
 from control.enums import EventKind
 from control.live_heartbeat import clear_alive as redis_hb_clear
 from control.live_heartbeat import mark_alive as redis_hb_mark
 from control.repo import (
     get_strategy_allocation,
+    get_wallet_account,
     store_live_initial_equity,
     update_live_job_heartbeat,
 )
@@ -48,8 +50,33 @@ async def _resolve_binance_client(
     user_id: str,
     session_maker: Any,
     env: str = "mainnet",
-) -> tuple[BinanceHTTPClient, "Any | None"]:
+    wallet_account_id: uuid.UUID | str | None = None,
+) -> tuple[BinanceHTTPClient, Any | None]:
     """사용자별 환경별 암호화된 키를 복호화하여 BinanceHTTPClient를 생성한다."""
+    if wallet_account_id is not None:
+        wallet_id = (
+            wallet_account_id
+            if isinstance(wallet_account_id, uuid.UUID)
+            else uuid.UUID(str(wallet_account_id))
+        )
+        async with session_maker() as session:
+            wallet = await get_wallet_account(session, wallet_account_id=wallet_id)
+            if wallet is None:
+                raise ValueError(f"Wallet account not found: {wallet_id}")
+            if wallet.user_id != user_id:
+                raise ValueError(
+                    f"Wallet account {wallet_id} does not belong to user {user_id}"
+                )
+            if wallet.env != env:
+                raise ValueError(
+                    f"Wallet account {wallet_id} env={wallet.env} does not match job env={env}"
+                )
+            client = await get_client_factory().get_trading_client(
+                session,
+                wallet_account_id=str(wallet_id),
+            )
+        return client, None
+
     from control.repo import get_binance_credential
 
     _ENV_FUTURES_URLS = {
@@ -89,13 +116,19 @@ async def run_live(
     job_id: uuid.UUID,
     user_id: str = "legacy",
     session_maker: Any = None,
+    wallet_account_id: uuid.UUID | str | None = None,
     should_drain: asyncio.Event | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     if not session_maker:
         raise ValueError("session_maker is required for live trading")
     env = str(config.get("env") or "mainnet")
-    client, earn_client = await _resolve_binance_client(user_id, session_maker, env)
+    client, earn_client = await _resolve_binance_client(
+        user_id,
+        session_maker,
+        env,
+        wallet_account_id=wallet_account_id,
+    )
 
     # Cap (USDT) on how much is pulled from Simple Earn into Futures right
     # before an entry (JIT margin restore). 0 = unlimited (full position).
