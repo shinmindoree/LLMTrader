@@ -16,6 +16,12 @@ import { getKimpHistory } from "@/lib/api";
 import type { KimpHistoryRange, KimpScreenerItem } from "@/lib/types";
 
 const RANGES: KimpHistoryRange[] = ["1H", "1D", "7D", "30D", "ALL"];
+const RANGE_SECONDS: Partial<Record<KimpHistoryRange, number>> = {
+  "1H": 60 * 60,
+  "1D": 24 * 60 * 60,
+  "7D": 7 * 24 * 60 * 60,
+  "30D": 30 * 24 * 60 * 60,
+};
 
 function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -142,6 +148,23 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
       .map(([ts, value]) => ({ time: ts as Time, value }));
   }, [data, latest, latestAsOf, symbol]);
 
+  const visibleTimeRange = useMemo(() => {
+    const rangeSeconds = RANGE_SECONDS[range];
+    if (!rangeSeconds) return null;
+
+    const endCandidates = [
+      latestAsOf ? Date.parse(latestAsOf) / 1000 : NaN,
+      data?.as_of ? Date.parse(data.as_of) / 1000 : NaN,
+      seriesData.length > 0 ? Number(seriesData[seriesData.length - 1].time) : NaN,
+    ].filter(Number.isFinite);
+    if (endCandidates.length === 0) return null;
+    const to = Math.ceil(Math.max(...endCandidates));
+    return {
+      from: (to - rangeSeconds) as Time,
+      to: to as Time,
+    };
+  }, [data, latestAsOf, range, seriesData]);
+
   const fitKey = useMemo(() => {
     const points = data?.series ?? [];
     const first = points[0]?.t ?? "";
@@ -159,13 +182,16 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
       if (meanPct != null) {
         const meanValue = meanPct * 100;
         const band = stdPct != null ? stdPct * 100 : 0;
-        const meanArr = seriesData.map((d) => ({ time: d.time, value: meanValue }));
+        const referenceTimes = visibleTimeRange
+          ? [visibleTimeRange.from, visibleTimeRange.to]
+          : seriesData.map((d) => d.time);
+        const meanArr = referenceTimes.map((time) => ({ time, value: meanValue }));
         meanRef.current.setData(meanArr);
         upperRef.current.setData(
-          seriesData.map((d) => ({ time: d.time, value: meanValue + band })),
+          referenceTimes.map((time) => ({ time, value: meanValue + band })),
         );
         lowerRef.current.setData(
-          seriesData.map((d) => ({ time: d.time, value: meanValue - band })),
+          referenceTimes.map((time) => ({ time, value: meanValue - band })),
         );
       } else {
         meanRef.current.setData([]);
@@ -180,9 +206,13 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
       && lastFitKeyRef.current !== fitKey
     ) {
       lastFitKeyRef.current = fitKey;
-      chartRef.current.timeScale().fitContent();
+      if (visibleTimeRange) {
+        chartRef.current.timeScale().setVisibleRange(visibleTimeRange);
+      } else {
+        chartRef.current.timeScale().fitContent();
+      }
     }
-  }, [seriesData, data?.mean_pct, data?.std_pct, fitKey]);
+  }, [seriesData, data?.mean_pct, data?.std_pct, fitKey, visibleTimeRange]);
 
   const isEmpty = !isLoading && seriesData.length === 0;
 
