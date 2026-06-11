@@ -6,9 +6,9 @@ import { useMemo, useState } from "react";
 
 import useSWR from "swr";
 import { useI18n } from "@/lib/i18n";
-import { getJob, listStrategies, listTrades, stopJob } from "@/lib/api";
+import { getJob, getWalletAccount, listStrategies, listTrades, stopJob } from "@/lib/api";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { Job, JobStatus, JobType, StrategyInfo, Trade } from "@/lib/types";
+import type { Job, JobStatus, JobType, StrategyInfo, Trade, WalletAccount } from "@/lib/types";
 import { jobDetailPath } from "@/lib/routes";
 import { JobResultSummary, isRecord } from "@/components/JobResultSummary";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
@@ -19,6 +19,7 @@ import { LiveJobPositionPanel } from "@/components/LivePositionPanel";
 import { FormModal } from "@/components/FormModal";
 import { BacktestForm, type BacktestInitialConfig } from "@/app/backtest/new/BacktestForm";
 import { JobEventsConsole } from "@/app/jobs/[jobId]/JobEventsConsole";
+import { WalletAccountBadge, type WalletAccountEnv } from "@/components/WalletAccountBadge";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 
@@ -45,6 +46,10 @@ function strategyNameFromPath(path: string): string {
   if (!trimmed) return "Strategy";
   const base = trimmed.split("/").pop() ?? trimmed;
   return base.replace(/\.[^.]+$/, "");
+}
+
+function extractAccountEnv(config: Record<string, unknown> | null | undefined): WalletAccountEnv {
+  return config?.env === "testnet" ? "testnet" : "mainnet";
 }
 
 function formatDateFromTs(ms: number): string {
@@ -125,6 +130,18 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
     },
   );
 
+  const accountEnv = useMemo(
+    () => (job && isRecord(job.config) ? extractAccountEnv(job.config) : "mainnet"),
+    [job],
+  );
+  const { data: walletAccount } = useSWR<WalletAccount>(
+    job?.type === "LIVE" && job.wallet_account_id
+      ? ["walletAccount", job.wallet_account_id]
+      : null,
+    () => getWalletAccount(job!.wallet_account_id!),
+    { dedupingInterval: 30_000 },
+  );
+
   const displayError = error || (fetchError ? String(fetchError) : null);
 
   const onStop = async () => {
@@ -189,6 +206,17 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
                 <span className="text-[#868993]">{t.jobDetail.strategy}:</span>
                 <span className="text-[#d1d4dc]">{strategyNameFromPath(job.strategy_path)}</span>
               </div>
+              {job.type === "LIVE" ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[#868993]">거래 계정:</span>
+                  <WalletAccountBadge
+                    wallet={walletAccount}
+                    walletAccountId={job.wallet_account_id}
+                    accountEnv={accountEnv}
+                    showPrefix={false}
+                  />
+                </div>
+              ) : null}
               <div className="flex items-center gap-2">
                 <span className="text-[#868993]">{t.jobDetail.created}:</span>
                 <span className="text-[#d1d4dc]">{formatDateTime(job.created_at)}</span>
