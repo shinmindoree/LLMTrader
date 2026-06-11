@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import ast
+import asyncio
 import importlib.util
 import json
 import logging
@@ -12,43 +12,40 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.strategy_storage import get_strategy_storage
 from control.alembic_upgrade import run_alembic_upgrade_head
 from control.db import create_async_engine, create_session_maker, init_db
 from control.enums import EventKind, JobStatus, JobType
-from control.models import Job, WalletAccountStatus, WalletRole
+from control.models import WalletAccountStatus, WalletRole
 from control.repo import (
     append_event,
+    count_jobs,
     create_job,
     create_strategy_quality_log,
-    delete_strategy_meta_by_name,
-    delete_strategy_chat_session as repo_delete_strategy_chat_session,
     delete_job,
     delete_jobs,
+    delete_strategy_meta_by_name,
     get_account_snapshot,
     get_job,
-    get_wallet_account,
     get_strategy_meta_by_name,
+    get_wallet_account,
     list_events,
-    count_jobs,
-    list_jobs,
     list_job_summaries,
+    list_jobs,
     list_orders,
     list_strategy_meta,
-    list_strategy_chat_sessions as repo_list_strategy_chat_sessions,
-    list_strategy_chat_session_summaries as repo_list_strategy_chat_session_summaries,
-    get_strategy_chat_session as repo_get_strategy_chat_session,
     list_strategy_quality_logs,
     list_trades,
     list_trades_batch,
@@ -56,17 +53,39 @@ from control.repo import (
     stop_all_jobs,
     upsert_order,
     upsert_strategy_meta,
+)
+from control.repo import (
+    delete_strategy_chat_session as repo_delete_strategy_chat_session,
+)
+from control.repo import (
+    get_strategy_chat_session as repo_get_strategy_chat_session,
+)
+from control.repo import (
+    list_strategy_chat_session_summaries as repo_list_strategy_chat_session_summaries,
+)
+from control.repo import (
+    list_strategy_chat_sessions as repo_list_strategy_chat_sessions,
+)
+from control.repo import (
     upsert_strategy_chat_session as repo_upsert_strategy_chat_session,
 )
-from common.strategy_storage import get_strategy_storage
-from settings import get_settings
 from llm.client import LLMClient
+from settings import get_settings
+
 try:
     from llm.capability_registry import (
-        SUPPORTED_DATA_SOURCES as LOCAL_SUPPORTED_DATA_SOURCES,
-        SUPPORTED_INDICATOR_SCOPES as LOCAL_SUPPORTED_INDICATOR_SCOPES,
         SUPPORTED_CONTEXT_METHODS as LOCAL_SUPPORTED_CONTEXT_METHODS,
+    )
+    from llm.capability_registry import (
+        SUPPORTED_DATA_SOURCES as LOCAL_SUPPORTED_DATA_SOURCES,
+    )
+    from llm.capability_registry import (
+        SUPPORTED_INDICATOR_SCOPES as LOCAL_SUPPORTED_INDICATOR_SCOPES,
+    )
+    from llm.capability_registry import (
         UNSUPPORTED_CAPABILITY_RULES as LOCAL_UNSUPPORTED_CAPABILITY_RULES,
+    )
+    from llm.capability_registry import (
         capability_summary_lines as local_capability_summary_lines,
     )
 except Exception:  # pragma: no cover - fallback for minimal runtime packaging
@@ -78,71 +97,38 @@ except Exception:  # pragma: no cover - fallback for minimal runtime packaging
     def local_capability_summary_lines() -> list[str]:
         return []
 
+
 from api.deps import AuthenticatedUser, require_admin, require_auth, set_session_maker
 from api.job_policy import evaluate_job_policy
 from api.schemas import (
-    HealthResponse,
-    CountItem,
-    DeleteAllResponse,
-    DeleteResponse,
-    JobPolicyCheckRequest,
-    JobPolicyCheckResponse,
-    JobCreateRequest,
-    JobCountsResponse,
-    JobEventResponse,
-    JobResponse,
-    JobSummary,
-    ManualLiveOrderRequest,
-    ManualLiveOrderResponse,
-    OrderResponse,
-    StopResponse,
-    StopAllResponse,
-    StrategyInfo,
-    StrategyContentResponse,
-    StrategyIntakeRequest,
-    StrategyIntakeResponse,
-    StrategyCapabilityResponse,
-    StrategyQualitySummaryResponse,
-    StrategyGenerateRequest,
-    StrategyGenerateResponse,
-    StrategyChatSessionResponse,
-    StrategyChatSessionSummary,
-    StrategyChatSessionUpsertRequest,
-    StrategyChatRequest,
-    StrategyChatResponse,
-    StrategySyntaxCheckRequest,
-    StrategySyntaxCheckResponse,
-    StrategySyntaxError,
-    StrategySaveRequest,
-    StrategySaveResponse,
-    StrategyParamsApplyRequest,
-    StrategyParamsApplyResponse,
-    StrategyParamsExtractRequest,
-    StrategyParamsExtractResponse,
-    LlmTestRequest,
-    LlmTestResponse,
     AdminUserItem,
     AdminUsersResponse,
-    TradeResponse,
+    AllocationSlice,
+    AutoSweepSettingsRequest,
+    AutoSweepStatusResponse,
+    BinanceAccountSummaryResponse,
     BinanceAssetBalance,
     BinanceCredentialStatus,
     BinancePositionSummary,
-    BinanceAccountSummaryResponse,
-    QuickBacktestRequest,
-    QuickBacktestResponse,
-    PortfolioSummaryResponse,
-    WalletSnapshot,
-    AllocationSlice,
-    StrategyModuleCatalogResponse,
-    StrategyModuleStatus,
+    CountItem,
+    DeleteAllResponse,
+    DeleteResponse,
     FundingArbitrageParams,
     FundingArbitrageStatusResponse,
+    FundingExtremePoint,
     FundingScreenerItem,
     FundingScreenerResponse,
+    FundingSymbolDetailPoint,
     FundingSymbolDetailResponse,
     FundingWindowStat,
-    FundingExtremePoint,
-    FundingSymbolDetailPoint,
+    HealthResponse,
+    JobCountsResponse,
+    JobCreateRequest,
+    JobEventResponse,
+    JobPolicyCheckRequest,
+    JobPolicyCheckResponse,
+    JobResponse,
+    JobSummary,
     KimpArbitrageParams,
     KimpArbitrageStatusResponse,
     KimpBacktestEquityPoint,
@@ -154,13 +140,48 @@ from api.schemas import (
     KimpHistoryResponse,
     KimpScreenerItem,
     KimpScreenerResponse,
-    AutoSweepSettingsRequest,
-    AutoSweepStatusResponse,
+    LivePositionsResponse,
+    LivePositionsTotals,
+    LiveStrategyPositions,
+    LlmTestRequest,
+    LlmTestResponse,
+    ManualLiveOrderRequest,
+    ManualLiveOrderResponse,
+    ManualLiveOrderSizingResponse,
+    OrderResponse,
+    PortfolioSummaryResponse,
+    QuickBacktestRequest,
+    QuickBacktestResponse,
+    StopAllResponse,
+    StopResponse,
+    StrategyCapabilityResponse,
+    StrategyChatRequest,
+    StrategyChatResponse,
+    StrategyChatSessionResponse,
+    StrategyChatSessionSummary,
+    StrategyChatSessionUpsertRequest,
+    StrategyContentResponse,
+    StrategyGenerateRequest,
+    StrategyGenerateResponse,
+    StrategyInfo,
+    StrategyIntakeRequest,
+    StrategyIntakeResponse,
+    StrategyModuleCatalogResponse,
+    StrategyModuleStatus,
+    StrategyParamsApplyRequest,
+    StrategyParamsApplyResponse,
+    StrategyParamsExtractRequest,
+    StrategyParamsExtractResponse,
+    StrategyQualitySummaryResponse,
+    StrategySaveRequest,
+    StrategySaveResponse,
+    StrategySyntaxCheckRequest,
+    StrategySyntaxCheckResponse,
+    StrategySyntaxError,
+    TradeResponse,
     WalletBalance,
     WalletOverviewResponse,
-    LiveStrategyPositions,
-    LivePositionsTotals,
-    LivePositionsResponse,
+    WalletSnapshot,
 )
 from api.strategy_catalog import list_strategy_files, validate_strategy_path
 from api.strategy_params import (
@@ -227,7 +248,9 @@ def _resolve_funding_deadband(symbol: str, hold_days: int) -> tuple[float, float
         exit_ratio = _FUNDING_EXIT_RATIOS.get(hold_days, 0.30)
         return entry_pct, entry_pct * exit_ratio
     except Exception:
-        _log.warning("Failed to resolve deadband for %s hold_days=%s", symbol, hold_days, exc_info=True)
+        _log.warning(
+            "Failed to resolve deadband for %s hold_days=%s", symbol, hold_days, exc_info=True
+        )
         return None
 
 
@@ -293,9 +316,7 @@ async def _fetch_spot_24h_quote_volume(testnet: bool = False) -> dict[str, float
     if cached["data"] and (now - cached["ts"]) < _SPOT_24H_TTL:
         return cached["data"]
     try:
-        async with httpx.AsyncClient(
-            base_url="https://api.binance.com", timeout=10.0
-        ) as client:
+        async with httpx.AsyncClient(base_url="https://api.binance.com", timeout=10.0) as client:
             resp = await client.get("/api/v3/ticker/24hr")
             resp.raise_for_status()
             out: dict[str, float] = {}
@@ -341,9 +362,7 @@ async def _fetch_market_caps() -> dict[str, float]:
         return _MARKET_CAP_CACHE["data"]
     out: dict[str, float] = {}
     try:
-        async with httpx.AsyncClient(
-            base_url="https://api.coingecko.com", timeout=15.0
-        ) as client:
+        async with httpx.AsyncClient(base_url="https://api.coingecko.com", timeout=15.0) as client:
             for page in range(1, _COINGECKO_PAGES + 1):
                 resp = await client.get(
                     "/api/v3/coins/markets",
@@ -356,9 +375,7 @@ async def _fetch_market_caps() -> dict[str, float]:
                     },
                 )
                 if resp.status_code != 200:
-                    _log.warning(
-                        "CoinGecko markets page=%d status=%d", page, resp.status_code
-                    )
+                    _log.warning("CoinGecko markets page=%d status=%d", page, resp.status_code)
                     break
                 rows = resp.json()
                 if not isinstance(rows, list) or not rows:
@@ -399,11 +416,8 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
     심볼별로 응답 객체를 1시간 캐시. 동시 요청이 들어와도 멱등하게 동작한다.
     """
     import time as _time
-    from datetime import timezone as _tz
 
     from api.schemas import (
-        FundingExtremePoint,
-        FundingSymbolDetailPoint,
         FundingSymbolDetailResponse,
         FundingWindowStat,
     )
@@ -414,7 +428,7 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
         return cached[1]
 
     rows = await _fetch_funding_history(symbol, days=None)  # 전체 기간
-    as_of = datetime.now(_tz.utc)
+    as_of = datetime.now(UTC)
 
     if not rows:
         resp = FundingSymbolDetailResponse(
@@ -453,18 +467,14 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
         n = len(window)
         if n == 0:
             window_stats.append(
-                FundingWindowStat(
-                    label=label, avg_pct=None, annualized_pct=None, n_samples=0
-                )
+                FundingWindowStat(label=label, avg_pct=None, annualized_pct=None, n_samples=0)
             )
             continue
         avg = sum(r[1] for r in window) / n  # 소수 단위 (예: 0.0001 = 0.01%)
         avg_pct = round(avg * 100.0, 5)
         ann = round(avg * PPY * 100.0, 2)
         window_stats.append(
-            FundingWindowStat(
-                label=label, avg_pct=avg_pct, annualized_pct=ann, n_samples=n
-            )
+            FundingWindowStat(label=label, avg_pct=avg_pct, annualized_pct=ann, n_samples=n)
         )
 
     # 최대/최소: 전체 기간(계약 상장 이후 전체) 기준.
@@ -472,11 +482,11 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
     min_row = min(rows, key=lambda r: r[1])
     max_pt = FundingExtremePoint(
         rate_pct=round(max_row[1] * 100.0, 5),
-        ts=datetime.fromtimestamp(max_row[0] / 1000.0, tz=_tz.utc),
+        ts=datetime.fromtimestamp(max_row[0] / 1000.0, tz=UTC),
     )
     min_pt = FundingExtremePoint(
         rate_pct=round(min_row[1] * 100.0, 5),
-        ts=datetime.fromtimestamp(min_row[0] / 1000.0, tz=_tz.utc),
+        ts=datetime.fromtimestamp(min_row[0] / 1000.0, tz=UTC),
     )
 
     # 차트 시계열: 전체 기간을 균등 간격으로 다운샘플하여 ≤ _SYMBOL_DETAIL_MAX_POINTS 포인트.
@@ -489,10 +499,7 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
         series_pts = [series_raw[i] for i in sorted(sampled_idx)]
     else:
         series_pts = series_raw
-    series = [
-        FundingSymbolDetailPoint(t=int(t), r=round(r * 100.0, 5))
-        for t, r in series_pts
-    ]
+    series = [FundingSymbolDetailPoint(t=int(t), r=round(r * 100.0, 5)) for t, r in series_pts]
 
     resp = FundingSymbolDetailResponse(
         symbol=symbol,
@@ -532,9 +539,7 @@ async def _fetch_funding_history(
     out: list[tuple[int, float]] = []
     cursor = start_ms
     try:
-        async with httpx.AsyncClient(
-            base_url="https://fapi.binance.com", timeout=20.0
-        ) as client:
+        async with httpx.AsyncClient(base_url="https://fapi.binance.com", timeout=20.0) as client:
             # 안전상 최대 30페이지(=30,000행 ≈ 27년) — 어떤 영구계약도 충분히 커버.
             for _ in range(30):
                 resp = await client.get(
@@ -567,8 +572,7 @@ async def _fetch_funding_history(
                     except (KeyError, TypeError, ValueError):
                         continue
                     out.append((ts, rate))
-                    if ts > last_ts:
-                        last_ts = ts
+                    last_ts = max(last_ts, ts)
                 if len(rows) < LIMIT:
                     break
                 # 다음 페이지: 마지막 ts + 1ms 부터
@@ -710,6 +714,233 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def _positive_float(value: Any, default: float) -> float:
+    parsed = _float_or_none(value)
+    if parsed is None or parsed <= 0:
+        return default
+    return parsed
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _manual_symbol_config(
+    config: dict[str, Any] | None,
+    symbol: str,
+) -> dict[str, Any]:
+    cfg = config or {}
+    streams = cfg.get("streams")
+    if isinstance(streams, list):
+        for raw in streams:
+            if not isinstance(raw, dict):
+                continue
+            stream_symbol = str(raw.get("symbol") or "").strip().upper()
+            if stream_symbol == symbol:
+                return raw
+    if str(cfg.get("symbol") or "").strip().upper() == symbol:
+        return cfg
+    return {}
+
+
+def _manual_position_row(account: dict[str, Any], symbol: str) -> dict[str, Any] | None:
+    raw_positions = account.get("positions", [])
+    if not isinstance(raw_positions, list):
+        return None
+    for raw in raw_positions:
+        if not isinstance(raw, dict):
+            continue
+        row_symbol = str(raw.get("symbol") or "").strip().upper()
+        if row_symbol == symbol:
+            return raw
+    return None
+
+
+def _manual_exchange_filters(
+    exchange_info: dict[str, Any] | None,
+    symbol: str,
+) -> dict[str, Any]:
+    if not isinstance(exchange_info, dict):
+        return {}
+    raw = exchange_info.get(symbol)
+    if isinstance(raw, dict):
+        return raw
+    return exchange_info
+
+
+def _quantity_from_notional(
+    notional_usdt: float,
+    mark_price: float,
+    filters: dict[str, Any],
+) -> float:
+    if notional_usdt <= 0 or mark_price <= 0:
+        return 0.0
+    qty = Decimal(str(notional_usdt)) / Decimal(str(mark_price))
+    step = _decimal_or_none(filters.get("step_size"))
+    if step is not None:
+        qty = (qty / step).to_integral_value(rounding=ROUND_DOWN) * step
+    max_qty = _decimal_or_none(filters.get("max_qty"))
+    if max_qty is not None and qty > max_qty:
+        qty = max_qty
+    return float(max(Decimal("0"), qty))
+
+
+def _manual_entry_sizing_from_state(
+    *,
+    config: dict[str, Any] | None,
+    account: dict[str, Any],
+    exchange_filters: dict[str, Any] | None,
+    symbol: str,
+    side: Literal["LONG", "SHORT"],
+    mark_price: float,
+) -> dict[str, float | None]:
+    symbol_config = _manual_symbol_config(config, symbol)
+    leverage = _positive_float(symbol_config.get("leverage"), 1.0)
+    max_position = _positive_float(symbol_config.get("max_position"), 0.5)
+
+    wallet_balance = _positive_float(account.get("totalWalletBalance"), 0.0)
+    unrealized = _float_or_none(account.get("totalUnrealizedProfit")) or 0.0
+    account_equity = _float_or_none(account.get("totalMarginBalance"))
+    if account_equity is None:
+        account_equity = wallet_balance + unrealized
+    available_balance = _float_or_none(account.get("availableBalance"))
+    if available_balance is None:
+        available_balance = max(0.0, account_equity)
+
+    position_row = _manual_position_row(account, symbol)
+    current_position_qty = _float_or_none(position_row.get("positionAmt")) if position_row else 0.0
+    current_position_qty = current_position_qty or 0.0
+    raw_notional = _float_or_none(position_row.get("notional")) if position_row else None
+    current_position_notional = (
+        abs(raw_notional) if raw_notional is not None else abs(current_position_qty * mark_price)
+    )
+
+    max_position_notional = max(0.0, account_equity * leverage * max_position)
+    available_open_notional = max(0.0, available_balance * leverage)
+    side_sign = 1 if side == "LONG" else -1
+    same_direction = current_position_qty * side_sign > 0
+    opposite_direction = current_position_qty * side_sign < 0
+
+    if same_direction:
+        remaining_position_notional = max(0.0, max_position_notional - current_position_notional)
+        max_order_notional = min(remaining_position_notional, available_open_notional)
+    elif opposite_direction:
+        max_order_notional = current_position_notional + min(
+            max_position_notional,
+            available_open_notional,
+        )
+    else:
+        max_order_notional = min(max_position_notional, available_open_notional)
+
+    filters = exchange_filters or {}
+    max_qty = _quantity_from_notional(max_order_notional, mark_price, filters)
+    adjusted_max_notional = max_qty * mark_price
+
+    min_qty = _decimal_or_none(filters.get("min_qty"))
+    max_qty_filter = _decimal_or_none(filters.get("max_qty"))
+    min_notional = _decimal_or_none(filters.get("min_notional"))
+    step_size = _decimal_or_none(filters.get("step_size"))
+
+    return {
+        "mark_price": mark_price,
+        "leverage": leverage,
+        "max_position": max_position,
+        "account_equity": account_equity,
+        "available_balance": available_balance,
+        "current_position_qty": current_position_qty,
+        "current_position_notional": current_position_notional,
+        "max_notional_usdt": adjusted_max_notional,
+        "max_quantity": max_qty,
+        "min_notional_usdt": float(min_notional) if min_notional is not None else None,
+        "min_quantity": float(min_qty) if min_qty is not None else None,
+        "max_exchange_quantity": float(max_qty_filter) if max_qty_filter is not None else None,
+        "step_size": float(step_size) if step_size is not None else None,
+    }
+
+
+def _validate_manual_entry_quantity(
+    *,
+    quantity: float,
+    side: Literal["LONG", "SHORT"],
+    sizing: dict[str, float | None],
+) -> None:
+    mark_price = float(sizing["mark_price"] or 0.0)
+    if quantity <= 0 or mark_price <= 0:
+        raise HTTPException(status_code=422, detail="entry quantity must be greater than zero")
+
+    min_quantity = sizing.get("min_quantity")
+    if min_quantity is not None and quantity + 1e-12 < min_quantity:
+        raise HTTPException(
+            status_code=422,
+            detail=f"quantity is below the exchange minimum ({min_quantity})",
+        )
+
+    order_notional = quantity * mark_price
+    min_notional = sizing.get("min_notional_usdt")
+    if min_notional is not None and order_notional + 1e-9 < min_notional:
+        raise HTTPException(
+            status_code=422,
+            detail=f"order notional is below the exchange minimum ({min_notional} USDT)",
+        )
+
+    side_sign = 1 if side == "LONG" else -1
+    current_qty = float(sizing["current_position_qty"] or 0.0)
+    after_qty = current_qty + (quantity * side_sign)
+    final_notional = abs(after_qty) * mark_price
+    max_position_notional = (
+        float(sizing["account_equity"] or 0.0)
+        * float(sizing["leverage"] or 1.0)
+        * float(sizing["max_position"] or 0.0)
+    )
+    if final_notional - max_position_notional > 1e-6:
+        raise HTTPException(
+            status_code=422,
+            detail=f"position size exceeds the configured maximum ({max_position_notional:.2f} USDT)",
+        )
+
+    if current_qty * side_sign >= 0:
+        opening_notional = order_notional
+    else:
+        opening_notional = max(0.0, abs(after_qty) * mark_price)
+    available_open_notional = float(sizing["available_balance"] or 0.0) * float(
+        sizing["leverage"] or 1.0
+    )
+    if opening_notional - available_open_notional > 1e-6:
+        raise HTTPException(
+            status_code=422,
+            detail=f"entry notional exceeds available balance ({available_open_notional:.2f} USDT)",
+        )
+
+
+async def _manual_entry_sizing(
+    client: Any,
+    *,
+    config: dict[str, Any] | None,
+    symbol: str,
+    side: Literal["LONG", "SHORT"],
+) -> dict[str, float | None]:
+    account = await client.fetch_account_info()
+    mark_price = float(await client.fetch_mark_price(symbol))
+    exchange_info = await client.fetch_exchange_info(symbol)
+    filters = _manual_exchange_filters(exchange_info, symbol)
+    return _manual_entry_sizing_from_state(
+        config=config,
+        account=account,
+        exchange_filters=filters,
+        symbol=symbol,
+        side=side,
+        mark_price=mark_price,
+    )
+
+
 def _manual_order_payload(order: dict[str, Any]) -> dict[str, Any]:
     return {
         "order_id": order.get("orderId"),
@@ -844,15 +1075,23 @@ def _strategy_dirs() -> list[Path]:
 
 
 def _local_capability_payload() -> dict[str, list[str]]:
-    unsupported = [str(getattr(rule, "name", "")).strip() for rule in LOCAL_UNSUPPORTED_CAPABILITY_RULES]
+    unsupported = [
+        str(getattr(rule, "name", "")).strip() for rule in LOCAL_UNSUPPORTED_CAPABILITY_RULES
+    ]
     return {
-        "supported_data_sources": [str(v).strip() for v in LOCAL_SUPPORTED_DATA_SOURCES if str(v).strip()],
+        "supported_data_sources": [
+            str(v).strip() for v in LOCAL_SUPPORTED_DATA_SOURCES if str(v).strip()
+        ],
         "supported_indicator_scopes": [
             str(v).strip() for v in LOCAL_SUPPORTED_INDICATOR_SCOPES if str(v).strip()
         ],
-        "supported_context_methods": [str(v).strip() for v in LOCAL_SUPPORTED_CONTEXT_METHODS if str(v).strip()],
+        "supported_context_methods": [
+            str(v).strip() for v in LOCAL_SUPPORTED_CONTEXT_METHODS if str(v).strip()
+        ],
         "unsupported_categories": [v for v in unsupported if v],
-        "summary_lines": [str(v).strip() for v in local_capability_summary_lines() if str(v).strip()],
+        "summary_lines": [
+            str(v).strip() for v in local_capability_summary_lines() if str(v).strip()
+        ],
     }
 
 
@@ -895,8 +1134,7 @@ async def _list_strategies_for_user(
     root = _repo_root()
     files = list_strategy_files(_strategy_dirs())
     deduped: dict[str, StrategyInfo] = {
-        p.name: StrategyInfo(name=p.name, path=str(p.relative_to(root)))
-        for p in files
+        p.name: StrategyInfo(name=p.name, path=str(p.relative_to(root))) for p in files
     }
 
     # Merge user's blob-stored strategies (overrides built-in if same name)
@@ -924,12 +1162,16 @@ async def _resolve_strategy_code_for_user(
             strategy_name = _strategy_name_from_path(path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        meta = await get_strategy_meta_by_name(session, user_id=user.user_id, strategy_name=strategy_name)
+        meta = await get_strategy_meta_by_name(
+            session, user_id=user.user_id, strategy_name=strategy_name
+        )
         if meta is not None:
             try:
                 return strategy_name, storage.download_by_path(meta.blob_path)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Failed to read strategy object: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to read strategy object: {exc}"
+                ) from exc
 
     root = _repo_root()
     dirs = _strategy_dirs()
@@ -955,7 +1197,9 @@ async def _delete_strategy_for_user(
             strategy_name = _strategy_name_from_path(path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        meta = await get_strategy_meta_by_name(session, user_id=user.user_id, strategy_name=strategy_name)
+        meta = await get_strategy_meta_by_name(
+            session, user_id=user.user_id, strategy_name=strategy_name
+        )
         if meta is not None:
             deleted_blob = storage.delete_by_path(meta.blob_path)
             deleted_meta = await delete_strategy_meta_by_name(
@@ -998,8 +1242,12 @@ def _strip_first_line_lang_tag(content: str) -> str:
     return content
 
 
-
-_INTAKE_ALLOWED_STATUSES = {"READY", "NEEDS_CLARIFICATION", "UNSUPPORTED_CAPABILITY", "OUT_OF_SCOPE"}
+_INTAKE_ALLOWED_STATUSES = {
+    "READY",
+    "NEEDS_CLARIFICATION",
+    "UNSUPPORTED_CAPABILITY",
+    "OUT_OF_SCOPE",
+}
 _INTAKE_ALLOWED_INTENTS = {"OUT_OF_SCOPE", "STRATEGY_CREATE", "STRATEGY_MODIFY", "STRATEGY_QA"}
 
 
@@ -1067,7 +1315,9 @@ def _normalize_intake_payload(raw: dict[str, Any]) -> StrategyIntakeResponse:
     )
 
 
-async def _run_intake(client: LLMClient, prompt: str, messages: list[dict[str, str]] | None) -> StrategyIntakeResponse:
+async def _run_intake(
+    client: LLMClient, prompt: str, messages: list[dict[str, str]] | None
+) -> StrategyIntakeResponse:
     intake_raw = await client.intake_strategy(prompt, messages=messages)
     if not intake_raw:
         return StrategyIntakeResponse(
@@ -1102,11 +1352,7 @@ def _verify_strategy_load(strategy_path: Path, repo_root: Path) -> None:
     strategy_class = None
     for name in dir(module):
         obj = getattr(module, name)
-        if (
-            isinstance(obj, type)
-            and name.endswith("Strategy")
-            and name != "Strategy"
-        ):
+        if isinstance(obj, type) and name.endswith("Strategy") and name != "Strategy":
             strategy_class = obj
             break
     if strategy_class is None:
@@ -1164,7 +1410,7 @@ def create_app() -> FastAPI:
             exc,
             exc_info=True,
         )
-        from sqlalchemy.exc import OperationalError, InterfaceError
+        from sqlalchemy.exc import InterfaceError, OperationalError
 
         if isinstance(exc, (OperationalError, InterfaceError, OSError)):
             return JSONResponse(
@@ -1351,7 +1597,7 @@ def create_app() -> FastAPI:
             _logger.info("DB keep-alive task stopped")
 
     async def _db_session() -> AsyncIterator[AsyncSession]:
-        from sqlalchemy.exc import OperationalError, InterfaceError
+        from sqlalchemy.exc import InterfaceError, OperationalError
 
         max_retries = 2
         for attempt in range(max_retries + 1):
@@ -1361,7 +1607,9 @@ def create_app() -> FastAPI:
                     return
             except (OperationalError, InterfaceError, OSError) as exc:
                 if attempt < max_retries:
-                    _logger.warning("DB session error (attempt %d/%d): %s", attempt + 1, max_retries + 1, exc)
+                    _logger.warning(
+                        "DB session error (attempt %d/%d): %s", attempt + 1, max_retries + 1, exc
+                    )
                     await asyncio.sleep(0.5 * (attempt + 1))
                 else:
                     _logger.error("DB session failed after %d attempts: %s", max_retries + 1, exc)
@@ -1407,8 +1655,12 @@ def create_app() -> FastAPI:
                     intent=(intake.intent if intake else None),
                     status=(intake.status if intake else None),
                     missing_fields=list(intake.missing_fields) if intake else [],
-                    unsupported_requirements=list(intake.unsupported_requirements) if intake else [],
-                    development_requirements=list(intake.development_requirements) if intake else [],
+                    unsupported_requirements=list(intake.unsupported_requirements)
+                    if intake
+                    else [],
+                    development_requirements=list(intake.development_requirements)
+                    if intake
+                    else [],
                     generation_attempted=generation_attempted,
                     generation_success=generation_success,
                     verification_passed=verification_passed,
@@ -1509,9 +1761,8 @@ def create_app() -> FastAPI:
                     detail=f"Wallet env {wallet.env} does not match requested env {env}",
                 )
             wallet_role = wallet.role.value if hasattr(wallet.role, "value") else wallet.role
-            if (
-                wallet_role == WalletRole.SUB.value
-                and not (wallet.enabled_wallets or {}).get("futures_um")
+            if wallet_role == WalletRole.SUB.value and not (wallet.enabled_wallets or {}).get(
+                "futures_um"
             ):
                 raise HTTPException(
                     status_code=400,
@@ -1554,6 +1805,7 @@ def create_app() -> FastAPI:
             )
 
         from common.crypto import get_crypto_service
+
         try:
             crypto = get_crypto_service()
             api_key = crypto.decrypt(cred.api_key_enc)
@@ -1578,16 +1830,21 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> PortfolioSummaryResponse:
         """전체 AUM + 전략 카테고리별 자산 배분 요약."""
-        from control.repo import get_user_profile
-        from datetime import date
 
-        now = datetime.now(timezone.utc)
+        from control.repo import get_user_profile
+
+        now = datetime.now(UTC)
         futures_balance = 0.0
         futures_unrealized = 0.0
 
         profile = await get_user_profile(session, user_id=user.user_id)
         from control.repo import get_binance_credential
-        mainnet_cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet") if profile else None
+
+        mainnet_cred = (
+            await get_binance_credential(session, user_id=user.user_id, env="mainnet")
+            if profile
+            else None
+        )
         if mainnet_cred:
             snapshot = await get_account_snapshot(session, user_id=user.user_id)
             if snapshot and isinstance(snapshot.data, dict):
@@ -1614,17 +1871,21 @@ def create_app() -> FastAPI:
         slices: list[AllocationSlice] = []
         if total_aum > 0:
             if directional_alloc > 0:
-                slices.append(AllocationSlice(
-                    category="Directional_Alpha",
-                    allocated_usdt=directional_alloc,
-                    pct=round(directional_alloc / total_aum * 100, 1),
-                ))
+                slices.append(
+                    AllocationSlice(
+                        category="Directional_Alpha",
+                        allocated_usdt=directional_alloc,
+                        pct=round(directional_alloc / total_aum * 100, 1),
+                    )
+                )
             if cash > 0:
-                slices.append(AllocationSlice(
-                    category="Cash",
-                    allocated_usdt=cash,
-                    pct=round(cash / total_aum * 100, 1),
-                ))
+                slices.append(
+                    AllocationSlice(
+                        category="Cash",
+                        allocated_usdt=cash,
+                        pct=round(cash / total_aum * 100, 1),
+                    )
+                )
         else:
             slices.append(AllocationSlice(category="Cash", allocated_usdt=0.0, pct=100.0))
 
@@ -1632,7 +1893,13 @@ def create_app() -> FastAPI:
             total_aum_usdt=total_aum,
             total_unrealized_pnl=futures_unrealized,
             total_realized_pnl_today=realized_today,
-            wallets=[WalletSnapshot(wallet="futures", balance_usdt=futures_balance, unrealized_pnl=futures_unrealized)],
+            wallets=[
+                WalletSnapshot(
+                    wallet="futures",
+                    balance_usdt=futures_balance,
+                    unrealized_pnl=futures_unrealized,
+                )
+            ],
             allocation=slices,
             as_of=now,
         )
@@ -1690,6 +1957,7 @@ def create_app() -> FastAPI:
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 현재 상태 (모든 replica에서 일관)."""
         from live.funding_arbitrage_engine import get_engine_status_persisted
+
         return await get_engine_status_persisted(session, user.user_id)
 
     @app.get("/api/funding-arb/screener", response_model=FundingScreenerResponse)
@@ -1721,12 +1989,9 @@ def create_app() -> FastAPI:
         (testnet은 통계 표본이 없음).
         """
         import json as _json
-        from datetime import timezone
 
         is_testnet = env == "testnet"
-        fut_base = (
-            "https://testnet.binancefuture.com" if is_testnet else "https://fapi.binance.com"
-        )
+        fut_base = "https://testnet.binancefuture.com" if is_testnet else "https://fapi.binance.com"
 
         ROUNDTRIP = _FUNDING_ROUNDTRIP_COST
         DEFAULT_INTERVAL_H = 8.0
@@ -1760,9 +2025,7 @@ def create_app() -> FastAPI:
 
         # 2) 선물 premiumIndex (전체 펀딩비)
         try:
-            async with httpx.AsyncClient(
-                base_url=fut_base, timeout=10.0
-            ) as client:
+            async with httpx.AsyncClient(base_url=fut_base, timeout=10.0) as client:
                 resp = await client.get("/fapi/v1/premiumIndex")
                 resp.raise_for_status()
                 rates: dict[str, float] = {
@@ -1772,8 +2035,10 @@ def create_app() -> FastAPI:
                 }
         except Exception as exc:  # noqa: BLE001
             return FundingScreenerResponse(
-                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
-                error=f"Binance API 오류: {exc}", as_of=datetime.now(timezone.utc),
+                items=[],
+                roundtrip_cost_pct=ROUNDTRIP * 100,
+                error=f"Binance API 오류: {exc}",
+                as_of=datetime.now(UTC),
             )
 
         # 3) 현물 상장 + 24h 거래대금 + 시가총액 (모두 캐시)
@@ -1784,14 +2049,12 @@ def create_app() -> FastAPI:
         # 4) 유니버스 = 현물 ∩ 선물 (USDT). 둘 다 상장된 종목만 차익거래 가능.
         if not spot_symbols:
             return FundingScreenerResponse(
-                items=[], roundtrip_cost_pct=ROUNDTRIP * 100,
+                items=[],
+                roundtrip_cost_pct=ROUNDTRIP * 100,
                 error="현물 상장 목록을 가져오지 못했습니다.",
-                as_of=datetime.now(timezone.utc),
+                as_of=datetime.now(UTC),
             )
-        universe = sorted(
-            sym for sym in rates
-            if sym.endswith("USDT") and sym in spot_symbols
-        )
+        universe = sorted(sym for sym in rates if sym.endswith("USDT") and sym in spot_symbols)
 
         items: list[FundingScreenerItem] = []
         for sym in universe:
@@ -1819,27 +2082,24 @@ def create_app() -> FastAPI:
                 score = None
 
             base = sym.removesuffix("USDT")
-            items.append(FundingScreenerItem(
-                symbol=sym,
-                current_rate_pct=round(current_rate * 100, 5),
-                annualized_pct=round(current_rate * PPY * 100, 2),
-                half_life_settlements=hl,
-                entry_threshold_pct=entry_threshold_pct,
-                score=score,
-                avg_rate_pct=(
-                    round(float(stat.get("avg_rate", 0.0)), 5)
-                    if stat else None
-                ),
-                n_samples=int(stat.get("n_samples", 0)) if stat else 0,
-                quote_volume_24h=(
-                    quote_volumes.get(sym) if quote_volumes else None
-                ),
-                market_cap_usd=market_caps.get(base.upper()) if market_caps else None,
-            ))
+            items.append(
+                FundingScreenerItem(
+                    symbol=sym,
+                    current_rate_pct=round(current_rate * 100, 5),
+                    annualized_pct=round(current_rate * PPY * 100, 2),
+                    half_life_settlements=hl,
+                    entry_threshold_pct=entry_threshold_pct,
+                    score=score,
+                    avg_rate_pct=(round(float(stat.get("avg_rate", 0.0)), 5) if stat else None),
+                    n_samples=int(stat.get("n_samples", 0)) if stat else 0,
+                    quote_volume_24h=(quote_volumes.get(sym) if quote_volumes else None),
+                    market_cap_usd=market_caps.get(base.upper()) if market_caps else None,
+                )
+            )
 
         # 기본 정렬: score 내림차순(None은 뒤). 프론트엔드가 컬럼별로 재정렬한다.
         items.sort(
-            key=lambda x: (x.score if x.score is not None else float("-inf")),
+            key=lambda x: x.score if x.score is not None else float("-inf"),
             reverse=True,
         )
         # top_n은 200으로 상한(과도한 페이로드 방지).
@@ -1847,7 +2107,7 @@ def create_app() -> FastAPI:
         return FundingScreenerResponse(
             items=items[:capped],
             roundtrip_cost_pct=round(ROUNDTRIP * 100, 2),
-            as_of=datetime.now(timezone.utc),
+            as_of=datetime.now(UTC),
         )
 
     @app.get(
@@ -1870,13 +2130,12 @@ def create_app() -> FastAPI:
         Testnet은 펀딩비 이력이 의미 없으므로 항상 운영망(fapi.binance.com)
         을 조회한다.
         """
-        from datetime import timezone as _tz
 
         sym = (symbol or "").strip().upper()
         if not sym or not sym.isalnum() or len(sym) > 32:
             return FundingSymbolDetailResponse(
                 symbol=sym,
-                as_of=datetime.now(_tz.utc),
+                as_of=datetime.now(UTC),
                 n_samples=0,
                 window_stats=[],
                 max=None,
@@ -1894,12 +2153,12 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 시작."""
+        from common.crypto import get_crypto_service
         from control.repo import get_binance_credential
         from live.funding_arbitrage_engine import (
-            start_engine,
             get_engine_status_persisted,
+            start_engine,
         )
-        from common.crypto import get_crypto_service
 
         crypto = get_crypto_service()
 
@@ -1915,7 +2174,9 @@ def create_app() -> FastAPI:
             fut_cred = await get_binance_credential(session, user_id=user.user_id, env="testnet")
             spot_cred = fut_cred
             if not fut_cred:
-                raise HTTPException(status_code=400, detail="Testnet(Demo) API 키가 설정되지 않았습니다.")
+                raise HTTPException(
+                    status_code=400, detail="Testnet(Demo) API 키가 설정되지 않았습니다."
+                )
             is_testnet = True
         else:
             fut_cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
@@ -1934,13 +2195,18 @@ def create_app() -> FastAPI:
             resolved = _resolve_funding_deadband(params.symbol, params.hold_days)
             if resolved is not None:
                 entry_pct, exit_pct = resolved
-                params = params.model_copy(update={
-                    "entry_deadband_pct": entry_pct,
-                    "exit_deadband_pct": exit_pct,
-                })
+                params = params.model_copy(
+                    update={
+                        "entry_deadband_pct": entry_pct,
+                        "exit_deadband_pct": exit_pct,
+                    }
+                )
                 logging.getLogger("api").info(
                     "Dynamic deadband resolved for %s hold_days=%d: entry=%.5f%% exit=%.5f%%",
-                    params.symbol, params.hold_days, entry_pct, exit_pct,
+                    params.symbol,
+                    params.hold_days,
+                    entry_pct,
+                    exit_pct,
                 )
             else:
                 logging.getLogger("api").warning(
@@ -1965,7 +2231,8 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> FundingArbitrageStatusResponse:
         """펀딩비 차익거래 봇 정지 (어느 replica에서 실행 중이든 정지)."""
-        from live.funding_arbitrage_engine import stop_engine, get_engine_status_persisted
+        from live.funding_arbitrage_engine import get_engine_status_persisted, stop_engine
+
         await stop_engine(user.user_id, session_maker=session_maker)
         return await get_engine_status_persisted(session, user.user_id)
 
@@ -2016,11 +2283,7 @@ def create_app() -> FastAPI:
             std_pct = stats.get("std")
             n = int(stats.get("n") or 0)
             z = None
-            if (
-                mean_pct is not None
-                and std_pct is not None
-                and float(std_pct) > 0
-            ):
+            if mean_pct is not None and std_pct is not None and float(std_pct) > 0:
                 z = (row.kimp_pct - float(mean_pct)) / float(std_pct)
             items.append(
                 KimpScreenerItem(
@@ -2083,7 +2346,7 @@ def create_app() -> FastAPI:
                     err = json.dumps(
                         {
                             "errors": [str(exc)],
-                            "as_of": datetime.now(timezone.utc).isoformat(),
+                            "as_of": datetime.now(UTC).isoformat(),
                         }
                     )
                     yield f"event: error\ndata: {err}\n\n"
@@ -2195,7 +2458,6 @@ def create_app() -> FastAPI:
         """저장된 ``kimp_snapshots`` 시계열로 김프 중립 전략을 백테스트한다."""
         from datetime import datetime as _dt
         from datetime import timedelta as _td
-        from datetime import timezone as _tz
 
         from sqlalchemy import select as _select
 
@@ -2204,7 +2466,7 @@ def create_app() -> FastAPI:
         from live.kimp_neutral_backtest import BacktestConfig, KimpBar, run_kimp_backtest
 
         sym = req.symbol.strip().upper()
-        now = _dt.now(_tz.utc)
+        now = _dt.now(UTC)
         if not sym:
             return KimpBacktestResponse(
                 success=False, error="symbol is required", symbol=sym, as_of=now
@@ -2287,13 +2549,17 @@ def create_app() -> FastAPI:
     async def list_binance_futures_symbols() -> list[str]:
         now = time.monotonic()
         cached_symbols = futures_symbols_cache.get("symbols", [])
-        if now < float(futures_symbols_cache.get("expires_at", 0.0)) and isinstance(cached_symbols, list):
+        if now < float(futures_symbols_cache.get("expires_at", 0.0)) and isinstance(
+            cached_symbols, list
+        ):
             return [str(item) for item in cached_symbols if isinstance(item, str)]
 
         from binance.client import normalize_binance_base_url
 
         base_url = normalize_binance_base_url(
-            settings.binance.base_url_backtest or settings.binance.base_url or "https://fapi.binance.com"
+            settings.binance.base_url_backtest
+            or settings.binance.base_url
+            or "https://fapi.binance.com"
         )
 
         try:
@@ -2304,7 +2570,9 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             if isinstance(cached_symbols, list) and cached_symbols:
                 return [str(item) for item in cached_symbols if isinstance(item, str)]
-            raise HTTPException(status_code=502, detail=f"Failed to fetch Binance futures symbols: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Failed to fetch Binance futures symbols: {exc}"
+            ) from exc
 
         symbols: list[str] = []
         for raw in payload.get("symbols", []) if isinstance(payload, dict) else []:
@@ -2327,7 +2595,9 @@ def create_app() -> FastAPI:
         futures_symbols_cache["expires_at"] = now + 900.0
         return symbols
 
-    @app.get("/api/strategies", response_model=list[StrategyInfo], dependencies=[Depends(require_auth)])
+    @app.get(
+        "/api/strategies", response_model=list[StrategyInfo], dependencies=[Depends(require_auth)]
+    )
     async def strategies(
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
@@ -2391,7 +2661,9 @@ def create_app() -> FastAPI:
             )
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+        openai_messages = (
+            [{"role": m.role, "content": m.content} for m in messages] if messages else None
+        )
         intake = await _run_intake(client, prompt, openai_messages)
         await _record_strategy_quality(
             request_id=request_id,
@@ -2465,7 +2737,7 @@ def create_app() -> FastAPI:
         limit: int = Query(default=5000, ge=100, le=20000),
         session: AsyncSession = Depends(_db_session),
     ) -> StrategyQualitySummaryResponse:
-        since = datetime.now(timezone.utc) - timedelta(days=days)
+        since = datetime.now(UTC) - timedelta(days=days)
         rows = await list_strategy_quality_logs(session, since=since, limit=limit)
 
         total_requests = len(rows)
@@ -2474,14 +2746,20 @@ def create_app() -> FastAPI:
         generate_requests = len(generate_rows)
         generation_success_count = sum(1 for r in generate_rows if r.generation_success is True)
         generation_failure_count = sum(
-            1 for r in generate_rows if r.generation_attempted is True and r.generation_success is False
+            1
+            for r in generate_rows
+            if r.generation_attempted is True and r.generation_success is False
         )
         repaired_count = sum(1 for r in generate_rows if r.repaired is True)
         total_repair_attempts = sum(int(r.repair_attempts or 0) for r in generate_rows)
 
         ready_count = sum(1 for r in rows if str(r.status or "").upper() == "READY")
-        clarification_count = sum(1 for r in rows if str(r.status or "").upper() == "NEEDS_CLARIFICATION")
-        unsupported_count = sum(1 for r in rows if str(r.status or "").upper() == "UNSUPPORTED_CAPABILITY")
+        clarification_count = sum(
+            1 for r in rows if str(r.status or "").upper() == "NEEDS_CLARIFICATION"
+        )
+        unsupported_count = sum(
+            1 for r in rows if str(r.status or "").upper() == "UNSUPPORTED_CAPABILITY"
+        )
         out_of_scope_count = sum(1 for r in rows if str(r.status or "").upper() == "OUT_OF_SCOPE")
 
         missing_counter: Counter[str] = Counter()
@@ -2489,11 +2767,11 @@ def create_app() -> FastAPI:
         error_stage_counter: Counter[str] = Counter()
 
         for row in rows:
-            for item in (row.missing_fields or []):
+            for item in row.missing_fields or []:
                 key = str(item).strip()
                 if key:
                     missing_counter[key] += 1
-            for item in (row.unsupported_requirements or []):
+            for item in row.unsupported_requirements or []:
                 key = str(item).strip()
                 if key:
                     unsupported_req_counter[key] += 1
@@ -2535,9 +2813,7 @@ def create_app() -> FastAPI:
     ) -> AdminUsersResponse:
         from control.models import UserProfile
 
-        result = await session.execute(
-            select(UserProfile).order_by(UserProfile.created_at.desc())
-        )
+        result = await session.execute(select(UserProfile).order_by(UserProfile.created_at.desc()))
         rows = result.scalars().all()
         items = [
             AdminUserItem(
@@ -2605,7 +2881,9 @@ def create_app() -> FastAPI:
                 quality_logged = True
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-            openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+            openai_messages = (
+                [{"role": m.role, "content": m.content} for m in messages] if messages else None
+            )
             if messages:
                 result = await client.generate_strategy("", messages=openai_messages)
             else:
@@ -2747,14 +3025,18 @@ def create_app() -> FastAPI:
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             return
 
-        openai_messages = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+        openai_messages = (
+            [{"role": m.role, "content": m.content} for m in messages] if messages else None
+        )
 
         code_acc: list[str] = []
         stream_repaired = False
         stream_repair_attempts = 0
         try:
             if messages:
-                stream = client.generate_strategy_stream("", messages=openai_messages, confirmed_plan=body.confirmed_plan)
+                stream = client.generate_strategy_stream(
+                    "", messages=openai_messages, confirmed_plan=body.confirmed_plan
+                )
             else:
                 stream = client.generate_strategy_stream(prompt, confirmed_plan=body.confirmed_plan)
             async for event in stream:
@@ -2939,7 +3221,9 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> list[StrategyChatSessionSummary]:
         """Lightweight session list — metadata only, no data payload."""
-        rows = await repo_list_strategy_chat_session_summaries(session, user_id=user_id, limit=limit)
+        rows = await repo_list_strategy_chat_session_summaries(
+            session, user_id=user_id, limit=limit
+        )
         return [_chat_session_to_summary(row) for row in rows]
 
     @app.get(
@@ -3034,10 +3318,14 @@ def create_app() -> FastAPI:
             _verify_strategy_backtest(temp_path, repo_root)
         except ValueError as exc:
             _cleanup_verify_temp(temp_path)
-            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Strategy verification failed: {exc}"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             _cleanup_verify_temp(temp_path)
-            raise HTTPException(status_code=502, detail=f"Strategy verification failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Strategy verification failed: {exc}"
+            ) from exc
 
         _cleanup_verify_temp(temp_path)
 
@@ -3053,7 +3341,9 @@ def create_app() -> FastAPI:
                 )
                 await session.commit()
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"Failed to upload strategy object: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to upload strategy object: {exc}"
+                ) from exc
             return StrategySaveResponse(path=_logical_strategy_path(filename))
 
         dirs = _strategy_dirs()
@@ -3064,13 +3354,17 @@ def create_app() -> FastAPI:
         try:
             base_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Failed to prepare strategy dir: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to prepare strategy dir: {exc}"
+            ) from exc
 
         final_target = _unique_strategy_path(base_dir, filename)
         try:
             final_target.write_text(code, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Failed to write strategy file: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to write strategy file: {exc}"
+            ) from exc
         return StrategySaveResponse(path=str(final_target.relative_to(repo_root)))
 
     @app.post(
@@ -3093,11 +3387,14 @@ def create_app() -> FastAPI:
                 error=StrategySyntaxError(
                     message=exc.msg or "invalid syntax",
                     line=exc.lineno,
-                    column=(exc.offset - 1) if isinstance(exc.offset, int) and exc.offset > 0 else exc.offset,
+                    column=(exc.offset - 1)
+                    if isinstance(exc.offset, int) and exc.offset > 0
+                    else exc.offset,
                     end_line=getattr(exc, "end_lineno", None),
                     end_column=(
                         (exc.end_offset - 1)
-                        if isinstance(getattr(exc, "end_offset", None), int) and getattr(exc, "end_offset", None) > 0
+                        if isinstance(getattr(exc, "end_offset", None), int)
+                        and getattr(exc, "end_offset", None) > 0
                         else getattr(exc, "end_offset", None)
                     ),
                 ),
@@ -3160,7 +3457,9 @@ def create_app() -> FastAPI:
     )
     async def preflight_job_policy(body: JobPolicyCheckRequest) -> JobPolicyCheckResponse:
         result = evaluate_job_policy(body.type, body.config)
-        return JobPolicyCheckResponse(ok=result.ok, blockers=result.blockers, warnings=result.warnings)
+        return JobPolicyCheckResponse(
+            ok=result.ok, blockers=result.blockers, warnings=result.warnings
+        )
 
     @app.post("/api/jobs", response_model=JobResponse)
     async def create_job_api(
@@ -3180,6 +3479,7 @@ def create_app() -> FastAPI:
             )
 
         from api.quota import check_job_quota
+
         await check_job_quota(session, user_id=user.user_id, plan=user.plan, job_type=body.type)
 
         wallet_account_id = body.wallet_account_id
@@ -3352,9 +3652,15 @@ def create_app() -> FastAPI:
         return {
             str(jid): [
                 TradeResponse(
-                    trade_id=t.trade_id, symbol=t.symbol, order_id=t.order_id,
-                    quantity=t.quantity, price=t.price, realized_pnl=t.realized_pnl,
-                    commission=t.commission, ts=t.ts, raw=t.raw_json,
+                    trade_id=t.trade_id,
+                    symbol=t.symbol,
+                    order_id=t.order_id,
+                    quantity=t.quantity,
+                    price=t.price,
+                    realized_pnl=t.realized_pnl,
+                    commission=t.commission,
+                    ts=t.ts,
+                    raw=t.raw_json,
                 )
                 for t in trades_list
             ]
@@ -3370,6 +3676,7 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
     ) -> StreamingResponse:
         """SSE stream that pushes live job summaries + trades periodically."""
+
         async def gen() -> AsyncIterator[bytes]:
             yield b"retry: 5000\n\n"
             try:
@@ -3390,10 +3697,14 @@ def create_app() -> FastAPI:
                             "jobs": [
                                 {
                                     "job_id": str(j.job_id),
-                                    "status": j.status.value if hasattr(j.status, "value") else str(j.status),
+                                    "status": j.status.value
+                                    if hasattr(j.status, "value")
+                                    else str(j.status),
                                     "strategy_path": j.strategy_path,
                                     "config": _public_job_config(j.config),
-                                    "started_at": j.started_at.isoformat() if j.started_at else None,
+                                    "started_at": j.started_at.isoformat()
+                                    if j.started_at
+                                    else None,
                                     "trades": [
                                         {
                                             "trade_id": t.trade_id,
@@ -3411,7 +3722,7 @@ def create_app() -> FastAPI:
                             ],
                         }
                     data = json.dumps(payload, ensure_ascii=False, default=str)
-                    yield f"data: {data}\n\n".encode("utf-8")
+                    yield f"data: {data}\n\n".encode()
                     await asyncio.sleep(5)
             except asyncio.CancelledError:
                 return
@@ -3457,7 +3768,9 @@ def create_app() -> FastAPI:
             return StopResponse(ok=False)
 
         if new_status == JobStatus.STOP_REQUESTED:
-            await append_event(session, job_id=job_id, kind=EventKind.STATUS, message="STOP_REQUESTED")
+            await append_event(
+                session, job_id=job_id, kind=EventKind.STATUS, message="STOP_REQUESTED"
+            )
         else:
             await append_event(
                 session,
@@ -3468,6 +3781,63 @@ def create_app() -> FastAPI:
             )
         await session.commit()
         return StopResponse(ok=True)
+
+    @app.get(
+        "/api/jobs/{job_id}/manual-order-sizing",
+        response_model=ManualLiveOrderSizingResponse,
+    )
+    async def manual_live_order_sizing(
+        job_id: uuid.UUID,
+        symbol: str = Query(..., min_length=1),
+        side: Literal["LONG", "SHORT"] = Query("LONG"),
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> ManualLiveOrderSizingResponse:
+        job = await get_job(session, job_id, user_id=user.user_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Not found")
+        if JobType(str(job.type)) != JobType.LIVE:
+            raise HTTPException(
+                status_code=422,
+                detail="Manual orders are only supported for LIVE jobs.",
+            )
+        if JobStatus(str(job.status)) != JobStatus.RUNNING:
+            raise HTTPException(status_code=409, detail="Manual orders require a RUNNING live job.")
+
+        config = _public_job_config(job.config_json)
+        env = _job_env(config)
+        normalized_symbol = symbol.strip().upper()
+        allowed_symbols = _job_symbols(config)
+        if not normalized_symbol:
+            raise HTTPException(status_code=422, detail="symbol is required")
+        if allowed_symbols and normalized_symbol not in allowed_symbols:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Symbol {normalized_symbol} is not configured for this live job.",
+            )
+
+        client, should_close_client = await _resolve_manual_order_client(
+            session,
+            user_id=user.user_id,
+            job=job,
+            env=env,
+        )
+        try:
+            sizing = await _manual_entry_sizing(
+                client,
+                config=config,
+                symbol=normalized_symbol,
+                side=side,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(exc)[:1000]) from exc
+        finally:
+            if should_close_client:
+                await client.aclose()
+
+        return ManualLiveOrderSizingResponse(symbol=normalized_symbol, side=side, **sizing)
 
     @app.post("/api/jobs/{job_id}/manual-order", response_model=ManualLiveOrderResponse)
     async def manual_live_order(
@@ -3480,7 +3850,10 @@ def create_app() -> FastAPI:
         if not job:
             raise HTTPException(status_code=404, detail="Not found")
         if JobType(str(job.type)) != JobType.LIVE:
-            raise HTTPException(status_code=422, detail="Manual orders are only supported for LIVE jobs.")
+            raise HTTPException(
+                status_code=422,
+                detail="Manual orders are only supported for LIVE jobs.",
+            )
         if JobStatus(str(job.status)) != JobStatus.RUNNING:
             raise HTTPException(status_code=409, detail="Manual orders require a RUNNING live job.")
 
@@ -3502,23 +3875,58 @@ def create_app() -> FastAPI:
             job=job,
             env=env,
         )
+        mark_price: float | None = None
+        order_notional_usdt: float | None = None
         try:
             reduce_only = body.action == "CLOSE"
             position_before: float | None = None
             if body.action == "ENTER":
                 if body.side is None:
                     raise HTTPException(status_code=422, detail="side is required for manual entry")
-                if body.quantity is None:
-                    raise HTTPException(status_code=422, detail="quantity is required for manual entry")
+                sizing = await _manual_entry_sizing(
+                    client,
+                    config=config,
+                    symbol=symbol,
+                    side=body.side,
+                )
+                mark_price = float(sizing["mark_price"] or 0.0)
+                if body.use_max:
+                    quantity = float(sizing["max_quantity"] or 0.0)
+                    if quantity <= 0:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="No available position size remains for this symbol.",
+                        )
+                elif body.notional_usdt is not None:
+                    quantity = _quantity_from_notional(
+                        float(body.notional_usdt),
+                        mark_price,
+                        {
+                            "step_size": sizing.get("step_size"),
+                            "max_qty": sizing.get("max_exchange_quantity"),
+                        },
+                    )
+                elif body.quantity is not None:
+                    quantity = float(body.quantity)
+                else:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="notional_usdt, use_max, or quantity is required for manual entry",
+                    )
+                _validate_manual_entry_quantity(quantity=quantity, side=body.side, sizing=sizing)
+                order_notional_usdt = quantity * mark_price
                 order_side = "BUY" if body.side == "LONG" else "SELL"
-                quantity = float(body.quantity)
                 order = await client.place_order(symbol, order_side, quantity)
             else:
                 raw_position = await client.fetch_position(symbol)
                 position_before = _position_amt(raw_position, symbol)
                 if abs(position_before) < 1e-12:
-                    raise HTTPException(status_code=409, detail=f"No open {symbol} position to close.")
-                quantity = float(body.quantity) if body.quantity is not None else abs(position_before)
+                    raise HTTPException(
+                        status_code=409, detail=f"No open {symbol} position to close."
+                    )
+                quantity = (
+                    float(body.quantity) if body.quantity is not None else abs(position_before)
+                )
                 if quantity - abs(position_before) > 1e-12:
                     raise HTTPException(
                         status_code=422,
@@ -3544,7 +3952,9 @@ def create_app() -> FastAPI:
                     "action": body.action,
                     "symbol": symbol,
                     "error": str(exc)[:1000],
-                    "wallet_account_id": str(job.wallet_account_id) if job.wallet_account_id else None,
+                    "wallet_account_id": str(job.wallet_account_id)
+                    if job.wallet_account_id
+                    else None,
                 },
             )
             await session.commit()
@@ -3584,6 +3994,8 @@ def create_app() -> FastAPI:
             "symbol": symbol,
             "side": order_side,
             "quantity": quantity,
+            "notional_usdt": order_notional_usdt,
+            "mark_price": mark_price,
             "reduce_only": reduce_only,
             "position_before": position_before,
             "wallet_account_id": str(job.wallet_account_id) if job.wallet_account_id else None,
@@ -3603,6 +4015,8 @@ def create_app() -> FastAPI:
             symbol=symbol,
             side=order_side,
             quantity=quantity,
+            notional_usdt=order_notional_usdt,
+            mark_price=mark_price,
             reduce_only=reduce_only,
             order=order,
         )
@@ -3636,13 +4050,15 @@ def create_app() -> FastAPI:
                     # IMPORTANT: Do not keep a DB session open for the whole SSE connection.
                     # Each open EventSource would otherwise reserve a pooled connection indefinitely.
                     async with session_maker() as session:
-                        rows = await list_events(session, job_id=job_id, after_event_id=last_id, limit=200)
+                        rows = await list_events(
+                            session, job_id=job_id, after_event_id=last_id, limit=200
+                        )
                     if rows:
                         for ev in rows:
                             last_id = int(ev.event_id)
                             payload = _event_to_response(ev).model_dump()
                             data = json.dumps(payload, ensure_ascii=False, default=str)
-                            chunk = f"id: {last_id}\ndata: {data}\n\n".encode("utf-8")
+                            chunk = f"id: {last_id}\ndata: {data}\n\n".encode()
                             yield chunk
                     else:
                         # keepalive
@@ -3665,10 +4081,17 @@ def create_app() -> FastAPI:
         rows = await list_orders(session, job_id=job_id)
         return [
             OrderResponse(
-                order_id=o.order_id, symbol=o.symbol, side=o.side,
-                order_type=o.order_type, status=o.status, quantity=o.quantity,
-                price=o.price, executed_qty=o.executed_qty, avg_price=o.avg_price,
-                ts=o.ts, raw=o.raw_json,
+                order_id=o.order_id,
+                symbol=o.symbol,
+                side=o.side,
+                order_type=o.order_type,
+                status=o.status,
+                quantity=o.quantity,
+                price=o.price,
+                executed_qty=o.executed_qty,
+                avg_price=o.avg_price,
+                ts=o.ts,
+                raw=o.raw_json,
             )
             for o in rows
         ]
@@ -3685,9 +4108,15 @@ def create_app() -> FastAPI:
         rows = await list_trades(session, job_id=job_id)
         return [
             TradeResponse(
-                trade_id=t.trade_id, symbol=t.symbol, order_id=t.order_id,
-                quantity=t.quantity, price=t.price, realized_pnl=t.realized_pnl,
-                commission=t.commission, ts=t.ts, raw=t.raw_json,
+                trade_id=t.trade_id,
+                symbol=t.symbol,
+                order_id=t.order_id,
+                quantity=t.quantity,
+                price=t.price,
+                realized_pnl=t.realized_pnl,
+                commission=t.commission,
+                ts=t.ts,
+                raw=t.raw_json,
             )
             for t in rows
         ]
@@ -3702,6 +4131,7 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         from control.repo import get_user_profile, list_binance_credentials
+
         profile = await get_user_profile(session, user_id=user.user_id)
         if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
@@ -3732,8 +4162,9 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> list[BinanceCredentialStatus]:
-        from control.repo import list_binance_credentials
         from common.crypto import get_crypto_service
+        from control.repo import list_binance_credentials
+
         creds = await list_binance_credentials(session, user_id=user.user_id)
         cred_map = {c.env: c for c in creds}
         crypto = get_crypto_service()
@@ -3767,7 +4198,9 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> BinanceCredentialStatus:
         if env not in _BINANCE_CRED_ENVS:
-            raise HTTPException(status_code=422, detail=f"Invalid env. Must be one of: {list(_BINANCE_CRED_ENVS)}")
+            raise HTTPException(
+                status_code=422, detail=f"Invalid env. Must be one of: {list(_BINANCE_CRED_ENVS)}"
+            )
         api_key = str(body.get("api_key") or "").strip()
         api_secret = str(body.get("api_secret") or "").strip()
         if not api_key or not api_secret:
@@ -3796,24 +4229,33 @@ def create_app() -> FastAPI:
         base_url = _BINANCE_CRED_ENVS[env]
 
         from binance.client import BinanceHTTPClient
-        test_client = BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0)
+
+        test_client = BinanceHTTPClient(
+            api_key=api_key, api_secret=api_secret, base_url=base_url, timeout=10.0
+        )
         try:
             account_info = await test_client.fetch_account_info()
             if not account_info:
-                raise HTTPException(status_code=400, detail="Binance API connection test failed: empty response")
+                raise HTTPException(
+                    status_code=400, detail="Binance API connection test failed: empty response"
+                )
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"Binance API connection test failed: {exc}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"Binance API connection test failed: {exc}"
+            ) from exc
         finally:
             await test_client.aclose()
 
         from common.crypto import get_crypto_service
+
         crypto = get_crypto_service()
         api_key_enc = crypto.encrypt(api_key)
         api_secret_enc = crypto.encrypt(api_secret)
 
         from control.repo import upsert_binance_credential
+
         await upsert_binance_credential(
             session,
             user_id=user.user_id,
@@ -3837,8 +4279,11 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, bool]:
         if env not in _BINANCE_CRED_ENVS:
-            raise HTTPException(status_code=422, detail=f"Invalid env. Must be one of: {list(_BINANCE_CRED_ENVS)}")
+            raise HTTPException(
+                status_code=422, detail=f"Invalid env. Must be one of: {list(_BINANCE_CRED_ENVS)}"
+            )
         from control.repo import delete_binance_credential
+
         await delete_binance_credential(session, user_id=user.user_id, env=env)
         await session.commit()
         return {"ok": True}
@@ -3859,27 +4304,38 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail="access_key and secret_key are required")
 
         from upbit.client import UpbitClient, UpbitClientError
+
         test_client = UpbitClient(access_key=access_key, secret_key=secret_key, timeout=10.0)
         try:
             balances = await test_client.fetch_balances()
             if not isinstance(balances, list):
-                raise HTTPException(status_code=400, detail="Upbit API connection test failed: unexpected response")
+                raise HTTPException(
+                    status_code=400, detail="Upbit API connection test failed: unexpected response"
+                )
         except HTTPException:
             raise
         except UpbitClientError as exc:
-            raise HTTPException(status_code=400, detail=f"Upbit API connection test failed: {exc}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"Upbit API connection test failed: {exc}"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"Upbit API connection test failed: {exc}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"Upbit API connection test failed: {exc}"
+            ) from exc
         finally:
             await test_client.aclose()
 
         from common.crypto import get_crypto_service
+
         crypto = get_crypto_service()
         key_enc = crypto.encrypt(access_key)
         secret_enc = crypto.encrypt(secret_key)
 
         from control.repo import update_user_upbit_keys
-        await update_user_upbit_keys(session, user_id=user.user_id, api_key_enc=key_enc, api_secret_enc=secret_enc)
+
+        await update_user_upbit_keys(
+            session, user_id=user.user_id, api_key_enc=key_enc, api_secret_enc=secret_enc
+        )
         await session.commit()
         return {"ok": True, "access_key_masked": _mask_key(access_key)}
 
@@ -3889,11 +4345,13 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         from control.repo import get_user_profile
+
         profile = await get_user_profile(session, user_id=user.user_id)
         if not profile or not profile.upbit_api_key_enc:
             return {"configured": False}
 
         from common.crypto import get_crypto_service
+
         crypto = get_crypto_service()
         try:
             raw_key = crypto.decrypt(profile.upbit_api_key_enc)
@@ -3908,7 +4366,10 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, bool]:
         from control.repo import update_user_upbit_keys
-        await update_user_upbit_keys(session, user_id=user.user_id, api_key_enc=None, api_secret_enc=None)
+
+        await update_user_upbit_keys(
+            session, user_id=user.user_id, api_key_enc=None, api_secret_enc=None
+        )
         await session.commit()
         return {"ok": True}
 
@@ -3921,9 +4382,9 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
+        from common.crypto import get_crypto_service
         from control.repo import get_user_profile
         from upbit.client import UpbitClient, UpbitClientError
-        from common.crypto import get_crypto_service
 
         profile = await get_user_profile(session, user_id=user.user_id)
         if not profile or not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
@@ -3959,6 +4420,7 @@ def create_app() -> FastAPI:
 
     def _get_upbit_client_for_user(profile: Any, crypto: Any) -> Any:
         from upbit.client import UpbitClient
+
         access_key = crypto.decrypt(profile.upbit_api_key_enc)
         secret_key = crypto.decrypt(profile.upbit_api_secret_enc)
         return UpbitClient(access_key=access_key, secret_key=secret_key)
@@ -3986,11 +4448,11 @@ def create_app() -> FastAPI:
           3. Withdraw USDT from Upbit to Binance
           4. Record transfer in DB
         """
-        from control.repo import create_bridge_transfer, get_user_profile, update_bridge_transfer
-        from upbit.client import UpbitClient, UpbitClientError
-        from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
+
+        from binance.earn_client import BinanceEarnClientError
         from common.crypto import get_crypto_service
-        import uuid as _uuid
+        from control.repo import create_bridge_transfer, get_user_profile, update_bridge_transfer
+        from upbit.client import UpbitClientError
 
         usdt_amount = float(body.get("usdt_amount") or 0)
         network = str(body.get("network") or "TRC20").upper()
@@ -4005,13 +4467,17 @@ def create_app() -> FastAPI:
         if not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
             raise HTTPException(status_code=400, detail="Upbit API keys not configured")
         from control.repo import get_binance_credential as _get_binance_cred_onramp
-        binance_cred_onramp = await _get_binance_cred_onramp(session, user_id=user.user_id, env="mainnet")
+
+        binance_cred_onramp = await _get_binance_cred_onramp(
+            session, user_id=user.user_id, env="mainnet"
+        )
         if not binance_cred_onramp:
             raise HTTPException(status_code=400, detail="Binance mainnet API keys not configured")
 
         crypto = get_crypto_service()
         upbit = _get_upbit_client_for_user(profile, crypto)
         from binance.earn_client import BinanceEarnClient as _BECOnramp
+
         binance = _BECOnramp(
             api_key=crypto.decrypt(binance_cred_onramp.api_key_enc),
             api_secret=crypto.decrypt(binance_cred_onramp.api_secret_enc),
@@ -4093,10 +4559,10 @@ def create_app() -> FastAPI:
           3. Withdraw USDT from Binance to Upbit
           4. Record transfer in DB
         """
-        from control.repo import create_bridge_transfer, get_user_profile, update_bridge_transfer
-        from upbit.client import UpbitClient, UpbitClientError
-        from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
+        from binance.earn_client import BinanceEarnClientError
         from common.crypto import get_crypto_service
+        from control.repo import create_bridge_transfer, get_user_profile, update_bridge_transfer
+        from upbit.client import UpbitClientError
 
         usdt_amount = float(body.get("usdt_amount") or 0)
         network = str(body.get("network") or "TRC20").upper()
@@ -4112,13 +4578,17 @@ def create_app() -> FastAPI:
         if not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
             raise HTTPException(status_code=400, detail="Upbit API keys not configured")
         from control.repo import get_binance_credential as _get_binance_cred_offramp
-        binance_cred_offramp = await _get_binance_cred_offramp(session, user_id=user.user_id, env="mainnet")
+
+        binance_cred_offramp = await _get_binance_cred_offramp(
+            session, user_id=user.user_id, env="mainnet"
+        )
         if not binance_cred_offramp:
             raise HTTPException(status_code=400, detail="Binance mainnet API keys not configured")
 
         crypto = get_crypto_service()
         upbit = _get_upbit_client_for_user(profile, crypto)
         from binance.earn_client import BinanceEarnClient as _BECOfframp
+
         binance = _BECOfframp(
             api_key=crypto.decrypt(binance_cred_offramp.api_key_enc),
             api_secret=crypto.decrypt(binance_cred_offramp.api_secret_enc),
@@ -4192,6 +4662,7 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         from control.repo import list_bridge_transfers
+
         transfers = await list_bridge_transfers(session, user_id=user.user_id)
         return {
             "transfers": [
@@ -4223,7 +4694,9 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         import uuid as _uuid
+
         from control.repo import get_bridge_transfer
+
         try:
             tid = _uuid.UUID(transfer_id)
         except ValueError:
@@ -4260,8 +4733,9 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         """Poll withdrawal status from the source exchange and update DB."""
         import uuid as _uuid
-        from control.repo import get_bridge_transfer, get_user_profile, update_bridge_transfer
+
         from common.crypto import get_crypto_service
+        from control.repo import get_bridge_transfer, get_user_profile, update_bridge_transfer
 
         try:
             tid = _uuid.UUID(transfer_id)
@@ -4285,8 +4759,8 @@ def create_app() -> FastAPI:
 
         async def _make_binance_client() -> Any:
             """Build a Binance Earn client from the user's mainnet credential."""
-            from control.repo import get_binance_credential as _get_binance_cred
             from binance.earn_client import BinanceEarnClient
+            from control.repo import get_binance_credential as _get_binance_cred
 
             cred = await _get_binance_cred(session, user_id=user.user_id, env="mainnet")
             if not cred:
@@ -4306,7 +4780,7 @@ def create_app() -> FastAPI:
             check_txid = (check_txid or "").lower()
             dst_addr = (transfer.dst_deposit_address or "").lower()
             want_amt = float(transfer.requested_usdt or 0)
-            for item in (deposits if isinstance(deposits, list) else []):
+            for item in deposits if isinstance(deposits, list) else []:
                 if int(item.get("status", -1)) != 1:  # 1 = Success/credited
                     continue
                 item_txid = str(item.get("txId") or "")
@@ -4366,11 +4840,18 @@ def create_app() -> FastAPI:
             elif transfer.direction == "BINANCE_TO_UPBIT" and transfer.src_withdrawal_id:
                 binance = await _make_binance_client()
                 if binance is None:
-                    raise HTTPException(status_code=400, detail="Binance mainnet API keys not configured")
+                    raise HTTPException(
+                        status_code=400, detail="Binance mainnet API keys not configured"
+                    )
                 try:
-                    history = await binance.get_withdrawal_history(withdraw_order_id=transfer.src_withdrawal_id)
+                    history = await binance.get_withdrawal_history(
+                        withdraw_order_id=transfer.src_withdrawal_id
+                    )
                     for item in history:
-                        if str(item.get("id")) == transfer.src_withdrawal_id or str(item.get("withdrawOrderId")) == transfer.src_withdrawal_id:
+                        if (
+                            str(item.get("id")) == transfer.src_withdrawal_id
+                            or str(item.get("withdrawOrderId")) == transfer.src_withdrawal_id
+                        ):
                             status_code = int(item.get("status", -1))
                             if status_code == 6:  # Completed
                                 new_status = "CONFIRMING"
@@ -4378,18 +4859,25 @@ def create_app() -> FastAPI:
                                 update_kwargs["fee_usdt"] = float(item.get("transactionFee") or 0)
                             elif status_code in (1, 3, 5):  # Cancelled / Rejected / Failure
                                 new_status = "FAILED"
-                                update_kwargs["error_message"] = f"Binance withdrawal status={status_code}"
+                                update_kwargs["error_message"] = (
+                                    f"Binance withdrawal status={status_code}"
+                                )
                             break
                 finally:
                     await binance.aclose()
 
                 # Destination side: check Upbit deposit history
-                if new_status in ("CONFIRMING", "WITHDRAWING") and (update_kwargs.get("dst_txid") or transfer.dst_txid):
+                if new_status in ("CONFIRMING", "WITHDRAWING") and (
+                    update_kwargs.get("dst_txid") or transfer.dst_txid
+                ):
                     upbit = _get_upbit_client_for_user(profile, crypto)
                     try:
                         check_txid = update_kwargs.get("dst_txid") or transfer.dst_txid
                         dep = await upbit.get_deposit(check_txid)
-                        if isinstance(dep, dict) and str(dep.get("state", "")).upper() == "ACCEPTED":
+                        if (
+                            isinstance(dep, dict)
+                            and str(dep.get("state", "")).upper() == "ACCEPTED"
+                        ):
                             new_status = "COMPLETED"
                             amt = dep.get("amount")
                             if amt is not None:
@@ -4405,7 +4893,7 @@ def create_app() -> FastAPI:
         if changed:
             update_kwargs["status"] = new_status
             if new_status == "COMPLETED":
-                update_kwargs["completed_at"] = datetime.now(timezone.utc)
+                update_kwargs["completed_at"] = datetime.now(UTC)
             await update_bridge_transfer(session, transfer_id=tid, **update_kwargs)
             await session.commit()
 
@@ -4420,7 +4908,7 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> AutoSweepStatusResponse:
-        from control.repo import get_user_profile, get_binance_credential
+        from control.repo import get_binance_credential, get_user_profile
         from live.auto_sweep_engine import get_user_status
 
         profile = await get_user_profile(session, user_id=user.user_id)
@@ -4468,6 +4956,7 @@ def create_app() -> FastAPI:
 
         if body.enabled:
             from control.repo import get_binance_credential as _get_sweep_cred
+
             mainnet_cred_sweep = await _get_sweep_cred(session, user_id=user.user_id, env="mainnet")
             if not mainnet_cred_sweep:
                 raise HTTPException(
@@ -4521,7 +5010,8 @@ def create_app() -> FastAPI:
     ) -> WalletOverviewResponse:
         """Return Futures + Spot + Earn USDT balances in a single call."""
         import asyncio
-        from binance.earn_client import BinanceEarnClient, BinanceEarnClientError
+
+        from binance.earn_client import BinanceEarnClient
         from common.crypto import get_crypto_service
         from control.repo import get_binance_credential
 
@@ -4530,7 +5020,7 @@ def create_app() -> FastAPI:
             return WalletOverviewResponse(
                 total_usdt=0.0,
                 wallets=[],
-                as_of=datetime.now(timezone.utc),
+                as_of=datetime.now(UTC),
                 error="Binance mainnet API keys not configured",
             )
 
@@ -4581,7 +5071,7 @@ def create_app() -> FastAPI:
         return WalletOverviewResponse(
             total_usdt=total,
             wallets=wallets,
-            as_of=datetime.now(timezone.utc),
+            as_of=datetime.now(UTC),
         )
 
     # ------------------------------------------------------------------
@@ -4603,7 +5093,7 @@ def create_app() -> FastAPI:
         from control.repo import get_binance_credential
         from runner.account_snapshot import _fetch_snapshot
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         cred = await get_binance_credential(session, user_id=user.user_id, env="mainnet")
         if not cred:
@@ -4705,9 +5195,7 @@ def create_app() -> FastAPI:
                 )
             )
 
-        unattributed = [
-            p for p in all_positions if f"{p.symbol}-{p.side}" not in claimed
-        ]
+        unattributed = [p for p in all_positions if f"{p.symbol}-{p.side}" not in claimed]
 
         totals = LivePositionsTotals(
             strategy_count=len(strategies),
@@ -4741,12 +5229,16 @@ def create_app() -> FastAPI:
 
         stripe_lib.api_key = stripe_settings.secret_key
         plan = str(body.get("plan") or "pro").strip().lower()
-        price_map = {"pro": stripe_settings.price_id_pro, "enterprise": stripe_settings.price_id_enterprise}
+        price_map = {
+            "pro": stripe_settings.price_id_pro,
+            "enterprise": stripe_settings.price_id_enterprise,
+        }
         price_id = price_map.get(plan)
         if not price_id:
             raise HTTPException(status_code=400, detail=f"Unknown plan: {plan}")
 
         from control.repo import get_user_profile
+
         profile = await get_user_profile(session, user_id=user.user_id)
         customer_id = profile.stripe_customer_id if profile else None
         checkout_params: dict[str, Any] = {
@@ -4778,9 +5270,12 @@ def create_app() -> FastAPI:
         stripe_lib.api_key = stripe_settings.secret_key
 
         from control.repo import get_user_profile
+
         profile = await get_user_profile(session, user_id=user.user_id)
         if not profile or not profile.stripe_customer_id:
-            raise HTTPException(status_code=400, detail="No billing account found. Subscribe first.")
+            raise HTTPException(
+                status_code=400, detail="No billing account found. Subscribe first."
+            )
 
         portal = stripe_lib.billing_portal.Session.create(
             customer=profile.stripe_customer_id,
@@ -4793,17 +5288,22 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
-        from control.repo import get_user_profile, get_usage_count
         from api.plans import get_plan_limits
+        from control.repo import get_usage_count, get_user_profile
 
         profile = await get_user_profile(session, user_id=user.user_id)
         plan = profile.plan if profile else "free"
         limits = get_plan_limits(plan)
 
-        from datetime import datetime as dt, timezone as tz
-        period = dt.now(tz.utc).strftime("%Y-%m")
-        bt_used = await get_usage_count(session, user_id=user.user_id, action="backtest", period_key=period)
-        llm_used = await get_usage_count(session, user_id=user.user_id, action="llm_generate", period_key=period)
+        from datetime import datetime as dt
+
+        period = dt.now(UTC).strftime("%Y-%m")
+        bt_used = await get_usage_count(
+            session, user_id=user.user_id, action="backtest", period_key=period
+        )
+        llm_used = await get_usage_count(
+            session, user_id=user.user_id, action="llm_generate", period_key=period
+        )
 
         return {
             "plan": plan,
@@ -4817,7 +5317,9 @@ def create_app() -> FastAPI:
                 "backtest_this_month": bt_used,
                 "llm_generate_this_month": llm_used,
             },
-            "plan_expires_at": profile.plan_expires_at.isoformat() if profile and profile.plan_expires_at else None,
+            "plan_expires_at": profile.plan_expires_at.isoformat()
+            if profile and profile.plan_expires_at
+            else None,
         }
 
     @app.post("/api/billing/webhook")
@@ -4847,6 +5349,7 @@ def create_app() -> FastAPI:
                 subscription_id = data_obj.get("subscription")
                 if user_id and customer_id:
                     from control.repo import update_user_plan
+
                     plan = "pro"
                     if data_obj.get("metadata", {}).get("plan"):
                         plan = data_obj["metadata"]["plan"]
@@ -4863,7 +5366,10 @@ def create_app() -> FastAPI:
                 customer_id = data_obj.get("customer")
                 if customer_id:
                     from control.repo import get_user_by_stripe_customer_id, update_user_plan
-                    profile = await get_user_by_stripe_customer_id(session, stripe_customer_id=customer_id)
+
+                    profile = await get_user_by_stripe_customer_id(
+                        session, stripe_customer_id=customer_id
+                    )
                     if profile:
                         status = data_obj.get("status")
                         if status in ("active", "trialing"):
@@ -4880,11 +5386,16 @@ def create_app() -> FastAPI:
             elif event_type == "customer.subscription.deleted":
                 customer_id = data_obj.get("customer")
                 if customer_id:
+                    from datetime import datetime as dt
+                    from datetime import timedelta
+
                     from control.repo import get_user_by_stripe_customer_id, update_user_plan
-                    from datetime import datetime as dt, timedelta, timezone as tz
-                    profile = await get_user_by_stripe_customer_id(session, stripe_customer_id=customer_id)
+
+                    profile = await get_user_by_stripe_customer_id(
+                        session, stripe_customer_id=customer_id
+                    )
                     if profile:
-                        grace = dt.now(tz.utc) + timedelta(days=3)
+                        grace = dt.now(UTC) + timedelta(days=3)
                         await update_user_plan(
                             session,
                             user_id=profile.user_id,
@@ -4908,7 +5419,9 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         import secrets
+
         import bcrypt
+
         from control.models import UserProfile
         from notifications.email import send_verification_email
 
@@ -4961,10 +5474,12 @@ def create_app() -> FastAPI:
 
         normalized_email = email.strip().lower()
         result = await session.execute(
-            select(UserProfile).where(
+            select(UserProfile)
+            .where(
                 UserProfile.email == normalized_email,
                 UserProfile.email_verification_token == token,
-            ).limit(1)
+            )
+            .limit(1)
         )
         profile = result.scalar_one_or_none()
 
@@ -4986,6 +5501,7 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         import secrets
+
         from control.models import UserProfile
         from notifications.email import send_verification_email
 
@@ -5024,6 +5540,7 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
     ) -> dict[str, Any]:
         import bcrypt
+
         from control.models import UserProfile
 
         body = await request.json()

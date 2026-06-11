@@ -244,6 +244,26 @@ export type ManualLiveOrderRequest = {
   symbol: string;
   side?: "LONG" | "SHORT";
   quantity?: number;
+  notional_usdt?: number;
+  use_max?: boolean;
+};
+
+export type ManualLiveOrderSizingResponse = {
+  symbol: string;
+  side: "LONG" | "SHORT";
+  mark_price: number;
+  leverage: number;
+  max_position: number;
+  account_equity: number;
+  available_balance: number;
+  current_position_qty: number;
+  current_position_notional: number;
+  max_notional_usdt: number;
+  max_quantity: number;
+  min_notional_usdt: number | null;
+  min_quantity: number | null;
+  max_exchange_quantity: number | null;
+  step_size: number | null;
 };
 
 export type ManualLiveOrderResponse = {
@@ -252,6 +272,8 @@ export type ManualLiveOrderResponse = {
   symbol: string;
   side: "BUY" | "SELL";
   quantity: number;
+  notional_usdt: number | null;
+  mark_price: number | null;
   reduce_only: boolean;
   order: Record<string, unknown>;
 };

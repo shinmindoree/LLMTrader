@@ -3,8 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 
-import { getBinanceAccountSummary, submitManualLiveOrder } from "@/lib/api";
-import type { BinanceAccountSummary, BinancePositionSummary, Job } from "@/lib/types";
+import {
+  getBinanceAccountSummary,
+  getManualLiveOrderSizing,
+  submitManualLiveOrder,
+} from "@/lib/api";
+import type {
+  BinanceAccountSummary,
+  BinancePositionSummary,
+  Job,
+  ManualLiveOrderSizingResponse,
+} from "@/lib/types";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -40,6 +49,12 @@ function formatNumber(value: number, digits = 6): string {
   });
 }
 
+function formatInputNumber(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const digits = value >= 1 ? 2 : 8;
+  return value.toFixed(digits).replace(/\.?0+$/, "");
+}
+
 export function LiveManualTradePanel({
   job,
   active,
@@ -53,7 +68,8 @@ export function LiveManualTradePanel({
   const accountEnv = useMemo(() => extractEnv(config), [config]);
   const [symbol, setSymbol] = useState(symbols[0] ?? "BTCUSDT");
   const [side, setSide] = useState<"LONG" | "SHORT">("LONG");
-  const [quantity, setQuantity] = useState("");
+  const [entryNotional, setEntryNotional] = useState("");
+  const [useMaxEntry, setUseMaxEntry] = useState(false);
   const [submitting, setSubmitting] = useState<"ENTER" | "CLOSE" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,16 +92,62 @@ export function LiveManualTradePanel({
     return positions.find((position) => position.symbol.toUpperCase() === symbol) ?? null;
   }, [snapshot, symbol]);
 
+  const sizingKey = ["manualLiveOrderSizing", job.job_id, symbol, side];
+  const { data: sizing } = useSWR<ManualLiveOrderSizingResponse>(
+    active && job.status === "RUNNING" ? sizingKey : null,
+    () => getManualLiveOrderSizing(job.job_id, symbol, side),
+    { refreshInterval: 5_000, dedupingInterval: 3_000 },
+  );
+
   const positionSize = currentPosition?.position_amt ?? 0;
   const hasPosition = Math.abs(positionSize) > 1e-12;
   const canSubmit = active && job.status === "RUNNING" && !submitting;
+  const parsedNotional = Number(entryNotional);
+  const hasValidNotional = Number.isFinite(parsedNotional) && parsedNotional > 0;
+  const maxNotional = sizing?.max_notional_usdt ?? null;
+  const canUseMax = canSubmit && maxNotional !== null && maxNotional > 0;
+  const estimatedQuantity =
+    useMaxEntry && sizing
+      ? sizing.max_quantity
+      : hasValidNotional && sizing && sizing.mark_price > 0
+        ? parsedNotional / sizing.mark_price
+        : null;
+
+  const updateSymbol = (nextSymbol: string) => {
+    setSymbol(nextSymbol);
+    setUseMaxEntry(false);
+  };
+
+  const updateSide = (nextSide: "LONG" | "SHORT") => {
+    setSide(nextSide);
+    setUseMaxEntry(false);
+  };
+
+  const updateEntryNotional = (nextValue: string) => {
+    setEntryNotional(nextValue);
+    setUseMaxEntry(false);
+  };
+
+  const fillMaxEntry = () => {
+    if (!sizing || sizing.max_notional_usdt <= 0) {
+      setError("현재 잔고와 포지션 한도 기준으로 추가 진입 가능한 금액이 없습니다.");
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    setEntryNotional(formatInputNumber(sizing.max_notional_usdt));
+    setUseMaxEntry(true);
+  };
 
   const submit = async (action: "ENTER" | "CLOSE") => {
     setError(null);
     setMessage(null);
-    const parsedQty = Number(quantity);
-    if (action === "ENTER" && (!Number.isFinite(parsedQty) || parsedQty <= 0)) {
-      setError("진입 수량을 0보다 크게 입력해주세요.");
+    if (action === "ENTER" && !useMaxEntry && !hasValidNotional) {
+      setError("진입 금액(USDT)을 0보다 크게 입력해주세요.");
+      return;
+    }
+    if (action === "ENTER" && useMaxEntry && (!sizing || sizing.max_notional_usdt <= 0)) {
+      setError("현재 잔고와 포지션 한도 기준으로 추가 진입 가능한 금액이 없습니다.");
       return;
     }
     if (action === "CLOSE" && !hasPosition) {
@@ -93,8 +155,14 @@ export function LiveManualTradePanel({
       return;
     }
 
+    const entrySummary = useMaxEntry && sizing
+      ? `최대 ${formatNumber(sizing.max_notional_usdt, 2)} USDT`
+      : `${formatNumber(parsedNotional, 2)} USDT`;
+    const quantitySummary = estimatedQuantity !== null
+      ? ` (예상 ${formatNumber(estimatedQuantity)} ${baseAsset(symbol)})`
+      : "";
     const confirmText = action === "ENTER"
-      ? `${symbol} ${side} 시장가 진입 주문을 전송할까요? 수량: ${quantity} ${baseAsset(symbol)}`
+      ? `${symbol} ${side} 시장가 진입 주문을 전송할까요? 진입 금액: ${entrySummary}${quantitySummary}`
       : `${symbol} 현재 포지션을 시장가로 전체 청산할까요?`;
     if (!window.confirm(confirmText)) return;
 
@@ -103,14 +171,25 @@ export function LiveManualTradePanel({
       const result = await submitManualLiveOrder(job.job_id, {
         action,
         symbol,
-        ...(action === "ENTER" ? { side, quantity: parsedQty } : {}),
+        ...(action === "ENTER"
+          ? useMaxEntry
+            ? { side, use_max: true }
+            : { side, notional_usdt: parsedNotional }
+          : {}),
       });
+      const resultNotional = result.notional_usdt
+        ?? (typeof result.mark_price === "number" ? result.quantity * result.mark_price : null);
+      const resultNotionalText = resultNotional !== null
+        ? ` · ${formatNumber(resultNotional, 2)} USDT`
+        : "";
       setMessage(
-        `${action === "ENTER" ? "진입" : "청산"} 주문 전송 완료: ${result.side} ${formatNumber(result.quantity)} ${baseAsset(symbol)}`,
+        `${action === "ENTER" ? "진입" : "청산"} 주문 전송 완료: ${result.side} ${formatNumber(result.quantity)} ${baseAsset(symbol)}${resultNotionalText}`,
       );
-      setQuantity("");
+      setEntryNotional("");
+      setUseMaxEntry(false);
       await Promise.all([
         mutate(snapshotKey),
+        mutate(sizingKey),
         mutate(["trades", job.job_id]),
         mutate(["job", job.job_id]),
       ]);
@@ -141,7 +220,7 @@ export function LiveManualTradePanel({
           <select
             className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
             value={symbol}
-            onChange={(event) => setSymbol(event.target.value)}
+            onChange={(event) => updateSymbol(event.target.value)}
           >
             {(symbols.length > 0 ? symbols : [symbol]).map((item) => (
               <option key={item} value={item} className="bg-[#131722]">
@@ -155,20 +234,32 @@ export function LiveManualTradePanel({
           <select
             className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
             value={side}
-            onChange={(event) => setSide(event.target.value as "LONG" | "SHORT")}
+            onChange={(event) => updateSide(event.target.value as "LONG" | "SHORT")}
           >
             <option value="LONG" className="bg-[#131722]">Long 진입</option>
             <option value="SHORT" className="bg-[#131722]">Short 진입</option>
           </select>
         </label>
         <label className="text-xs text-[#868993]">
-          진입 수량 ({baseAsset(symbol)})
+          <span className="flex items-center justify-between gap-2">
+            <span>진입 금액 (USDT)</span>
+            <button
+              className="rounded border border-[#2962ff]/60 px-2 py-0.5 text-[11px] text-[#9bb5ff] hover:bg-[#2962ff]/10 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canUseMax}
+              onClick={fillMaxEntry}
+              type="button"
+            >
+              Max
+            </button>
+          </span>
           <input
             className="mt-1 w-full rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
             inputMode="decimal"
-            placeholder="예: 0.001"
-            value={quantity}
-            onChange={(event) => setQuantity(event.target.value)}
+            placeholder={maxNotional !== null && maxNotional > 0
+              ? `최대 ${formatInputNumber(maxNotional)} USDT`
+              : "예: 100"}
+            value={entryNotional}
+            onChange={(event) => updateEntryNotional(event.target.value)}
           />
         </label>
         <button
@@ -198,6 +289,28 @@ export function LiveManualTradePanel({
           </span>
         ) : (
           <span>없음</span>
+        )}
+      </div>
+      <div className="mt-2 rounded border border-[#2a2e39] bg-[#131722] px-3 py-2 text-xs text-[#868993]">
+        {sizing ? (
+          <>
+            <span className="text-[#d1d4dc]">
+              진입 가능: 최대 {formatNumber(sizing.max_notional_usdt, 2)} USDT
+              {" · "}약 {formatNumber(sizing.max_quantity)} {baseAsset(symbol)}
+            </span>
+            <span>
+              {" · "}잔고 {formatNumber(sizing.available_balance, 2)} USDT
+              {" · "}레버리지 {formatNumber(sizing.leverage, 2)}x
+              {" · "}최대 포지션 {(sizing.max_position * 100).toFixed(0)}%
+            </span>
+            {estimatedQuantity !== null ? (
+              <span>
+                {" · "}입력 환산 약 {formatNumber(estimatedQuantity)} {baseAsset(symbol)}
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span>진입 가능 금액 계산 중...</span>
         )}
       </div>
       {message ? <p className="mt-2 text-xs text-[#26a69a]">{message}</p> : null}

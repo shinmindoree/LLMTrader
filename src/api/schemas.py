@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -169,6 +169,7 @@ class StrategyChatSessionUpsertRequest(BaseModel):
 
 class StrategyChatSessionSummary(BaseModel):
     """Lightweight session metadata — no full data payload."""
+
     session_id: str
     title: str
     message_count: int = 0
@@ -227,6 +228,7 @@ class JobCountsResponse(BaseModel):
 
 class JobSummary(BaseModel):
     """Lightweight job representation without heavy result payload."""
+
     job_id: uuid.UUID
     type: JobType
     status: JobStatus
@@ -273,6 +275,26 @@ class ManualLiveOrderRequest(BaseModel):
     symbol: str
     side: Literal["LONG", "SHORT"] | None = None
     quantity: float | None = Field(default=None, gt=0)
+    notional_usdt: float | None = Field(default=None, gt=0)
+    use_max: bool = False
+
+
+class ManualLiveOrderSizingResponse(BaseModel):
+    symbol: str
+    side: Literal["LONG", "SHORT"]
+    mark_price: float
+    leverage: float
+    max_position: float
+    account_equity: float
+    available_balance: float
+    current_position_qty: float
+    current_position_notional: float
+    max_notional_usdt: float
+    max_quantity: float
+    min_notional_usdt: float | None = None
+    min_quantity: float | None = None
+    max_exchange_quantity: float | None = None
+    step_size: float | None = None
 
 
 class ManualLiveOrderResponse(BaseModel):
@@ -281,6 +303,8 @@ class ManualLiveOrderResponse(BaseModel):
     symbol: str
     side: Literal["BUY", "SELL"]
     quantity: float
+    notional_usdt: float | None = None
+    mark_price: float | None = None
     reduce_only: bool
     order: dict[str, Any]
 
@@ -364,13 +388,14 @@ class BinanceAccountSummaryResponse(BaseModel):
     total_margin_balance: float | None = None
     available_balance: float | None = None
     can_trade: bool | None = None
-    update_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    update_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     assets: list[BinanceAssetBalance] = Field(default_factory=list)
     positions: list[BinancePositionSummary] = Field(default_factory=list)
     error: str | None = None
 
 
 # ── Portfolio Summary (Quant Asset Management Platform) ────
+
 
 class WalletSnapshot(BaseModel):
     wallet: Literal["futures", "spot", "earn"]
@@ -448,6 +473,7 @@ class WalletOverviewResponse(BaseModel):
 
 # ── Live Positions Board (multi-strategy open positions) ───
 
+
 class LiveStrategyPositions(BaseModel):
     job_id: str
     strategy_path: str
@@ -488,51 +514,65 @@ class FundingArbitrageParams(BaseModel):
     env: Literal["mainnet", "testnet"] = "testnet"
     allocated_usdt: float = Field(default=1000.0, gt=0, description="할당 시드 (USDT)")
     hold_days: int | None = Field(
-        default=None, ge=1, le=7,
-        description="목표 유지 기간(일). 설정 시 진입·청산 임계치를 AR(1) half-life 통계로 자동 계산."
+        default=None,
+        ge=1,
+        le=7,
+        description="목표 유지 기간(일). 설정 시 진입·청산 임계치를 AR(1) half-life 통계로 자동 계산.",
     )
     entry_deadband_pct: float = Field(
-        default=0.15, gt=0, le=1.0,
-        description="진입 임계치 (%/정산 기준). hold_days 설정 시 자동 계산됨."
+        default=0.15,
+        gt=0,
+        le=1.0,
+        description="진입 임계치 (%/정산 기준). hold_days 설정 시 자동 계산됨.",
     )
     exit_deadband_pct: float = Field(
-        default=0.05, gt=0, le=1.0,
-        description="청산 임계치 (%/정산 기준). hold_days 설정 시 자동 계산됨."
+        default=0.05,
+        gt=0,
+        le=1.0,
+        description="청산 임계치 (%/정산 기준). hold_days 설정 시 자동 계산됨.",
     )
-    margin_alert_ratio: float = Field(default=0.80, gt=0, lt=1.0, description="마진 비율 위험 수위 (0–1)")
-    rebalance_transfer_pct: float = Field(default=0.20, gt=0, lt=1.0, description="리밸런싱 시 현물→선물 이체 비율")
+    margin_alert_ratio: float = Field(
+        default=0.80, gt=0, lt=1.0, description="마진 비율 위험 수위 (0–1)"
+    )
+    rebalance_transfer_pct: float = Field(
+        default=0.20, gt=0, lt=1.0, description="리밸런싱 시 현물→선물 이체 비율"
+    )
 
 
 class FundingScreenerItem(BaseModel):
     symbol: str
-    current_rate_pct: float        # 마지막 정산 펀딩비 (%)
-    annualized_pct: float          # 연환산 펀딩비 (%)
-    half_life_settlements: float | None = None  # AR(1)/OU half-life (정산 횟수 단위). 통계 없으면 None
-    entry_threshold_pct: float | None = None    # 최소 진입 임계치 (%/정산). half-life가 있을 때만 산출
-    score: float | None = None                  # current_rate / entry_threshold (> 1 = 수익 가능)
-    avg_rate_pct: float | None = None           # 과거 평균 펀딩비 (%)
-    n_samples: int = 0                          # 통계 산출에 사용된 데이터 포인트 수
-    quote_volume_24h: float | None = None   # 24h 현물 거래대금 (USDT)
-    market_cap_usd: float | None = None     # 현물 시가총액 (USD, CoinGecko)
+    current_rate_pct: float  # 마지막 정산 펀딩비 (%)
+    annualized_pct: float  # 연환산 펀딩비 (%)
+    half_life_settlements: float | None = (
+        None  # AR(1)/OU half-life (정산 횟수 단위). 통계 없으면 None
+    )
+    entry_threshold_pct: float | None = (
+        None  # 최소 진입 임계치 (%/정산). half-life가 있을 때만 산출
+    )
+    score: float | None = None  # current_rate / entry_threshold (> 1 = 수익 가능)
+    avg_rate_pct: float | None = None  # 과거 평균 펀딩비 (%)
+    n_samples: int = 0  # 통계 산출에 사용된 데이터 포인트 수
+    quote_volume_24h: float | None = None  # 24h 현물 거래대금 (USDT)
+    market_cap_usd: float | None = None  # 현물 시가총액 (USD, CoinGecko)
 
 
 class FundingScreenerResponse(BaseModel):
     items: list[FundingScreenerItem]
-    roundtrip_cost_pct: float      # 연산에 사용된 왕복 수수료 가정치 (%)
+    roundtrip_cost_pct: float  # 연산에 사용된 왕복 수수료 가정치 (%)
     error: str | None = None
     as_of: datetime
 
 
 class FundingSymbolDetailPoint(BaseModel):
-    t: int     # 정산 시각 (ms, UTC epoch)
-    r: float   # 펀딩비 (%, percent per settlement)
+    t: int  # 정산 시각 (ms, UTC epoch)
+    r: float  # 펀딩비 (%, percent per settlement)
 
 
 class FundingWindowStat(BaseModel):
-    label: str                  # "1w" / "1m" / "6m" / "1y" / "all"
-    avg_pct: float | None       # 윈도우 평균 펀딩비 (%)
+    label: str  # "1w" / "1m" / "6m" / "1y" / "all"
+    avg_pct: float | None  # 윈도우 평균 펀딩비 (%)
     annualized_pct: float | None  # 연환산 평균 (%)
-    n_samples: int              # 윈도우 안에 포함된 정산 수
+    n_samples: int  # 윈도우 안에 포함된 정산 수
 
 
 class FundingExtremePoint(BaseModel):
@@ -543,10 +583,10 @@ class FundingExtremePoint(BaseModel):
 class FundingSymbolDetailResponse(BaseModel):
     symbol: str
     as_of: datetime
-    n_samples: int                          # 전체 표본 수 (계약 상장 이후 전체 기간)
-    window_stats: list[FundingWindowStat]   # 1w / 1m / 6m / 1y / all
-    max: FundingExtremePoint | None         # 전체 기간 내 최대 펀딩비
-    min: FundingExtremePoint | None         # 전체 기간 내 최소 펀딩비
+    n_samples: int  # 전체 표본 수 (계약 상장 이후 전체 기간)
+    window_stats: list[FundingWindowStat]  # 1w / 1m / 6m / 1y / all
+    max: FundingExtremePoint | None  # 전체 기간 내 최대 펀딩비
+    min: FundingExtremePoint | None  # 전체 기간 내 최소 펀딩비
     series: list[FundingSymbolDetailPoint]  # 차트용 (전체 기간, 다운샘플)
     error: str | None = None
 
@@ -562,7 +602,7 @@ class FundingArbitrageStatusResponse(BaseModel):
     unrealized_pnl: float | None = None
     accumulated_funding_income: float
     entry_fee: float | None = None  # 진입 누적 수수료(USDT)
-    exit_fee: float | None = None   # 청산 누적 수수료(USDT)
+    exit_fee: float | None = None  # 청산 누적 수수료(USDT)
     last_funding_ts: datetime | None = None
     params: FundingArbitrageParams | None = None
     last_error: str | None = None
@@ -580,15 +620,15 @@ class KimpFxRateResponse(BaseModel):
 
 
 class KimpScreenerItem(BaseModel):
-    symbol: str                       # 예: "BTC"
+    symbol: str  # 예: "BTC"
     upbit_krw_price: float
     binance_usdt_price: float
     usdt_krw_rate: float
     usd_krw_rate: float | None = None  # backward-compatible alias for older clients
-    kimp_pct: float                   # 0.0345 == 3.45%
+    kimp_pct: float  # 0.0345 == 3.45%
     mean_30d_pct: float | None = None
     std_30d_pct: float | None = None
-    zscore_30d: float | None = None   # (kimp - mean) / std
+    zscore_30d: float | None = None  # (kimp - mean) / std
     n_samples_30d: int = 0
 
 
@@ -600,8 +640,8 @@ class KimpScreenerResponse(BaseModel):
 
 
 class KimpHistoryPoint(BaseModel):
-    t: int     # epoch ms (UTC)
-    p: float   # kimp 비율 (예: 0.0345)
+    t: int  # epoch ms (UTC)
+    p: float  # kimp 비율 (예: 0.0345)
 
 
 class KimpHistoryResponse(BaseModel):
@@ -629,9 +669,7 @@ class KimpArbitrageParams(BaseModel):
     gross_cap_krw: float = Field(
         default=10_000_000.0, gt=0, description="최대 북 명목(업비트 롱 기준, KRW)"
     )
-    full_build_z: float = Field(
-        default=-2.0, description="이 z 이하로 김프가 싸지면 풀사이즈 진입"
-    )
+    full_build_z: float = Field(default=-2.0, description="이 z 이하로 김프가 싸지면 풀사이즈 진입")
     flat_z: float = Field(default=0.5, description="이 z 이상으로 김프가 비싸지면 청산")
     hedge_mode: Literal["quantity", "delta"] = Field(
         default="quantity",
@@ -656,13 +694,13 @@ class KimpArbitrageStatusResponse(BaseModel):
     symbol: str | None = None
     upbit_long_qty: float | None = None
     binance_short_qty: float | None = None
-    kimp_pct: float | None = None          # 현재 김프 (0.0345 == 3.45%)
-    zscore: float | None = None            # 현재 김프 z-score
-    target_notional_krw: float | None = None   # 시그널이 요구하는 목표 북(KRW)
+    kimp_pct: float | None = None  # 현재 김프 (0.0345 == 3.45%)
+    zscore: float | None = None  # 현재 김프 z-score
+    target_notional_krw: float | None = None  # 시그널이 요구하는 목표 북(KRW)
     current_notional_krw: float | None = None  # 실제 보유 북(KRW)
-    fx_hedge_usd: float | None = None      # 권장 USD 매도 헤지량
-    coin_delta_qty: float | None = None    # 순 코인 델타(롱-숏)
-    price_delta_krw: float | None = None   # 공통 가격변동 방향성 델타(KRW)
+    fx_hedge_usd: float | None = None  # 권장 USD 매도 헤지량
+    coin_delta_qty: float | None = None  # 순 코인 델타(롱-숏)
+    price_delta_krw: float | None = None  # 공통 가격변동 방향성 델타(KRW)
     unrealized_pnl_krw: float | None = None
     accumulated_fee_krw: float = 0.0
     binance_margin_ratio: float | None = None
@@ -688,7 +726,7 @@ class KimpBacktestRequest(BaseModel):
 
 class KimpBacktestMetrics(BaseModel):
     n_bars: int
-    total_return_pct: float        # 투입자본 대비 (gross_cap 기준)
+    total_return_pct: float  # 투입자본 대비 (gross_cap 기준)
     net_profit_krw: float
     max_drawdown_pct: float
     sharpe: float
@@ -700,7 +738,7 @@ class KimpBacktestMetrics(BaseModel):
 
 
 class KimpBacktestEquityPoint(BaseModel):
-    t: int       # epoch ms (UTC)
+    t: int  # epoch ms (UTC)
     equity_krw: float
     kimp_pct: float
     zscore: float | None = None

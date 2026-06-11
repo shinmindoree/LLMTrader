@@ -17,6 +17,7 @@ import type {
   JobType,
   ManualLiveOrderRequest,
   ManualLiveOrderResponse,
+  ManualLiveOrderSizingResponse,
   Order,
   PortalResponse,
   QuickBacktestRequest,
@@ -790,6 +791,17 @@ export async function submitManualLiveOrder(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export async function getManualLiveOrderSizing(
+  jobId: string,
+  symbol: string,
+  side: "LONG" | "SHORT",
+): Promise<ManualLiveOrderSizingResponse> {
+  const qs = new URLSearchParams({ symbol, side });
+  return json<ManualLiveOrderSizingResponse>(
+    `/api/backend/api/jobs/${jobId}/manual-order-sizing?${qs.toString()}`,
+  );
 }
 
 export async function stopAllJobs(type?: JobType): Promise<StopAllResponse> {
