@@ -54,6 +54,7 @@ from control.repo import (
     list_trades_batch,
     request_stop,
     stop_all_jobs,
+    upsert_order,
     upsert_strategy_meta,
     upsert_strategy_chat_session as repo_upsert_strategy_chat_session,
 )
@@ -91,6 +92,8 @@ from api.schemas import (
     JobEventResponse,
     JobResponse,
     JobSummary,
+    ManualLiveOrderRequest,
+    ManualLiveOrderResponse,
     OrderResponse,
     StopResponse,
     StopAllResponse,
@@ -659,6 +662,120 @@ def _event_to_response(ev: Any) -> JobEventResponse:
         message=ev.message,
         payload=ev.payload_json,
     )
+
+
+def _job_env(config: dict[str, Any] | None) -> str:
+    env = str((config or {}).get("env") or "mainnet").strip().lower()
+    return "testnet" if env == "testnet" else "mainnet"
+
+
+def _job_symbols(config: dict[str, Any] | None) -> list[str]:
+    cfg = config or {}
+    symbols: list[str] = []
+    streams = cfg.get("streams")
+    if isinstance(streams, list):
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            symbol = str(stream.get("symbol") or "").strip().upper()
+            if symbol and symbol not in symbols:
+                symbols.append(symbol)
+    symbol = str(cfg.get("symbol") or "").strip().upper()
+    if symbol and symbol not in symbols:
+        symbols.append(symbol)
+    return symbols
+
+
+def _position_amt(position_payload: Any, symbol: str) -> float:
+    rows = position_payload if isinstance(position_payload, list) else [position_payload]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_symbol = str(row.get("symbol") or "").strip().upper()
+        if row_symbol and row_symbol != symbol:
+            continue
+        try:
+            return float(row.get("positionAmt") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _manual_order_payload(order: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "order_id": order.get("orderId"),
+        "client_order_id": order.get("clientOrderId"),
+        "symbol": order.get("symbol"),
+        "side": order.get("side"),
+        "type": order.get("type"),
+        "status": order.get("status"),
+        "orig_qty": order.get("origQty"),
+        "executed_qty": order.get("executedQty"),
+        "avg_price": order.get("avgPrice"),
+        "price": order.get("price"),
+    }
+
+
+async def _resolve_manual_order_client(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    job: Any,
+    env: str,
+) -> tuple[Any, bool]:
+    if job.wallet_account_id is not None:
+        wallet = await get_wallet_account(session, wallet_account_id=job.wallet_account_id)
+        if wallet is None or wallet.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Wallet account not found")
+        if wallet.env != env:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Wallet env({wallet.env}) does not match job env({env}).",
+            )
+        from binance.client_factory import BinanceClientFactoryError, get_client_factory
+
+        try:
+            client = await get_client_factory().get_trading_client(
+                session,
+                wallet_account_id=str(job.wallet_account_id),
+            )
+        except BinanceClientFactoryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return client, False
+
+    from binance.client import BinanceHTTPClient
+    from common.crypto import get_crypto_service
+    from control.repo import get_binance_credential
+
+    cred = await get_binance_credential(session, user_id=user_id, env=env)
+    if not cred:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Binance {env} API keys are not configured.",
+        )
+    try:
+        crypto = get_crypto_service()
+        api_key = crypto.decrypt(cred.api_key_enc)
+        api_secret = crypto.decrypt(cred.api_secret_enc)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to decrypt Binance keys: {type(exc).__name__}",
+        ) from exc
+    base_url = {
+        "mainnet": "https://fapi.binance.com",
+        "testnet": "https://testnet.binancefuture.com",
+    }[env]
+    return BinanceHTTPClient(api_key=api_key, api_secret=api_secret, base_url=base_url), True
 
 
 def _normalize_chat_user_id(raw: str | None) -> str:
@@ -3323,6 +3440,144 @@ def create_app() -> FastAPI:
             )
         await session.commit()
         return StopResponse(ok=True)
+
+    @app.post("/api/jobs/{job_id}/manual-order", response_model=ManualLiveOrderResponse)
+    async def manual_live_order(
+        job_id: uuid.UUID,
+        body: ManualLiveOrderRequest,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> ManualLiveOrderResponse:
+        job = await get_job(session, job_id, user_id=user.user_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Not found")
+        if JobType(str(job.type)) != JobType.LIVE:
+            raise HTTPException(status_code=422, detail="Manual orders are only supported for LIVE jobs.")
+        if JobStatus(str(job.status)) != JobStatus.RUNNING:
+            raise HTTPException(status_code=409, detail="Manual orders require a RUNNING live job.")
+
+        config = _public_job_config(job.config_json)
+        env = _job_env(config)
+        symbol = body.symbol.strip().upper()
+        allowed_symbols = _job_symbols(config)
+        if not symbol:
+            raise HTTPException(status_code=422, detail="symbol is required")
+        if allowed_symbols and symbol not in allowed_symbols:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Symbol {symbol} is not configured for this live job.",
+            )
+
+        client, should_close_client = await _resolve_manual_order_client(
+            session,
+            user_id=user.user_id,
+            job=job,
+            env=env,
+        )
+        try:
+            reduce_only = body.action == "CLOSE"
+            position_before: float | None = None
+            if body.action == "ENTER":
+                if body.side is None:
+                    raise HTTPException(status_code=422, detail="side is required for manual entry")
+                if body.quantity is None:
+                    raise HTTPException(status_code=422, detail="quantity is required for manual entry")
+                order_side = "BUY" if body.side == "LONG" else "SELL"
+                quantity = float(body.quantity)
+                order = await client.place_order(symbol, order_side, quantity)
+            else:
+                raw_position = await client.fetch_position(symbol)
+                position_before = _position_amt(raw_position, symbol)
+                if abs(position_before) < 1e-12:
+                    raise HTTPException(status_code=409, detail=f"No open {symbol} position to close.")
+                quantity = float(body.quantity) if body.quantity is not None else abs(position_before)
+                if quantity - abs(position_before) > 1e-12:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="close quantity cannot exceed the current position size",
+                    )
+                order_side = "SELL" if position_before > 0 else "BUY"
+                order = await client.place_order(
+                    symbol,
+                    order_side,
+                    quantity,
+                    reduceOnly="true",
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await append_event(
+                session,
+                job_id=job_id,
+                kind=EventKind.ORDER,
+                level="ERROR",
+                message="MANUAL_ORDER_FAILED",
+                payload_json={
+                    "action": body.action,
+                    "symbol": symbol,
+                    "error": str(exc)[:1000],
+                    "wallet_account_id": str(job.wallet_account_id) if job.wallet_account_id else None,
+                },
+            )
+            await session.commit()
+            raise HTTPException(status_code=502, detail=str(exc)[:1000]) from exc
+        finally:
+            if should_close_client:
+                await client.aclose()
+
+        order_id = order.get("orderId")
+        if order_id is not None:
+            try:
+                order_id_int = int(order_id)
+            except (TypeError, ValueError):
+                order_id_int = None
+            if order_id_int is not None:
+                await upsert_order(
+                    session,
+                    job_id=job_id,
+                    symbol=symbol,
+                    order_id=order_id_int,
+                    side=order_side,
+                    order_type=str(order.get("type") or "MARKET"),
+                    status=str(order.get("status") or ""),
+                    quantity=_float_or_none(order.get("origQty")) or quantity,
+                    price=_float_or_none(order.get("price")),
+                    executed_qty=_float_or_none(order.get("executedQty")),
+                    avg_price=_float_or_none(order.get("avgPrice")),
+                    raw_json={
+                        **order,
+                        "reason": "manual_alphaweaver",
+                        "manual_action": body.action,
+                    },
+                )
+
+        payload = {
+            "action": body.action,
+            "symbol": symbol,
+            "side": order_side,
+            "quantity": quantity,
+            "reduce_only": reduce_only,
+            "position_before": position_before,
+            "wallet_account_id": str(job.wallet_account_id) if job.wallet_account_id else None,
+            "order": _manual_order_payload(order),
+        }
+        await append_event(
+            session,
+            job_id=job_id,
+            kind=EventKind.ORDER,
+            message="MANUAL_ORDER_SUBMITTED",
+            payload_json=payload,
+        )
+        await session.commit()
+        return ManualLiveOrderResponse(
+            ok=True,
+            action=body.action,
+            symbol=symbol,
+            side=order_side,
+            quantity=quantity,
+            reduce_only=reduce_only,
+            order=order,
+        )
 
     @app.get("/api/jobs/{job_id}/events", response_model=list[JobEventResponse])
     async def events(

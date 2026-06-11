@@ -268,6 +268,23 @@ class StopResponse(BaseModel):
     ok: bool
 
 
+class ManualLiveOrderRequest(BaseModel):
+    action: Literal["ENTER", "CLOSE"]
+    symbol: str
+    side: Literal["LONG", "SHORT"] | None = None
+    quantity: float | None = Field(default=None, gt=0)
+
+
+class ManualLiveOrderResponse(BaseModel):
+    ok: bool
+    action: Literal["ENTER", "CLOSE"]
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    quantity: float
+    reduce_only: bool
+    order: dict[str, Any]
+
+
 class StopAllResponse(BaseModel):
     stopped_queued: int
     stop_requested_running: int

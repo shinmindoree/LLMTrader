@@ -239,6 +239,23 @@ export type DeleteAllResponse = {
   skipped_active: number;
 };
 
+export type ManualLiveOrderRequest = {
+  action: "ENTER" | "CLOSE";
+  symbol: string;
+  side?: "LONG" | "SHORT";
+  quantity?: number;
+};
+
+export type ManualLiveOrderResponse = {
+  ok: boolean;
+  action: "ENTER" | "CLOSE";
+  symbol: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  reduce_only: boolean;
+  order: Record<string, unknown>;
+};
+
 export type JobEvent = {
   event_id: number;
   job_id: string;

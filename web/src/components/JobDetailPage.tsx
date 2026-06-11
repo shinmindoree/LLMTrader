@@ -15,6 +15,7 @@ import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { TradeAnalysis } from "@/components/TradeAnalysis";
 import { JobProgressGauge } from "@/components/JobProgressGauge";
 import { JobConfigSummary } from "@/components/JobConfigSummary";
+import { LiveManualTradePanel } from "@/components/LiveManualTradePanel";
 import { LiveJobPositionPanel } from "@/components/LivePositionPanel";
 import { FormModal } from "@/components/FormModal";
 import { BacktestForm, type BacktestInitialConfig } from "@/app/backtest/new/BacktestForm";
@@ -252,6 +253,10 @@ export function JobDetailPage({ expectedType }: { expectedType?: JobType }) {
         <div className="mt-4 rounded border border-[#2a2e39] bg-[#131722] px-4 py-3 text-sm text-[#d1d4dc]">
           {t.jobDetail.runInProgress}
         </div>
+      ) : null}
+
+      {job && job.type === "LIVE" ? (
+        <LiveManualTradePanel job={job} active={!finished} />
       ) : null}
 
       {job && job.type === "LIVE" ? (

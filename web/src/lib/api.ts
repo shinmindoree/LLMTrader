@@ -15,6 +15,8 @@ import type {
   JobStatus,
   JobSummary,
   JobType,
+  ManualLiveOrderRequest,
+  ManualLiveOrderResponse,
   Order,
   PortalResponse,
   QuickBacktestRequest,
@@ -778,6 +780,16 @@ export async function getJob(jobId: string): Promise<Job> {
 
 export async function stopJob(jobId: string): Promise<{ ok: boolean }> {
   return json<{ ok: boolean }>(`/api/backend/api/jobs/${jobId}/stop`, { method: "POST" });
+}
+
+export async function submitManualLiveOrder(
+  jobId: string,
+  body: ManualLiveOrderRequest,
+): Promise<ManualLiveOrderResponse> {
+  return json<ManualLiveOrderResponse>(`/api/backend/api/jobs/${jobId}/manual-order`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export async function stopAllJobs(type?: JobType): Promise<StopAllResponse> {
