@@ -10,13 +10,17 @@ name: Check Container Drift
 # profile read then raises UndefinedColumnError and LIVE jobs FAIL silently.
 #
 # This job reads the git-SHA image tags of all three containers and compares
-# them by ANCESTRY (not naive string equality). It fails loudly ONLY when the
-# LIVE runner is a strict ancestor of — i.e. genuinely OLDER than — a
-# schema-owning container, so an operator redeploys the LIVE runner BEFORE the
-# next destructive migration. A bare SHA mismatch is not drift: main can
-# legitimately advance past api/backtest via a commit their `paths:` filters
-# skip (e.g. a docs-only commit) while the unfiltered LIVE workflow deploys main
-# HEAD, leaving LIVE strictly AHEAD — which is safe.
+# them by ANCESTRY (not naive string equality). A bare SHA mismatch is NOT
+# drift, and even a LIVE runner that is strictly OLDER than a schema owner is
+# NOT inherently dangerous: additive (Expand/Contract) migrations leave the old
+# ORM working because it simply ignores the new columns. The ONLY dangerous case
+# is a LIVE runner that is BEHIND a schema owner AND a DESTRUCTIVE migration
+# (drop_column / drop_table / rename) landed in the commits the schema owner has
+# but LIVE lacks — that is exactly when the stale ORM maps a now-deleted column
+# and every LIVE profile read raises UndefinedColumnError. Only then does it fail
+# loudly, so an operator redeploys the LIVE runner. This keeps the check quiet on
+# the routine "LIVE lags by additive-only commits" state that occurs after every
+# push (api/backtest auto-deploy while LIVE is deployed manually).
 #
 # It does NOT mutate anything; it only inspects and reports.
 
@@ -57,6 +61,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Azure Login
         uses: azure/login@v2
@@ -124,18 +133,39 @@ jobs:
           DRIFT=0
           MSG=""
 
+          # A destructive migration that LIVE lacks but a schema owner has is the
+          # only thing that makes a "behind" state dangerous. Reuse the repo's
+          # canonical destructive definition over the LIVE..owner range. The
+          # `--ignore-allow-marker` flag is intentional: the PR-time escape hatch
+          # asserts every container is already past the Expand release, which says
+          # nothing about a LIVE runner that is, right now, demonstrably behind.
+          scan_destructive() {
+            python scripts/check_destructive_migrations.py \
+              --base "$1" --head "$2" --ignore-allow-marker 2>&1
+          }
+
           # The ONLY dangerous condition is the LIVE runner executing code that is
-          # strictly OLDER than a schema-owning container: a destructive migration
-          # owned by api/backtest can drop columns the stale LIVE ORM still maps,
-          # making every LIVE profile read raise UndefinedColumnError. LIVE being
-          # equal to — or AHEAD of — the schema owners is safe.
+          # strictly OLDER than a schema-owning container AND a destructive
+          # migration sits in between: it can drop columns the stale LIVE ORM still
+          # maps, making every LIVE profile read raise UndefinedColumnError. LIVE
+          # being equal to, AHEAD of, or behind only by ADDITIVE migrations is safe.
           if [ "${LIVE_VS_BACKTEST}" = "behind" ]; then
-            DRIFT=1
-            MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is BEHIND the alembic-owning backtest container (${BACKTEST_SHA})."
+            if SCAN="$(scan_destructive "${LIVE_SHA}" "${BACKTEST_SHA}")"; then
+              echo "LIVE behind backtest by additive-only migrations — safe."
+              echo "${SCAN}"
+            else
+              DRIFT=1
+              MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is BEHIND the alembic-owning backtest container (${BACKTEST_SHA}) and a DESTRUCTIVE migration sits in between:\n\`\`\`\n${SCAN}\n\`\`\`"
+            fi
           fi
           if [ "${LIVE_VS_API}" = "behind" ]; then
-            DRIFT=1
-            MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is BEHIND the schema-owning api container (${API_SHA})."
+            if SCAN="$(scan_destructive "${LIVE_SHA}" "${API_SHA}")"; then
+              echo "LIVE behind api by additive-only migrations — safe."
+              echo "${SCAN}"
+            else
+              DRIFT=1
+              MSG="${MSG}\n- LIVE runner (${LIVE_SHA}) is BEHIND the schema-owning api container (${API_SHA}) and a DESTRUCTIVE migration sits in between:\n\`\`\`\n${SCAN}\n\`\`\`"
+            fi
           fi
 
           # Inconclusive ancestry must not silently pass — a missing or diverged
@@ -150,7 +180,7 @@ jobs:
           fi
 
           if [ "${DRIFT}" -eq 1 ]; then
-            MSG="${MSG}\n  Redeploy the LIVE runner: \`gh workflow run deploy-runner-test-live.yml --ref main\` BEFORE merging any destructive migration."
+            MSG="${MSG}\n  Redeploy the LIVE runner: \`gh workflow run deploy-runner-test-live.yml --ref main\` so it is no longer behind the destructive schema change."
             {
               echo ""
               echo "#### ⚠️ DRIFT DETECTED"
@@ -160,11 +190,13 @@ jobs:
             exit 1
           fi
 
-          # Note (informational only): api and backtest can legitimately differ
-          # because their `paths:` filters trigger on different file sets, so a
-          # mismatch here is NOT failed — only a LIVE-behind state is.
+          # Note (informational only): a LIVE runner that merely lags behind the
+          # schema owners by ADDITIVE migrations is safe and is NOT failed — only a
+          # LIVE-behind-a-destructive-migration state is. api and backtest can also
+          # legitimately differ because their `paths:` filters trigger on different
+          # file sets.
           {
             echo ""
-            echo "✅ LIVE runner is not behind any schema-owning container."
+            echo "✅ LIVE runner is not behind any DESTRUCTIVE schema change."
           } >> "${GITHUB_STEP_SUMMARY}"
-          echo "OK: LIVE runner is not behind any schema-owning container (LIVE→backtest=${LIVE_VS_BACKTEST}, LIVE→api=${LIVE_VS_API})."
+          echo "OK: LIVE runner is not behind any destructive schema change (LIVE→backtest=${LIVE_VS_BACKTEST}, LIVE→api=${LIVE_VS_API})."

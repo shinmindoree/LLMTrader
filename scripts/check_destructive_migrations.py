@@ -50,16 +50,19 @@ def _run_git(args: list[str]) -> str:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     ).stdout
 
 
-def _added_migration_files(base: str) -> list[str]:
-    """Return migration files ADDED relative to `base` (filter=A)."""
+def _added_migration_files(base: str, head: str = "HEAD") -> list[str]:
+    """Return migration files ADDED in ``base..head`` (filter=A)."""
     try:
-        out = _run_git(["diff", "--diff-filter=A", "--name-only", f"{base}...HEAD"])
+        out = _run_git(["diff", "--diff-filter=A", "--name-only", f"{base}...{head}"])
     except subprocess.CalledProcessError:
         # Fallback: a plain two-dot diff if the merge-base form is unavailable.
-        out = _run_git(["diff", "--diff-filter=A", "--name-only", base])
+        fallback = [base] if head == "HEAD" else [base, head]
+        out = _run_git(["diff", "--diff-filter=A", "--name-only", *fallback])
     files = [f.strip() for f in out.splitlines() if f.strip()]
     return [
         f
@@ -68,24 +71,47 @@ def _added_migration_files(base: str) -> list[str]:
     ]
 
 
+def _read_at(path: str, head: str) -> str | None:
+    """Return the text of ``path`` as it exists at ``head``.
+
+    When ``head`` is the working tree (``HEAD``) the file is read from disk to
+    preserve the migration-guard's original behavior (it diffs the PR's checked
+    -out merge commit). For any other revision the blob is read with ``git show``
+    so the drift check can inspect a container's *deployed* SHA without checking
+    it out.
+    """
+    if head == "HEAD":
+        p = Path(path)
+        return p.read_text(encoding="utf-8") if p.is_file() else None
+    try:
+        return _run_git(["show", f"{head}:{path}"])
+    except subprocess.CalledProcessError:
+        return None
+
+
 _DOWNGRADE_RE = re.compile(r"^\s*def\s+downgrade\s*\(")
 
 
-def _scan_file(path: Path) -> list[str]:
-    """Scan only the ``upgrade()`` body.
+def _scan_text(label: str, text: str, *, ignore_allow_marker: bool = False) -> list[str]:
+    """Scan only the ``upgrade()`` body of a migration's source ``text``.
 
     ``downgrade()`` is inherently destructive (it reverses an additive upgrade)
     and only runs on an explicit rollback, so its drops are expected and ignored.
+
+    ``ignore_allow_marker`` disables the ``# migration-guard: allow-destructive``
+    escape hatch. The marker is a PR-merge convenience asserting "every container
+    is already past the Expand release"; it is irrelevant to the drift check,
+    which inspects the *actual runtime state* of a lagging LIVE runner.
     """
     violations: list[str] = []
-    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         if _DOWNGRADE_RE.match(raw):
             break
-        if ALLOW_MARKER in raw:
+        if not ignore_allow_marker and ALLOW_MARKER in raw:
             continue
         for pattern, desc in DESTRUCTIVE_PATTERNS:
             if pattern.search(raw):
-                violations.append(f"{path}:{lineno}: {desc} -> {raw.strip()}")
+                violations.append(f"{label}:{lineno}: {desc} -> {raw.strip()}")
     return violations
 
 
@@ -96,22 +122,42 @@ def main() -> int:
         default=os.environ.get("BASE_REF", "origin/main"),
         help="git ref to diff against (default: env BASE_REF or origin/main)",
     )
+    parser.add_argument(
+        "--head",
+        default="HEAD",
+        help=(
+            "git ref whose newly-added migrations are scanned (default: HEAD, the "
+            "working tree). Pass a container's deployed SHA to inspect the range "
+            "base..head without checking it out."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-allow-marker",
+        action="store_true",
+        help=(
+            "Treat every destructive op as a violation, even lines tagged "
+            f"`# {ALLOW_MARKER}`. Used by the container-drift check, where the "
+            "PR-time escape hatch does not reflect a lagging runtime."
+        ),
+    )
     args = parser.parse_args()
 
-    added = _added_migration_files(args.base)
+    added = _added_migration_files(args.base, args.head)
     if not added:
-        print(f"No newly-added migrations vs {args.base}; nothing to check.")
+        print(f"No newly-added migrations in {args.base}..{args.head}; nothing to check.")
         return 0
 
-    print(f"Checking {len(added)} new migration(s) vs {args.base}:")
+    print(f"Checking {len(added)} new migration(s) in {args.base}..{args.head}:")
     for f in added:
         print(f"  - {f}")
 
     all_violations: list[str] = []
     for f in added:
-        p = Path(f)
-        if p.is_file():
-            all_violations.extend(_scan_file(p))
+        text = _read_at(f, args.head)
+        if text is not None:
+            all_violations.extend(
+                _scan_text(f, text, ignore_allow_marker=args.ignore_allow_marker)
+            )
 
     if not all_violations:
         print("\nOK: no destructive operations found in new migrations.")
