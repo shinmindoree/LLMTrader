@@ -25,49 +25,52 @@ import multi_factor_portfolio_strategy as _mfp  # noqa: E402
 
 from strategy.context import StrategyContext  # noqa: E402
 
-DEFAULTS: dict[str, Any] = {
+STRATEGY_PARAMS: dict[str, Any] = {
     "fractional_exposure_scale": 1.0,
     "fractional_exposure_max": 1.0,
     "fractional_exposure_step": 0.0,
 }
 
 
-STRATEGY_PARAMS: dict[str, Any] = {**_mfp.STRATEGY_PARAMS, **DEFAULTS}
-
-STRATEGY_PARAM_SCHEMA: list[dict[str, Any]] = [
-    *_mfp.STRATEGY_PARAM_SCHEMA,
-    {
+STRATEGY_PARAM_SCHEMA: dict[str, dict[str, Any]] = {
+    "fractional_exposure_scale": {
         "name": "fractional_exposure_scale",
-        "type": "float",
+        "type": "number",
         "min": 0.0,
         "max": 5.0,
         "step": 0.1,
-        "label": "Fractional exposure scale",
+        "label": "분수 노출 배율",
+        "description": "투표 비율로 계산한 기본 노출을 몇 배로 키울지 정합니다.",
+        "group": "리스크 관리 (Risk)",
     },
-    {
+    "fractional_exposure_max": {
         "name": "fractional_exposure_max",
-        "type": "float",
+        "type": "number",
         "min": 0.0,
         "max": 1.0,
         "step": 0.01,
-        "label": "Maximum absolute exposure",
+        "label": "최대 절대 노출",
+        "description": "scale 적용 후에도 넘을 수 없는 포지션 노출 상한입니다.",
+        "group": "리스크 관리 (Risk)",
     },
-    {
+    "fractional_exposure_step": {
         "name": "fractional_exposure_step",
-        "type": "float",
+        "type": "number",
         "min": 0.0,
         "max": 1.0,
         "step": 0.01,
-        "label": "Exposure quantization step (0 = exact vote fraction)",
+        "label": "노출 버킷 단위",
+        "description": "0이면 투표 비율을 그대로 쓰고, 0보다 크면 해당 단위로 반올림합니다.",
+        "group": "리스크 관리 (Risk)",
     },
-]
+}
 
 
 class MultiFactorPortfolioFractionalStrategy(_mfp.MultiFactorPortfolioStrategy):
     """Base BTC MFP sized by vote margin instead of binary majority."""
 
     def __init__(self, **kwargs: Any) -> None:
-        fractional_params = {k: kwargs.pop(k, v) for k, v in DEFAULTS.items()}
+        fractional_params = {k: kwargs.pop(k, v) for k, v in STRATEGY_PARAMS.items()}
         super().__init__(**kwargs)
 
         self.fractional_exposure_scale = float(fractional_params["fractional_exposure_scale"])
