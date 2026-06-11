@@ -1,0 +1,359 @@
+{
+  "strategy_id": "multi_factor_portfolio_eth_v4",
+  "symbol": "ETHUSDT",
+  "status": "promoted",
+  "version": 4,
+  "params": {
+    "discovery": "scripts/_alpha_lab/_eth_v4_optimize.py (REAL fractional-exposure single-account model)",
+    "execution_model": "fractional exposure: single position sized by vote conviction via enter_long/short(entry_pct). Overrides parent _reconcile. NOT +/-100% vote.",
+    "exposure_formula": "exposure = quantize(clip((long-short)/n_legs*scale, -max_exp, max_exp), step)",
+    "exposure_params": {
+      "scale": 2.5,
+      "max_exp": 0.5,
+      "step": 0.15
+    },
+    "objective": "minimise MDD; >=1 trade/day; every calendar year positive; steady monthly uptrend.",
+    "n_legs": 13,
+    "legs": [
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 240,
+          "dc_period": 20,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.04,
+          "sl_pct": 0.015,
+          "max_hold_h": 48,
+          "side": "both"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 120,
+          "dc_period": 48,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.08,
+          "sl_pct": 0.025,
+          "max_hold_h": 72,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "ensemble_meanrev",
+        "config": {
+          "interval_min": 60,
+          "bb_period": 20,
+          "bb_std": 2.0,
+          "rsi_period": 14,
+          "rsi_long": 40.0,
+          "rsi_short": 60.0,
+          "oi_lb": 96,
+          "oi_drop": -0.015,
+          "oi_pop": 0.02,
+          "taker_lb": 96,
+          "taker_long_max": 0.93,
+          "taker_short_min": 1.07,
+          "lsr_z_lookback": 480,
+          "lsr_z_long": -1.0,
+          "lsr_z_short": 1.5,
+          "min_votes": 3,
+          "use_trend_filter": true,
+          "trend_ema": 200,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
+          "tp_pct": 0.012,
+          "sl_pct": 0.012,
+          "max_hold_h": 16,
+          "side": "both"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 120,
+          "dc_period": 96,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.15,
+          "sl_pct": 0.04,
+          "max_hold_h": 36,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 30,
+          "dc_period": 96,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.15,
+          "sl_pct": 0.04,
+          "max_hold_h": 12,
+          "side": "long_only"
+        }
+      },
+      {
+        "family": "lsr_taker_confluence",
+        "config": {
+          "interval_min": 15,
+          "lsr_lb": 240,
+          "z_lsr_long": -1.0,
+          "z_lsr_short": 1.5,
+          "use_taker": true,
+          "taker_lb": 240,
+          "z_taker_long": -1.0,
+          "z_taker_short": 1.0,
+          "lsr_col": "lsr_count",
+          "use_rsi": true,
+          "rsi_long": 35.0,
+          "rsi_short": 60.0,
+          "tp_pct": 0.018,
+          "sl_pct": 0.008,
+          "max_hold_h": 16,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 120,
+          "dc_period": 192,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.04,
+          "sl_pct": 0.015,
+          "max_hold_h": 72,
+          "side": "both"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 240,
+          "dc_period": 48,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.04,
+          "sl_pct": 0.015,
+          "max_hold_h": 48,
+          "side": "both"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 120,
+          "dc_period": 96,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.04,
+          "sl_pct": 0.015,
+          "max_hold_h": 72,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 240,
+          "dc_period": 192,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.15,
+          "sl_pct": 0.04,
+          "max_hold_h": 48,
+          "side": "long_only"
+        }
+      },
+      {
+        "family": "lsr_taker_confluence",
+        "config": {
+          "interval_min": 15,
+          "lsr_lb": 240,
+          "z_lsr_long": -1.0,
+          "z_lsr_short": 1.5,
+          "use_taker": true,
+          "taker_lb": 240,
+          "z_taker_long": -1.0,
+          "z_taker_short": 1.0,
+          "lsr_col": "lsr_count",
+          "use_rsi": true,
+          "rsi_long": 35.0,
+          "rsi_short": 60.0,
+          "tp_pct": 0.012,
+          "sl_pct": 0.012,
+          "max_hold_h": 8,
+          "side": "both"
+        }
+      },
+      {
+        "family": "ensemble_meanrev",
+        "config": {
+          "interval_min": 60,
+          "bb_period": 20,
+          "bb_std": 2.0,
+          "rsi_period": 14,
+          "rsi_long": 40.0,
+          "rsi_short": 60.0,
+          "oi_lb": 96,
+          "oi_drop": -0.015,
+          "oi_pop": 0.02,
+          "taker_lb": 96,
+          "taker_long_max": 0.93,
+          "taker_short_min": 1.07,
+          "lsr_z_lookback": 480,
+          "lsr_z_long": -1.0,
+          "lsr_z_short": 1.5,
+          "min_votes": 3,
+          "use_trend_filter": true,
+          "trend_ema": 200,
+          "use_atr_filter": true,
+          "atr_min_pct": 0.0025,
+          "atr_max_pct": 0.025,
+          "tp_pct": 0.012,
+          "sl_pct": 0.012,
+          "max_hold_h": 8,
+          "side": "short_only"
+        }
+      },
+      {
+        "family": "donchian_breakout",
+        "config": {
+          "interval_min": 240,
+          "dc_period": 192,
+          "atr_min_mult": 0.0,
+          "use_oi": false,
+          "oi_lb": 96,
+          "oi_min_for_long": 0.0,
+          "oi_max_for_short": -0.01,
+          "tp_pct": 0.08,
+          "sl_pct": 0.025,
+          "max_hold_h": 48,
+          "side": "long_only"
+        }
+      }
+    ]
+  },
+  "backtest": {
+    "commission": 0.0004,
+    "model": "fractional-exposure single account (close+reenter cost)",
+    "full": {
+      "window": [
+        "2022-01-01",
+        "2026-06-10"
+      ],
+      "ret_pct": 48.415,
+      "max_dd_pct": 14.47,
+      "pos_months_pct": 57.407,
+      "worst_month_pct": -7.098,
+      "trades_per_day": 1.578,
+      "avg_exposure": 0.1398
+    },
+    "train": {
+      "window": [
+        "2022-01-01",
+        "2024-09-30"
+      ],
+      "ret_pct": 28.521,
+      "max_dd_pct": 14.094,
+      "pos_months_pct": 57.576,
+      "worst_month_pct": -7.098,
+      "trades_per_day": 1.523,
+      "avg_exposure": 0.1419
+    },
+    "val": {
+      "window": [
+        "2024-10-01",
+        "2024-12-31"
+      ],
+      "ret_pct": 8.626,
+      "max_dd_pct": 6.249,
+      "pos_months_pct": 100.0,
+      "worst_month_pct": 0.139,
+      "trades_per_day": 1.934,
+      "avg_exposure": 0.1697
+    },
+    "holdout": {
+      "window": [
+        "2025-01-01",
+        "2026-05-31"
+      ],
+      "ret_pct": 5.719,
+      "max_dd_pct": 14.47,
+      "pos_months_pct": 47.059,
+      "worst_month_pct": -5.215,
+      "trades_per_day": 1.631,
+      "avg_exposure": 0.1301
+    }
+  },
+  "per_year": {
+    "2022": {
+      "ret": 13.923,
+      "mdd": 13.587,
+      "pm": 66.667,
+      "worst": -7.098,
+      "tpd": 1.673
+    },
+    "2023": {
+      "ret": 3.198,
+      "mdd": 10.754,
+      "pm": 66.667,
+      "worst": -3.833,
+      "tpd": 1.385
+    },
+    "2024": {
+      "ret": 18.747,
+      "mdd": 14.094,
+      "pm": 50.0,
+      "worst": -3.917,
+      "tpd": 1.619
+    },
+    "2025": {
+      "ret": 2.819,
+      "mdd": 14.359,
+      "pm": 50.0,
+      "worst": -5.215,
+      "tpd": 1.717
+    },
+    "2026": {
+      "ret": 3.395,
+      "mdd": 14.348,
+      "pm": 50.0,
+      "worst": -3.657,
+      "tpd": 1.425
+    }
+  },
+  "notes": [
+    "v4 is the first ETH variant to break below ~16% MDD while keeping >=1 trade/day, by sizing the position proportional to conviction instead of the parent's binary +/-100% majority vote.",
+    "Commission is modelled faithfully as close+re-enter on every exposure-bucket change (the backtest engine cannot partially resize a position)."
+  ]
+}
