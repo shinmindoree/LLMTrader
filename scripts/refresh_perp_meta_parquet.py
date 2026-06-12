@@ -5,7 +5,8 @@ families used by ``MultiFactorPortfolioStrategy``:
 
   - funding   <SYMBOL>_funding.parquet      ← /fapi/v1/fundingRate
   - taker     <SYMBOL>_taker_5m.parquet     ← /futures/data/takerlongshortRatio
-  - lsr       <SYMBOL>_lsr_5m.parquet       ← /futures/data/globalLongShortAccountRatio
+  - lsr       <SYMBOL>_lsr_5m.parquet       ← globalLongShortAccountRatio +
+                                              topLongShort{Account,Position}Ratio
   - klines    <SYMBOL>_15m_klines.parquet   ← /fapi/v1/klines (interval=15m)
 
 Each function downloads the existing parquet from blob (or local file),
@@ -440,8 +441,13 @@ def _refresh_lsr(
 
     # Match the schema produced by backfill_vision.py so the multi-factor
     # strategy's _load_unified_dataset (which reads `count_long_short_ratio`)
-    # keeps working. We populate count_long_short_ratio from
-    # /futures/data/globalLongShortAccountRatio's `longShortRatio` field.
+    # keeps working. We populate:
+    #   count_long_short_ratio          <- /futures/data/globalLongShortAccountRatio
+    #   count_toptrader_long_short_ratio<- /futures/data/topLongShortAccountRatio
+    #   sum_toptrader_long_short_ratio  <- /futures/data/topLongShortPositionRatio
+    # The crowd-reversion LSRACC/LSRPOS legs depend on the two top-trader
+    # columns being DISTINCT (account ratio vs position ratio), so they are
+    # fetched from separate endpoints rather than mirrored.
     cols = [
         "timestamp",
         "count_long_short_ratio",
@@ -471,12 +477,16 @@ def _refresh_lsr(
             http, path="globalLongShortAccountRatio", symbol=symbol,
             start_ms=start_ms, end_ms=now_ms, base_url=base_url,
         )
-        top_rows = _fetch_futures_data_5m(
+        top_acc_rows = _fetch_futures_data_5m(
             http, path="topLongShortAccountRatio", symbol=symbol,
             start_ms=start_ms, end_ms=now_ms, base_url=base_url,
         )
+        top_pos_rows = _fetch_futures_data_5m(
+            http, path="topLongShortPositionRatio", symbol=symbol,
+            start_ms=start_ms, end_ms=now_ms, base_url=base_url,
+        )
 
-    if not global_rows and not top_rows:
+    if not global_rows and not top_acc_rows and not top_pos_rows:
         return _empty_result(symbol, "lsr", existed, last_ts, len(existing))
 
     glob_df = pd.DataFrame(global_rows)
@@ -487,35 +497,34 @@ def _refresh_lsr(
     else:
         glob_df = pd.DataFrame(columns=["timestamp", "count_long_short_ratio"])
 
-    top_df = pd.DataFrame(top_rows)
-    if len(top_df):
-        top_df["timestamp"] = top_df["timestamp"].astype("int64")
-        top_df["sum_toptrader_long_short_ratio"] = top_df["longShortRatio"].astype(float)
-        # Top trader 'count' variant is approximated by the same ratio (the
-        # daily Vision archive distinguishes count vs sum, but the fapi
-        # endpoint exposes only one composite ratio). We mirror the value
-        # so downstream consumers keep a non-null column; only the columns
-        # actually read by the strategy (count_long_short_ratio) need to
-        # be precise.
-        top_df["count_toptrader_long_short_ratio"] = top_df["sum_toptrader_long_short_ratio"]
-        top_df = top_df[
-            [
-                "timestamp",
-                "sum_toptrader_long_short_ratio",
-                "count_toptrader_long_short_ratio",
-            ]
-        ]
+    # Top-trader ACCOUNT ratio -> count_toptrader_long_short_ratio
+    acc_df = pd.DataFrame(top_acc_rows)
+    if len(acc_df):
+        acc_df["timestamp"] = acc_df["timestamp"].astype("int64")
+        acc_df["count_toptrader_long_short_ratio"] = acc_df["longShortRatio"].astype(float)
+        acc_df = acc_df[["timestamp", "count_toptrader_long_short_ratio"]]
     else:
-        top_df = pd.DataFrame(
-            columns=[
-                "timestamp",
-                "sum_toptrader_long_short_ratio",
-                "count_toptrader_long_short_ratio",
-            ]
+        acc_df = pd.DataFrame(
+            columns=["timestamp", "count_toptrader_long_short_ratio"]
         )
 
-    new_df = glob_df.merge(top_df, on="timestamp", how="outer").sort_values("timestamp")
-    # Fill any missing columns that the merge skipped because of empty side.
+    # Top-trader POSITION ratio -> sum_toptrader_long_short_ratio
+    pos_df = pd.DataFrame(top_pos_rows)
+    if len(pos_df):
+        pos_df["timestamp"] = pos_df["timestamp"].astype("int64")
+        pos_df["sum_toptrader_long_short_ratio"] = pos_df["longShortRatio"].astype(float)
+        pos_df = pos_df[["timestamp", "sum_toptrader_long_short_ratio"]]
+    else:
+        pos_df = pd.DataFrame(
+            columns=["timestamp", "sum_toptrader_long_short_ratio"]
+        )
+
+    new_df = (
+        glob_df.merge(acc_df, on="timestamp", how="outer")
+        .merge(pos_df, on="timestamp", how="outer")
+        .sort_values("timestamp")
+    )
+    # Fill any missing columns that the merge skipped because of an empty side.
     for c in cols:
         if c not in new_df.columns:
             new_df[c] = float("nan")

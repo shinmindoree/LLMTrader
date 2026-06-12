@@ -11,6 +11,8 @@ Indicator -> kind mapping:
   funding -> ``funding:{SYMBOL}:hist`` (cadence ~8h, /fapi/v1/fundingRate)
   taker   -> ``taker:{SYMBOL}:hist``   (cadence 5m,  /futures/data/takerlongshortRatio)
   lsr     -> ``lsr:{SYMBOL}:hist``     (cadence 5m,  /futures/data/globalLongShortAccountRatio)
+  lsr_top_acc -> ``lsr_top_acc:{SYMBOL}:hist`` (5m, /futures/data/topLongShortAccountRatio)
+  lsr_top_pos -> ``lsr_top_pos:{SYMBOL}:hist`` (5m, /futures/data/topLongShortPositionRatio)
 
 Backtest backends read the same parquet files used by
 ``MultiFactorPortfolioStrategy._load_unified_dataset``:
@@ -89,6 +91,29 @@ _LSR_SPEC = _MetaSpec(
     parquet_filename_fmt="{symbol}_lsr_5m.parquet",
     parquet_ts_column="timestamp",
     parquet_value_column="count_long_short_ratio",
+    default_stale_tol_ms=6 * 3600 * 1000,
+)
+
+# Top-trader long/short ratios. Same 5m parquet file as the global LSR, but
+# distinct value columns; live data comes from dedicated Redis keys fed by the
+# /futures/data/topLongShort{Account,Position}Ratio endpoints.
+#   lsr_top_acc -> count_toptrader_long_short_ratio (top-trader ACCOUNT ratio)
+#   lsr_top_pos -> sum_toptrader_long_short_ratio   (top-trader POSITION ratio)
+_LSR_TOP_ACC_SPEC = _MetaSpec(
+    kind="lsr_top_acc",
+    redis_key_fmt="lsr_top_acc:{symbol}:hist",
+    parquet_filename_fmt="{symbol}_lsr_5m.parquet",
+    parquet_ts_column="timestamp",
+    parquet_value_column="count_toptrader_long_short_ratio",
+    default_stale_tol_ms=6 * 3600 * 1000,
+)
+
+_LSR_TOP_POS_SPEC = _MetaSpec(
+    kind="lsr_top_pos",
+    redis_key_fmt="lsr_top_pos:{symbol}:hist",
+    parquet_filename_fmt="{symbol}_lsr_5m.parquet",
+    parquet_ts_column="timestamp",
+    parquet_value_column="sum_toptrader_long_short_ratio",
     default_stale_tol_ms=6 * 3600 * 1000,
 )
 
@@ -457,6 +482,16 @@ def get_taker_provider(symbol: str, mode: Optional[str] = None) -> _MetaProvider
 
 def get_lsr_provider(symbol: str, mode: Optional[str] = None) -> _MetaProviderBase:
     return _get(_LSR_SPEC, symbol, mode)
+
+
+def get_lsr_top_acc_provider(symbol: str, mode: Optional[str] = None) -> _MetaProviderBase:
+    """Top-trader ACCOUNT long/short ratio (count_toptrader_long_short_ratio)."""
+    return _get(_LSR_TOP_ACC_SPEC, symbol, mode)
+
+
+def get_lsr_top_pos_provider(symbol: str, mode: Optional[str] = None) -> _MetaProviderBase:
+    """Top-trader POSITION long/short ratio (sum_toptrader_long_short_ratio)."""
+    return _get(_LSR_TOP_POS_SPEC, symbol, mode)
 
 
 def reset_provider_cache() -> None:

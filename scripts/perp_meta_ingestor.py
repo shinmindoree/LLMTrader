@@ -22,9 +22,11 @@ Why gap-fill + deep backfill:
   (which reads the full-history parquet) was producing.
 
 Redis schema (matches src/indicators/perp_meta_provider.py):
-  funding:{SYMBOL}:hist  -> "{ts_ms}:{rate}"   from /fapi/v1/fundingRate
-  taker:{SYMBOL}:hist    -> "{ts_ms}:{ratio}"  from /futures/data/takerlongshortRatio
-  lsr:{SYMBOL}:hist      -> "{ts_ms}:{ratio}"  from /futures/data/globalLongShortAccountRatio
+  funding:{SYMBOL}:hist      -> "{ts_ms}:{rate}"   from /fapi/v1/fundingRate
+  taker:{SYMBOL}:hist        -> "{ts_ms}:{ratio}"  from /futures/data/takerlongshortRatio
+  lsr:{SYMBOL}:hist          -> "{ts_ms}:{ratio}"  from /futures/data/globalLongShortAccountRatio
+  lsr_top_acc:{SYMBOL}:hist  -> "{ts_ms}:{ratio}"  from /futures/data/topLongShortAccountRatio
+  lsr_top_pos:{SYMBOL}:hist  -> "{ts_ms}:{ratio}"  from /futures/data/topLongShortPositionRatio
 
 Env (Redis -- choose one auth path):
   REDIS_URL                  full URL with key auth
@@ -41,7 +43,8 @@ Env (config):
   MFP_COVERAGE_LOG_HOURS           default 24
   MFP_FUNDING_POLL_SECONDS         override funding-only cadence (default 1800s)
   BINANCE_FAPI                     default https://fapi.binance.com
-  MFP_INDICATORS                   comma-separated subset of {funding,taker,lsr}
+  MFP_INDICATORS                   comma-separated subset of
+                                   {funding,taker,lsr,lsr_top_acc,lsr_top_pos}
 
 Optional backtest-parquet refresh (off when blob env not set):
   MFP_PARQUET_REFRESH_HOURS        default 6 (0 disables)
@@ -147,6 +150,44 @@ INDICATORS: dict[str, dict] = {
         # globalLongShortAccountRatio gives `count_long_short_ratio` (across all accounts);
         # this is what the MFP strategy reads from the LSR parquet column.
         "endpoint": "/futures/data/globalLongShortAccountRatio",
+        "ts_field": "timestamp",
+        "value_field": "longShortRatio",
+        "params": lambda symbol, start, end: {
+            "symbol": symbol,
+            "period": "5m",
+            "limit": 500,
+            "startTime": int(start),
+            "endTime": int(end),
+        },
+        "period_ms": 5 * 60 * 1000,
+        "binance_limit": 500,
+        "lookback_cap_ms": BINANCE_FUTURES_DATA_LOOKBACK_MS,
+        "backfill_hours_default": 30,
+    },
+    "lsr_top_acc": {
+        "key_fmt": "lsr_top_acc:{symbol}:hist",
+        # topLongShortAccountRatio gives the top-trader ACCOUNT long/short ratio,
+        # consumed as parquet column count_toptrader_long_short_ratio.
+        "endpoint": "/futures/data/topLongShortAccountRatio",
+        "ts_field": "timestamp",
+        "value_field": "longShortRatio",
+        "params": lambda symbol, start, end: {
+            "symbol": symbol,
+            "period": "5m",
+            "limit": 500,
+            "startTime": int(start),
+            "endTime": int(end),
+        },
+        "period_ms": 5 * 60 * 1000,
+        "binance_limit": 500,
+        "lookback_cap_ms": BINANCE_FUTURES_DATA_LOOKBACK_MS,
+        "backfill_hours_default": 30,
+    },
+    "lsr_top_pos": {
+        "key_fmt": "lsr_top_pos:{symbol}:hist",
+        # topLongShortPositionRatio gives the top-trader POSITION long/short ratio,
+        # consumed as parquet column sum_toptrader_long_short_ratio.
+        "endpoint": "/futures/data/topLongShortPositionRatio",
         "ts_field": "timestamp",
         "value_field": "longShortRatio",
         "params": lambda symbol, start, end: {
@@ -477,7 +518,7 @@ def main() -> int:
         return 2
 
     enabled = [s.strip().lower() for s in os.environ.get(
-        "MFP_INDICATORS", "funding,taker,lsr"
+        "MFP_INDICATORS", "funding,taker,lsr,lsr_top_acc,lsr_top_pos"
     ).split(",") if s.strip()]
     enabled = [k for k in enabled if k in INDICATORS]
     if not enabled:

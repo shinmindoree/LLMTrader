@@ -247,7 +247,9 @@ def _make_parquet_sampler(symbol: str, source: str) -> Callable[[int], float]:
 
 def _make_live_sampler(symbol: str, source: str) -> Callable[[int], float] | None:
     """Try to bind a production provider for live mode.  Returns None when no
-    matching provider exists (top-trader LSR) so the caller can fall back."""
+    matching provider exists or binding fails, so the caller can fall back to
+    the parquet sampler. All five sources (funding, taker, oi, lsr_top_acc,
+    lsr_top_pos) have live providers."""
     try:
         if source == "funding":
             from indicators.perp_meta_provider import get_funding_provider
@@ -258,8 +260,14 @@ def _make_live_sampler(symbol: str, source: str) -> Callable[[int], float] | Non
         elif source == "oi":
             from indicators.oi_provider import get_oi_provider
             p = get_oi_provider(symbol)
+        elif source == "lsr_top_acc":
+            from indicators.perp_meta_provider import get_lsr_top_acc_provider
+            p = get_lsr_top_acc_provider(symbol)
+        elif source == "lsr_top_pos":
+            from indicators.perp_meta_provider import get_lsr_top_pos_provider
+            p = get_lsr_top_pos_provider(symbol)
         else:
-            return None  # top-trader LSR not exposed by get_lsr_provider
+            return None  # no matching provider for this source
     except Exception:  # noqa: BLE001
         return None
     return lambda ts_ms: float(p.value_at(int(ts_ms)))
