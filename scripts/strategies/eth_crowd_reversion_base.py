@@ -44,9 +44,11 @@ Data plumbing:
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -58,6 +60,8 @@ if str(_SRC) not in sys.path:
 
 from strategy.base import Strategy
 from strategy.context import StrategyContext
+
+logger = logging.getLogger("eth_crowd_reversion")
 
 def _find_perp_dir() -> Path:
     """Locate ``data/perp_meta`` robustly.
@@ -97,13 +101,137 @@ SOURCE_SPEC: dict[str, tuple[str, str, str, str]] = {
 }
 
 
+def _cache_dir() -> Path:
+    d = Path(os.environ.get("CROWDREV_PARQUET_CACHE_DIR", "/tmp/crowdrev_parquet"))
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        d = Path(os.environ.get("TEMP", ".")) / "crowdrev_parquet"
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _cache_fresh(path: Path) -> bool:
+    try:
+        ttl = int(os.environ.get("CROWDREV_PARQUET_CACHE_TTL_SEC", "1800"))
+    except ValueError:
+        ttl = 1800
+    if ttl <= 0:
+        return False
+    try:
+        return (time.time() - path.stat().st_mtime) < ttl
+    except OSError:
+        return False
+
+
+def _download_blob(container_name: str, blob_name: str) -> bytes:
+    """Reuse the production blob auth chain; fall back to a local copy of it."""
+    try:
+        from indicators.perp_meta_provider import _download_blob as _dl  # type: ignore
+        return _dl(container_name, blob_name)
+    except Exception:  # noqa: BLE001 -- fall back to a self-contained chain
+        pass
+    from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
+    from azure.storage.blob import ContainerClient
+
+    conn_str = os.environ.get("AZURE_BLOB_CONNECTION_STRING", "").strip()
+    if conn_str:
+        client = ContainerClient.from_connection_string(conn_str, container_name)
+    else:
+        account_url = os.environ.get("AZURE_BLOB_ACCOUNT_URL", "").strip()
+        if not account_url:
+            raise RuntimeError(
+                "blob resolver invoked but neither AZURE_BLOB_CONNECTION_STRING "
+                "nor AZURE_BLOB_ACCOUNT_URL is set."
+            )
+        client_id = os.environ.get("AZURE_CLIENT_ID", "").strip()
+        if os.environ.get("IDENTITY_ENDPOINT"):
+            kwargs: dict = {}
+            if client_id:
+                kwargs["client_id"] = client_id
+            credential = ManagedIdentityCredential(**kwargs)
+        else:
+            kwargs = {}
+            if client_id:
+                kwargs["managed_identity_client_id"] = client_id
+            credential = DefaultAzureCredential(**kwargs)
+        client = ContainerClient(account_url=account_url,
+                                 container_name=container_name, credential=credential)
+    return client.download_blob(blob_name).readall()
+
+
+def _resolve_source_parquet(symbol: str, suffix: str) -> Path:
+    """Locate ``{symbol}_{suffix}.parquet`` for a backtest.
+
+    Order (mirrors ``indicators.perp_meta_provider._resolve_parquet_path``):
+      1. local ``data/perp_meta`` (works for local dev / mounted data)
+      2. Azure blob -> ``/tmp`` cache (works in the deployed runner, which has
+         no local parquet but sets MFP/OI ``*_PARQUET_BLOB_*`` + AZURE_BLOB_*).
+    Raises ``FileNotFoundError`` when neither is available so the caller can
+    surface a clear error instead of silently signalling nothing.
+    """
+    fname = f"{symbol}_{suffix}.parquet"
+
+    local = _PERP_DIR / fname
+    if local.exists():
+        return local
+
+    # Blob candidates: our own override, then the MFP/OI conventions the
+    # runner already configures, then a sensible default container/prefix.
+    candidates: list[tuple[str, str]] = []
+    for c_env, p_env in (("CROWDREV_PARQUET_BLOB_CONTAINER", "CROWDREV_PARQUET_BLOB_PREFIX"),
+                         ("MFP_PARQUET_BLOB_CONTAINER", "MFP_PARQUET_BLOB_PREFIX"),
+                         ("OI_PARQUET_BLOB_CONTAINER", "OI_PARQUET_BLOB_PREFIX")):
+        container = os.environ.get(c_env, "").strip()
+        if container:
+            prefix = os.environ.get(p_env, "perp_meta").strip().rstrip("/")
+            candidates.append((container, prefix))
+    have_creds = bool(os.environ.get("AZURE_BLOB_CONNECTION_STRING", "").strip()
+                      or os.environ.get("AZURE_BLOB_ACCOUNT_URL", "").strip())
+    if have_creds and not candidates:
+        candidates.append(("market-data", "perp_meta"))
+
+    cache_path = _cache_dir() / fname
+    if candidates and cache_path.exists() and _cache_fresh(cache_path):
+        return cache_path
+
+    last_err: Exception | None = None
+    for container, prefix in candidates:
+        blob_name = f"{prefix}/{fname}" if prefix else fname
+        try:
+            logger.info("crowd-reversion: downloading %s from blob %s/%s",
+                        fname, container, blob_name)
+            data = _download_blob(container, blob_name)
+            tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(cache_path)
+            logger.info("crowd-reversion: cached %d bytes -> %s", len(data), cache_path)
+            return cache_path
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            logger.warning("crowd-reversion: blob fetch failed (%s/%s): %s",
+                           container, blob_name, exc)
+
+    if cache_path.exists():  # stale but usable beats failing outright
+        logger.warning("crowd-reversion: using STALE cache %s", cache_path)
+        return cache_path
+
+    raise FileNotFoundError(
+        f"could not locate {fname}: no local file at {local} and no usable blob "
+        f"source (tried {[c for c, _ in candidates] or 'none'}). "
+        f"Provide data/perp_meta/{fname} locally, set CROWDREV_PARQUET_BLOB_CONTAINER "
+        f"(+ AZURE_BLOB_ACCOUNT_URL/CONNECTION_STRING), or set LLMTRADER_PERP_DIR."
+        + (f" last error: {last_err}" if last_err else "")
+    )
+
+
 def _make_parquet_sampler(symbol: str, source: str) -> Callable[[int], float]:
     """Return last_known(ts_ms): newest source value at or before ts_ms (NaN if
     none).  Mirrors the research dataset's no-look-ahead sampling exactly."""
     import pandas as pd
 
     suffix, ts_col, val_col, _kind = SOURCE_SPEC[source]
-    path = _PERP_DIR / f"{symbol}_{suffix}.parquet"
+    path = _resolve_source_parquet(symbol, suffix)
     df = pd.read_parquet(path).sort_values(ts_col).reset_index(drop=True)
     ts = df[ts_col].to_numpy(dtype="int64")
     val = df[val_col].to_numpy(dtype="float64")
@@ -225,11 +353,11 @@ class CrowdReversionStrategy(Strategy):
                 suffix = SOURCE_SPEC[self.source][0]
                 raise RuntimeError(
                     f"crowd-reversion needs perp-meta data for source "
-                    f"{self.source!r}: could not read "
-                    f"{_PERP_DIR / f'{symbol}_{suffix}.parquet'} ({exc}). "
-                    f"Set the LLMTRADER_PERP_DIR env var to the folder holding "
-                    f"the {symbol}_*.parquet files, or run from a location where "
-                    f"data/perp_meta exists."
+                    f"{self.source!r} ({symbol}_{suffix}.parquet): {exc}. "
+                    f"Tried local {_PERP_DIR} and Azure blob "
+                    f"(MFP/OI/CROWDREV *_PARQUET_BLOB_CONTAINER + AZURE_BLOB_*). "
+                    f"Provide the parquet locally, set LLMTRADER_PERP_DIR, or "
+                    f"configure a reachable blob source."
                 ) from exc
         self._sampler = sampler
 
