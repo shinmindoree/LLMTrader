@@ -31,14 +31,52 @@ deployment requires extending the LSR provider / Redis feed with
 """
 from __future__ import annotations
 
+import importlib.util as _ilu
 import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eth_crowd_reversion_base import (  # noqa: E402,F401
-    CrowdReversionStrategy as _CrowdReversionBase, STRATEGY_PARAM_SCHEMA,
-)
+
+def _import_crowd_reversion_base():
+    """Import the shared base resiliently.
+
+    A plain sibling import works when this file runs from ``scripts/strategies/``.
+    The AlphaWeaver quick-backtest, however, materialises strategy code to a temp
+    file where the sibling is absent; in that case we locate
+    ``eth_crowd_reversion_base.py`` by searching upward from this file and from
+    the current working directory (the repo root when the API server runs there).
+    """
+    try:
+        import eth_crowd_reversion_base as _b
+        return _b
+    except Exception:  # noqa: BLE001
+        pass
+    seen: set[Path] = set()
+    for _start in (Path(__file__).resolve().parent, Path.cwd().resolve()):
+        for _d in (_start, *_start.parents):
+            for _c in (_d / "eth_crowd_reversion_base.py",
+                       _d / "scripts" / "strategies" / "eth_crowd_reversion_base.py"):
+                _rc = _c.resolve()
+                if _rc in seen:
+                    continue
+                seen.add(_rc)
+                if _rc.is_file():
+                    if str(_rc.parent) not in sys.path:
+                        sys.path.insert(0, str(_rc.parent))
+                    _spec = _ilu.spec_from_file_location("eth_crowd_reversion_base", _rc)
+                    _m = _ilu.module_from_spec(_spec)
+                    sys.modules["eth_crowd_reversion_base"] = _m
+                    _spec.loader.exec_module(_m)
+                    return _m
+    raise ModuleNotFoundError(
+        "eth_crowd_reversion_base.py not found next to this strategy or under "
+        "<cwd>/scripts/strategies/; keep the base module alongside the leg files."
+    )
+
+
+_base = _import_crowd_reversion_base()
+_CrowdReversionBase = _base.CrowdReversionStrategy
+STRATEGY_PARAM_SCHEMA = _base.STRATEGY_PARAM_SCHEMA  # noqa: F401
 
 PRESET: dict[str, Any] = {
     "source": "lsr_top_pos", "z_win": 1344, "z_thr": 2.0,

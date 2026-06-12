@@ -45,6 +45,7 @@ Data plumbing:
 from __future__ import annotations
 
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -58,8 +59,31 @@ if str(_SRC) not in sys.path:
 from strategy.base import Strategy
 from strategy.context import StrategyContext
 
+def _find_perp_dir() -> Path:
+    """Locate ``data/perp_meta`` robustly.
+
+    Resolving via ``__file__`` alone breaks when this module is loaded from a
+    temp/runtime location (e.g. the AlphaWeaver quick-backtest materialises the
+    strategy code to a tmp file), so also honour the ``LLMTRADER_PERP_DIR`` env
+    var and search upward from BOTH this file and the current working directory.
+    """
+    env = os.environ.get("LLMTRADER_PERP_DIR")
+    if env and Path(env).is_dir():
+        return Path(env).resolve()
+    seen: set[Path] = set()
+    for start in (Path(__file__).resolve().parent, Path.cwd().resolve()):
+        for d in (start, *start.parents):
+            cand = (d / "data" / "perp_meta").resolve()
+            if cand in seen:
+                continue
+            seen.add(cand)
+            if cand.is_dir():
+                return cand
+    return (Path(__file__).resolve().parents[2] / "data" / "perp_meta")
+
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_PERP_DIR = _PROJECT_ROOT / "data" / "perp_meta"
+_PERP_DIR = _find_perp_dir()
 
 # source-name -> (parquet suffix, timestamp column, value column, kind)
 #   kind "std" : standard shifted-value reversion
@@ -194,8 +218,19 @@ class CrowdReversionStrategy(Strategy):
                 sampler = _make_parquet_sampler(symbol, self.source)
             except Exception as exc:  # noqa: BLE001
                 self._emit_event(ctx, "CROWDREV_DATA_ERROR",
-                                 {"source": self.source, "error": repr(exc)})
-                sampler = None
+                                 {"source": self.source, "error": repr(exc),
+                                  "perp_dir": str(_PERP_DIR)})
+                # Fail loudly instead of silently producing 0 trades: this
+                # strategy CANNOT signal without its perp-meta source series.
+                suffix = SOURCE_SPEC[self.source][0]
+                raise RuntimeError(
+                    f"crowd-reversion needs perp-meta data for source "
+                    f"{self.source!r}: could not read "
+                    f"{_PERP_DIR / f'{symbol}_{suffix}.parquet'} ({exc}). "
+                    f"Set the LLMTRADER_PERP_DIR env var to the folder holding "
+                    f"the {symbol}_*.parquet files, or run from a location where "
+                    f"data/perp_meta exists."
+                ) from exc
         self._sampler = sampler
 
         self._src, self._close, self._oichg = [], [], []
