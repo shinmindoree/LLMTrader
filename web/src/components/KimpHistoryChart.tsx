@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
 import {
   ColorType,
@@ -21,7 +21,6 @@ import type {
   KimpScreenerItem,
 } from "@/lib/types";
 
-const RANGES: KimpHistoryRange[] = ["1H", "1D", "7D", "30D", "ALL"];
 const RANGE_SECONDS: Partial<Record<KimpHistoryRange, number>> = {
   "1H": 60 * 60,
   "1D": 24 * 60 * 60,
@@ -73,7 +72,7 @@ export default function KimpHistoryChart({
 }: Props) {
   const { t } = useI18n();
   const h = t.hubs.arbitrage.kimp.history;
-  const [range, setRange] = useState<KimpHistoryRange>("1D");
+  const range: KimpHistoryRange = "ALL";
 
   const { data, isLoading, error } = useSWR(
     symbol ? ["kimp:history", symbol, range, rateMode] : null,
@@ -269,31 +268,6 @@ export default function KimpHistoryChart({
             </span>
           </div>
           <div className="text-xs text-[#868993]">{h.subtitle}</div>
-        </div>
-        <div className="flex gap-1">
-          {RANGES.map((r) => {
-            const labelMap: Record<KimpHistoryRange, string> = {
-              "1H": h.range1H,
-              "1D": h.range1D,
-              "7D": h.range7D,
-              "30D": h.range30D,
-              ALL: h.rangeAll,
-            };
-            return (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRange(r)}
-                className={`rounded-md border px-2 py-1 text-[11px] ${
-                  r === range
-                    ? "border-[#3a3b44] bg-[#22232b] text-white"
-                    : "border-[#26272d] bg-[#1a1b22] text-[#c3c5cc] hover:bg-[#22232b]"
-                }`}
-              >
-                {labelMap[r]}
-              </button>
-            );
-          })}
         </div>
       </div>
 
