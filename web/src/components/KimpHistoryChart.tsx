@@ -263,7 +263,10 @@ export default function KimpHistoryChart({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#26272d] px-4 py-3">
         <div>
           <div className="text-sm font-semibold text-white">
-            {h.title} · <span className="text-[#60a5fa]">{symbol}</span>
+            {h.title} · <span className="text-[#60a5fa]">{symbol}</span>{" "}
+            <span className="text-xs font-normal text-[#868993]">
+              {t.hubs.arbitrage.kimp.screener.rateModes[rateMode]}
+            </span>
           </div>
           <div className="text-xs text-[#868993]">{h.subtitle}</div>
         </div>
@@ -339,6 +342,12 @@ function FxSummaryCard({
   kimpPct: number | null;
   kimpLabel: string;
 }) {
+  const sourceClass = !rate
+    ? "bg-[#1a1b22] text-[#868993]"
+    : rate.stale
+      ? "bg-amber-500/10 text-amber-400"
+      : "bg-emerald-500/10 text-emerald-400";
+
   return (
     <div
       className={`rounded-xl border p-3 ${
@@ -347,11 +356,7 @@ function FxSummaryCard({
     >
       <div className="flex items-center justify-between gap-3">
         <div className="text-[11px] uppercase tracking-wider text-[#868993]">{label}</div>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] ${
-            rate?.stale ? "bg-amber-500/10 text-amber-400" : "bg-emerald-500/10 text-emerald-400"
-          }`}
-        >
+        <span className={`rounded-full px-2 py-0.5 text-[10px] ${sourceClass}`}>
           {rate?.source ?? "—"}
         </span>
       </div>

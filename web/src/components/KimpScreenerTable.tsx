@@ -103,16 +103,18 @@ export default function KimpScreenerTable({
   const [sortKey, setSortKey] = useState<SortKey>("kimp_pct");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  function sortValue(item: KimpScreenerItem, key: SortKey): string | number {
-    if (key === "symbol") return item.symbol;
-    if (key === "kimp_pct") return getKimpPctForMode(item, rateMode) ?? Number.NEGATIVE_INFINITY;
-    const value = item[key];
-    return typeof value === "number" && Number.isFinite(value)
-      ? value
-      : Number.NEGATIVE_INFINITY;
-  }
-
   const items = useMemo<KimpScreenerItem[]>(() => {
+    const sortValue = (item: KimpScreenerItem, key: SortKey): string | number => {
+      if (key === "symbol") return item.symbol;
+      if (key === "kimp_pct") {
+        return getKimpPctForMode(item, rateMode) ?? Number.NEGATIVE_INFINITY;
+      }
+      const value = item[key];
+      return typeof value === "number" && Number.isFinite(value)
+        ? value
+        : Number.NEGATIVE_INFINITY;
+    };
+
     if (!data?.items) return [];
     const q = query.trim().toUpperCase();
     const filtered = q

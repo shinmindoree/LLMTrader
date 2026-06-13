@@ -1,7 +1,8 @@
 """External-candle Kimchi Premium history with result caching.
 
-Builds chart history from Upbit KRW coin candles, Upbit KRW-USDT candles, and
-Binance spot klines so historical and live KIMP share the same USDT/KRW basis.
+Builds chart history from Upbit KRW coin candles, Binance spot klines, and the
+selected KRW conversion basis. USDT mode uses Upbit KRW-USDT candles; bank mode
+uses the current USD/KRW bank FX feed across the visible candle window.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from statistics import StatisticsError, mean, pstdev
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 
@@ -23,6 +24,7 @@ from live.kimp_calculator import BINANCE_PUBLIC_BASE, UPBIT_PUBLIC_BASE
 _log = logging.getLogger("llmtrader.kimp_candle_history")
 
 KimpHistoryRange = Literal["1H", "1D", "7D", "30D", "ALL"]
+KimpRateMode = Literal["usdt", "bank"]
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ _RANGE_CONFIGS: dict[KimpHistoryRange, _RangeConfig] = {
 class KimpCandleHistory:
     symbol: str
     range: KimpHistoryRange
+    rate_mode: KimpRateMode
     as_of: datetime
     mean_pct: float | None
     std_pct: float | None
@@ -65,8 +68,8 @@ _upbit_throttle_lock = asyncio.Lock()
 _upbit_last_call_ts = 0.0
 
 
-def _cache_key(symbol: str, range_name: KimpHistoryRange) -> str:
-    return f"kimp:history:v2:{symbol}:{range_name}"
+def _cache_key(symbol: str, range_name: KimpHistoryRange, rate_mode: KimpRateMode) -> str:
+    return f"kimp:history:v3:{rate_mode}:{symbol}:{range_name}"
 
 
 def _interval_ms(unit_min: int) -> int:
@@ -102,6 +105,7 @@ def _to_cache_payload(history: KimpCandleHistory) -> dict[str, Any]:
     return {
         "symbol": history.symbol,
         "range": history.range,
+        "rate_mode": history.rate_mode,
         "as_of": history.as_of.isoformat(),
         "mean_pct": history.mean_pct,
         "std_pct": history.std_pct,
@@ -114,6 +118,9 @@ def _from_cache_payload(payload: dict[str, Any]) -> KimpCandleHistory | None:
     try:
         raw_range = str(payload["range"])
         if raw_range not in _RANGE_CONFIGS:
+            return None
+        raw_mode = str(payload.get("rate_mode") or "usdt")
+        if raw_mode not in ("usdt", "bank"):
             return None
         as_of = datetime.fromisoformat(str(payload["as_of"]))
         if as_of.tzinfo is None:
@@ -128,7 +135,8 @@ def _from_cache_payload(payload: dict[str, Any]) -> KimpCandleHistory | None:
                 series.append((ts, premium))
         return KimpCandleHistory(
             symbol=str(payload["symbol"]).upper(),
-            range=raw_range,  # type: ignore[arg-type]
+            range=cast(KimpHistoryRange, raw_range),
+            rate_mode=cast(KimpRateMode, raw_mode),
             as_of=as_of,
             mean_pct=(
                 float(payload["mean_pct"])
@@ -343,10 +351,12 @@ def _stats(values: list[float]) -> tuple[float | None, float | None]:
 async def get_kimp_candle_history(
     symbol: str,
     range_name: KimpHistoryRange,
+    rate_mode: KimpRateMode = "usdt",
 ) -> KimpCandleHistory:
     sym = symbol.strip().upper()
+    mode: KimpRateMode = "bank" if rate_mode == "bank" else "usdt"
     config = _RANGE_CONFIGS[range_name]
-    key = _cache_key(sym, range_name)
+    key = _cache_key(sym, range_name, mode)
     cached = await _get_cached_history(key, config.ttl_sec)
     if cached is not None:
         return cached
@@ -359,9 +369,6 @@ async def get_kimp_candle_history(
         upbit_coin_task = _fetch_upbit_candles(
             client, f"KRW-{sym}", config.upbit_unit_min, start_ms, now_ms
         )
-        upbit_usdt_task = _fetch_upbit_candles(
-            client, "KRW-USDT", config.upbit_unit_min, start_ms, now_ms
-        )
         binance_task = _fetch_binance_klines(
             client,
             f"{sym}USDT",
@@ -370,13 +377,25 @@ async def get_kimp_candle_history(
             start_ms,
             now_ms,
         )
-        upbit_coin, upbit_usdt, binance = await asyncio.gather(
-            upbit_coin_task, upbit_usdt_task, binance_task
-        )
+        if mode == "bank":
+            from live.fx_feed import get_fx_rate
+
+            upbit_coin, binance, bank_fx = await asyncio.gather(
+                upbit_coin_task, binance_task, get_fx_rate()
+            )
+            krw_rate_by_ts = {ts: bank_fx.rate for ts in binance}
+        else:
+            upbit_usdt_task = _fetch_upbit_candles(
+                client, "KRW-USDT", config.upbit_unit_min, start_ms, now_ms
+            )
+            upbit_coin, upbit_usdt, binance = await asyncio.gather(
+                upbit_coin_task, upbit_usdt_task, binance_task
+            )
+            krw_rate_by_ts = upbit_usdt
 
     points: list[tuple[int, float]] = []
-    for ts in sorted(set(upbit_coin) & set(upbit_usdt) & set(binance)):
-        denom = binance[ts] * upbit_usdt[ts]
+    for ts in sorted(set(upbit_coin) & set(krw_rate_by_ts) & set(binance)):
+        denom = binance[ts] * krw_rate_by_ts[ts]
         if denom <= 0:
             continue
         premium = (upbit_coin[ts] / denom) - 1.0
@@ -388,6 +407,7 @@ async def get_kimp_candle_history(
     history = KimpCandleHistory(
         symbol=sym,
         range=range_name,
+        rate_mode=mode,
         as_of=datetime.fromtimestamp(now_ms / 1000, tz=UTC),
         mean_pct=mean_pct,
         std_pct=std_pct,
