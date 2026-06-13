@@ -533,6 +533,7 @@ const ko: TranslationKeys = {
     netProfit: "순수익",
     winRate: "승률",
     trades: "트레이드",
+    maxDrawdown: "최대 낙폭 (MDD)",
     commission: "수수료",
     bestBy: "정렬 기준",
     exportCsv: "CSV 내보내기",
