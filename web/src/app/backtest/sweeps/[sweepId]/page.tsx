@@ -16,6 +16,14 @@ const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTE
 const PCT_PATHS = new Set(["stop_loss_pct", "max_position"]);
 
 type SortKey = "returnPct" | "netProfit" | "winRate" | "trades" | "maxDrawdown";
+type SortOrder = "asc" | "desc";
+
+function SortIcon({ active, order }: { active: boolean; order: SortOrder }) {
+  if (!active) {
+    return <span className="ml-1 inline-block text-[#868993] opacity-50">↕</span>;
+  }
+  return <span className="ml-1 text-[#2962ff]">{order === "asc" ? "↑" : "↓"}</span>;
+}
 
 type RunMetrics = {
   returnPct: number | null;
@@ -71,6 +79,7 @@ export default function SweepDetailPage() {
   const sweepId = String(params?.sweepId ?? "");
   const isVisible = usePageVisibility();
   const [sortKey, setSortKey] = useState<SortKey>("returnPct");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -107,12 +116,14 @@ export default function SweepDetailPage() {
         case "trades":
           return m.trades ?? -Infinity;
         case "maxDrawdown":
-          // Lower drawdown is better, so rank ascending (negate for desc sort).
-          return m.maxDrawdown === null ? -Infinity : -m.maxDrawdown;
+          return m.maxDrawdown ?? -Infinity;
       }
     };
-    return [...enriched].sort((a, b) => value(b.metrics) - value(a.metrics));
-  }, [data, sortKey]);
+    return [...enriched].sort((a, b) => {
+      const cmp = value(a.metrics) - value(b.metrics);
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
+  }, [data, sortKey, sortOrder]);
 
   const completed = data?.runs.filter((r) => !ACTIVE_STATUSES.has(r.status)).length ?? 0;
   const total = data?.total_runs ?? 0;
@@ -191,17 +202,14 @@ export default function SweepDetailPage() {
     );
   }
 
-  const sortButton = (key: SortKey, label: string) => (
-    <button
-      type="button"
-      className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
-        sortKey === key ? "bg-[#2962ff] text-white" : "bg-[#1e222d] text-[#868993] hover:text-[#d1d4dc]"
-      }`}
-      onClick={() => setSortKey(key)}
-    >
-      {label}
-    </button>
-  );
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortOrder("desc");
+    }
+  };
 
   return (
     <main className="w-full px-4 py-6">
@@ -246,15 +254,6 @@ export default function SweepDetailPage() {
         </p>
       ) : null}
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-[#868993]">{t.sweep.bestBy}:</span>
-        {sortButton("returnPct", t.sweep.return)}
-        {sortButton("netProfit", t.sweep.netProfit)}
-        {sortButton("winRate", t.sweep.winRate)}
-        {sortButton("trades", t.sweep.trades)}
-        {sortButton("maxDrawdown", t.sweep.maxDrawdown)}
-      </div>
-
       <div className="overflow-x-auto rounded border border-[#2a2e39]">
         <table className="w-full text-sm">
           <thead className="bg-[#1e222d] text-xs text-[#868993]">
@@ -266,11 +265,41 @@ export default function SweepDetailPage() {
                   {t.sweep.paramLabels[p as keyof typeof t.sweep.paramLabels] ?? p}
                 </th>
               ))}
-              <th className="px-3 py-2 text-right font-medium">{t.sweep.return}</th>
-              <th className="px-3 py-2 text-right font-medium">{t.sweep.netProfit}</th>
-              <th className="px-3 py-2 text-right font-medium">{t.sweep.winRate}</th>
-              <th className="px-3 py-2 text-right font-medium">{t.sweep.trades}</th>
-              <th className="px-3 py-2 text-right font-medium">{t.sweep.maxDrawdown}</th>
+              <th
+                className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-[#d1d4dc] whitespace-nowrap"
+                onClick={() => handleSort("returnPct")}
+              >
+                {t.sweep.return}
+                <SortIcon active={sortKey === "returnPct"} order={sortOrder} />
+              </th>
+              <th
+                className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-[#d1d4dc] whitespace-nowrap"
+                onClick={() => handleSort("netProfit")}
+              >
+                {t.sweep.netProfit}
+                <SortIcon active={sortKey === "netProfit"} order={sortOrder} />
+              </th>
+              <th
+                className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-[#d1d4dc] whitespace-nowrap"
+                onClick={() => handleSort("winRate")}
+              >
+                {t.sweep.winRate}
+                <SortIcon active={sortKey === "winRate"} order={sortOrder} />
+              </th>
+              <th
+                className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-[#d1d4dc] whitespace-nowrap"
+                onClick={() => handleSort("trades")}
+              >
+                {t.sweep.trades}
+                <SortIcon active={sortKey === "trades"} order={sortOrder} />
+              </th>
+              <th
+                className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-[#d1d4dc] whitespace-nowrap"
+                onClick={() => handleSort("maxDrawdown")}
+              >
+                {t.sweep.maxDrawdown}
+                <SortIcon active={sortKey === "maxDrawdown"} order={sortOrder} />
+              </th>
             </tr>
           </thead>
           <tbody>
