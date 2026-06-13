@@ -438,7 +438,7 @@ class CrowdReversionStrategy(Strategy):
         placing any order.
 
         This is the signal+state half of :meth:`on_bar` exposed for the unified
-        single-account net strategy (``eth_crowd_reversion_unified``): it samples
+        single-account net strategy (``eth_crowd_reversion_unified_strategy``): it samples
         the source, updates the same rolling buffers + continuous rising-edge
         state, and runs a single-position H-bar pure-time-exit state machine
         (enter on the rising edge, hold EXACTLY ``max_hold_bars`` fills, then
