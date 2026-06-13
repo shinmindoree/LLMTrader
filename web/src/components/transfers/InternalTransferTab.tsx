@@ -159,15 +159,23 @@ function BalanceAmount({
 }: BalanceTotals & {
   asset: string;
 }): ReactElement {
+  const locked = Math.max(total - free, 0);
+
   return (
-    <>
-      {free > 0 ? fmtAmount(free, asset) : "—"}
-      {total > free && (
-        <span className="ml-1 text-xs text-[#868993]">
-          (잠금 {fmtAmount(total - free, asset)})
-        </span>
+    <div className="space-y-0.5">
+      <div>{total > 0 ? fmtAmount(total, asset) : "—"}</div>
+      {total > 0 && (
+        <div className="text-[11px] font-normal leading-tight text-[#868993]">
+          <span className="whitespace-nowrap">
+            사용가능 {fmtAmount(free, asset)}
+          </span>
+          <span className="mx-1 text-[#4a4f5e]">/</span>
+          <span className="whitespace-nowrap">
+            잠금 {fmtAmount(locked, asset)}
+          </span>
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
