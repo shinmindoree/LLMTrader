@@ -5,12 +5,100 @@ import type { FocusEvent, MouseEvent } from "react";
 
 import { InfoTooltip } from "@/components/InfoTooltip";
 import StrategyParamsEditor from "@/components/StrategyParamsEditor";
-import { createJob, listFuturesSymbols, preflightJob } from "@/lib/api";
+import { createJob, createSweep, listFuturesSymbols, preflightJob, preflightSweep } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import type { Job, StrategyInfo } from "@/lib/types";
+import type { Job, SweepDimensionSpec, StrategyInfo } from "@/lib/types";
 
 const EXECUTION_DEFAULTS_KEY = "llmtrader.execution_defaults";
 const BACKTEST_INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
+
+type SweepMode = "single" | "sweep";
+
+type SweepParamMeta = {
+  path: string;
+  factor: number;
+  integer?: boolean;
+};
+
+// Parameters that can be swept. ``factor`` converts the value shown in the
+// form (display unit) into the config unit. ``stop_loss_pct`` / ``max_position``
+// are entered as % in the UI but stored as fractions in the config.
+const SWEEP_PARAMS: SweepParamMeta[] = [
+  { path: "leverage", factor: 1, integer: true },
+  { path: "initial_balance", factor: 1 },
+  { path: "commission", factor: 1 },
+  { path: "slippage_bps", factor: 1 },
+  { path: "stop_loss_pct", factor: 0.01 },
+  { path: "max_position", factor: 0.01 },
+  { path: "max_pyramid_entries", factor: 1, integer: true },
+  { path: "fixed_notional", factor: 1 },
+];
+
+const SWEEP_PARAM_BY_PATH: Record<string, SweepParamMeta> = Object.fromEntries(
+  SWEEP_PARAMS.map((p) => [p.path, p]),
+);
+
+type SweepDimDraft = {
+  path: string;
+  mode: "range" | "values";
+  start: string;
+  end: string;
+  step: string;
+  values: string;
+};
+
+function emptyDimDraft(usedPaths: string[]): SweepDimDraft {
+  const available = SWEEP_PARAMS.find((p) => !usedPaths.includes(p.path));
+  return {
+    path: available?.path ?? SWEEP_PARAMS[0].path,
+    mode: "range",
+    start: "",
+    end: "",
+    step: "",
+    values: "",
+  };
+}
+
+function parseValuesList(raw: string): number[] {
+  return raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((s) => Number(s))
+    .filter((n) => Number.isFinite(n));
+}
+
+function countDimRuns(dim: SweepDimDraft): number {
+  if (dim.mode === "values") {
+    return new Set(parseValuesList(dim.values)).size;
+  }
+  const start = Number(dim.start);
+  const end = Number(dim.end);
+  const step = Number(dim.step);
+  if (![start, end, step].every(Number.isFinite) || step <= 0 || end < start) {
+    return 0;
+  }
+  return Math.floor((end - start) / step + 1e-9) + 1;
+}
+
+function buildDimensionSpec(dim: SweepDimDraft): SweepDimensionSpec {
+  const meta = SWEEP_PARAM_BY_PATH[dim.path] ?? { path: dim.path, factor: 1 };
+  const f = meta.factor;
+  if (dim.mode === "values") {
+    return {
+      path: dim.path,
+      mode: "values",
+      values: parseValuesList(dim.values).map((v) => v * f),
+    };
+  }
+  return {
+    path: dim.path,
+    mode: "range",
+    start: Number(dim.start) * f,
+    end: Number(dim.end) * f,
+    step: Number(dim.step) * f,
+  };
+}
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -105,12 +193,14 @@ export type BacktestInitialConfig = {
 export function BacktestForm({
   strategies,
   onCreated,
+  onCreatedSweep,
   onSubmittingChange,
   onClose,
   initialConfig,
 }: {
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
+  onCreatedSweep?: (sweepId: string) => void;
   onSubmittingChange?: (submitting: boolean) => void;
   onClose?: () => void;
   initialConfig?: BacktestInitialConfig;
@@ -142,6 +232,10 @@ export function BacktestForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
+  const [mode, setMode] = useState<SweepMode>("single");
+  const [dims, setDims] = useState<SweepDimDraft[]>([
+    { path: "leverage", mode: "range", start: "1", end: "5", step: "1", values: "" },
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,45 +257,50 @@ export function BacktestForm({
     }
   };
 
+  const buildConfig = (): Record<string, unknown> => {
+    const startParts = parseDateInputValue(startDate);
+    const endParts = parseDateInputValue(endDate);
+    if (!startParts || !endParts) {
+      throw new Error(t.form.invalidDateRange);
+    }
+    const startTs = new Date(startParts.year, startParts.month - 1, startParts.day, 0, 0, 0, 0).getTime();
+    const endTs = new Date(endParts.year, endParts.month - 1, endParts.day, 23, 59, 59, 999).getTime();
+    if (Number.isNaN(startTs) || Number.isNaN(endTs)) {
+      throw new Error(t.form.invalidDate);
+    }
+    if (startTs > endTs) {
+      throw new Error(t.form.startBeforeEnd);
+    }
+    const config: Record<string, unknown> = {
+      symbol,
+      interval,
+      leverage,
+      initial_balance: initialBalance,
+      commission,
+      slippage_bps: slippageBps === "" ? 0 : Number(slippageBps),
+      stop_loss_pct: stopLossEnabled ? stopLossPct : 0,
+      max_position: Math.min(1, Math.max(0.01, (Number(maxPositionPct) || 100) / 100)),
+      max_pyramid_entries: maxPyramidEntries,
+      start_ts: startTs,
+      end_ts: endTs,
+    };
+    const fixedNotionalNum =
+      fixedNotional === "" || fixedNotional === null ? null : Number(fixedNotional);
+    if (fixedNotionalNum !== null && !Number.isNaN(fixedNotionalNum) && fixedNotionalNum > 0) {
+      config.fixed_notional = fixedNotionalNum;
+    }
+    if (Object.keys(strategyParams).length > 0) {
+      config.strategy_params = strategyParams;
+    }
+    return config;
+  };
+
   const onSubmit = async () => {
     setError(null);
     setSubmitting(true);
     onSubmittingChange?.(true);
     try {
-      const startParts = parseDateInputValue(startDate);
-      const endParts = parseDateInputValue(endDate);
-      if (!startParts || !endParts) {
-        throw new Error(t.form.invalidDateRange);
-      }
-      const startTs = new Date(startParts.year, startParts.month - 1, startParts.day, 0, 0, 0, 0).getTime();
-      const endTs = new Date(endParts.year, endParts.month - 1, endParts.day, 23, 59, 59, 999).getTime();
-      if (Number.isNaN(startTs) || Number.isNaN(endTs)) {
-        throw new Error(t.form.invalidDate);
-      }
-      if (startTs > endTs) {
-        throw new Error(t.form.startBeforeEnd);
-      }
-      const config: Record<string, unknown> = {
-        symbol,
-        interval,
-        leverage,
-        initial_balance: initialBalance,
-        commission,
-        slippage_bps: slippageBps === "" ? 0 : Number(slippageBps),
-        stop_loss_pct: stopLossEnabled ? stopLossPct : 0,
-        max_position: Math.min(1, Math.max(0.01, (Number(maxPositionPct) || 100) / 100)),
-        max_pyramid_entries: maxPyramidEntries,
-        start_ts: startTs,
-        end_ts: endTs,
-      };
-      const fixedNotionalNum =
-        fixedNotional === "" || fixedNotional === null ? null : Number(fixedNotional);
-      if (fixedNotionalNum !== null && !Number.isNaN(fixedNotionalNum) && fixedNotionalNum > 0) {
-        config.fixed_notional = fixedNotionalNum;
-      }
-      if (Object.keys(strategyParams).length > 0) {
-        config.strategy_params = strategyParams;
-      }
+      const config = buildConfig();
 
       const preflight = await preflightJob({
         type: "BACKTEST",
@@ -238,6 +337,57 @@ export function BacktestForm({
     }
   };
 
+  const totalSweepRuns = dims.reduce(
+    (acc, d) => acc * Math.max(0, countDimRuns(d)),
+    dims.length > 0 ? 1 : 0,
+  );
+
+  const onSubmitSweep = async () => {
+    setError(null);
+    if (dims.length === 0) {
+      setError(t.sweep.noDimensions);
+      return;
+    }
+    for (const d of dims) {
+      if (countDimRuns(d) <= 0) {
+        setError(t.sweep.noDimensions);
+        return;
+      }
+    }
+    setSubmitting(true);
+    onSubmittingChange?.(true);
+    try {
+      const baseConfig = buildConfig();
+      const dimensions = dims.map(buildDimensionSpec);
+
+      const preflight = await preflightSweep({ base_config: baseConfig, dimensions });
+      if (!preflight.ok) {
+        setError(formatPolicyMessages(t.form.runBlocked, preflight.blockers));
+        return;
+      }
+      if (preflight.warnings.length > 0) {
+        const proceed = window.confirm(
+          formatPolicyMessages(t.form.warningsDetected, preflight.warnings),
+        );
+        if (!proceed) {
+          return;
+        }
+      }
+
+      const res = await createSweep({
+        strategy_path: strategyPath,
+        base_config: baseConfig,
+        dimensions,
+      });
+      onCreatedSweep?.(res.sweep_id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+      onSubmittingChange?.(false);
+    }
+  };
+
   return (
     <div>
       {error ? (
@@ -245,6 +395,26 @@ export function BacktestForm({
           {error}
         </p>
       ) : null}
+      <div className="mb-4 inline-flex rounded border border-[#2a2e39] bg-[#131722] p-0.5">
+        <button
+          type="button"
+          className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            mode === "single" ? "bg-[#2962ff] text-white" : "text-[#868993] hover:text-[#d1d4dc]"
+          }`}
+          onClick={() => setMode("single")}
+        >
+          {t.sweep.modeSingle}
+        </button>
+        <button
+          type="button"
+          className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            mode === "sweep" ? "bg-[#2962ff] text-white" : "text-[#868993] hover:text-[#d1d4dc]"
+          }`}
+          onClick={() => setMode("sweep")}
+        >
+          {t.sweep.modeSweep}
+        </button>
+      </div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#d1d4dc]">{symbol}</span>
         <span className="rounded bg-[#131722] px-2 py-1 text-xs text-[#868993]">{interval}</span>
@@ -491,6 +661,164 @@ export function BacktestForm({
         </label>
       </div>
 
+      {mode === "sweep" && (
+        <div className="mt-5 rounded border border-[#2962ff]/30 bg-[#131722] p-4">
+          <div className="mb-1 flex items-center justify-between">
+            <p className="text-sm font-medium text-[#d1d4dc]">{t.sweep.title}</p>
+            <span
+              className={`rounded px-2 py-1 text-xs font-medium ${
+                totalSweepRuns > 100
+                  ? "bg-[#ef5350]/15 text-[#ef5350]"
+                  : "bg-[#2962ff]/15 text-[#2962ff]"
+              }`}
+            >
+              {t.sweep.totalRuns}: {totalSweepRuns} ({t.sweep.maxRuns} 100)
+            </span>
+          </div>
+          <p className="mb-3 text-xs text-[#868993]">{t.sweep.description}</p>
+
+          <div className="space-y-3">
+            {dims.map((dim, idx) => {
+              const usedPaths = dims.filter((_, i) => i !== idx).map((d) => d.path);
+              const runs = countDimRuns(dim);
+              return (
+                <div
+                  key={idx}
+                  className="flex flex-wrap items-end gap-2 rounded border border-[#2a2e39] bg-[#0e1117] p-3"
+                >
+                  <label className="text-xs">
+                    <div className="mb-1 text-[#868993]">{t.sweep.parameter}</div>
+                    <select
+                      className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                      value={dim.path}
+                      onChange={(e) => {
+                        const path = e.target.value;
+                        setDims((prev) =>
+                          prev.map((d, i) => (i === idx ? { ...d, path } : d)),
+                        );
+                      }}
+                    >
+                      {SWEEP_PARAMS.map((p) => (
+                        <option
+                          key={p.path}
+                          value={p.path}
+                          disabled={usedPaths.includes(p.path)}
+                          className="bg-[#131722]"
+                        >
+                          {t.sweep.paramLabels[p.path as keyof typeof t.sweep.paramLabels] ?? p.path}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs">
+                    <div className="mb-1 text-[#868993]">{t.sweep.mode}</div>
+                    <select
+                      className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                      value={dim.mode}
+                      onChange={(e) => {
+                        const m = e.target.value as "range" | "values";
+                        setDims((prev) =>
+                          prev.map((d, i) => (i === idx ? { ...d, mode: m } : d)),
+                        );
+                      }}
+                    >
+                      <option value="range" className="bg-[#131722]">{t.sweep.modeRange}</option>
+                      <option value="values" className="bg-[#131722]">{t.sweep.modeValues}</option>
+                    </select>
+                  </label>
+
+                  {dim.mode === "range" ? (
+                    <>
+                      <label className="text-xs">
+                        <div className="mb-1 text-[#868993]">{t.sweep.start}</div>
+                        <input
+                          className="w-20 rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                          type="number"
+                          value={dim.start}
+                          onChange={(e) =>
+                            setDims((prev) =>
+                              prev.map((d, i) => (i === idx ? { ...d, start: e.target.value } : d)),
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="text-xs">
+                        <div className="mb-1 text-[#868993]">{t.sweep.end}</div>
+                        <input
+                          className="w-20 rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                          type="number"
+                          value={dim.end}
+                          onChange={(e) =>
+                            setDims((prev) =>
+                              prev.map((d, i) => (i === idx ? { ...d, end: e.target.value } : d)),
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="text-xs">
+                        <div className="mb-1 text-[#868993]">{t.sweep.step}</div>
+                        <input
+                          className="w-20 rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                          type="number"
+                          value={dim.step}
+                          onChange={(e) =>
+                            setDims((prev) =>
+                              prev.map((d, i) => (i === idx ? { ...d, step: e.target.value } : d)),
+                            )
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <label className="flex-1 text-xs">
+                      <div className="mb-1 text-[#868993]">{t.sweep.values}</div>
+                      <input
+                        className="w-full min-w-[12rem] rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                        type="text"
+                        placeholder={t.sweep.valuesHint}
+                        value={dim.values}
+                        onChange={(e) =>
+                          setDims((prev) =>
+                            prev.map((d, i) => (i === idx ? { ...d, values: e.target.value } : d)),
+                          )
+                        }
+                      />
+                    </label>
+                  )}
+
+                  <span className="ml-auto whitespace-nowrap text-[10px] text-[#868993]">
+                    {runs} {t.sweep.run}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded border border-[#2a2e39] px-2 py-1.5 text-xs text-[#868993] hover:border-[#ef5350] hover:text-[#ef5350] transition-colors"
+                    onClick={() => setDims((prev) => prev.filter((_, i) => i !== idx))}
+                  >
+                    {t.sweep.removeDimension}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {dims.length < SWEEP_PARAMS.length && (
+            <button
+              type="button"
+              className="mt-3 rounded border border-[#2a2e39] bg-[#131722] px-3 py-1.5 text-xs text-[#d1d4dc] hover:border-[#2962ff] transition-colors"
+              onClick={() =>
+                setDims((prev) => [...prev, emptyDimDraft(prev.map((d) => d.path))])
+              }
+            >
+              + {t.sweep.addDimension}
+            </button>
+          )}
+
+          {totalSweepRuns > 100 && (
+            <p className="mt-3 text-xs text-[#ef5350]">{t.sweep.runsExceeded}</p>
+          )}
+        </div>
+      )}
+
       {/* Strategy Parameters */}
       {strategyPath && (
         <div className="mt-4">
@@ -515,13 +843,23 @@ export function BacktestForm({
             {t.common.cancel}
           </button>
         )}
-        <button
-          className="rounded bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          onClick={onSubmit}
-          disabled={submitting}
-        >
-          {t.backtest.startBacktest}
-        </button>
+        {mode === "sweep" ? (
+          <button
+            className="rounded bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            onClick={onSubmitSweep}
+            disabled={submitting || totalSweepRuns === 0 || totalSweepRuns > 100}
+          >
+            {submitting ? t.sweep.creating : `${t.sweep.createSweep} (${totalSweepRuns})`}
+          </button>
+        ) : (
+          <button
+            className="rounded bg-[#2962ff] px-4 py-2 text-sm text-white hover:bg-[#1e53d5] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            onClick={onSubmit}
+            disabled={submitting}
+          >
+            {t.backtest.startBacktest}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -23,6 +23,12 @@ import type {
   QuickBacktestRequest,
   QuickBacktestResponse,
   StopAllResponse,
+  SweepCreateRequest,
+  SweepCreateResponse,
+  SweepDetailResponse,
+  SweepListItem,
+  SweepPreflightRequest,
+  SweepPreflightResponse,
   StrategyAllocation,
   StrategyCapabilitiesResponse,
   StrategyContentResponse,
@@ -770,9 +776,13 @@ export async function getKimpScreener(
 export async function getKimpHistory(
   symbol: string,
   range: import("@/lib/types").KimpHistoryRange = "1D",
+  rateMode: import("@/lib/types").KimpRateMode = "usdt",
 ): Promise<import("@/lib/types").KimpHistoryResponse> {
-  const s = encodeURIComponent(symbol.trim().toUpperCase());
-  return json(`/api/backend/api/kimp-arb/history?symbol=${s}&range=${range}`);
+  const params = new URLSearchParams();
+  params.set("symbol", symbol.trim().toUpperCase());
+  params.set("range", range);
+  params.set("rate_mode", rateMode);
+  return json(`/api/backend/api/kimp-arb/history?${params.toString()}`);
 }
 
 export async function getJob(jobId: string): Promise<Job> {
@@ -890,6 +900,41 @@ export async function preflightJob(body: {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export async function preflightSweep(
+  body: SweepPreflightRequest,
+): Promise<SweepPreflightResponse> {
+  return json<SweepPreflightResponse>("/api/backend/api/backtest/sweeps/preflight", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function createSweep(
+  body: SweepCreateRequest,
+): Promise<SweepCreateResponse> {
+  return json<SweepCreateResponse>("/api/backend/api/backtest/sweeps", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listSweeps(limit = 50): Promise<SweepListItem[]> {
+  return json<SweepListItem[]>(`/api/backend/api/backtest/sweeps?limit=${limit}`);
+}
+
+export async function getSweep(sweepId: string): Promise<SweepDetailResponse> {
+  return json<SweepDetailResponse>(
+    `/api/backend/api/backtest/sweeps/${encodeURIComponent(sweepId)}`,
+  );
+}
+
+export async function stopSweep(sweepId: string): Promise<StopAllResponse> {
+  return json<StopAllResponse>(
+    `/api/backend/api/backtest/sweeps/${encodeURIComponent(sweepId)}/stop`,
+    { method: "POST" },
+  );
 }
 
 export async function getUserProfile(): Promise<UserProfile> {

@@ -428,6 +428,79 @@ async def list_job_summaries(
     return list(result.all())
 
 
+def _slim_result_summary_column() -> Any:
+    """JSONB projection that strips heavy result keys (chart, trades).
+
+    Shared by job summary and sweep queries so the API process never loads
+    multi-MB result blobs when it only needs aggregate metrics.
+    """
+    slim_expr = Job.result_json
+    for key in _HEAVY_RESULT_KEYS:
+        slim_expr = slim_expr.op("-")(key)
+    return case(
+        (func.jsonb_typeof(Job.result_json) == "object", slim_expr),
+        else_=Job.result_json,
+    ).label("result_summary")
+
+
+async def list_sweep_child_rows(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    sweep_id: str,
+) -> list[Row[Any]]:
+    """Child BACKTEST jobs belonging to ``sweep_id`` with slim result summaries."""
+    result_summary = _slim_result_summary_column()
+    stmt = (
+        select(
+            Job.job_id,
+            Job.status,
+            Job.strategy_path,
+            Job.config_json,
+            Job.error,
+            Job.created_at,
+            Job.started_at,
+            Job.ended_at,
+            result_summary,
+        )
+        .where(Job.user_id == user_id)
+        .where(Job.type == JobType.BACKTEST)
+        .where(Job.config_json["_sweep"]["sweep_id"].astext == sweep_id)
+    )
+    result = await session.execute(stmt)
+    return list(result.all())
+
+
+async def list_sweep_group_rows(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    limit: int = 500,
+) -> list[Row[Any]]:
+    """Recent BACKTEST jobs that belong to any sweep (have ``config_json._sweep``)."""
+    result_summary = _slim_result_summary_column()
+    stmt = (
+        select(
+            Job.job_id,
+            Job.status,
+            Job.strategy_path,
+            Job.config_json,
+            Job.error,
+            Job.created_at,
+            Job.started_at,
+            Job.ended_at,
+            result_summary,
+        )
+        .where(Job.user_id == user_id)
+        .where(Job.type == JobType.BACKTEST)
+        .where(Job.config_json.has_key("_sweep"))  # noqa: W601 - JSONB ? operator
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.all())
+
+
 async def count_jobs(
     session: AsyncSession,
     *,

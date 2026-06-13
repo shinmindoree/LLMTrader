@@ -45,6 +45,8 @@ from control.repo import (
     list_job_summaries,
     list_jobs,
     list_orders,
+    list_sweep_child_rows,
+    list_sweep_group_rows,
     list_strategy_meta,
     list_strategy_quality_logs,
     list_trades,
@@ -154,6 +156,15 @@ from api.schemas import (
     QuickBacktestResponse,
     StopAllResponse,
     StopResponse,
+    SweepCreateRequest,
+    SweepCreateResponse,
+    SweepDetailResponse,
+    SweepDimensionResolved,
+    SweepListItem,
+    SweepPreflightRequest,
+    SweepPreflightResponse,
+    SweepRunPreview,
+    SweepRunResult,
     StrategyCapabilityResponse,
     StrategyChatRequest,
     StrategyChatResponse,
@@ -2271,11 +2282,18 @@ def create_app() -> FastAPI:
         symbols: str | None,
     ) -> KimpScreenerResponse:
         from live.kimp_calculator import classify_kimp_signal, compute_kimp_snapshot
+        from live.fx_feed import get_fx_rate
         from live.kimp_history import window_stats_bulk
         from live.kimp_universe import get_kimp_universe
 
         requested = _parse_kimp_symbols(symbols) or await get_kimp_universe()
         snapshot = await compute_kimp_snapshot(requested)
+        bank_fx = None
+        bank_fx_error: str | None = None
+        try:
+            bank_fx = await get_fx_rate()
+        except RuntimeError as exc:
+            bank_fx_error = f"USD/KRW: {exc}"
 
         stats_by_symbol = await window_stats_bulk(
             session, [row.symbol for row in snapshot.rows], days=30
@@ -2290,14 +2308,20 @@ def create_app() -> FastAPI:
             z = None
             if mean_pct is not None and std_pct is not None and float(std_pct) > 0:
                 z = (row.kimp_pct - float(mean_pct)) / float(std_pct)
+            bank_kimp_pct = None
+            if bank_fx is not None and bank_fx.rate > 0:
+                bank_denom = row.binance_usdt_price * bank_fx.rate
+                if bank_denom > 0:
+                    bank_kimp_pct = (row.upbit_krw_price / bank_denom) - 1.0
             items.append(
                 KimpScreenerItem(
                     symbol=row.symbol,
                     upbit_krw_price=row.upbit_krw_price,
                     binance_usdt_price=row.binance_usdt_price,
                     usdt_krw_rate=row.usdt_krw_rate,
-                    usd_krw_rate=row.usdt_krw_rate,
+                    usd_krw_rate=bank_fx.rate if bank_fx is not None else None,
                     kimp_pct=row.kimp_pct,
+                    bank_kimp_pct=bank_kimp_pct,
                     mean_30d_pct=float(mean_pct) if mean_pct is not None else None,
                     std_30d_pct=float(std_pct) if std_pct is not None else None,
                     zscore_30d=z,
@@ -2311,15 +2335,31 @@ def create_app() -> FastAPI:
             )
 
         rate_payload = KimpFxRateResponse(
+            pair="USDT/KRW",
             rate=snapshot.rate.rate,
             source=snapshot.rate.source,
             fetched_at=snapshot.rate.fetched_at,
             stale=snapshot.rate.stale,
         )
+        bank_rate_payload = (
+            KimpFxRateResponse(
+                pair="USD/KRW",
+                rate=bank_fx.rate,
+                source=bank_fx.source,
+                fetched_at=bank_fx.fetched_at,
+                stale=bank_fx.stale,
+            )
+            if bank_fx is not None
+            else None
+        )
+        errors = list(snapshot.errors)
+        if bank_fx_error:
+            errors.append(bank_fx_error)
         return KimpScreenerResponse(
             items=items,
             fx=rate_payload,
-            errors=list(snapshot.errors),
+            bank_fx=bank_rate_payload,
+            errors=errors,
             as_of=snapshot.as_of,
         )
 
@@ -2370,13 +2410,15 @@ def create_app() -> FastAPI:
     async def kimp_history(
         symbol: str,
         range: Literal["1H", "1D", "7D", "30D", "ALL"] = "1D",
+        rate_mode: Literal["usdt", "bank"] = "usdt",
         session: AsyncSession = Depends(_db_session),
         _: AuthenticatedUser = Depends(require_auth),
     ) -> KimpHistoryResponse:
-        """심볼별 USDT/KRW 기준 김프 시계열.
+        """심볼별 김프 시계열.
 
-        외부 캔들(Upbit KRW-코인, Upbit KRW-USDT, Binance 코인USDT)을 조합해
-        선택 심볼 1개만 계산하고, 기간별 결과는 서버 캐시에 저장한다.
+        외부 캔들(Upbit KRW-코인, Binance 코인USDT)과 선택 환율 기준
+        (Upbit USDT/KRW 또는 은행 USD/KRW)을 조합해 선택 심볼 1개만 계산하고,
+        기간별 결과는 서버 캐시에 저장한다.
         """
         from live.kimp_candle_history import get_kimp_candle_history
 
@@ -2385,11 +2427,12 @@ def create_app() -> FastAPI:
         if not sym:
             raise HTTPException(status_code=400, detail="symbol is required")
 
-        history = await get_kimp_candle_history(sym, range)
+        history = await get_kimp_candle_history(sym, range, rate_mode=rate_mode)
         points = [KimpHistoryPoint(t=int(ts), p=float(p)) for ts, p in history.series]
         return KimpHistoryResponse(
             symbol=sym,
             range=range,
+            rate_mode=history.rate_mode,
             as_of=history.as_of,
             mean_pct=history.mean_pct,
             std_pct=history.std_pct,
@@ -3570,6 +3613,333 @@ def create_app() -> FastAPI:
             )
         await session.commit()
         return _job_to_response(job)
+
+    # ------------------------------------------------------------------
+    # Backtest Sweep: run many backtests at once (parameter grid) and
+    # compare them as a group. A sweep is just a set of BACKTEST jobs that
+    # share a ``config_json._sweep.sweep_id`` — no schema/runner changes.
+    # ------------------------------------------------------------------
+
+    def _evaluate_sweep_policy(
+        expanded: list[tuple[dict[str, Any], dict[str, Any]]],
+    ) -> tuple[list[str], list[str]]:
+        blockers: list[str] = []
+        warnings_set: dict[str, None] = {}
+        for run_index, (varied, cfg) in enumerate(expanded):
+            res = evaluate_job_policy(JobType.BACKTEST, cfg)
+            label = ", ".join(f"{k}={v}" for k, v in varied.items())
+            for blocker in res.blockers:
+                if len(blockers) < 50:
+                    blockers.append(f"run#{run_index + 1} ({label}): {blocker}")
+            for warning in res.warnings:
+                warnings_set.setdefault(warning, None)
+        return blockers, list(warnings_set.keys())
+
+    @app.post(
+        "/api/backtest/sweeps/preflight",
+        response_model=SweepPreflightResponse,
+        dependencies=[Depends(require_auth)],
+    )
+    async def preflight_sweep(body: SweepPreflightRequest) -> SweepPreflightResponse:
+        from api.backtest_sweep import (
+            MAX_SWEEP_TOTAL_RUNS,
+            SweepError,
+            build_dimensions,
+            expand,
+        )
+
+        try:
+            dims = build_dimensions([d.model_dump() for d in body.dimensions])
+        except SweepError as exc:
+            return SweepPreflightResponse(
+                ok=False,
+                total_runs=0,
+                max_runs=MAX_SWEEP_TOTAL_RUNS,
+                blockers=[str(exc)],
+            )
+
+        base = {
+            k: v
+            for k, v in dict(body.base_config).items()
+            if k not in INTERNAL_JOB_CONFIG_KEYS and k != "_sweep"
+        }
+        expanded = expand(base, dims)
+        blockers, warnings = _evaluate_sweep_policy(expanded)
+        preview = [
+            SweepRunPreview(index=i, params=varied)
+            for i, (varied, _) in enumerate(expanded[:50])
+        ]
+        return SweepPreflightResponse(
+            ok=not blockers,
+            total_runs=len(expanded),
+            max_runs=MAX_SWEEP_TOTAL_RUNS,
+            blockers=blockers,
+            warnings=warnings,
+            dimensions=[
+                SweepDimensionResolved(path=d.path, values=[float(v) for v in d.values])
+                for d in dims
+            ],
+            preview=preview,
+        )
+
+    @app.post("/api/backtest/sweeps", response_model=SweepCreateResponse)
+    async def create_sweep_api(
+        body: SweepCreateRequest,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> SweepCreateResponse:
+        from api.backtest_sweep import SweepError, build_dimensions, expand
+
+        try:
+            dims = build_dimensions([d.model_dump() for d in body.dimensions])
+        except SweepError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        base = {
+            k: v
+            for k, v in dict(body.base_config).items()
+            if k not in INTERNAL_JOB_CONFIG_KEYS and k != "_sweep"
+        }
+        expanded = expand(base, dims)
+
+        blockers, warnings = _evaluate_sweep_policy(expanded)
+        if blockers:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Sweep policy check failed",
+                    "blockers": blockers,
+                    "warnings": warnings,
+                },
+            )
+
+        from api.quota import check_job_quota
+
+        await check_job_quota(
+            session, user_id=user.user_id, plan=user.plan, job_type=JobType.BACKTEST
+        )
+
+        try:
+            strategy_name, strategy_code = await _resolve_strategy_code_for_user(
+                session=session,
+                user=user,
+                path=body.strategy_path,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        sweep_id = uuid.uuid4().hex
+        logical_path = _logical_strategy_path(strategy_name)
+        total = len(expanded)
+        spec = {
+            "strategy_path": logical_path,
+            "base_config": base,
+            "dimensions": [
+                {"path": d.path, "values": [float(v) for v in d.values]} for d in dims
+            ],
+        }
+
+        job_ids: list[uuid.UUID] = []
+        for run_index, (varied, cfg) in enumerate(expanded):
+            config_json = dict(cfg)
+            config_json["_strategy_code"] = strategy_code
+            config_json["_sweep"] = {
+                "sweep_id": sweep_id,
+                "index": run_index,
+                "total": total,
+                "params": varied,
+                "spec": spec,
+            }
+            job = await create_job(
+                session,
+                user_id=user.user_id,
+                job_type=JobType.BACKTEST,
+                strategy_path=logical_path,
+                config_json=config_json,
+            )
+            await append_event(
+                session,
+                job_id=job.job_id,
+                kind=EventKind.STATUS,
+                message="JOB_CREATED",
+                payload_json={
+                    "type": str(JobType.BACKTEST),
+                    "strategy_path": body.strategy_path,
+                    "sweep_id": sweep_id,
+                    "sweep_index": run_index,
+                },
+            )
+            job_ids.append(job.job_id)
+
+        if warnings and job_ids:
+            await append_event(
+                session,
+                job_id=job_ids[0],
+                kind=EventKind.RISK,
+                message="POLICY_WARNINGS",
+                payload_json={"warnings": warnings},
+            )
+
+        await session.commit()
+        return SweepCreateResponse(
+            sweep_id=sweep_id, total_runs=total, job_ids=job_ids
+        )
+
+    @app.get("/api/backtest/sweeps", response_model=list[SweepListItem])
+    async def list_sweeps_api(
+        limit: int = Query(default=50, ge=1, le=200),
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> list[SweepListItem]:
+        rows = await list_sweep_group_rows(session, user_id=user.user_id, limit=1000)
+
+        groups: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for row in rows:
+            config = row.config_json if isinstance(row.config_json, dict) else {}
+            sweep = config.get("_sweep") if isinstance(config.get("_sweep"), dict) else {}
+            sweep_id = sweep.get("sweep_id")
+            if not sweep_id:
+                continue
+            if sweep_id not in groups:
+                spec = sweep.get("spec") if isinstance(sweep.get("spec"), dict) else {}
+                varied_paths = [
+                    d.get("path")
+                    for d in (spec.get("dimensions") or [])
+                    if isinstance(d, dict) and d.get("path")
+                ]
+                groups[sweep_id] = {
+                    "sweep_id": sweep_id,
+                    "strategy_path": spec.get("strategy_path") or row.strategy_path,
+                    "symbol": config.get("symbol"),
+                    "interval": config.get("interval"),
+                    "total_runs": int(sweep.get("total") or 0),
+                    "completed_runs": 0,
+                    "status_counts": {},
+                    "varied_paths": varied_paths,
+                    "created_at": row.created_at,
+                }
+                order.append(sweep_id)
+            group = groups[sweep_id]
+            status_key = str(row.status)
+            group["status_counts"][status_key] = (
+                group["status_counts"].get(status_key, 0) + 1
+            )
+            if row.status in (
+                JobStatus.SUCCEEDED,
+                JobStatus.FAILED,
+                JobStatus.STOPPED,
+            ):
+                group["completed_runs"] += 1
+            if row.created_at and (
+                group["created_at"] is None or row.created_at > group["created_at"]
+            ):
+                group["created_at"] = row.created_at
+            # Fallback when sweep.total is missing/0: count children.
+            if not group["total_runs"]:
+                group["total_runs"] = sum(group["status_counts"].values())
+
+        items = [
+            SweepListItem(
+                sweep_id=g["sweep_id"],
+                strategy_path=g["strategy_path"],
+                symbol=g["symbol"],
+                interval=g["interval"],
+                total_runs=g["total_runs"] or sum(g["status_counts"].values()),
+                completed_runs=g["completed_runs"],
+                status_counts=g["status_counts"],
+                varied_paths=g["varied_paths"],
+                created_at=g["created_at"],
+            )
+            for g in (groups[sid] for sid in order)
+        ]
+        items.sort(key=lambda it: it.created_at, reverse=True)
+        return items[:limit]
+
+    @app.get("/api/backtest/sweeps/{sweep_id}", response_model=SweepDetailResponse)
+    async def get_sweep_api(
+        sweep_id: str,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> SweepDetailResponse:
+        rows = await list_sweep_child_rows(
+            session, user_id=user.user_id, sweep_id=sweep_id
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Sweep not found")
+
+        def _sweep_meta(row: Any) -> dict[str, Any]:
+            config = row.config_json if isinstance(row.config_json, dict) else {}
+            sweep = config.get("_sweep")
+            return sweep if isinstance(sweep, dict) else {}
+
+        rows_sorted = sorted(rows, key=lambda r: int(_sweep_meta(r).get("index") or 0))
+        spec = _sweep_meta(rows_sorted[0]).get("spec")
+        spec = spec if isinstance(spec, dict) else {}
+
+        runs: list[SweepRunResult] = []
+        for row in rows_sorted:
+            meta = _sweep_meta(row)
+            summary = row.result_summary if isinstance(row.result_summary, dict) else None
+            runs.append(
+                SweepRunResult(
+                    job_id=row.job_id,
+                    index=int(meta.get("index") or 0),
+                    params=meta.get("params") if isinstance(meta.get("params"), dict) else {},
+                    status=row.status,
+                    error=row.error,
+                    result_summary=summary,
+                )
+            )
+
+        created_candidates = [r.created_at for r in rows_sorted if r.created_at]
+        created_at = min(created_candidates) if created_candidates else rows_sorted[0].created_at
+        dimensions = [
+            SweepDimensionResolved(
+                path=d.get("path"),
+                values=[float(v) for v in (d.get("values") or [])],
+            )
+            for d in (spec.get("dimensions") or [])
+            if isinstance(d, dict) and d.get("path")
+        ]
+        runs_strategy_path = spec.get("strategy_path") or ""
+        return SweepDetailResponse(
+            sweep_id=sweep_id,
+            strategy_path=runs_strategy_path,
+            base_config=spec.get("base_config") if isinstance(spec.get("base_config"), dict) else {},
+            dimensions=dimensions,
+            total_runs=len(rows_sorted),
+            created_at=created_at,
+            runs=runs,
+        )
+
+    @app.post(
+        "/api/backtest/sweeps/{sweep_id}/stop", response_model=StopAllResponse
+    )
+    async def stop_sweep_api(
+        sweep_id: str,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> StopAllResponse:
+        rows = await list_sweep_child_rows(
+            session, user_id=user.user_id, sweep_id=sweep_id
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Sweep not found")
+
+        stopped_queued = 0
+        stop_requested_running = 0
+        for row in rows:
+            new_status = await request_stop(session, row.job_id, user_id=user.user_id)
+            if new_status == JobStatus.STOPPED:
+                stopped_queued += 1
+            elif new_status == JobStatus.STOP_REQUESTED:
+                stop_requested_running += 1
+        await session.commit()
+        return StopAllResponse(
+            stopped_queued=stopped_queued,
+            stop_requested_running=stop_requested_running,
+        )
 
     @app.get("/api/jobs", response_model=list[JobResponse])
     async def jobs(

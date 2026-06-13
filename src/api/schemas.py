@@ -215,6 +215,88 @@ class JobPolicyCheckRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+# ── Backtest Sweep ──────────────────────────────────────────
+
+
+class SweepDimensionSpec(BaseModel):
+    """One swept parameter. ``mode='range'`` uses start/end/step; ``mode='values'`` uses values."""
+
+    path: str
+    mode: Literal["range", "values"]
+    start: float | None = None
+    end: float | None = None
+    step: float | None = None
+    values: list[float] | None = None
+
+
+class SweepPreflightRequest(BaseModel):
+    base_config: dict[str, Any] = Field(default_factory=dict)
+    dimensions: list[SweepDimensionSpec] = Field(default_factory=list)
+
+
+class SweepCreateRequest(BaseModel):
+    strategy_path: str
+    base_config: dict[str, Any] = Field(default_factory=dict)
+    dimensions: list[SweepDimensionSpec] = Field(default_factory=list)
+
+
+class SweepDimensionResolved(BaseModel):
+    path: str
+    values: list[float]
+
+
+class SweepRunPreview(BaseModel):
+    index: int
+    params: dict[str, Any]
+
+
+class SweepPreflightResponse(BaseModel):
+    ok: bool
+    total_runs: int
+    max_runs: int
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    dimensions: list[SweepDimensionResolved] = Field(default_factory=list)
+    preview: list[SweepRunPreview] = Field(default_factory=list)
+
+
+class SweepCreateResponse(BaseModel):
+    sweep_id: str
+    total_runs: int
+    job_ids: list[uuid.UUID]
+
+
+class SweepRunResult(BaseModel):
+    job_id: uuid.UUID
+    index: int
+    params: dict[str, Any]
+    status: JobStatus
+    error: str | None = None
+    result_summary: dict[str, Any] | None = None
+
+
+class SweepListItem(BaseModel):
+    sweep_id: str
+    strategy_path: str
+    symbol: str | None = None
+    interval: str | None = None
+    total_runs: int
+    completed_runs: int
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    varied_paths: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+
+class SweepDetailResponse(BaseModel):
+    sweep_id: str
+    strategy_path: str
+    base_config: dict[str, Any] = Field(default_factory=dict)
+    dimensions: list[SweepDimensionResolved] = Field(default_factory=list)
+    total_runs: int
+    created_at: datetime
+    runs: list[SweepRunResult] = Field(default_factory=list)
+
+
 class JobPolicyCheckResponse(BaseModel):
     ok: bool
     blockers: list[str] = Field(default_factory=list)
@@ -612,7 +694,7 @@ class FundingArbitrageStatusResponse(BaseModel):
 
 
 class KimpFxRateResponse(BaseModel):
-    pair: Literal["USDT/KRW"] = "USDT/KRW"
+    pair: Literal["USDT/KRW", "USD/KRW"] = "USDT/KRW"
     rate: float
     source: str
     fetched_at: datetime
@@ -624,8 +706,9 @@ class KimpScreenerItem(BaseModel):
     upbit_krw_price: float
     binance_usdt_price: float  # Binance USDT-M 무기한 마크가격
     usdt_krw_rate: float
-    usd_krw_rate: float | None = None  # backward-compatible alias for older clients
+    usd_krw_rate: float | None = None
     kimp_pct: float  # 0.0345 == 3.45%
+    bank_kimp_pct: float | None = None
     mean_30d_pct: float | None = None
     std_30d_pct: float | None = None
     zscore_30d: float | None = None  # (kimp - mean) / std
@@ -640,6 +723,7 @@ class KimpScreenerItem(BaseModel):
 class KimpScreenerResponse(BaseModel):
     items: list[KimpScreenerItem]
     fx: KimpFxRateResponse
+    bank_fx: KimpFxRateResponse | None = None
     errors: list[str] = Field(default_factory=list)
     as_of: datetime
 
@@ -652,6 +736,7 @@ class KimpHistoryPoint(BaseModel):
 class KimpHistoryResponse(BaseModel):
     symbol: str
     range: Literal["1H", "1D", "7D", "30D", "ALL"]
+    rate_mode: Literal["usdt", "bank"] = "usdt"
     as_of: datetime
     mean_pct: float | None
     std_pct: float | None

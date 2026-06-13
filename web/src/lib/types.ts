@@ -230,6 +230,83 @@ export type StopAllResponse = {
   stop_requested_running: number;
 };
 
+export type SweepDimensionSpec = {
+  path: string;
+  mode: "range" | "values";
+  start?: number | null;
+  end?: number | null;
+  step?: number | null;
+  values?: number[] | null;
+};
+
+export type SweepDimensionResolved = {
+  path: string;
+  values: number[];
+};
+
+export type SweepRunPreview = {
+  index: number;
+  params: Record<string, number>;
+};
+
+export type SweepPreflightRequest = {
+  base_config: Record<string, unknown>;
+  dimensions: SweepDimensionSpec[];
+};
+
+export type SweepPreflightResponse = {
+  ok: boolean;
+  total_runs: number;
+  max_runs: number;
+  blockers: string[];
+  warnings: string[];
+  dimensions: SweepDimensionResolved[];
+  preview: SweepRunPreview[];
+};
+
+export type SweepCreateRequest = {
+  strategy_path: string;
+  base_config: Record<string, unknown>;
+  dimensions: SweepDimensionSpec[];
+};
+
+export type SweepCreateResponse = {
+  sweep_id: string;
+  total_runs: number;
+  job_ids: string[];
+};
+
+export type SweepRunResult = {
+  job_id: string;
+  index: number;
+  params: Record<string, number>;
+  status: JobStatus;
+  error: string | null;
+  result_summary: Record<string, unknown> | null;
+};
+
+export type SweepListItem = {
+  sweep_id: string;
+  strategy_path: string;
+  symbol: string | null;
+  interval: string | null;
+  total_runs: number;
+  completed_runs: number;
+  status_counts: Record<string, number>;
+  varied_paths: string[];
+  created_at: string;
+};
+
+export type SweepDetailResponse = {
+  sweep_id: string;
+  strategy_path: string;
+  base_config: Record<string, unknown>;
+  dimensions: SweepDimensionResolved[];
+  total_runs: number;
+  created_at: string;
+  runs: SweepRunResult[];
+};
+
 export type DeleteResponse = {
   ok: boolean;
 };
@@ -768,12 +845,14 @@ export type FundingSymbolDetailResponse = {
 // ── Kimchi Premium (김프) Arbitrage ───────────────────────────────
 
 export type KimpFxRateResponse = {
-  pair: "USDT/KRW";
+  pair: "USDT/KRW" | "USD/KRW";
   rate: number;
   source: string;
   fetched_at: string; // ISO 8601
   stale: boolean;
 };
+
+export type KimpRateMode = "usdt" | "bank";
 
 export type KimpScreenerItem = {
   symbol: string;
@@ -782,6 +861,7 @@ export type KimpScreenerItem = {
   usdt_krw_rate: number;
   usd_krw_rate?: number | null;
   kimp_pct: number; // 0.0345 == 3.45%
+  bank_kimp_pct?: number | null;
   mean_30d_pct: number | null;
   std_30d_pct: number | null;
   zscore_30d: number | null;
@@ -796,6 +876,7 @@ export type KimpScreenerItem = {
 export type KimpScreenerResponse = {
   items: KimpScreenerItem[];
   fx: KimpFxRateResponse;
+  bank_fx?: KimpFxRateResponse | null;
   errors: string[];
   as_of: string;
 };
@@ -810,6 +891,7 @@ export type KimpHistoryPoint = {
 export type KimpHistoryResponse = {
   symbol: string;
   range: KimpHistoryRange;
+  rate_mode: KimpRateMode;
   as_of: string;
   mean_pct: number | null;
   std_pct: number | null;

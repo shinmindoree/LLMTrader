@@ -4,16 +4,17 @@ import { useCallback, useState } from "react";
 
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { deleteAllJobs, deleteJob, listJobSummaries, listStrategies, stopAllJobs } from "@/lib/api";
+import { deleteAllJobs, deleteJob, listJobSummaries, listStrategies, listSweeps, stopAllJobs } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import type { Job, JobStatus, JobSummary, StrategyInfo } from "@/lib/types";
+import type { Job, JobStatus, JobSummary, StrategyInfo, SweepListItem } from "@/lib/types";
 import { RunHistoryTable } from "@/components/RunHistoryTable";
 import { RunHistoryTableSkeleton } from "@/components/skeletons/RunHistoryTableSkeleton";
 import { InlineLoadingIndicator } from "@/components/InlineLoadingIndicator";
 import { FormModal } from "@/components/FormModal";
 import { BacktestEmptyState } from "@/components/BacktestEmptyState";
 import { BacktestForm } from "./new/BacktestForm";
+import { sweepDetailPath } from "@/lib/routes";
 
 const FINISHED_STATUSES = new Set<JobStatus>(["SUCCEEDED", "FAILED", "STOPPED"]);
 const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
@@ -49,10 +50,28 @@ export default function BacktestJobsPage() {
 
   const refresh = useCallback(() => refreshItems(), [refreshItems]);
 
+  const { data: sweeps = [], mutate: refreshSweeps } = useSWR<SweepListItem[]>(
+    "sweeps",
+    () => listSweeps(20),
+    {
+      refreshInterval: (latest: SweepListItem[] | undefined) => {
+        if (!latest || !latest.some((s) => s.completed_runs < s.total_runs)) return 0;
+        return isVisible ? 5_000 : 15_000;
+      },
+      dedupingInterval: 2_000,
+    },
+  );
+
   const onCreated = (job: Job) => {
     refreshItems();
     setFormOpen(false);
     router.push(`/backtest/jobs/${job.job_id}`);
+  };
+
+  const onCreatedSweep = (sweepId: string) => {
+    refreshSweeps();
+    setFormOpen(false);
+    router.push(sweepDetailPath(sweepId));
   };
 
   const onDeleteJob = async (job: Job | JobSummary) => {
@@ -187,6 +206,7 @@ export default function BacktestJobsPage() {
           <BacktestForm
             strategies={strategies}
             onCreated={onCreated}
+            onCreatedSweep={onCreatedSweep}
             onSubmittingChange={setRunPending}
             onClose={() => setFormOpen(false)}
           />
@@ -194,6 +214,52 @@ export default function BacktestJobsPage() {
           <InlineLoadingIndicator message={t.common.loading} />
         )}
       </FormModal>
+
+      {sweeps.length > 0 ? (
+        <section className="mt-6">
+          <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.sweep.recentSweeps}</div>
+          <div className="overflow-hidden rounded border border-[#2a2e39]">
+            <table className="w-full text-sm">
+              <thead className="bg-[#1e222d] text-xs text-[#868993]">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">{t.sweep.parameter}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t.jobConfig.symbol}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t.sweep.progress}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t.jobDetail.created}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sweeps.map((s) => (
+                  <tr
+                    key={s.sweep_id}
+                    className="cursor-pointer border-t border-[#2a2e39] hover:bg-[#1e222d]"
+                    onClick={() => router.push(sweepDetailPath(s.sweep_id))}
+                  >
+                    <td className="px-3 py-2 text-[#d1d4dc]">
+                      {s.varied_paths
+                        .map(
+                          (p) =>
+                            t.sweep.paramLabels[p as keyof typeof t.sweep.paramLabels] ?? p,
+                        )
+                        .join(", ") || "—"}
+                    </td>
+                    <td className="px-3 py-2 text-[#868993]">
+                      {s.symbol ?? "—"}
+                      {s.interval ? ` · ${s.interval}` : ""}
+                    </td>
+                    <td className="px-3 py-2 text-[#868993]">
+                      {s.completed_runs}/{s.total_runs}
+                    </td>
+                    <td className="px-3 py-2 text-right text-[#868993]">
+                      {new Date(s.created_at).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <section className="mt-6">
         <div className="mb-3 text-sm font-medium text-[#d1d4dc]">{t.backtest.runHistory}</div>
