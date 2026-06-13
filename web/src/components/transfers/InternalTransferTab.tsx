@@ -36,6 +36,8 @@ const WALLET_TYPE_ORDER: UiWalletType[] = [
 ];
 
 const BALANCE_GRID_COLUMN_COUNT = WALLET_TYPE_ORDER.length + 2;
+const ACCOUNT_COLUMN_CLASS = "w-[9rem] min-w-[9rem] max-w-[9rem]";
+const TOTAL_COLUMN_CLASS = "min-w-[8.75rem]";
 
 const ENABLED_FLAG_KEY: Record<UiWalletType, string | null> = {
   SPOT: null,
@@ -96,6 +98,14 @@ function addTotals(left: BalanceTotals, right: BalanceTotals): BalanceTotals {
     free: left.free + right.free,
     total: left.total + right.total,
   };
+}
+
+function walletColumnClass(wallet: UiWalletType): string {
+  if (wallet === "USDT_FUTURE") return "min-w-[10.5rem]";
+  if (wallet === "COIN_FUTURE" || wallet === "EARN_FLEXIBLE") {
+    return "min-w-[8.25rem]";
+  }
+  return "min-w-[7rem]";
 }
 
 function sumRowBalance(row: WalletBalanceRow, asset: string): BalanceTotals {
@@ -162,12 +172,14 @@ function BalanceAmount({
   const locked = Math.max(total - free, 0);
 
   return (
-    <div className="flex flex-col items-end gap-0.5">
+    <div className="flex min-w-[5.75rem] flex-col items-end gap-0.5">
       <div>{total > 0 ? fmtAmount(total, asset) : "—"}</div>
       {total > 0 && (
-        <div className="grid grid-cols-[auto_auto] gap-x-2 text-[11px] font-normal leading-tight text-[#868993]">
+        <div className="grid grid-cols-[max-content_max-content] justify-end gap-x-2 whitespace-nowrap text-[11px] font-normal leading-tight text-[#868993]">
           <span className="text-right">잔고</span>
-          <span className="text-right tabular-nums">{fmtAmount(free, asset)}</span>
+          <span className="text-right tabular-nums">
+            {fmtAmount(free, asset)}
+          </span>
           <span className="text-right">포지션</span>
           <span className="text-right tabular-nums">
             {fmtAmount(locked, asset)}
@@ -211,13 +223,20 @@ function BalanceGrid({
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-[#2a2e39] text-xs text-[#868993]">
-            <th className="px-4 py-2 text-left">계정</th>
+            <th className={`${ACCOUNT_COLUMN_CLASS} px-3 py-2 text-left`}>
+              계정
+            </th>
             {WALLET_TYPE_ORDER.map((wt) => (
-              <th key={wt} className="px-4 py-2 text-right">
+              <th
+                key={wt}
+                className={`${walletColumnClass(wt)} px-3 py-2 text-right`}
+              >
                 {WALLET_TYPE_LABEL[wt]}
               </th>
             ))}
-            <th className="px-4 py-2 text-right">합계</th>
+            <th className={`${TOTAL_COLUMN_CLASS} px-3 py-2 text-right`}>
+              합계
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -232,11 +251,12 @@ function BalanceGrid({
             return (
               <Fragment key={`${row.role}:${rowId ?? "master"}`}>
                 <tr className="border-b border-[#2a2e39]/50">
-                  <td className="px-4 py-2 text-[#d1d4dc]">
-                    <div className="font-medium">{label}</div>
-                    {row.email && (
-                      <div className="text-xs text-[#4a4f5e]">{row.email}</div>
-                    )}
+                  <td
+                    className={`${ACCOUNT_COLUMN_CLASS} px-3 py-2 text-[#d1d4dc]`}
+                  >
+                    <div className="truncate font-medium" title={label}>
+                      {label}
+                    </div>
                   </td>
                   {WALLET_TYPE_ORDER.map((wt) => {
                     const enabled = isCellSelectable(row, wt, asset);
@@ -256,7 +276,7 @@ function BalanceGrid({
                       <td
                         key={wt}
                         className={[
-                          "px-4 py-2 text-right font-mono",
+                          `${walletColumnClass(wt)} px-3 py-2 text-right font-mono`,
                           enabled
                             ? "text-[#d1d4dc]"
                             : "text-[#3a3f4e] line-through",
@@ -284,7 +304,7 @@ function BalanceGrid({
                             "—"
                           )}
                           {total > value && (
-                            <span className="ml-1 text-xs text-[#868993]">
+                            <span className="ml-1 whitespace-nowrap text-xs text-[#868993]">
                               (포지션 {fmtAmount(total - value, asset)})
                             </span>
                           )}
@@ -292,7 +312,9 @@ function BalanceGrid({
                       </td>
                     );
                   })}
-                  <td className="px-4 py-2 text-right font-mono font-semibold text-[#d1d4dc]">
+                  <td
+                    className={`${TOTAL_COLUMN_CLASS} px-3 py-2 text-right font-mono font-semibold text-[#d1d4dc]`}
+                  >
                     <BalanceAmount
                       free={rowTotal.free}
                       total={rowTotal.total}
@@ -304,7 +326,7 @@ function BalanceGrid({
                   <tr className="border-b border-[#2a2e39]/30 bg-[#1a1d28]">
                     <td
                       colSpan={BALANCE_GRID_COLUMN_COUNT}
-                      className="px-4 py-1.5 text-xs text-[#f59e0b]"
+                      className="px-3 py-1.5 text-xs text-[#f59e0b]"
                     >
                       <span className="font-semibold">⚠ {label}:</span>{" "}
                       {errorEntries.map(([wt, err], idx) => (
@@ -325,9 +347,12 @@ function BalanceGrid({
         </tbody>
         <tfoot>
           <tr className="border-t border-[#2a2e39] bg-[#1a1d28] text-xs font-semibold text-[#d1d4dc]">
-            <td className="px-4 py-3">총합</td>
+            <td className={`${ACCOUNT_COLUMN_CLASS} px-3 py-3`}>총합</td>
             {walletTotals.map(({ wallet, totals }) => (
-              <td key={wallet} className="px-4 py-3 text-right font-mono">
+              <td
+                key={wallet}
+                className={`${walletColumnClass(wallet)} px-3 py-3 text-right font-mono`}
+              >
                 <BalanceAmount
                   free={totals.free}
                   total={totals.total}
@@ -335,7 +360,9 @@ function BalanceGrid({
                 />
               </td>
             ))}
-            <td className="px-4 py-3 text-right font-mono text-[#26a17b]">
+            <td
+              className={`${TOTAL_COLUMN_CLASS} px-3 py-3 text-right font-mono text-[#26a17b]`}
+            >
               <BalanceAmount
                 free={grandTotal.free}
                 total={grandTotal.total}
