@@ -530,7 +530,7 @@ const en = {
     netProfit: "Net Profit",
     winRate: "Win Rate",
     trades: "Trades",
-    commission: "Commission",
+    maxDrawdown: "MDD",
     bestBy: "Sort by",
     exportCsv: "Export CSV",
     stop: "Stop Sweep",

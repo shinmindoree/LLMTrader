@@ -212,6 +212,7 @@ class BacktestEngine:
             "net_profit": final_equity - initial_balance,
             "total_trades": num_trades,
             "win_rate": win_rate,
+            "max_drawdown_pct": self.ctx.max_drawdown_pct,
             "trades": self.ctx.trades,
         }
         
@@ -222,6 +223,7 @@ class BacktestEngine:
         print(f"   순손익: ${final_equity - initial_balance:,.2f}")
         print(f"   총 거래 횟수: {self.results['total_trades']}")
         print(f"   총 수수료: ${total_commission:,.2f}")
+        print(f"   최대 낙폭(MDD): {self.ctx.max_drawdown_pct:.2f}%")
         
         return self.results
     

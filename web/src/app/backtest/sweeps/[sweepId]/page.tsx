@@ -15,14 +15,14 @@ import type { JobStatus, SweepDetailResponse } from "@/lib/types";
 const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
 const PCT_PATHS = new Set(["stop_loss_pct", "max_position"]);
 
-type SortKey = "returnPct" | "netProfit" | "winRate" | "trades";
+type SortKey = "returnPct" | "netProfit" | "winRate" | "trades" | "maxDrawdown";
 
 type RunMetrics = {
   returnPct: number | null;
   netProfit: number | null;
   winRate: number | null;
   trades: number | null;
-  commission: number | null;
+  maxDrawdown: number | null;
 };
 
 function num(v: unknown): number | null {
@@ -31,7 +31,7 @@ function num(v: unknown): number | null {
 
 function runMetrics(summary: Record<string, unknown> | null): RunMetrics {
   if (!summary) {
-    return { returnPct: null, netProfit: null, winRate: null, trades: null, commission: null };
+    return { returnPct: null, netProfit: null, winRate: null, trades: null, maxDrawdown: null };
   }
   const initial = num(summary.initial_balance);
   const final = num(summary.final_balance);
@@ -43,7 +43,7 @@ function runMetrics(summary: Record<string, unknown> | null): RunMetrics {
       num(summary.net_profit) ?? (initial !== null && final !== null ? final - initial : null),
     winRate: num(summary.win_rate),
     trades: num(summary.total_trades),
-    commission: num(summary.total_commission),
+    maxDrawdown: num(summary.max_drawdown_pct),
   };
 }
 
@@ -106,6 +106,9 @@ export default function SweepDetailPage() {
           return m.winRate ?? -Infinity;
         case "trades":
           return m.trades ?? -Infinity;
+        case "maxDrawdown":
+          // Lower drawdown is better, so rank ascending (negate for desc sort).
+          return m.maxDrawdown === null ? -Infinity : -m.maxDrawdown;
       }
     };
     return [...enriched].sort((a, b) => value(b.metrics) - value(a.metrics));
@@ -140,7 +143,7 @@ export default function SweepDetailPage() {
       t.sweep.netProfit,
       t.sweep.winRate,
       t.sweep.trades,
-      t.sweep.commission,
+      t.sweep.maxDrawdown,
     ];
     const lines = rows.map((row, idx) => {
       const m = row.metrics;
@@ -152,7 +155,7 @@ export default function SweepDetailPage() {
         m.netProfit === null ? "" : String(m.netProfit),
         m.winRate === null ? "" : String(m.winRate),
         m.trades === null ? "" : String(m.trades),
-        m.commission === null ? "" : String(m.commission),
+        m.maxDrawdown === null ? "" : String(m.maxDrawdown),
       ]
         .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
         .join(",");
@@ -249,6 +252,7 @@ export default function SweepDetailPage() {
         {sortButton("netProfit", t.sweep.netProfit)}
         {sortButton("winRate", t.sweep.winRate)}
         {sortButton("trades", t.sweep.trades)}
+        {sortButton("maxDrawdown", t.sweep.maxDrawdown)}
       </div>
 
       <div className="overflow-x-auto rounded border border-[#2a2e39]">
@@ -266,7 +270,7 @@ export default function SweepDetailPage() {
               <th className="px-3 py-2 text-right font-medium">{t.sweep.netProfit}</th>
               <th className="px-3 py-2 text-right font-medium">{t.sweep.winRate}</th>
               <th className="px-3 py-2 text-right font-medium">{t.sweep.trades}</th>
-              <th className="px-3 py-2 text-right font-medium">{t.sweep.commission}</th>
+              <th className="px-3 py-2 text-right font-medium">{t.sweep.maxDrawdown}</th>
             </tr>
           </thead>
           <tbody>
@@ -306,7 +310,9 @@ export default function SweepDetailPage() {
                   <td className="px-3 py-2 text-right text-[#d1d4dc]">
                     {m.trades === null ? "-" : m.trades}
                   </td>
-                  <td className="px-3 py-2 text-right text-[#868993]">{formatNum(m.commission)}</td>
+                  <td className="px-3 py-2 text-right text-[#ef5350]">
+                    {m.maxDrawdown === null ? "-" : `-${formatNum(m.maxDrawdown)}%`}
+                  </td>
                 </tr>
               );
             })}

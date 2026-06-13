@@ -58,6 +58,9 @@ class BacktestContext:
         self._current_price: float = 0.0
         self._price_history: list[float] = []
         self._current_timestamp: int = 0
+        # 자산 곡선(mark-to-market) 기반 최대낙폭(MDD) 추적.
+        self._peak_equity: float = initial_balance
+        self._max_drawdown_pct: float = 0.0
         
         self.trades: list[dict[str, Any]] = []
         self.orders: list[dict[str, Any]] = []
@@ -108,6 +111,20 @@ class BacktestContext:
     @property
     def total_equity(self) -> float:
         return self.balance + self.unrealized_pnl
+
+    @property
+    def max_drawdown_pct(self) -> float:
+        """자산 곡선 기준 최대낙폭(%). 양수로 반환(예: 12.3 = -12.3% 낙폭)."""
+        return self._max_drawdown_pct
+
+    def _track_drawdown(self) -> None:
+        equity = self.total_equity
+        if equity > self._peak_equity:
+            self._peak_equity = equity
+        elif self._peak_equity > 0:
+            drawdown = (self._peak_equity - equity) / self._peak_equity * 100.0
+            if drawdown > self._max_drawdown_pct:
+                self._max_drawdown_pct = drawdown
     
     def update_price(self, price: float, timestamp: int | None = None) -> None:
         """가격 업데이트 (tick마다 호출).
@@ -126,6 +143,8 @@ class BacktestContext:
         
         if self.position.size != 0 and self.position.entry_price != 0:
             self.position.unrealized_pnl = (price - self.position.entry_price) * self.position.size
+
+        self._track_drawdown()
 
     def check_stoploss(self) -> bool:
         """StopLoss 조건 확인 후 필요 시 청산.
