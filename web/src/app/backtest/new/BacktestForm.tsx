@@ -100,6 +100,30 @@ function buildDimensionSpec(dim: SweepDimDraft): SweepDimensionSpec {
   };
 }
 
+// Convert resolved sweep dimensions (config units) back into form drafts
+// (display units) so an existing sweep can be re-run with edits.
+function resolvedDimsToDrafts(
+  dims: { path: string; values: number[] }[],
+): SweepDimDraft[] {
+  return dims
+    .filter((d) => SWEEP_PARAM_BY_PATH[d.path] && d.values.length > 0)
+    .map((d) => {
+      const meta = SWEEP_PARAM_BY_PATH[d.path];
+      const displayValues = d.values.map((v) => {
+        const dv = v / meta.factor;
+        return meta.integer ? Math.round(dv) : Number(dv.toFixed(10));
+      });
+      return {
+        path: d.path,
+        mode: "values" as const,
+        start: "",
+        end: "",
+        step: "",
+        values: displayValues.join(", "),
+      };
+    });
+}
+
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
@@ -197,6 +221,8 @@ export function BacktestForm({
   onSubmittingChange,
   onClose,
   initialConfig,
+  initialMode,
+  initialSweepDimensions,
 }: {
   strategies: StrategyInfo[];
   onCreated?: (job: Job) => void;
@@ -204,6 +230,8 @@ export function BacktestForm({
   onSubmittingChange?: (submitting: boolean) => void;
   onClose?: () => void;
   initialConfig?: BacktestInitialConfig;
+  initialMode?: SweepMode;
+  initialSweepDimensions?: { path: string; values: number[] }[];
 }) {
   const defaults = loadExecutionDefaults();
   const { t } = useI18n();
@@ -232,10 +260,14 @@ export function BacktestForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>([]);
-  const [mode, setMode] = useState<SweepMode>("single");
-  const [dims, setDims] = useState<SweepDimDraft[]>([
-    { path: "leverage", mode: "range", start: "1", end: "5", step: "1", values: "" },
-  ]);
+  const [mode, setMode] = useState<SweepMode>(initialMode ?? "single");
+  const [dims, setDims] = useState<SweepDimDraft[]>(() => {
+    if (initialSweepDimensions && initialSweepDimensions.length > 0) {
+      const drafts = resolvedDimsToDrafts(initialSweepDimensions);
+      if (drafts.length > 0) return drafts;
+    }
+    return [{ path: "leverage", mode: "range", start: "1", end: "5", step: "1", values: "" }];
+  });
 
   useEffect(() => {
     let cancelled = false;

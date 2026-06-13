@@ -543,6 +543,7 @@ const ko: TranslationKeys = {
     viewRun: "상세 보기",
     notFound: "Sweep을 찾을 수 없습니다.",
     back: "백테스트로 돌아가기",
+    reRun: "설정 변경 후 재실행",
     paramLabels: {
       leverage: "레버리지",
       initial_balance: "초기 자본금",

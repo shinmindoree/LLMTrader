@@ -540,6 +540,7 @@ const en = {
     viewRun: "View",
     notFound: "Sweep not found.",
     back: "Back to Backtests",
+    reRun: "Re-run with Changes",
     paramLabels: {
       leverage: "Leverage",
       initial_balance: "Initial Balance",

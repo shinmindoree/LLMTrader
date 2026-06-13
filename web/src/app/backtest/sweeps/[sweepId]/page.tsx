@@ -5,12 +5,14 @@ import { useParams, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import useSWR from "swr";
-import { getSweep, stopSweep } from "@/lib/api";
+import { getSweep, listStrategies, stopSweep } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { usePageVisibility } from "@/lib/usePageVisibility";
-import { jobDetailPath } from "@/lib/routes";
+import { jobDetailPath, sweepDetailPath } from "@/lib/routes";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
-import type { JobStatus, SweepDetailResponse } from "@/lib/types";
+import { FormModal } from "@/components/FormModal";
+import { BacktestForm, type BacktestInitialConfig } from "@/app/backtest/new/BacktestForm";
+import type { JobStatus, StrategyInfo, SweepDetailResponse } from "@/lib/types";
 
 const ACTIVE_STATUSES = new Set<JobStatus>(["PENDING", "RUNNING", "STOP_REQUESTED"]);
 const PCT_PATHS = new Set(["stop_loss_pct", "max_position"]);
@@ -35,6 +37,41 @@ type RunMetrics = {
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function formatDateFromTs(ms: number): string {
+  const d = new Date(ms);
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function buildInitialConfig(
+  strategyPath: string,
+  c: Record<string, unknown>,
+): BacktestInitialConfig {
+  const slPct = Number(c.stop_loss_pct ?? 0);
+  return {
+    strategyPath,
+    symbol: String(c.symbol ?? "BTCUSDT"),
+    interval: String(c.interval ?? "1h"),
+    leverage: Number(c.leverage ?? 1),
+    initialBalance: Number(c.initial_balance ?? 1000),
+    commission: Number(c.commission ?? 0.0004),
+    slippageBps: Number(c.slippage_bps ?? 0),
+    stopLossPct: slPct > 0 ? slPct : 0.05,
+    stopLossEnabled: slPct > 0,
+    maxPosition: c.max_position != null ? Number(c.max_position) : undefined,
+    maxPyramidEntries: Number(c.max_pyramid_entries ?? 0),
+    fixedNotional: c.fixed_notional != null ? Number(c.fixed_notional) : null,
+    startDate: typeof c.start_ts === "number" ? formatDateFromTs(c.start_ts) : undefined,
+    endDate: typeof c.end_ts === "number" ? formatDateFromTs(c.end_ts) : undefined,
+    strategyParams:
+      typeof c.strategy_params === "object" && c.strategy_params != null
+        ? (c.strategy_params as Record<string, unknown>)
+        : undefined,
+  };
 }
 
 function runMetrics(summary: Record<string, unknown> | null): RunMetrics {
@@ -82,6 +119,9 @@ export default function SweepDetailPage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [rerunOpen, setRerunOpen] = useState(false);
+
+  const { data: strategies = [] } = useSWR<StrategyInfo[]>("strategies", () => listStrategies());
 
   const { data, error, isLoading, mutate } = useSWR<SweepDetailResponse>(
     sweepId ? ["sweep", sweepId] : null,
@@ -230,6 +270,13 @@ export default function SweepDetailPage() {
           </span>
           <button
             type="button"
+            className="rounded border border-[#2962ff] bg-[#2962ff] px-3 py-1.5 text-xs text-white hover:bg-[#1e53d5] hover:border-[#1e53d5] transition-colors"
+            onClick={() => setRerunOpen(true)}
+          >
+            {t.sweep.reRun}
+          </button>
+          <button
+            type="button"
             className="rounded border border-[#2a2e39] bg-[#1e222d] px-3 py-1.5 text-xs text-[#d1d4dc] hover:border-[#2962ff] transition-colors disabled:opacity-60"
             onClick={onExportCsv}
           >
@@ -360,6 +407,20 @@ export default function SweepDetailPage() {
             ))}
         </div>
       ) : null}
+
+      <FormModal open={rerunOpen} onClose={() => setRerunOpen(false)} title={t.sweep.reRun}>
+        <BacktestForm
+          strategies={strategies}
+          initialConfig={buildInitialConfig(data.strategy_path, data.base_config)}
+          initialMode="sweep"
+          initialSweepDimensions={data.dimensions}
+          onCreatedSweep={(newSweepId) => {
+            setRerunOpen(false);
+            router.push(sweepDetailPath(newSweepId));
+          }}
+          onClose={() => setRerunOpen(false)}
+        />
+      </FormModal>
     </main>
   );
 }
