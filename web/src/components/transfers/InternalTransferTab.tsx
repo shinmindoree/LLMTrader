@@ -262,8 +262,9 @@ function BalanceGrid({
                     const enabled = isCellSelectable(row, wt, asset);
                     const assetOk = isAssetAllowed(wt, asset);
                     const cell = findCell(row, wt, asset);
-                    const value = cell?.free ?? 0;
-                    const total = cell?.total ?? 0;
+                    const cellTotals = getCellTotals(cell);
+                    const value = cellTotals.free;
+                    const total = cellTotals.total;
                     const cellError = row.errors?.[wt];
                     const reason = cellError
                       ? `${WALLET_TYPE_LABEL[wt]}: ${cellError}`
@@ -294,19 +295,20 @@ function BalanceGrid({
                           ].join(" ")}
                           title={reason}
                         >
-                          {value > 0 ? (
-                            fmtAmount(value, asset)
-                          ) : cellError ? (
+                          {cellError ? (
                             <span className="text-[#f59e0b]" title={cellError}>
                               !
                             </span>
+                          ) : total > value ? (
+                            <BalanceAmount
+                              free={value}
+                              total={total}
+                              asset={asset}
+                            />
+                          ) : value > 0 ? (
+                            fmtAmount(value, asset)
                           ) : (
                             "—"
-                          )}
-                          {total > value && (
-                            <span className="ml-1 whitespace-nowrap text-xs text-[#868993]">
-                              (포지션 {fmtAmount(total - value, asset)})
-                            </span>
                           )}
                         </button>
                       </td>
