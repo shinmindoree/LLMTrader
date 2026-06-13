@@ -162,16 +162,15 @@ function BalanceAmount({
   const locked = Math.max(total - free, 0);
 
   return (
-    <div className="space-y-0.5">
+    <div className="flex flex-col items-end gap-0.5">
       <div>{total > 0 ? fmtAmount(total, asset) : "—"}</div>
       {total > 0 && (
-        <div className="text-[11px] font-normal leading-tight text-[#868993]">
-          <span className="whitespace-nowrap">
-            사용가능 {fmtAmount(free, asset)}
-          </span>
-          <span className="mx-1 text-[#4a4f5e]">/</span>
-          <span className="whitespace-nowrap">
-            잠금 {fmtAmount(locked, asset)}
+        <div className="grid grid-cols-[auto_auto] gap-x-2 text-[11px] font-normal leading-tight text-[#868993]">
+          <span className="text-right">잔고</span>
+          <span className="text-right tabular-nums">{fmtAmount(free, asset)}</span>
+          <span className="text-right">포지션</span>
+          <span className="text-right tabular-nums">
+            {fmtAmount(locked, asset)}
           </span>
         </div>
       )}
@@ -286,7 +285,7 @@ function BalanceGrid({
                           )}
                           {total > value && (
                             <span className="ml-1 text-xs text-[#868993]">
-                              (잠금 {fmtAmount(total - value, asset)})
+                              (포지션 {fmtAmount(total - value, asset)})
                             </span>
                           )}
                         </button>
