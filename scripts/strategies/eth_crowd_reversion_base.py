@@ -376,6 +376,8 @@ class CrowdReversionStrategy(Strategy):
         self._is_closing = False
         self._prev_long = False
         self._prev_short = False
+        self._tgt_hold = 0
+        self._tgt_dir = 0.0
 
         self._emit_event(ctx, "CROWDREV_INIT", {
             "symbol": symbol, "mode": mode, "source": self.source,
@@ -429,6 +431,70 @@ class CrowdReversionStrategy(Strategy):
         elif self.side == "short":
             long_sig = False
         return bool(long_sig), bool(short_sig)
+
+    # ----------------------------------------------- unified (net) signal path
+    def step_target(self, ts_open: int, close: float) -> float:
+        """Per-bar TARGET position in {-1, 0, +1} for the NEXT-bar fill, WITHOUT
+        placing any order.
+
+        This is the signal+state half of :meth:`on_bar` exposed for the unified
+        single-account net strategy (``eth_crowd_reversion_unified``): it samples
+        the source, updates the same rolling buffers + continuous rising-edge
+        state, and runs a single-position H-bar pure-time-exit state machine
+        (enter on the rising edge, hold EXACTLY ``max_hold_bars`` fills, then
+        become eligible again).  The returned value is the position this leg
+        wants held starting at the next bar open -- identical to the validated
+        research ``per_bar_positions`` (tgt[i] == pos[i+1]).  ``on_bar`` is left
+        untouched so the 5 deployed single-leg files are unaffected.
+        """
+        if not hasattr(self, "_tgt_hold"):
+            self._tgt_hold = 0
+            self._tgt_dir = 0.0
+        if not math.isfinite(close) or close <= 0:
+            return self._tgt_dir
+
+        # ---- ingest sample (mirror on_bar's buffer maintenance exactly) ------
+        s = self._sampler(ts_open) if self._sampler is not None else math.nan
+        self._src.append(s)
+        self._close.append(close)
+        if self.kind == "oi":
+            if len(self._src) >= self.lb + 2:
+                base = self._src[-2 - self.lb]
+                cur = self._src[-2]
+                oc = (cur / base - 1.0) if (math.isfinite(base) and base != 0
+                                            and math.isfinite(cur)) else math.nan
+            else:
+                oc = math.nan
+            self._oichg.append(oc)
+            if len(self._oichg) > self._cap:
+                self._oichg = self._oichg[-self._cap:]
+        if len(self._src) > self._cap:
+            self._src = self._src[-self._cap:]
+        if len(self._close) > self._cap:
+            self._close = self._close[-self._cap:]
+
+        # ---- continuous rising-edge evaluation (same as on_bar) --------------
+        long_sig, short_sig = self._raw_signals()
+        long_edge = long_sig and not self._prev_long
+        short_edge = short_sig and not self._prev_short
+        self._prev_long = long_sig
+        self._prev_short = short_sig
+
+        # ---- single-position H-bar time-exit state machine -------------------
+        if self._tgt_hold > 0:
+            self._tgt_hold -= 1
+            if self._tgt_hold == 0:
+                self._tgt_dir = 0.0
+            return self._tgt_dir
+        if long_edge:
+            self._tgt_dir = 1.0
+            self._tgt_hold = self.max_hold_bars
+        elif short_edge:
+            self._tgt_dir = -1.0
+            self._tgt_hold = self.max_hold_bars
+        else:
+            self._tgt_dir = 0.0
+        return self._tgt_dir
 
     # ------------------------------------------------------------------ bar
     def on_bar(self, ctx: StrategyContext, bar: dict[str, Any]) -> None:
