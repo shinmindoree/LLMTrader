@@ -955,6 +955,8 @@ const en = {
           mean: "Mean",
           std: "Std",
           samples: "Samples",
+          kimpLegend: "Kimp (right)",
+          fundingLegend: "Funding (left)",
         },
         common: {
           loading: "Loading…",

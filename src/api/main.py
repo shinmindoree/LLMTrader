@@ -137,6 +137,7 @@ from api.schemas import (
     KimpBacktestMetrics,
     KimpBacktestRequest,
     KimpBacktestResponse,
+    KimpFundingPoint,
     KimpFxRateResponse,
     KimpHistoryPoint,
     KimpHistoryResponse,
@@ -202,6 +203,8 @@ from api.strategy_params import (
 )
 
 INTERNAL_JOB_CONFIG_KEYS = {"_strategy_code"}
+
+_log = logging.getLogger("api")
 
 # ── Funding-arb helpers ─────────────────────────────────────────────────────
 
@@ -524,6 +527,17 @@ async def _funding_symbol_detail_cached(symbol: str) -> Any:
     )
     _SYMBOL_DETAIL_CACHE[symbol] = (now, resp)
     return resp
+
+
+# 김프 히스토리 차트 range별 펀딩 이력 조회 일수(캔들 윈도우보다 약간 넓게 잡아
+# 윈도우 좌측 끝까지 펀딩 라인이 그려지도록 한다).
+_FUNDING_DAYS_BY_RANGE: dict[str, int] = {
+    "1H": 1,
+    "1D": 2,
+    "7D": 8,
+    "30D": 31,
+    "ALL": 366,
+}
 
 
 async def _fetch_funding_history(
@@ -2442,6 +2456,32 @@ def create_app() -> FastAPI:
 
         history = await get_kimp_candle_history(sym, range, rate_mode=rate_mode)
         points = [KimpHistoryPoint(t=int(ts), p=float(p)) for ts, p in history.series]
+
+        # 김프 트렌드와 펀딩비 트렌드를 같이 보기 위한 펀딩 시계열(좌측 Y축 오버레이).
+        # Binance USDT-M 무기한 ``{SYM}USDT`` 펀딩 이력을 가져와 캔들 윈도우에 맞춘다.
+        funding_series: list[KimpFundingPoint] = []
+        try:
+            funding_days = _FUNDING_DAYS_BY_RANGE.get(range, 366)
+            funding_rows = await _fetch_funding_history(f"{sym}USDT", days=funding_days)
+            if funding_rows:
+                start_ms = points[0].t if points else 0
+                prev: tuple[int, float] | None = None
+                in_window: list[tuple[int, float]] = []
+                for ts, rate in funding_rows:
+                    if ts < start_ms:
+                        prev = (ts, rate)
+                        continue
+                    in_window.append((ts, rate))
+                # 윈도우 좌측 끝에서도 라인이 그려지도록 직전 정산 1건을 포함한다.
+                if prev is not None:
+                    in_window.insert(0, prev)
+                funding_series = [
+                    KimpFundingPoint(t=int(ts), r=float(rate) * 100.0)
+                    for ts, rate in in_window
+                ]
+        except Exception:  # noqa: BLE001
+            _log.warning("kimp funding history fetch failed symbol=%s", sym, exc_info=True)
+
         return KimpHistoryResponse(
             symbol=sym,
             range=range,
@@ -2451,6 +2491,7 @@ def create_app() -> FastAPI:
             std_pct=history.std_pct,
             n_samples=history.n_samples,
             series=points,
+            funding_series=funding_series,
         )
 
     # ── Kimchi Premium Delta-Neutral Arbitrage (실거래/백테스트) ──

@@ -891,6 +891,11 @@ export type KimpHistoryPoint = {
   p: number; // kimp ratio
 };
 
+export type KimpFundingPoint = {
+  t: number; // epoch ms — funding settlement time
+  r: number; // funding rate in percent (e.g. 0.0100 == 0.0100%)
+};
+
 export type KimpHistoryResponse = {
   symbol: string;
   range: KimpHistoryRange;
@@ -900,4 +905,5 @@ export type KimpHistoryResponse = {
   std_pct: number | null;
   n_samples: number;
   series: KimpHistoryPoint[];
+  funding_series: KimpFundingPoint[];
 };

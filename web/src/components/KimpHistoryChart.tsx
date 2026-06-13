@@ -39,6 +39,11 @@ function fmtChartPct(v: number): string {
   return `${rounded.toFixed(2)}%`;
 }
 
+function fmtFundingPct(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  return `${v.toFixed(4)}%`;
+}
+
 function fmtRate(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "—";
   return `₩${v.toLocaleString("en-US", {
@@ -51,6 +56,15 @@ const chartPctPriceFormat = {
   type: "custom" as const,
   minMove: 0.01,
   formatter: fmtChartPct,
+};
+
+const KIMP_COLOR = "#60a5fa";
+const FUNDING_COLOR = "#f472b6";
+
+const fundingPriceFormat = {
+  type: "custom" as const,
+  minMove: 0.0001,
+  formatter: fmtFundingPct,
 };
 
 type Props = {
@@ -86,6 +100,7 @@ export default function KimpHistoryChart({
   const meanRef = useRef<ISeriesApi<"Line"> | null>(null);
   const upperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const lowerRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const fundingRef = useRef<ISeriesApi<"Line"> | null>(null);
   const lastFitKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -109,12 +124,13 @@ export default function KimpHistoryChart({
         rightOffset: 4,
       },
       rightPriceScale: { borderColor: "#26272d" },
+      leftPriceScale: { visible: true, borderColor: "#26272d" },
       handleScroll: true,
       handleScale: true,
     });
     chartRef.current = chart;
     lineRef.current = chart.addLineSeries({
-      color: "#60a5fa",
+      color: KIMP_COLOR,
       lineWidth: 2,
       priceFormat: chartPctPriceFormat,
     });
@@ -142,6 +158,13 @@ export default function KimpHistoryChart({
       lastValueVisible: false,
       priceFormat: chartPctPriceFormat,
     });
+    fundingRef.current = chart.addLineSeries({
+      color: FUNDING_COLOR,
+      lineWidth: 2,
+      priceScaleId: "left",
+      priceLineVisible: false,
+      priceFormat: fundingPriceFormat,
+    });
     return () => {
       chart.remove();
       chartRef.current = null;
@@ -149,6 +172,7 @@ export default function KimpHistoryChart({
       meanRef.current = null;
       upperRef.current = null;
       lowerRef.current = null;
+      fundingRef.current = null;
     };
   }, []);
 
@@ -171,6 +195,29 @@ export default function KimpHistoryChart({
       .sort((a, b) => a[0] - b[0])
       .map(([ts, value]) => ({ time: ts as Time, value }));
   }, [data, latest, latestAsOf, rateMode, symbol]);
+
+  // 펀딩비 시계열(좌측 Y축). 백엔드 funding_series 는 퍼센트 단위이며 라이브
+  // 스냅샷의 funding_rate_pct 도 동일 단위라 우측 끝에 현재 펀딩을 이어 붙인다.
+  const fundingData = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const f of data?.funding_series ?? []) {
+      map.set(Math.floor(f.t / 1000), f.r);
+    }
+    if (
+      latest?.symbol === symbol
+      && latestAsOf
+      && latest.funding_rate_pct != null
+      && Number.isFinite(latest.funding_rate_pct)
+    ) {
+      const liveTs = Date.parse(latestAsOf);
+      if (Number.isFinite(liveTs)) {
+        map.set(Math.floor(liveTs / 1000), latest.funding_rate_pct);
+      }
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, value]) => ({ time: ts as Time, value }));
+  }, [data, latest, latestAsOf, symbol]);
 
   const visibleTimeRange = useMemo(() => {
     const rangeSeconds = RANGE_SECONDS[range];
@@ -238,6 +285,11 @@ export default function KimpHistoryChart({
     }
   }, [seriesData, data?.mean_pct, data?.std_pct, fitKey, visibleTimeRange]);
 
+  useEffect(() => {
+    if (!fundingRef.current) return;
+    fundingRef.current.setData(fundingData);
+  }, [fundingData]);
+
   const isEmpty = !isLoading && seriesData.length === 0;
 
   return (
@@ -268,6 +320,22 @@ export default function KimpHistoryChart({
             </span>
           </div>
           <div className="text-xs text-[#868993]">{h.subtitle}</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[#868993]">
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-0.5 w-3 rounded-full"
+              style={{ backgroundColor: KIMP_COLOR }}
+            />
+            {h.kimpLegend}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-0.5 w-3 rounded-full"
+              style={{ backgroundColor: FUNDING_COLOR }}
+            />
+            {h.fundingLegend}
+          </span>
         </div>
       </div>
 

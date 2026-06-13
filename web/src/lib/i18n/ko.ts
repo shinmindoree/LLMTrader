@@ -958,6 +958,8 @@ const ko: TranslationKeys = {
           mean: "평균",
           std: "표준편차",
           samples: "표본수",
+          kimpLegend: "김프 (우축)",
+          fundingLegend: "펀딩비 (좌축)",
         },
         common: {
           loading: "불러오는 중…",

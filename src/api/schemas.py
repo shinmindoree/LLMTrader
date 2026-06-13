@@ -736,6 +736,11 @@ class KimpHistoryPoint(BaseModel):
     p: float  # kimp 비율 (예: 0.0345)
 
 
+class KimpFundingPoint(BaseModel):
+    t: int  # epoch ms (UTC) — 펀딩 정산 시각
+    r: float  # 펀딩비 (퍼센트 단위, 예: 0.0100 == 0.0100%)
+
+
 class KimpHistoryResponse(BaseModel):
     symbol: str
     range: Literal["1H", "1D", "7D", "30D", "ALL"]
@@ -745,6 +750,8 @@ class KimpHistoryResponse(BaseModel):
     std_pct: float | None
     n_samples: int
     series: list[KimpHistoryPoint]
+    # 김프 트렌드와 함께 보여줄 바이낸스 무기한 펀딩비 시계열(좌측 Y축 오버레이용).
+    funding_series: list[KimpFundingPoint] = []
 
 
 # ── Kimchi Premium Delta-Neutral Arbitrage (실거래/백테스트) ──
