@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import type { KimpScreenerItem, KimpScreenerResponse } from "@/lib/types";
+import { getKimpPctForMode } from "@/lib/kimp";
+import type { KimpRateMode, KimpScreenerItem, KimpScreenerResponse } from "@/lib/types";
 import type { KimpScreenerStreamStatus } from "@/lib/useKimpScreenerStream";
 
 type SortKey =
@@ -55,7 +56,8 @@ function fmtZ(v: number | null | undefined): string {
   return v.toFixed(2);
 }
 
-function kimpClass(v: number): string {
+function kimpClass(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "text-[#868993]";
   if (v >= 0.005) return "text-rose-400";
   if (v <= -0.005) return "text-emerald-400";
   return "text-[#c3c5cc]";
@@ -78,6 +80,8 @@ type Props = {
   isValidating: boolean;
   status: KimpScreenerStreamStatus;
   onRefresh: () => void;
+  rateMode: KimpRateMode;
+  onRateModeChange: (mode: KimpRateMode) => void;
 };
 
 export default function KimpScreenerTable({
@@ -89,6 +93,8 @@ export default function KimpScreenerTable({
   isValidating,
   status,
   onRefresh,
+  rateMode,
+  onRateModeChange,
 }: Props) {
   const { t } = useI18n();
   const s = t.hubs.arbitrage.kimp.screener;
@@ -97,6 +103,15 @@ export default function KimpScreenerTable({
   const [sortKey, setSortKey] = useState<SortKey>("kimp_pct");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
+  function sortValue(item: KimpScreenerItem, key: SortKey): string | number {
+    if (key === "symbol") return item.symbol;
+    if (key === "kimp_pct") return getKimpPctForMode(item, rateMode) ?? Number.NEGATIVE_INFINITY;
+    const value = item[key];
+    return typeof value === "number" && Number.isFinite(value)
+      ? value
+      : Number.NEGATIVE_INFINITY;
+  }
+
   const items = useMemo<KimpScreenerItem[]>(() => {
     if (!data?.items) return [];
     const q = query.trim().toUpperCase();
@@ -104,8 +119,8 @@ export default function KimpScreenerTable({
       ? data.items.filter((it) => it.symbol.includes(q))
       : data.items.slice();
     filtered.sort((a, b) => {
-      const av = (a[sortKey] ?? -Infinity) as number;
-      const bv = (b[sortKey] ?? -Infinity) as number;
+      const av = sortValue(a, sortKey);
+      const bv = sortValue(b, sortKey);
       let cmp = 0;
       if (typeof av === "string" || typeof bv === "string") {
         cmp = String(av).localeCompare(String(bv));
@@ -115,7 +130,7 @@ export default function KimpScreenerTable({
       return sortDir === "asc" ? cmp : -cmp;
     });
     return filtered;
-  }, [data, query, sortKey, sortDir]);
+  }, [data, query, rateMode, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -138,7 +153,23 @@ export default function KimpScreenerTable({
           <div className="text-sm font-semibold text-white">{s.title}</div>
           <div className="text-xs text-[#868993]">{s.subtitle}</div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-md border border-[#26272d] bg-[#0e0f14] p-0.5">
+            {(["usdt", "bank"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => onRateModeChange(mode)}
+                className={`rounded px-2 py-1 text-[11px] ${
+                  rateMode === mode
+                    ? "bg-[#22232b] text-white"
+                    : "text-[#868993] hover:text-[#c3c5cc]"
+                }`}
+              >
+                {s.rateModes[mode]}
+              </button>
+            ))}
+          </div>
           <input
             type="text"
             value={query}
@@ -166,13 +197,12 @@ export default function KimpScreenerTable({
               </Th>
               <Th align="right">{s.columns.upbit}</Th>
               <Th align="right">{s.columns.binance}</Th>
-              <Th align="right">{s.columns.usdtKrw}</Th>
               <Th
                 align="right"
                 onClick={() => toggleSort("kimp_pct")}
                 arrow={sortArrow("kimp_pct")}
               >
-                {s.columns.kimp}
+                {s.columns.kimp} ({s.rateModes[rateMode]})
               </Th>
               <Th
                 align="right"
@@ -216,19 +246,20 @@ export default function KimpScreenerTable({
           <tbody>
             {isLoading && !data ? (
               <tr>
-                <td colSpan={12} className="px-4 py-6 text-center text-[#868993]">
+                <td colSpan={11} className="px-4 py-6 text-center text-[#868993]">
                   {t.hubs.arbitrage.kimp.common.loading}
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-4 py-6 text-center text-[#868993]">
+                <td colSpan={11} className="px-4 py-6 text-center text-[#868993]">
                   {s.empty}
                 </td>
               </tr>
             ) : (
               items.map((it) => {
                 const selected = it.symbol === symbol;
+                const displayKimpPct = getKimpPctForMode(it, rateMode);
                 return (
                   <tr
                     key={it.symbol}
@@ -246,11 +277,8 @@ export default function KimpScreenerTable({
                     <td className="px-3 py-2 text-right text-[#c3c5cc]">
                       {fmtUsd(it.binance_usdt_price)}
                     </td>
-                    <td className="px-3 py-2 text-right text-[#868993]">
-                      {it.usdt_krw_rate.toFixed(2)}
-                    </td>
-                    <td className={`px-3 py-2 text-right font-medium ${kimpClass(it.kimp_pct)}`}>
-                      {fmtPct(it.kimp_pct)}
+                    <td className={`px-3 py-2 text-right font-medium ${kimpClass(displayKimpPct)}`}>
+                      {fmtPct(displayKimpPct)}
                     </td>
                     <td className={`px-3 py-2 text-right ${fundingClass(it.funding_rate_pct)}`}>
                       {fmtFundingPct(it.funding_rate_pct)}

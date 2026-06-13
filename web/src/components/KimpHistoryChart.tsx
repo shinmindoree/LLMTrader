@@ -13,7 +13,13 @@ import {
 } from "lightweight-charts";
 import { useI18n } from "@/lib/i18n";
 import { getKimpHistory } from "@/lib/api";
-import type { KimpHistoryRange, KimpScreenerItem } from "@/lib/types";
+import { getKimpPctForMode } from "@/lib/kimp";
+import type {
+  KimpFxRateResponse,
+  KimpHistoryRange,
+  KimpRateMode,
+  KimpScreenerItem,
+} from "@/lib/types";
 
 const RANGES: KimpHistoryRange[] = ["1H", "1D", "7D", "30D", "ALL"];
 const RANGE_SECONDS: Partial<Record<KimpHistoryRange, number>> = {
@@ -34,6 +40,14 @@ function fmtChartPct(v: number): string {
   return `${rounded.toFixed(2)}%`;
 }
 
+function fmtRate(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `₩${v.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 const chartPctPriceFormat = {
   type: "custom" as const,
   minMove: 0.01,
@@ -44,16 +58,26 @@ type Props = {
   symbol: string;
   latest?: KimpScreenerItem | null;
   latestAsOf?: string | null;
+  usdtFx?: KimpFxRateResponse | null;
+  bankFx?: KimpFxRateResponse | null;
+  rateMode: KimpRateMode;
 };
 
-export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) {
+export default function KimpHistoryChart({
+  symbol,
+  latest,
+  latestAsOf,
+  usdtFx,
+  bankFx,
+  rateMode,
+}: Props) {
   const { t } = useI18n();
   const h = t.hubs.arbitrage.kimp.history;
   const [range, setRange] = useState<KimpHistoryRange>("1D");
 
   const { data, isLoading, error } = useSWR(
-    symbol ? ["kimp:history", symbol, range] : null,
-    () => getKimpHistory(symbol, range),
+    symbol ? ["kimp:history", symbol, range, rateMode] : null,
+    () => getKimpHistory(symbol, range, rateMode),
     { refreshInterval: 60_000, revalidateOnFocus: false },
   );
 
@@ -139,14 +163,15 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
     }
     if (latest?.symbol === symbol && latestAsOf) {
       const liveTs = Date.parse(latestAsOf);
-      if (Number.isFinite(liveTs) && Number.isFinite(latest.kimp_pct)) {
-        map.set(Math.floor(liveTs / 1000), latest.kimp_pct * 100);
+      const liveKimpPct = getKimpPctForMode(latest, rateMode);
+      if (Number.isFinite(liveTs) && liveKimpPct != null && Number.isFinite(liveKimpPct)) {
+        map.set(Math.floor(liveTs / 1000), liveKimpPct * 100);
       }
     }
     return Array.from(map.entries())
       .sort((a, b) => a[0] - b[0])
       .map(([ts, value]) => ({ time: ts as Time, value }));
-  }, [data, latest, latestAsOf, symbol]);
+  }, [data, latest, latestAsOf, rateMode, symbol]);
 
   const visibleTimeRange = useMemo(() => {
     const rangeSeconds = RANGE_SECONDS[range];
@@ -169,8 +194,8 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
     const points = data?.series ?? [];
     const first = points[0]?.t ?? "";
     const last = points.length > 0 ? points[points.length - 1]?.t : "";
-    return `${symbol}:${range}:${points.length}:${first}:${last}`;
-  }, [data?.series, range, symbol]);
+    return `${symbol}:${range}:${rateMode}:${points.length}:${first}:${last}`;
+  }, [data?.series, range, rateMode, symbol]);
 
   useEffect(() => {
     if (!lineRef.current) return;
@@ -218,6 +243,23 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
 
   return (
     <div className="rounded-2xl border border-[#26272d] bg-[#13141a]">
+      <div className="grid gap-2 border-b border-[#26272d] p-4 sm:grid-cols-2">
+        <FxSummaryCard
+          active={rateMode === "usdt"}
+          label={h.usdtRate}
+          rate={usdtFx ?? null}
+          kimpPct={latest ? getKimpPctForMode(latest, "usdt") : null}
+          kimpLabel={h.currentKimp}
+        />
+        <FxSummaryCard
+          active={rateMode === "bank"}
+          label={h.bankRate}
+          rate={bankFx ?? null}
+          kimpPct={latest ? getKimpPctForMode(latest, "bank") : null}
+          kimpLabel={h.currentKimp}
+        />
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#26272d] px-4 py-3">
         <div>
           <div className="text-sm font-semibold text-white">
@@ -279,6 +321,45 @@ export default function KimpHistoryChart({ symbol, latest, latestAsOf }: Props) 
             {t.hubs.arbitrage.kimp.common.loadFailed}
           </div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function FxSummaryCard({
+  active,
+  label,
+  rate,
+  kimpPct,
+  kimpLabel,
+}: {
+  active: boolean;
+  label: string;
+  rate: KimpFxRateResponse | null;
+  kimpPct: number | null;
+  kimpLabel: string;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-3 ${
+        active ? "border-[#3a3b44] bg-[#1a1b22]" : "border-[#26272d] bg-[#0e0f14]"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] uppercase tracking-wider text-[#868993]">{label}</div>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] ${
+            rate?.stale ? "bg-amber-500/10 text-amber-400" : "bg-emerald-500/10 text-emerald-400"
+          }`}
+        >
+          {rate?.source ?? "—"}
+        </span>
+      </div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-white">
+        {fmtRate(rate?.rate)}
+      </div>
+      <div className="mt-1 text-[11px] text-[#868993]">
+        {kimpLabel}: <span className="tabular-nums text-[#c3c5cc]">{fmtPct(kimpPct)}</span>
       </div>
     </div>
   );
