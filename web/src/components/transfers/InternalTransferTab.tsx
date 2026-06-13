@@ -35,6 +35,8 @@ const WALLET_TYPE_ORDER: UiWalletType[] = [
   "EARN_FLEXIBLE",
 ];
 
+const BALANCE_GRID_COLUMN_COUNT = WALLET_TYPE_ORDER.length + 2;
+
 const ENABLED_FLAG_KEY: Record<UiWalletType, string | null> = {
   SPOT: null,
   USDT_FUTURE: "futures_um",
@@ -59,6 +61,11 @@ function isAssetAllowed(wallet: UiWalletType, asset: string): boolean {
 
 // ── helpers ──────────────────────────────────────────────────────────
 
+type BalanceTotals = {
+  free: number;
+  total: number;
+};
+
 function fmtAmount(value: number, asset: string): string {
   const digits = asset === "BTC" || asset === "ETH" ? 6 : 2;
   return value.toLocaleString("en-US", {
@@ -74,6 +81,39 @@ function findCell(
 ): WalletBalanceCell | undefined {
   if (!row) return undefined;
   return row.balances[wallet]?.find((c) => c.asset === asset);
+}
+
+function getCellTotals(cell: WalletBalanceCell | undefined): BalanceTotals {
+  if (!cell) return { free: 0, total: 0 };
+  return {
+    free: cell.free,
+    total: Math.max(cell.total, cell.free),
+  };
+}
+
+function addTotals(left: BalanceTotals, right: BalanceTotals): BalanceTotals {
+  return {
+    free: left.free + right.free,
+    total: left.total + right.total,
+  };
+}
+
+function sumRowBalance(row: WalletBalanceRow, asset: string): BalanceTotals {
+  return WALLET_TYPE_ORDER.reduce(
+    (acc, wallet) => addTotals(acc, getCellTotals(findCell(row, wallet, asset))),
+    { free: 0, total: 0 },
+  );
+}
+
+function sumWalletBalance(
+  rows: WalletBalanceRow[],
+  wallet: UiWalletType,
+  asset: string,
+): BalanceTotals {
+  return rows.reduce(
+    (acc, row) => addTotals(acc, getCellTotals(findCell(row, wallet, asset))),
+    { free: 0, total: 0 },
+  );
 }
 
 function isWalletEnabled(row: WalletBalanceRow, wallet: UiWalletType): boolean {
@@ -112,6 +152,25 @@ function statusBadge(status: string): ReactElement {
   );
 }
 
+function BalanceAmount({
+  free,
+  total,
+  asset,
+}: BalanceTotals & {
+  asset: string;
+}): ReactElement {
+  return (
+    <>
+      {free > 0 ? fmtAmount(free, asset) : "—"}
+      {total > free && (
+        <span className="ml-1 text-xs text-[#868993]">
+          (잠금 {fmtAmount(total - free, asset)})
+        </span>
+      )}
+    </>
+  );
+}
+
 // ── balance grid ─────────────────────────────────────────────────────
 
 function BalanceGrid({
@@ -130,6 +189,16 @@ function BalanceGrid({
       </p>
     );
   }
+
+  const walletTotals = WALLET_TYPE_ORDER.map((wallet) => ({
+    wallet,
+    totals: sumWalletBalance(data.rows, wallet, asset),
+  }));
+  const grandTotal = walletTotals.reduce(
+    (acc, item) => addTotals(acc, item.totals),
+    { free: 0, total: 0 },
+  );
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -141,12 +210,14 @@ function BalanceGrid({
                 {WALLET_TYPE_LABEL[wt]}
               </th>
             ))}
+            <th className="px-4 py-2 text-right">합계</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map((row) => {
             const rowId = row.wallet_account_id;
             const label = row.role === "master" ? "Master" : row.alias;
+            const rowTotal = sumRowBalance(row, asset);
             const errorEntries = Object.entries(row.errors ?? {}) as [
               UiWalletType,
               string,
@@ -214,11 +285,18 @@ function BalanceGrid({
                       </td>
                     );
                   })}
+                  <td className="px-4 py-2 text-right font-mono font-semibold text-[#d1d4dc]">
+                    <BalanceAmount
+                      free={rowTotal.free}
+                      total={rowTotal.total}
+                      asset={asset}
+                    />
+                  </td>
                 </tr>
                 {errorEntries.length > 0 && (
                   <tr className="border-b border-[#2a2e39]/30 bg-[#1a1d28]">
                     <td
-                      colSpan={WALLET_TYPE_ORDER.length + 1}
+                      colSpan={BALANCE_GRID_COLUMN_COUNT}
                       className="px-4 py-1.5 text-xs text-[#f59e0b]"
                     >
                       <span className="font-semibold">⚠ {label}:</span>{" "}
@@ -238,6 +316,27 @@ function BalanceGrid({
             );
           })}
         </tbody>
+        <tfoot>
+          <tr className="border-t border-[#2a2e39] bg-[#1a1d28] text-xs font-semibold text-[#d1d4dc]">
+            <td className="px-4 py-3">총합</td>
+            {walletTotals.map(({ wallet, totals }) => (
+              <td key={wallet} className="px-4 py-3 text-right font-mono">
+                <BalanceAmount
+                  free={totals.free}
+                  total={totals.total}
+                  asset={asset}
+                />
+              </td>
+            ))}
+            <td className="px-4 py-3 text-right font-mono text-[#26a17b]">
+              <BalanceAmount
+                free={grandTotal.free}
+                total={grandTotal.total}
+                asset={asset}
+              />
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   );
