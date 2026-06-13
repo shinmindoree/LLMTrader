@@ -2,13 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { getKimpPctForMode } from "@/lib/kimp";
+import { getKimpPctForMode, getSpotKimpPctForMode } from "@/lib/kimp";
 import type { KimpRateMode, KimpScreenerItem, KimpScreenerResponse } from "@/lib/types";
 import type { KimpScreenerStreamStatus } from "@/lib/useKimpScreenerStream";
 
 type SortKey =
   | "symbol"
   | "kimp_pct"
+  | "spot_kimp_pct"
   | "zscore_30d"
   | "mean_30d_pct"
   | "n_samples_30d"
@@ -71,6 +72,21 @@ function zClass(v: number | null | undefined): string {
   return "text-[#c3c5cc]";
 }
 
+function sortValue(
+  item: KimpScreenerItem,
+  key: SortKey,
+  rateMode: KimpRateMode,
+): string | number {
+  if (key === "symbol") return item.symbol;
+  if (key === "kimp_pct") return getKimpPctForMode(item, rateMode) ?? Number.NEGATIVE_INFINITY;
+  if (key === "spot_kimp_pct")
+    return getSpotKimpPctForMode(item, rateMode) ?? Number.NEGATIVE_INFINITY;
+  const value = item[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : Number.NEGATIVE_INFINITY;
+}
+
 type Props = {
   symbol: string;
   onSelect: (symbol: string) => void;
@@ -104,25 +120,14 @@ export default function KimpScreenerTable({
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const items = useMemo<KimpScreenerItem[]>(() => {
-    const sortValue = (item: KimpScreenerItem, key: SortKey): string | number => {
-      if (key === "symbol") return item.symbol;
-      if (key === "kimp_pct") {
-        return getKimpPctForMode(item, rateMode) ?? Number.NEGATIVE_INFINITY;
-      }
-      const value = item[key];
-      return typeof value === "number" && Number.isFinite(value)
-        ? value
-        : Number.NEGATIVE_INFINITY;
-    };
-
     if (!data?.items) return [];
     const q = query.trim().toUpperCase();
     const filtered = q
       ? data.items.filter((it) => it.symbol.includes(q))
       : data.items.slice();
     filtered.sort((a, b) => {
-      const av = sortValue(a, sortKey);
-      const bv = sortValue(b, sortKey);
+      const av = sortValue(a, sortKey, rateMode);
+      const bv = sortValue(b, sortKey, rateMode);
       let cmp = 0;
       if (typeof av === "string" || typeof bv === "string") {
         cmp = String(av).localeCompare(String(bv));
@@ -191,7 +196,7 @@ export default function KimpScreenerTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[960px] text-left text-xs">
+        <table className="w-full min-w-[1040px] text-left text-xs">
           <thead className="bg-[#0e0f14] text-[10px] uppercase tracking-wider text-[#868993]">
             <tr>
               <Th onClick={() => toggleSort("symbol")} arrow={sortArrow("symbol")}>
@@ -205,6 +210,13 @@ export default function KimpScreenerTable({
                 arrow={sortArrow("kimp_pct")}
               >
                 {s.columns.kimp} ({s.rateModes[rateMode]})
+              </Th>
+              <Th
+                align="right"
+                onClick={() => toggleSort("spot_kimp_pct")}
+                arrow={sortArrow("spot_kimp_pct")}
+              >
+                {s.columns.spotKimp} ({s.rateModes[rateMode]})
               </Th>
               <Th
                 align="right"
@@ -248,13 +260,13 @@ export default function KimpScreenerTable({
           <tbody>
             {isLoading && !data ? (
               <tr>
-                <td colSpan={11} className="px-4 py-6 text-center text-[#868993]">
+                <td colSpan={12} className="px-4 py-6 text-center text-[#868993]">
                   {t.hubs.arbitrage.kimp.common.loading}
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-6 text-center text-[#868993]">
+                <td colSpan={12} className="px-4 py-6 text-center text-[#868993]">
                   {s.empty}
                 </td>
               </tr>
@@ -262,6 +274,7 @@ export default function KimpScreenerTable({
               items.map((it) => {
                 const selected = it.symbol === symbol;
                 const displayKimpPct = getKimpPctForMode(it, rateMode);
+                const displaySpotKimpPct = getSpotKimpPctForMode(it, rateMode);
                 return (
                   <tr
                     key={it.symbol}
@@ -281,6 +294,9 @@ export default function KimpScreenerTable({
                     </td>
                     <td className={`px-3 py-2 text-right font-medium ${kimpClass(displayKimpPct)}`}>
                       {fmtPct(displayKimpPct)}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-medium ${kimpClass(displaySpotKimpPct)}`}>
+                      {fmtPct(displaySpotKimpPct)}
                     </td>
                     <td className={`px-3 py-2 text-right ${fundingClass(it.funding_rate_pct)}`}>
                       {fmtFundingPct(it.funding_rate_pct)}

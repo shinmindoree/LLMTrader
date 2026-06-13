@@ -705,10 +705,13 @@ class KimpScreenerItem(BaseModel):
     symbol: str  # 예: "BTC"
     upbit_krw_price: float
     binance_usdt_price: float  # Binance USDT-M 무기한 마크가격
+    binance_spot_price: float | None = None  # Binance 현물 가격(USDT/coin)
     usdt_krw_rate: float
     usd_krw_rate: float | None = None
-    kimp_pct: float  # 0.0345 == 3.45%
-    bank_kimp_pct: float | None = None
+    kimp_pct: float  # 0.0345 == 3.45% (선물 마크 기준, USDT 환율)
+    bank_kimp_pct: float | None = None  # 선물 마크 기준, 은행 환율
+    spot_kimp_pct: float | None = None  # 현물 기준, USDT 환율
+    spot_bank_kimp_pct: float | None = None  # 현물 기준, 은행 환율
     mean_30d_pct: float | None = None
     std_30d_pct: float | None = None
     zscore_30d: float | None = None  # (kimp - mean) / std

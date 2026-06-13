@@ -72,13 +72,15 @@ class KimpRow:
     upbit_krw_price: float
     binance_usdt_price: float   # Binance USDT-M 무기한 마크가격 (USDT/coin)
     usdt_krw_rate: float
-    kimp_pct: float             # 예: 0.0345 == 3.45%
+    kimp_pct: float             # 예: 0.0345 == 3.45% (선물 마크 기준)
     rate_source: str
     rate_stale: bool
     funding_rate: float = 0.0           # 직전 펀딩 비율 (예: 0.0001 == 0.01%)
     next_funding_time: datetime | None = None
     funding_interval_hours: float = DEFAULT_FUNDING_INTERVAL_HOURS
     upbit_quote_volume_krw: float = 0.0  # Upbit 24h 누적 거래대금(KRW)
+    binance_spot_price: float | None = None   # Binance 현물 가격 (USDT/coin)
+    spot_kimp_pct: float | None = None         # 현물 기준 김프 (USDT 환율 기준)
 
     @property
     def usd_krw_rate(self) -> float:
@@ -221,6 +223,38 @@ async def _fetch_binance_futures(client: httpx.AsyncClient) -> dict[str, dict[st
     return out
 
 
+async def _fetch_binance_spot(client: httpx.AsyncClient) -> dict[str, float]:
+    """Binance 현물 ``/api/v3/ticker/price`` 전체 조회.
+
+    한 번의 호출로 모든 현물 심볼의 최신 체결가를 반환한다. USDT 마켓만 추려서
+    base 자산(``BTC``)을 키로, 현물 가격(USDT/coin)을 값으로 돌려준다.
+    """
+    try:
+        resp = await client.get(f"{BINANCE_PUBLIC_BASE}/api/v3/ticker/price")
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, json.JSONDecodeError) as exc:
+        _log.warning("Binance spot ticker fetch failed: %s", exc)
+        return {}
+    out: dict[str, float] = {}
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            pair = str(item.get("symbol") or "")
+            if not pair.endswith("USDT"):
+                continue
+            base = pair[:-4]
+            try:
+                price = float(item.get("price") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if price <= 0:
+                continue
+            out[base] = price
+    return out
+
+
 async def compute_kimp_snapshot(symbols: list[str] | None = None) -> KimpSnapshot:
     """주어진 심볼들의 김프 스냅샷을 계산한다.
 
@@ -240,7 +274,10 @@ async def compute_kimp_snapshot(symbols: list[str] | None = None) -> KimpSnapsho
     async with httpx.AsyncClient(timeout=10.0) as client:
         upbit_task = _fetch_upbit_tickers(client, ["USDT", *target_symbols])
         binance_task = _fetch_binance_futures(client)
-        upbit_tickers, binance_futures = await asyncio.gather(upbit_task, binance_task)
+        binance_spot_task = _fetch_binance_spot(client)
+        upbit_tickers, binance_futures, binance_spot = await asyncio.gather(
+            upbit_task, binance_task, binance_spot_task
+        )
 
     usdt_ticker = upbit_tickers.get("USDT")
     usdt_krw = usdt_ticker["price"] if usdt_ticker else None
@@ -273,6 +310,12 @@ async def compute_kimp_snapshot(symbols: list[str] | None = None) -> KimpSnapsho
             errors.append(f"{sym}: invalid denominator")
             continue
         kimp = (krw / denom) - 1.0
+        spot_price = binance_spot.get(sym)
+        spot_kimp = None
+        if spot_price and spot_price > 0:
+            spot_denom = spot_price * usdt_krw
+            if spot_denom > 0:
+                spot_kimp = (krw / spot_denom) - 1.0
         next_ms = fut.get("next_funding_ms", 0.0) if fut else 0.0
         next_funding = (
             datetime.fromtimestamp(next_ms / 1000.0, tz=timezone.utc)
@@ -292,6 +335,8 @@ async def compute_kimp_snapshot(symbols: list[str] | None = None) -> KimpSnapsho
                 next_funding_time=next_funding,
                 funding_interval_hours=DEFAULT_FUNDING_INTERVAL_HOURS,
                 upbit_quote_volume_krw=(upbit_row.get("vol24h", 0.0) if upbit_row else 0.0),
+                binance_spot_price=spot_price,
+                spot_kimp_pct=spot_kimp,
             )
         )
 

@@ -2313,15 +2313,28 @@ def create_app() -> FastAPI:
                 bank_denom = row.binance_usdt_price * bank_fx.rate
                 if bank_denom > 0:
                     bank_kimp_pct = (row.upbit_krw_price / bank_denom) - 1.0
+            spot_bank_kimp_pct = None
+            if (
+                bank_fx is not None
+                and bank_fx.rate > 0
+                and row.binance_spot_price
+                and row.binance_spot_price > 0
+            ):
+                spot_bank_denom = row.binance_spot_price * bank_fx.rate
+                if spot_bank_denom > 0:
+                    spot_bank_kimp_pct = (row.upbit_krw_price / spot_bank_denom) - 1.0
             items.append(
                 KimpScreenerItem(
                     symbol=row.symbol,
                     upbit_krw_price=row.upbit_krw_price,
                     binance_usdt_price=row.binance_usdt_price,
+                    binance_spot_price=row.binance_spot_price,
                     usdt_krw_rate=row.usdt_krw_rate,
                     usd_krw_rate=bank_fx.rate if bank_fx is not None else None,
                     kimp_pct=row.kimp_pct,
                     bank_kimp_pct=bank_kimp_pct,
+                    spot_kimp_pct=row.spot_kimp_pct,
+                    spot_bank_kimp_pct=spot_bank_kimp_pct,
                     mean_30d_pct=float(mean_pct) if mean_pct is not None else None,
                     std_30d_pct=float(std_pct) if std_pct is not None else None,
                     zscore_30d=z,

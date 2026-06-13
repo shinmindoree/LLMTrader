@@ -858,10 +858,13 @@ export type KimpScreenerItem = {
   symbol: string;
   upbit_krw_price: number;
   binance_usdt_price: number;
+  binance_spot_price?: number | null;
   usdt_krw_rate: number;
   usd_krw_rate?: number | null;
-  kimp_pct: number; // 0.0345 == 3.45%
-  bank_kimp_pct?: number | null;
+  kimp_pct: number; // 0.0345 == 3.45% (futures mark basis, USDT FX)
+  bank_kimp_pct?: number | null; // futures mark basis, bank FX
+  spot_kimp_pct?: number | null; // spot basis, USDT FX
+  spot_bank_kimp_pct?: number | null; // spot basis, bank FX
   mean_30d_pct: number | null;
   std_30d_pct: number | null;
   zscore_30d: number | null;
