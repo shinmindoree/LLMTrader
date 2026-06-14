@@ -27,6 +27,10 @@ export default function ArbitrageKimpPage() {
     () => screener.data?.items.find((item) => item.symbol === symbol) ?? null,
     [screener.data?.items, symbol],
   );
+  const availableSymbols = useMemo(
+    () => screener.data?.items.map((item) => item.symbol) ?? [],
+    [screener.data?.items],
+  );
 
   return (
     <div className="w-full max-w-6xl px-4 py-6">
@@ -74,7 +78,11 @@ export default function ArbitrageKimpPage() {
       </div>
 
       <div className={activeTab === "backtest" ? "mt-4 flex flex-col gap-4" : "hidden"}>
-        <KimpBacktestPanel symbol={symbol} onSelect={setSymbol} />
+        <KimpBacktestPanel
+          symbol={symbol}
+          onSelect={setSymbol}
+          availableSymbols={availableSymbols}
+        />
       </div>
 
       <div className={activeTab === "bot" ? "mt-4 flex flex-col gap-4" : "hidden"}>

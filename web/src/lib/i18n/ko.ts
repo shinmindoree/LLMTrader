@@ -1030,6 +1030,27 @@ const ko: TranslationKeys = {
             chart: "요약·차트",
             trades: "트레이드 내역",
           },
+          search: {
+            placeholder: "심볼 검색…",
+            empty: "심볼 목록을 불러오는 중…",
+            useCustom: "\"{symbol}\" 직접 사용",
+          },
+          chart: {
+            noData: "표시할 트레이드가 없습니다.",
+            pnlLegend: "손익 (PnL)",
+            equityLegend: "자본금 (Equity)",
+            positions: "건",
+            pnlRange: "손익 범위",
+            resetZoom: "줌 초기화",
+            zoomHint: "스크롤로 확대 · 드래그로 이동",
+            tip: {
+              entry: "진입",
+              exit: "청산",
+              pnl: "순손익",
+              equity: "자본금",
+              reason: "청산 사유",
+            },
+          },
           trades: {
             count: "총 {n}건",
             empty: "완료된 트레이드가 없습니다.",

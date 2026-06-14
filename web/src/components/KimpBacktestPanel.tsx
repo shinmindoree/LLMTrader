@@ -1,11 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { runKimpBacktest, runKimpUniverseBacktest } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type {
-  KimpBacktestEquityPoint,
   KimpBacktestResponse,
   KimpBacktestTrade,
   KimpHedgeMode,
@@ -16,6 +15,7 @@ import type {
 type Props = {
   symbol: string;
   onSelect: (symbol: string) => void;
+  availableSymbols?: string[];
 };
 
 type SharedConfig = {
@@ -78,7 +78,7 @@ function signClass(v: number | null | undefined): string {
   return "text-[#c3c5cc]";
 }
 
-export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
+export default function KimpBacktestPanel({ symbol, onSelect, availableSymbols = [] }: Props) {
   const { t } = useI18n();
   const b = t.hubs.arbitrage.kimp.backtest;
   const selectedSymbol = symbol.trim().toUpperCase() || "BTC";
@@ -241,6 +241,9 @@ export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
           onRun={onRunSingle}
           labels={b}
           symbol={selectedSymbol}
+          onSelect={onSelect}
+          availableSymbols={availableSymbols}
+          capitalBase={cfg.grossCap}
         />
       ) : (
         <UniversePanel
@@ -270,6 +273,9 @@ function SinglePanel({
   onRun,
   labels,
   symbol,
+  onSelect,
+  availableSymbols,
+  capitalBase,
 }: {
   busy: boolean;
   res: KimpBacktestResponse | null;
@@ -277,6 +283,9 @@ function SinglePanel({
   onRun: () => void;
   labels: Labels;
   symbol: string;
+  onSelect: (symbol: string) => void;
+  availableSymbols: string[];
+  capitalBase: number;
 }) {
   const m = res?.success ? res.metrics ?? null : null;
   const trades = res?.success ? res.trades ?? [] : [];
@@ -292,10 +301,12 @@ function SinglePanel({
         >
           {busy ? labels.running : labels.run}
         </button>
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-[#868993]">
-          {labels.tabs.single}:{" "}
-          <span className="font-semibold text-emerald-400">{symbol}</span>
-        </div>
+        <SymbolSearch
+          value={symbol}
+          onSelect={onSelect}
+          options={availableSymbols}
+          labels={labels}
+        />
       </div>
 
       {err ? (
@@ -344,10 +355,12 @@ function SinglePanel({
                 <Metric label={labels.metrics.bars} value={String(m.n_bars)} />
               </div>
               <div className="mt-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-[#868993]">
-                  {labels.equityTitle}
-                </div>
-                <EquityCurve data={res?.equity_curve ?? []} trades={trades} labels={labels} />
+                <KimpTradeChart
+                  trades={trades}
+                  capitalBase={capitalBase}
+                  symbol={symbol}
+                  labels={labels}
+                />
               </div>
             </>
           ) : (
@@ -540,117 +553,458 @@ function NumField({
   );
 }
 
-function EquityCurve({
-  data,
-  trades = [],
+function SymbolSearch({
+  value,
+  onSelect,
+  options,
   labels,
 }: {
-  data: KimpBacktestEquityPoint[];
-  trades?: KimpBacktestTrade[];
-  labels?: Labels;
+  value: string;
+  onSelect: (symbol: string) => void;
+  options: string[];
+  labels: Labels;
 }) {
-  if (data.length < 2) {
-    return (
-      <div className="flex h-[120px] items-center justify-center text-xs text-[#5b5d66]">—</div>
-    );
-  }
-  const width = 640;
-  const height = 120;
-  const pad = 8;
-  const innerW = width - pad * 2;
-  const innerH = height - pad * 2;
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
 
-  const eq = data.map((d) => d.equity_krw);
-  const minE = Math.min(...eq);
-  const maxE = Math.max(...eq);
-  const range = maxE - minE || 1;
-  const base = eq[0];
-
-  const sx = (i: number) => pad + (i / (data.length - 1)) * innerW;
-  const sy = (v: number) => pad + innerH - ((v - minE) / range) * innerH;
-
-  const baseY = sy(base);
-  const pts = data.map((d, i) => ({ x: sx(i), y: sy(d.equity_krw) }));
-  const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  const area = `${line} L${pts[pts.length - 1].x.toFixed(1)},${baseY.toFixed(1)} L${pts[0].x.toFixed(1)},${baseY.toFixed(1)} Z`;
-
-  const final = eq[eq.length - 1];
-  const up = final >= base;
-  const stroke = up ? "#22c55e" : "#ef4444";
-  const fill = up ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)";
-
-  const nearestIdx = (tMs: number): number => {
-    let lo = 0;
-    let hi = data.length - 1;
-    let best = 0;
-    let bestDiff = Infinity;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const diff = data[mid].t - tMs;
-      if (Math.abs(diff) < bestDiff) {
-        bestDiff = Math.abs(diff);
-        best = mid;
+  useEffect(() => {
+    function onDocMouseDown(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        setOpen(false);
       }
-      if (diff < 0) lo = mid + 1;
-      else if (diff > 0) hi = mid - 1;
-      else return mid;
     }
-    return best;
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    const uniq = Array.from(new Set(options.map((s) => s.toUpperCase())));
+    const list = q ? uniq.filter((s) => s.includes(q)) : uniq;
+    return list.slice(0, 50);
+  }, [options, query]);
+
+  const commit = (sym: string) => {
+    const s = sym.trim().toUpperCase();
+    if (!s) return;
+    onSelect(s);
+    setQuery("");
+    setOpen(false);
   };
 
-  const markers = trades.flatMap((tr) => {
-    const ei = nearestIdx(tr.entry_t);
-    const xi = nearestIdx(tr.exit_t);
-    return [
-      { x: sx(ei), y: pts[ei].y, kind: "entry" as const },
-      { x: sx(xi), y: pts[xi].y, kind: "exit" as const },
-    ];
-  });
-
   return (
-    <>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full"
-        style={{ height }}
-        preserveAspectRatio="none"
-      >
-        <line
-          x1={pad}
-          y1={baseY}
-          x2={width - pad}
-          y2={baseY}
-          stroke="#3f3f46"
-          strokeWidth={0.5}
-          strokeDasharray="3 3"
+    <div ref={boxRef} className="relative">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-[#868993]">{labels.tabs.single}:</span>
+        <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-400">
+          {value}
+        </span>
+        <input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit(filtered[0] ?? query);
+            } else if (e.key === "Escape") {
+              setOpen(false);
+            }
+          }}
+          placeholder={labels.search.placeholder}
+          className="w-40 rounded-md border border-[#26272d] bg-[#0e0f14] px-2 py-1 text-xs text-[#c3c5cc] focus:border-[#3a3b44] focus:outline-none"
         />
-        <path d={area} fill={fill} />
-        <path d={line} fill="none" stroke={stroke} strokeWidth={1.5} />
-        {markers.map((mk, i) => (
-          <circle
-            key={i}
-            cx={mk.x}
-            cy={mk.y}
-            r={2.4}
-            fill={mk.kind === "entry" ? "#22c55e" : "#ef4444"}
-            stroke="#0e0f14"
-            strokeWidth={0.6}
-          />
-        ))}
-      </svg>
-      {labels && trades.length > 0 ? (
-        <div className="mt-1 flex items-center gap-3 text-[10px] text-[#868993]">
-          <span className="inline-flex items-center gap-1">
-            <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-            {labels.trades.entryMarker}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span className="inline-block h-2 w-2 rounded-full bg-rose-500" />
-            {labels.trades.exitMarker}
-          </span>
+      </div>
+      {open ? (
+        <div className="absolute z-30 mt-1 max-h-56 w-48 overflow-auto rounded-md border border-[#26272d] bg-[#13141a] py-1 shadow-lg">
+          {filtered.length > 0 ? (
+            filtered.map((sym) => (
+              <button
+                key={sym}
+                type="button"
+                onClick={() => commit(sym)}
+                className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-[#1a1b22] ${
+                  sym === value.toUpperCase() ? "text-emerald-400" : "text-[#c3c5cc]"
+                }`}
+              >
+                {sym}
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-1.5 text-xs text-[#868993]">
+              {query.trim()
+                ? labels.search.useCustom.replace("{symbol}", query.trim().toUpperCase())
+                : labels.search.empty}
+            </div>
+          )}
+          {query.trim() && !filtered.includes(query.trim().toUpperCase()) ? (
+            <button
+              type="button"
+              onClick={() => commit(query)}
+              className="mt-1 block w-full border-t border-[#26272d] px-3 py-1.5 text-left text-xs text-[#42a5f5] hover:bg-[#1a1b22]"
+            >
+              {labels.search.useCustom.replace("{symbol}", query.trim().toUpperCase())}
+            </button>
+          ) : null}
         </div>
       ) : null}
-    </>
+    </div>
+  );
+}
+
+type TradePoint = {
+  index: number;
+  timestamp: number;
+  entryTs: number;
+  pnl: number;
+  equity: number;
+  returnPct: number;
+  symbol: string;
+  exitReason: string;
+};
+
+function KimpTradeChart({
+  trades,
+  capitalBase,
+  symbol,
+  labels,
+}: {
+  trades: KimpBacktestTrade[];
+  capitalBase: number;
+  symbol: string;
+  labels: Labels;
+}) {
+  const c = labels.chart;
+  const points: TradePoint[] = useMemo(() => {
+    return trades.reduce<{ acc: TradePoint[]; cum: number }>(
+      (state, tr) => {
+        const cum = state.cum + tr.net_pnl_krw;
+        state.acc.push({
+          index: tr.index,
+          timestamp: tr.exit_t,
+          entryTs: tr.entry_t,
+          pnl: tr.net_pnl_krw,
+          equity: capitalBase + cum,
+          returnPct: tr.return_pct,
+          symbol,
+          exitReason: tr.exit_reason,
+        });
+        return { acc: state.acc, cum };
+      },
+      { acc: [], cum: 0 },
+    ).acc;
+  }, [trades, capitalBase, symbol]);
+
+  const [hovered, setHovered] = useState<TradePoint | null>(null);
+  const [tipPos, setTipPos] = useState({ x: 0, y: 0 });
+
+  const width = 900;
+  const height = 320;
+  const padding = 36;
+  const plotWidth = width - padding * 2;
+  const plotHeight = height - padding * 2;
+
+  const totalRange = Math.max(1, points.length - 1);
+  const [visibleRange, setVisibleRange] = useState<[number, number] | null>(null);
+  const visibleRangeRef = useRef<[number, number] | null>(null);
+  useEffect(() => {
+    visibleRangeRef.current = visibleRange;
+  }, [visibleRange]);
+
+  const [lastLen, setLastLen] = useState(points.length);
+  if (lastLen !== points.length) {
+    setVisibleRange(null);
+    setLastLen(points.length);
+  }
+
+  const svgRef = useRef<SVGSVGElement>(null);
+  const panRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startVStart: number;
+    startVEnd: number;
+    moved: boolean;
+  } | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+
+  const clampRange = useCallback(
+    (start: number, end: number): [number, number] => {
+      const minSpan = Math.min(1, totalRange);
+      const span = Math.max(minSpan, Math.min(totalRange, end - start));
+      let s = start;
+      let e = s + span;
+      if (s < 0) {
+        s = 0;
+        e = s + span;
+      }
+      if (e > totalRange) {
+        e = totalRange;
+        s = e - span;
+      }
+      if (s < 0) s = 0;
+      return [s, e];
+    },
+    [totalRange],
+  );
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (points.length < 2) return;
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const xVB = ((e.clientX - rect.left) / rect.width) * width;
+      const xPlot = Math.max(padding, Math.min(width - padding, xVB));
+      const xRel = plotWidth > 0 ? (xPlot - padding) / plotWidth : 0;
+      const [cs, ce] = visibleRangeRef.current ?? [0, totalRange];
+      const range = Math.max(ce - cs, 0.0001);
+      const idxAtCursor = cs + xRel * range;
+      const zoomFactor = e.deltaY < 0 ? 0.85 : 1.18;
+      const minRange = Math.min(2, totalRange);
+      const newRange = Math.max(minRange, Math.min(totalRange, range * zoomFactor));
+      let ns = idxAtCursor - xRel * newRange;
+      let ne = ns + newRange;
+      [ns, ne] = clampRange(ns, ne);
+      setVisibleRange([ns, ne]);
+    };
+    svg.addEventListener("wheel", handleWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", handleWheel);
+  }, [points.length, totalRange, plotWidth, clampRange]);
+
+  if (points.length === 0) {
+    return (
+      <div className="rounded-md border border-[#26272d] bg-[#0e0f14] px-4 py-6 text-center text-xs text-[#868993]">
+        {c.noData}
+      </div>
+    );
+  }
+
+  const [vStartRaw, vEndRaw] = visibleRange ?? [0, totalRange];
+  const [vStart, vEnd] = clampRange(vStartRaw, vEndRaw);
+  const visibleSpan = Math.max(vEnd - vStart, 0.0001);
+  const isZoomed =
+    visibleRange !== null && (vStart > 0.0001 || vEnd < totalRange - 0.0001);
+  const step = plotWidth / Math.max(visibleSpan, 1);
+  const barWidth = Math.max(2, Math.min(24, step * 0.6));
+
+  const xForIndex = (idx: number) => padding + ((idx - vStart) / visibleSpan) * plotWidth;
+
+  const visibleStartIdx = Math.max(0, Math.floor(vStart));
+  const visibleEndIdx = Math.min(points.length - 1, Math.ceil(vEnd));
+  const visiblePoints = points.slice(visibleStartIdx, visibleEndIdx + 1);
+  const maxAbsPnl = Math.max(...visiblePoints.map((p) => Math.abs(p.pnl)), 1);
+  const yZero = padding + plotHeight / 2;
+  const pnlScale = plotHeight / (2 * maxAbsPnl);
+
+  const eqValues = visiblePoints.map((p) => p.equity);
+  const eqMin = eqValues.length ? Math.min(...eqValues) : 0;
+  const eqMax = eqValues.length ? Math.max(...eqValues) : 1;
+  const eqRange = Math.max(eqMax - eqMin, 1);
+
+  const yPnl = (v: number) => yZero - v * pnlScale;
+  const yEq = (v: number) => padding + ((eqMax - v) / eqRange) * plotHeight;
+
+  const linePath = visiblePoints
+    .map((p, idx) => {
+      const x = xForIndex(visibleStartIdx + idx);
+      const y = yEq(p.equity);
+      return `${idx === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+
+  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0 || points.length < 2) return;
+    panRef.current = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startVStart: vStart,
+      startVEnd: vEnd,
+      moved: false,
+    };
+    setHovered(null);
+    try {
+      (e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const state = panRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const pxPerUnit = (rect.width * (plotWidth / width)) / visibleSpan;
+    if (pxPerUnit <= 0) return;
+    const dx = e.clientX - state.startClientX;
+    if (!state.moved && Math.abs(dx) > 3) {
+      state.moved = true;
+      setIsPanning(true);
+    }
+    if (!state.moved) return;
+    const deltaIdx = -dx / pxPerUnit;
+    let ns = state.startVStart + deltaIdx;
+    let ne = state.startVEnd + deltaIdx;
+    [ns, ne] = clampRange(ns, ne);
+    setVisibleRange([ns, ne]);
+  };
+
+  const finishPan = (e: React.PointerEvent<SVGSVGElement>) => {
+    const state = panRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    panRef.current = null;
+    setIsPanning(false);
+    try {
+      (e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const resetZoom = () => setVisibleRange(null);
+  const cursorClass = isPanning ? "cursor-grabbing" : "cursor-grab";
+
+  return (
+    <div
+      className="relative rounded-md border border-[#26272d] bg-[#0e0f14] p-4"
+      onMouseLeave={() => setHovered(null)}
+    >
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#868993]">
+        <div>
+          <span className="mr-3 inline-flex items-center gap-2">
+            <span className="h-2 w-2 rounded-sm bg-[#26a69a]" /> {c.pnlLegend}
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-0.5 w-4 rounded-full bg-[#42a5f5]" /> {c.equityLegend}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span>
+            {isZoomed
+              ? `${visiblePoints.length}/${points.length} ${c.positions}`
+              : `${points.length} ${c.positions}`}
+            {` · ${c.pnlRange} ±${fmtKrw(maxAbsPnl)}`}
+          </span>
+          {isZoomed ? (
+            <button
+              type="button"
+              onClick={resetZoom}
+              className="rounded border border-[#26272d] bg-[#1a1b22] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#c3c5cc] hover:bg-[#22232b]"
+            >
+              {c.resetZoom}
+            </button>
+          ) : (
+            <span className="text-[10px] text-[#5b5d66]">{c.zoomHint}</span>
+          )}
+        </div>
+      </div>
+
+      {hovered ? (
+        <div
+          className="pointer-events-none fixed z-50 min-w-[200px] rounded border border-[#26272d] bg-[#1a1b22] px-3 py-2 text-xs shadow-lg"
+          style={{ left: tipPos.x + 12, top: tipPos.y + 12 }}
+        >
+          <ul className="space-y-1 text-[#c3c5cc]">
+            <li>#{hovered.index} · {hovered.symbol}</li>
+            <li>{c.tip.entry}: {fmtTime(hovered.entryTs)}</li>
+            <li>{c.tip.exit}: {fmtTime(hovered.timestamp)}</li>
+            <li>
+              {c.tip.pnl}:{" "}
+              <span className={hovered.pnl >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}>
+                {fmtKrw(hovered.pnl)} ({fmtPct(hovered.returnPct)})
+              </span>
+            </li>
+            <li>{c.tip.equity}: {fmtKrw(hovered.equity)}</li>
+            <li>
+              {c.tip.reason}:{" "}
+              {hovered.exitReason === "period_end"
+                ? labels.trades.reasons.period_end
+                : labels.trades.reasons.target}
+            </li>
+          </ul>
+        </div>
+      ) : null}
+
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        className={`w-full touch-none select-none ${cursorClass}`}
+        role="img"
+        aria-label="Kimp trade PnL and equity chart"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={finishPan}
+        onPointerCancel={finishPan}
+        onDoubleClick={resetZoom}
+      >
+        <defs>
+          <clipPath id="kimp-chart-plot">
+            <rect x={padding} y={padding} width={plotWidth} height={plotHeight} />
+          </clipPath>
+        </defs>
+        <rect x={padding} y={padding} width={plotWidth} height={plotHeight} fill="#0b0c10" />
+        <line x1={padding} y1={yZero} x2={width - padding} y2={yZero} stroke="#26272d" strokeWidth={1} />
+        <g clipPath="url(#kimp-chart-plot)">
+          {visiblePoints.map((p, idx) => {
+            const xCenter = xForIndex(visibleStartIdx + idx);
+            const y = yPnl(p.pnl);
+            const barHeight = Math.max(2, Math.abs(y - yZero));
+            const yTop = p.pnl >= 0 ? y : yZero;
+            const color = p.pnl >= 0 ? "#26a69a" : "#ef5350";
+            return (
+              <rect
+                key={`bar-${p.index}`}
+                x={xCenter - barWidth / 2}
+                y={yTop}
+                width={barWidth}
+                height={barHeight}
+                fill={color}
+                rx={2}
+                onMouseEnter={(e) => {
+                  if (isPanning) return;
+                  setHovered(p);
+                  setTipPos({ x: e.clientX, y: e.clientY });
+                }}
+                onMouseMove={(e) => {
+                  if (isPanning) return;
+                  setTipPos({ x: e.clientX, y: e.clientY });
+                }}
+              />
+            );
+          })}
+          <path d={linePath} fill="none" stroke="#42a5f5" strokeWidth={2} />
+          {visiblePoints.map((p, idx) => {
+            const x = xForIndex(visibleStartIdx + idx);
+            const y = yEq(p.equity);
+            return (
+              <g
+                key={`pt-${p.index}`}
+                onMouseEnter={(e) => {
+                  if (isPanning) return;
+                  setHovered(p);
+                  setTipPos({ x: e.clientX, y: e.clientY });
+                }}
+                onMouseMove={(e) => {
+                  if (isPanning) return;
+                  setTipPos({ x: e.clientX, y: e.clientY });
+                }}
+              >
+                <circle cx={x} cy={y} r={7} fill="transparent" />
+                <circle cx={x} cy={y} r={3} fill="#42a5f5" />
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+    </div>
   );
 }
 

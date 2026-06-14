@@ -1027,6 +1027,27 @@ const en = {
             chart: "Summary · Chart",
             trades: "Trades",
           },
+          search: {
+            placeholder: "Search symbol…",
+            empty: "Loading symbols…",
+            useCustom: "Use \"{symbol}\"",
+          },
+          chart: {
+            noData: "No trades to display.",
+            pnlLegend: "PnL",
+            equityLegend: "Equity",
+            positions: "positions",
+            pnlRange: "PnL range",
+            resetZoom: "Reset zoom",
+            zoomHint: "Scroll to zoom · drag to pan",
+            tip: {
+              entry: "Entry",
+              exit: "Exit",
+              pnl: "Net PnL",
+              equity: "Equity",
+              reason: "Exit reason",
+            },
+          },
           trades: {
             count: "{n} total",
             empty: "No closed trades.",
