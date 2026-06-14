@@ -179,6 +179,7 @@ class _KimpEngineState:
     binance_secret: str = ""
     futures_base: str = "https://fapi.binance.com"
     is_testnet: bool = False
+    paper: bool = False
     session_maker: async_sessionmaker[AsyncSession] | None = field(default=None, repr=False)
     _prev_quote: KimpQuote | None = field(default=None, repr=False, compare=False)
     _tick_count: int = 0
@@ -334,6 +335,7 @@ def get_engine_status(user_id: str) -> KimpArbitrageStatusResponse:
         return KimpArbitrageStatusResponse(running=False)
     return KimpArbitrageStatusResponse(
         running=st.running,
+        mode="paper" if st.paper else "live",
         symbol=st.symbol,
         upbit_long_qty=st.upbit_long_qty or None,
         binance_short_qty=st.binance_short_qty or None,
@@ -358,6 +360,7 @@ def _state_to_dict(st: _KimpEngineState) -> dict[str, Any]:
         "running": st.running,
         "owner": st.owner,
         "instance_id": st.instance_id,
+        "paper": st.paper,
         "symbol": st.symbol,
         "upbit_long_qty": st.upbit_long_qty,
         "binance_short_qty": st.binance_short_qty,
@@ -397,6 +400,7 @@ def status_from_dict(
     running = bool(d.get("running")) if running_override is None else running_override
     return KimpArbitrageStatusResponse(
         running=running,
+        mode="paper" if d.get("paper") else "live",
         symbol=d.get("symbol"),
         upbit_long_qty=(d.get("upbit_long_qty") or None),
         binance_short_qty=(d.get("binance_short_qty") or None),
@@ -584,6 +588,63 @@ class LiveExecutor:
         return float(qty_str)
 
 
+class PaperExecutor:
+    """모의(paper) :class:`KimpExecutor`. 실주문 없이 시세로 전량 체결을 가정한다.
+
+    시세/통계는 라이브와 동일한 공개 소스(:func:`compute_kimp_snapshot`,
+    :func:`window_stats`)를 사용하므로 신호/사이징/PnL 거동은 라이브와 같지만,
+    거래소 키·주문·마진 위험이 없어 안전하게 전략을 검증한다.
+    """
+
+    def __init__(self, st: _KimpEngineState) -> None:
+        self._st = st
+
+    async def aclose(self) -> None:  # 닫을 자원 없음(인터페이스 대칭).
+        return None
+
+    async def fetch_quote(self, symbol: str) -> KimpQuote:
+        snap = await compute_kimp_snapshot([symbol])
+        row = next((r for r in snap.rows if r.symbol == symbol), None)
+        if row is None:
+            raise RuntimeError(f"{symbol} 김프 시세를 가져오지 못했습니다: {snap.errors[:2]}")
+        return KimpQuote(
+            symbol=symbol,
+            upbit_krw=row.upbit_krw_price,
+            binance_usdt=row.binance_usdt_price,
+            usd_krw=row.usd_krw_rate,
+        )
+
+    async def fetch_zscore(self, symbol: str, window_days: int) -> float | None:
+        if self._st.session_maker is None:
+            return None
+        async with self._st.session_maker() as session:
+            stats = await window_stats(session, symbol, window_days)
+        last = stats.get("last")
+        if last is None:
+            return None
+        return compute_zscore(float(last), stats.get("mean"), stats.get("std"))
+
+    async def fetch_margin_ratio(self) -> float | None:
+        return None  # paper: 마진 위험 없음.
+
+    async def buy_upbit(self, symbol: str, qty: float, price_krw: float) -> float:
+        return qty
+
+    async def sell_upbit(self, symbol: str, qty: float) -> float:
+        return qty
+
+    async def open_short(self, symbol: str, qty: float) -> float:
+        return qty
+
+    async def cover_short(self, symbol: str, qty: float) -> float:
+        return qty
+
+
+def _make_executor(st: _KimpEngineState) -> KimpExecutor:
+    """상태의 ``paper`` 플래그에 따라 모의/실거래 executor 를 만든다."""
+    return PaperExecutor(st) if st.paper else LiveExecutor(st)
+
+
 # ── 틱/루프 ────────────────────────────────────────────────
 
 
@@ -624,7 +685,7 @@ async def _tick(st: _KimpEngineState, executor: KimpExecutor) -> None:
 
 
 async def _engine_loop(st: _KimpEngineState) -> None:
-    executor = LiveExecutor(st)
+    executor = _make_executor(st)
     try:
         while st.running:
             try:
@@ -712,6 +773,7 @@ async def start_engine(  # noqa: PLR0913 — credentials/env are distinct requir
         binance_secret=binance_secret,
         futures_base=futures_base,
         is_testnet=is_testnet,
+        paper=(params.mode == "paper"),
         session_maker=session_maker,
     )
     _engines[user_id] = st
@@ -770,7 +832,7 @@ async def stop_engine(
         with contextlib.suppress(asyncio.CancelledError):
             await st._task
 
-    executor = LiveExecutor(st)
+    executor = _make_executor(st)
     try:
         with contextlib.suppress(Exception):
             await asyncio.shield(_liquidate_all(st, executor))
@@ -812,6 +874,24 @@ async def restore_engines_on_startup(
             params = KimpArbitrageParams(**params_raw)
             is_testnet = bool(data.get("is_testnet"))
             env = "testnet" if is_testnet else "mainnet"
+            if params.mode == "paper":
+                # paper 모드는 실주문이 없어 거래소 키 없이 복원한다.
+                await start_engine(
+                    user_id=user_id,
+                    params=params,
+                    upbit_access="",
+                    upbit_secret="",
+                    binance_key="",
+                    binance_secret="",
+                    is_testnet=is_testnet,
+                    session_maker=session_maker,
+                )
+                _log.info(
+                    "Auto-restored kimp PAPER engine user=%s symbol=%s",
+                    user_id,
+                    params.symbol,
+                )
+                continue
             async with session_maker() as session:
                 profile = await get_user_profile(session, user_id=user_id)
                 cred = await get_binance_credential(session, user_id=user_id, env=env)
@@ -837,6 +917,7 @@ async def restore_engines_on_startup(
 __all__ = [
     "KimpExecutor",
     "LiveExecutor",
+    "PaperExecutor",
     "TickDecision",
     "compute_zscore",
     "plan_tick",

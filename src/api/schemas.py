@@ -766,6 +766,10 @@ class KimpArbitrageParams(BaseModel):
 
     symbol: str = "BTC"
     env: Literal["mainnet", "testnet"] = "testnet"
+    mode: Literal["live", "paper"] = Field(
+        default="live",
+        description="live=실주문, paper=모의체결(주문 없이 시세로 시뮬, API 키 불필요)",
+    )
     gross_cap_krw: float = Field(
         default=10_000_000.0, gt=0, description="최대 북 명목(업비트 롱 기준, KRW)"
     )
@@ -791,6 +795,7 @@ class KimpArbitrageParams(BaseModel):
 
 class KimpArbitrageStatusResponse(BaseModel):
     running: bool
+    mode: Literal["live", "paper"] = "live"
     symbol: str | None = None
     upbit_long_qty: float | None = None
     binance_short_qty: float | None = None
@@ -863,6 +868,45 @@ class KimpBacktestResponse(BaseModel):
     as_of: datetime
     metrics: KimpBacktestMetrics | None = None
     equity_curve: list[KimpBacktestEquityPoint] = Field(default_factory=list)
+
+
+class KimpUniverseBacktestRequest(BaseModel):
+    """유니버스 일괄 백테스트 요청. 종목 미지정 시 스크리너 유니버스 전체."""
+
+    symbols: list[str] | None = Field(
+        default=None, description="대상 베이스 심볼 목록(미지정 시 유니버스 전체)"
+    )
+    limit: int = Field(default=30, ge=1, le=200, description="유니버스 상위 N개로 제한")
+    days: int = Field(default=30, ge=1, le=365)
+    rate_mode: Literal["usdt", "bank"] = "usdt"
+    include_funding: bool = True
+    gross_cap_krw: float = Field(default=10_000_000.0, gt=0)
+    full_build_z: float = -2.0
+    flat_z: float = 0.5
+    hedge_mode: Literal["quantity", "delta"] = "quantity"
+    leverage: float = Field(default=1.0, ge=1.0, le=10.0)
+    z_window_points: int = Field(default=720, ge=10, le=43200)
+    upbit_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+    binance_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+    concurrency: int = Field(default=4, ge=1, le=8, description="동시 데이터 적재 수")
+
+
+class KimpUniverseBacktestItem(BaseModel):
+    symbol: str
+    score: float | None = None  # composite_score (None=실패)
+    error: str | None = None
+    n_bars: int = 0
+    n_funding_events: int = 0
+    metrics: KimpBacktestMetrics | None = None
+
+
+class KimpUniverseBacktestResponse(BaseModel):
+    success: bool
+    error: str | None = None
+    as_of: datetime
+    n_symbols: int = 0
+    n_ok: int = 0
+    items: list[KimpUniverseBacktestItem] = Field(default_factory=list)
 
 
 # ── Quick Backtest ──────────────────────────────────────────

@@ -12,8 +12,11 @@ import pytest
 from api.schemas import KimpArbitrageParams
 from live.kimp_neutral import KimpQuote, RebalanceAction, book_deltas
 from live.kimp_neutral_engine import (
+    LiveExecutor,
+    PaperExecutor,
     _apply_order,
     _KimpEngineState,
+    _make_executor,
     _refresh_metrics,
     _state_to_dict,
     _tick,
@@ -291,6 +294,67 @@ class TestRefreshMetrics:
 class TestEngineStatus:
     def test_status_when_no_engine(self) -> None:
         assert get_engine_status("nonexistent-user").running is False
+
+
+class TestPaperExecutor:
+    @pytest.mark.asyncio
+    async def test_orders_simulate_full_fill(self) -> None:
+        st = _state(paper=True)
+        ex = PaperExecutor(st)
+        assert await ex.buy_upbit("BTC", 1.5, 1000.0) == pytest.approx(1.5)
+        assert await ex.sell_upbit("BTC", 1.5) == pytest.approx(1.5)
+        assert await ex.open_short("BTC", 2.0) == pytest.approx(2.0)
+        assert await ex.cover_short("BTC", 2.0) == pytest.approx(2.0)
+        await ex.aclose()
+
+    @pytest.mark.asyncio
+    async def test_margin_ratio_is_none(self) -> None:
+        ex = PaperExecutor(_state(paper=True))
+        assert await ex.fetch_margin_ratio() is None
+
+    @pytest.mark.asyncio
+    async def test_zscore_none_without_session(self) -> None:
+        ex = PaperExecutor(_state(paper=True))
+        assert await ex.fetch_zscore("BTC", 30) is None
+
+    def test_make_executor_picks_paper(self) -> None:
+        assert isinstance(_make_executor(_state(paper=True)), PaperExecutor)
+
+    @pytest.mark.asyncio
+    async def test_make_executor_picks_live(self) -> None:
+        st = _state(paper=False, upbit_access="k", upbit_secret="s")  # noqa: S106 — test dummy
+        ex = _make_executor(st)
+        assert isinstance(ex, LiveExecutor)
+        await ex.aclose()
+
+    @pytest.mark.asyncio
+    async def test_paper_tick_builds_and_unwinds(self) -> None:
+        # paper executor 주문 시뮬을 통해 _tick 이 라이브와 동일하게 북을 형성/청산.
+        st = _state(paper=True)
+        ex = PaperExecutor(st)
+        fixed_quote = _quote()
+
+        async def _quote_for(_symbol: str) -> KimpQuote:
+            return fixed_quote
+
+        ex.fetch_quote = _quote_for  # type: ignore[method-assign]
+        ex.fetch_zscore = _z_neg  # type: ignore[method-assign]
+        await _tick(st, ex)
+        assert st.upbit_long_qty > 0.0
+        assert st.binance_short_qty > 0.0
+
+        ex.fetch_zscore = _z_pos  # type: ignore[method-assign]
+        await _tick(st, ex)
+        assert st.upbit_long_qty == pytest.approx(0.0)
+        assert st.binance_short_qty == pytest.approx(0.0)
+
+
+async def _z_neg(_symbol: str, _window: int) -> float:
+    return -3.0
+
+
+async def _z_pos(_symbol: str, _window: int) -> float:
+    return 1.0
 
 
 if __name__ == "__main__":

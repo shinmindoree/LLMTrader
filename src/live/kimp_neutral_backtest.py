@@ -44,9 +44,29 @@ __all__ = [
     "BacktestMetrics",
     "KimpBacktestResult",
     "run_kimp_backtest",
+    "composite_score",
 ]
 
 _MS_PER_YEAR = 365 * 24 * 3600 * 1000
+
+
+def composite_score(metrics: BacktestMetrics) -> float:
+    """유니버스 랭킹용 단일 점수. 높을수록 우선.
+
+    역김프 회귀+펀딩 수익을 보상하고 낙폭/무진입을 벌점한다. 구성::
+
+        score = total_return_pct / (1 + mdd_pct) + 0.25·sharpe
+
+    - ``total_return_pct`` 는 펀딩 수익을 포함한 순손익(자본 대비).
+    - 큰 ``max_drawdown_pct`` 는 분모로 보상을 깎는다(위험조정).
+    - ``sharpe`` 는 변동성 대비 일관성에 소폭 가점.
+    - 진입이 거의 없으면(거래 0) 수익도 0이라 자연히 하위로 밀린다.
+    """
+    denom = 1.0 + max(0.0, metrics.max_drawdown_pct)
+    base = metrics.total_return_pct / denom
+    sharpe = metrics.sharpe if math.isfinite(metrics.sharpe) else 0.0
+    return base + 0.25 * sharpe
+
 
 
 @dataclass(frozen=True)

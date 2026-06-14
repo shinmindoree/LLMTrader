@@ -31,9 +31,20 @@ from live.kimp_candle_history import (
     _interval_ms,
     _parse_float,
 )
-from live.kimp_neutral_backtest import KimpBar
+from live.kimp_neutral_backtest import (
+    BacktestConfig,
+    BacktestMetrics,
+    KimpBar,
+    composite_score,
+    run_kimp_backtest,
+)
 
-__all__ = ["BacktestData", "load_backtest_bars"]
+__all__ = [
+    "BacktestData",
+    "load_backtest_bars",
+    "UniverseBacktestItem",
+    "run_universe_backtest",
+]
 
 
 @dataclass(frozen=True)
@@ -59,7 +70,7 @@ def _pick_granularity(days: int) -> _Granularity:
     return _Granularity(240, "4h")
 
 
-async def _fetch_binance_futures_klines(
+async def _fetch_binance_futures_klines(  # noqa: PLR0913 — distinct pagination bounds
     client: httpx.AsyncClient,
     symbol: str,
     interval_name: str,
@@ -222,7 +233,7 @@ async def load_backtest_bars(
         )
 
         if mode == "bank":
-            from live.fx_feed import get_fx_rate
+            from live.fx_feed import get_fx_rate  # noqa: PLC0415
 
             upbit_coin, binance, funding_rows, bank_fx = await asyncio.gather(
                 upbit_coin_task, binance_task, funding_task, get_fx_rate()
@@ -264,3 +275,89 @@ async def load_backtest_bars(
 
 async def _noop_funding() -> list[tuple[int, float]]:
     return []
+
+
+@dataclass(frozen=True)
+class UniverseBacktestItem:
+    """유니버스 백테스트 1종목 요약(랭킹용)."""
+
+    symbol: str
+    score: float
+    metrics: BacktestMetrics | None
+    n_bars: int
+    n_funding_events: int
+    error: str | None = None
+
+
+async def _backtest_one(  # noqa: PLR0913 — keyword-only config knobs
+    symbol: str,
+    *,
+    days: int,
+    rate_mode: KimpRateMode,
+    include_funding: bool,
+    config: BacktestConfig,
+    min_bars: int,
+    sem: asyncio.Semaphore,
+) -> UniverseBacktestItem:
+    """한 종목 데이터 적재 + 백테스트 + 점수화(예외는 item.error 로 캡처)."""
+    async with sem:
+        try:
+            data = await load_backtest_bars(
+                symbol, days=days, rate_mode=rate_mode, include_funding=include_funding
+            )
+        except Exception as exc:  # noqa: BLE001
+            return UniverseBacktestItem(
+                symbol=symbol, score=float("-inf"), metrics=None,
+                n_bars=0, n_funding_events=0, error=f"데이터 조회 실패: {exc}",
+            )
+
+    if len(data.bars) < max(min_bars, config.z_window):
+        return UniverseBacktestItem(
+            symbol=symbol, score=float("-inf"), metrics=None,
+            n_bars=len(data.bars), n_funding_events=data.n_funding_events,
+            error=f"데이터 부족({len(data.bars)} bars)",
+        )
+
+    result = run_kimp_backtest(data.bars, config)
+    return UniverseBacktestItem(
+        symbol=symbol,
+        score=composite_score(result.metrics),
+        metrics=result.metrics,
+        n_bars=result.metrics.n_bars,
+        n_funding_events=data.n_funding_events,
+    )
+
+
+async def run_universe_backtest(  # noqa: PLR0913 — keyword-only config knobs
+    symbols: list[str],
+    *,
+    days: int = 30,
+    rate_mode: KimpRateMode = "usdt",
+    include_funding: bool = True,
+    config: BacktestConfig | None = None,
+    min_bars: int = 50,
+    concurrency: int = 4,
+) -> list[UniverseBacktestItem]:
+    """``symbols`` 전체를 백테스트하고 ``composite_score`` 내림차순으로 정렬해 반환.
+
+    공개 API 부하를 막기 위해 ``concurrency`` 개의 동시 적재로 제한한다. 실패한
+    종목은 ``error`` 가 채워진 채 점수 ``-inf`` 로 하위에 남는다.
+    """
+    cfg = config or BacktestConfig()
+    sem = asyncio.Semaphore(max(1, concurrency))
+    tasks = [
+        _backtest_one(
+            sym.strip().upper(),
+            days=days,
+            rate_mode=rate_mode,
+            include_funding=include_funding,
+            config=cfg,
+            min_bars=min_bars,
+            sem=sem,
+        )
+        for sym in symbols
+        if sym.strip()
+    ]
+    items = await asyncio.gather(*tasks)
+    return sorted(items, key=lambda it: it.score, reverse=True)
+

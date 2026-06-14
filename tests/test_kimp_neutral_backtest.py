@@ -12,8 +12,10 @@ import pytest
 from live.kimp_neutral import HedgeMode
 from live.kimp_neutral_backtest import (
     BacktestConfig,
+    BacktestMetrics,
     KimpBacktestResult,
     KimpBar,
+    composite_score,
     run_kimp_backtest,
 )
 
@@ -246,6 +248,46 @@ class TestFunding:
     def test_default_bar_has_no_funding(self) -> None:
         res = run_kimp_backtest(kimps_to_bars([0.03] * 40), BacktestConfig(z_window=10))
         assert res.metrics.funding_income_krw == 0.0
+
+
+def _metrics(
+    *, total_return_pct: float, max_drawdown_pct: float = 0.0, sharpe: float = 0.0
+) -> BacktestMetrics:
+    return BacktestMetrics(
+        n_bars=100,
+        total_return_pct=total_return_pct,
+        net_profit_krw=total_return_pct / 100.0 * 1e7,
+        funding_income_krw=0.0,
+        max_drawdown_pct=max_drawdown_pct,
+        sharpe=sharpe,
+        n_rebalances=1,
+        fee_drag_krw=0.0,
+        avg_kimp_pct=0.0,
+        time_in_market_pct=50.0,
+        final_kimp_pct=0.0,
+    )
+
+
+class TestCompositeScore:
+    def test_higher_return_scores_higher(self) -> None:
+        assert composite_score(_metrics(total_return_pct=5.0)) > composite_score(
+            _metrics(total_return_pct=2.0)
+        )
+
+    def test_drawdown_penalizes(self) -> None:
+        # 같은 수익이면 낙폭 큰 쪽이 낮은 점수.
+        low_dd = composite_score(_metrics(total_return_pct=5.0, max_drawdown_pct=1.0))
+        high_dd = composite_score(_metrics(total_return_pct=5.0, max_drawdown_pct=20.0))
+        assert low_dd > high_dd
+
+    def test_sharpe_adds_small_bonus(self) -> None:
+        base = composite_score(_metrics(total_return_pct=5.0))
+        with_sharpe = composite_score(_metrics(total_return_pct=5.0, sharpe=2.0))
+        assert with_sharpe > base
+
+    def test_nonfinite_sharpe_is_safe(self) -> None:
+        s = composite_score(_metrics(total_return_pct=3.0, sharpe=float("nan")))
+        assert math.isfinite(s)
 
 
 if __name__ == "__main__":

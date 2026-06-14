@@ -143,6 +143,9 @@ from api.schemas import (
     KimpHistoryResponse,
     KimpScreenerItem,
     KimpScreenerResponse,
+    KimpUniverseBacktestItem,
+    KimpUniverseBacktestRequest,
+    KimpUniverseBacktestResponse,
     LivePositionsResponse,
     LivePositionsTotals,
     LiveStrategyPositions,
@@ -2511,7 +2514,11 @@ def create_app() -> FastAPI:
         user: AuthenticatedUser = Depends(require_auth),
         session: AsyncSession = Depends(_db_session),
     ) -> KimpArbitrageStatusResponse:
-        """김프 델타-중립 봇 시작 (업비트 현물 롱 + 바이낸스 무기한 숏)."""
+        """김프 델타-중립 봇 시작 (업비트 현물 롱 + 바이낸스 무기한 숏).
+
+        ``mode="paper"`` 면 실주문 없이 시세로 모의체결만 하므로 거래소 API 키
+        없이도 시작할 수 있다.
+        """
         from common.crypto import get_crypto_service
         from control.repo import get_binance_credential, get_user_profile
         from live.kimp_neutral_engine import get_engine_status_persisted, start_engine
@@ -2522,6 +2529,20 @@ def create_app() -> FastAPI:
                 status_code=409,
                 detail=f"이미 실행 중입니다 (symbol={current.symbol}). 먼저 정지하세요.",
             )
+
+        if params.mode == "paper":
+            # paper: 키/주문 불필요. 시세·통계는 공개 소스를 사용한다.
+            await start_engine(
+                user_id=user.user_id,
+                params=params,
+                upbit_access="",
+                upbit_secret="",
+                binance_key="",
+                binance_secret="",
+                is_testnet=(params.env == "testnet"),
+                session_maker=session_maker,
+            )
+            return await get_engine_status_persisted(session, user.user_id)
 
         profile = await get_user_profile(session, user_id=user.user_id)
         if not profile or not profile.upbit_api_key_enc or not profile.upbit_api_secret_enc:
@@ -2674,6 +2695,95 @@ def create_app() -> FastAPI:
         )
         return KimpBacktestResponse(
             success=True, symbol=sym, as_of=now, metrics=metrics, equity_curve=curve
+        )
+
+    def _to_universe_metrics(m: Any) -> KimpBacktestMetrics:
+        return KimpBacktestMetrics(
+            n_bars=m.n_bars,
+            total_return_pct=m.total_return_pct,
+            net_profit_krw=m.net_profit_krw,
+            funding_income_krw=m.funding_income_krw,
+            max_drawdown_pct=m.max_drawdown_pct,
+            sharpe=m.sharpe,
+            n_rebalances=m.n_rebalances,
+            fee_drag_krw=m.fee_drag_krw,
+            avg_kimp_pct=m.avg_kimp_pct,
+            time_in_market_pct=m.time_in_market_pct,
+            final_kimp_pct=m.final_kimp_pct,
+        )
+
+    @app.post(
+        "/api/kimp-arb/backtest/universe", response_model=KimpUniverseBacktestResponse
+    )
+    async def kimp_arb_backtest_universe(
+        req: KimpUniverseBacktestRequest,
+        _: AuthenticatedUser = Depends(require_auth),
+    ) -> KimpUniverseBacktestResponse:
+        """유니버스(또는 지정 종목) 전체를 백테스트하고 점수 내림차순으로 랭킹한다.
+
+        각 종목을 선물 캔들 + 펀딩 이력으로 백테스트한 뒤, 펀딩 포함 위험조정
+        ``composite_score`` 로 정렬한다. 전략의 **종목 선택 근거**로 사용한다.
+        """
+        from datetime import datetime as _dt
+
+        from live.kimp_neutral import HedgeMode
+        from live.kimp_backtest_data import run_universe_backtest
+        from live.kimp_neutral_backtest import BacktestConfig
+        from live.kimp_universe import get_kimp_universe
+
+        now = _dt.now(UTC)
+        if req.symbols:
+            symbols = [s.strip().upper() for s in req.symbols if s.strip()]
+        else:
+            symbols = list(await get_kimp_universe())[: req.limit]
+        if not symbols:
+            return KimpUniverseBacktestResponse(
+                success=False, error="대상 종목이 없습니다", as_of=now
+            )
+
+        cfg = BacktestConfig(
+            gross_cap_krw=req.gross_cap_krw,
+            full_build_z=req.full_build_z,
+            flat_z=req.flat_z,
+            hedge_mode=HedgeMode.DELTA if req.hedge_mode == "delta" else HedgeMode.QUANTITY,
+            leverage=req.leverage,
+            z_window=req.z_window_points,
+            upbit_taker_fee=req.upbit_taker_fee,
+            binance_taker_fee=req.binance_taker_fee,
+        )
+        try:
+            results = await run_universe_backtest(
+                symbols,
+                days=req.days,
+                rate_mode=req.rate_mode,
+                include_funding=req.include_funding,
+                config=cfg,
+                concurrency=req.concurrency,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("universe backtest failed", exc_info=True)
+            return KimpUniverseBacktestResponse(
+                success=False, error=f"유니버스 백테스트 실패: {exc}", as_of=now
+            )
+
+        items = [
+            KimpUniverseBacktestItem(
+                symbol=it.symbol,
+                score=(it.score if it.metrics is not None else None),
+                error=it.error,
+                n_bars=it.n_bars,
+                n_funding_events=it.n_funding_events,
+                metrics=(_to_universe_metrics(it.metrics) if it.metrics is not None else None),
+            )
+            for it in results
+        ]
+        n_ok = sum(1 for it in items if it.metrics is not None)
+        return KimpUniverseBacktestResponse(
+            success=True,
+            as_of=now,
+            n_symbols=len(items),
+            n_ok=n_ok,
+            items=items,
         )
 
     @app.get(
