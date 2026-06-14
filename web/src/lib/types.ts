@@ -919,10 +919,15 @@ export type KimpBacktestMetrics = {
   n_bars: number;
   total_return_pct: number;
   net_profit_krw: number;
+  kimp_pnl_krw: number;
   funding_income_krw: number;
+  funding_event_count: number;
   max_drawdown_pct: number;
   sharpe: number;
   n_rebalances: number;
+  n_entries: number;
+  n_exits: number;
+  completed_trades: number;
   fee_drag_krw: number;
   avg_kimp_pct: number;
   time_in_market_pct: number;

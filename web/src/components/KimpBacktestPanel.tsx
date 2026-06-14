@@ -22,8 +22,6 @@ type SharedConfig = {
   grossCap: number;
   fullBuildZ: number;
   flatZ: number;
-  zWindow: number;
-  leverage: number;
   hedgeMode: KimpHedgeMode;
   includeFunding: boolean;
 };
@@ -33,8 +31,6 @@ const DEFAULT_CONFIG: SharedConfig = {
   grossCap: 10_000_000,
   fullBuildZ: -2.0,
   flatZ: 0.5,
-  zWindow: 720,
-  leverage: 1.0,
   hedgeMode: "quantity",
   includeFunding: true,
 };
@@ -56,6 +52,10 @@ function fmtKrw(v: number | null | undefined): string {
   if (abs >= 1e8) return `${sign}₩${(abs / 1e8).toFixed(2)}억`;
   if (abs >= 1e4) return `${sign}₩${(abs / 1e4).toFixed(0)}만`;
   return `${sign}₩${abs.toFixed(0)}`;
+}
+
+function fmtKrwWithCount(v: number | null | undefined, count: number | null | undefined, unit: string): string {
+  return `${fmtKrw(v)} / ${count ?? 0}${unit}`;
 }
 
 function fmtScore(v: number | null | undefined): string {
@@ -106,8 +106,6 @@ export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
         full_build_z: cfg.fullBuildZ,
         flat_z: cfg.flatZ,
         hedge_mode: cfg.hedgeMode,
-        leverage: cfg.leverage,
-        z_window_points: cfg.zWindow,
       });
       setSingleRes(res);
       if (!res.success) setSingleErr(res.error ?? b.noData);
@@ -132,8 +130,6 @@ export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
         full_build_z: cfg.fullBuildZ,
         flat_z: cfg.flatZ,
         hedge_mode: cfg.hedgeMode,
-        leverage: cfg.leverage,
-        z_window_points: cfg.zWindow,
         concurrency,
       });
       setUniRes(res);
@@ -197,21 +193,6 @@ export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
           value={cfg.flatZ}
           onChange={(v) => patch("flatZ", v)}
           step={0.1}
-        />
-        <NumField
-          label={b.fields.zWindow}
-          value={cfg.zWindow}
-          onChange={(v) => patch("zWindow", v)}
-          min={10}
-          max={43200}
-        />
-        <NumField
-          label={b.fields.leverage}
-          value={cfg.leverage}
-          onChange={(v) => patch("leverage", v)}
-          min={1}
-          max={10}
-          step={0.5}
         />
         <label className="flex flex-col gap-1">
           <span className="text-[10px] uppercase tracking-wider text-[#868993]">
@@ -318,11 +299,16 @@ function SinglePanel({
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             <Metric label={labels.metrics.totalReturn} value={fmtPct(m.total_return_pct)} cls={signClass(m.total_return_pct)} />
             <Metric label={labels.metrics.netProfit} value={fmtKrw(m.net_profit_krw)} cls={signClass(m.net_profit_krw)} />
-            <Metric label={labels.metrics.funding} value={fmtKrw(m.funding_income_krw)} cls={signClass(m.funding_income_krw)} />
-            <Metric label={labels.metrics.mdd} value={fmtPct(m.max_drawdown_pct)} cls="text-rose-400" />
-            <Metric label={labels.metrics.sharpe} value={fmtNum(m.sharpe)} />
-            <Metric label={labels.metrics.rebalances} value={String(m.n_rebalances)} />
+            <Metric label={labels.metrics.kimpPnl} value={fmtKrw(m.kimp_pnl_krw)} cls={signClass(m.kimp_pnl_krw)} />
+            <Metric
+              label={labels.metrics.funding}
+              value={fmtKrwWithCount(m.funding_income_krw, m.funding_event_count, labels.metrics.eventUnit)}
+              cls={signClass(m.funding_income_krw)}
+            />
             <Metric label={labels.metrics.feeDrag} value={fmtKrw(m.fee_drag_krw)} cls="text-[#868993]" />
+            <Metric label={labels.metrics.completedTrades} value={String(m.completed_trades)} />
+            <Metric label={labels.metrics.entriesExits} value={`${m.n_entries}/${m.n_exits}`} />
+            <Metric label={labels.metrics.mdd} value={fmtPct(m.max_drawdown_pct)} cls="text-rose-400" />
             <Metric label={labels.metrics.timeInMarket} value={fmtPct(m.time_in_market_pct)} />
             <Metric label={labels.metrics.avgKimp} value={fmtPct(m.avg_kimp_pct)} />
             <Metric label={labels.metrics.finalKimp} value={fmtPct(m.final_kimp_pct)} />
@@ -333,20 +319,6 @@ function SinglePanel({
               {labels.equityTitle}
             </div>
             <EquityCurve data={res?.equity_curve ?? []} />
-          </div>
-          <div className="mt-3">
-            <div className="mb-1 flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#868993]">
-              <span>{labels.overlayTitle}</span>
-              <span className="flex items-center gap-1 normal-case">
-                <span className="inline-block h-0.5 w-3 bg-[#38bdf8]" />
-                {labels.kimpLegend}
-              </span>
-              <span className="flex items-center gap-1 normal-case">
-                <span className="inline-block h-0.5 w-3 bg-[#f59e0b]" />
-                {labels.zLegend}
-              </span>
-            </div>
-            <KimpZOverlay data={res?.equity_curve ?? []} />
           </div>
         </>
       ) : !err ? (
@@ -455,7 +427,11 @@ function UniversePanel({
                       {fmtPct(it.metrics?.total_return_pct)}
                     </td>
                     <td className={`px-3 py-2 text-right ${signClass(it.metrics?.funding_income_krw)}`}>
-                      {fmtKrw(it.metrics?.funding_income_krw)}
+                      {fmtKrwWithCount(
+                        it.metrics?.funding_income_krw,
+                        it.metrics?.funding_event_count,
+                        labels.metrics.eventUnit,
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right text-rose-400">
                       {fmtPct(it.metrics?.max_drawdown_pct)}
@@ -580,75 +556,6 @@ function EquityCurve({ data }: { data: KimpBacktestEquityPoint[] }) {
       />
       <path d={area} fill={fill} />
       <path d={line} fill="none" stroke={stroke} strokeWidth={1.5} />
-    </svg>
-  );
-}
-
-function buildLine(
-  values: (number | null)[],
-  sx: (i: number) => number,
-  sy: (v: number) => number,
-): string {
-  let path = "";
-  let started = false;
-  values.forEach((v, i) => {
-    if (v == null || !Number.isFinite(v)) {
-      started = false;
-      return;
-    }
-    const cmd = started ? "L" : "M";
-    path += `${cmd}${sx(i).toFixed(1)},${sy(v).toFixed(1)} `;
-    started = true;
-  });
-  return path.trim();
-}
-
-function KimpZOverlay({ data }: { data: KimpBacktestEquityPoint[] }) {
-  if (data.length < 2) {
-    return (
-      <div className="flex h-[120px] items-center justify-center text-xs text-[#5b5d66]">—</div>
-    );
-  }
-  const width = 640;
-  const height = 120;
-  const pad = 8;
-  const innerW = width - pad * 2;
-  const innerH = height - pad * 2;
-  const sx = (i: number) => pad + (i / (data.length - 1)) * innerW;
-
-  const kimps = data.map((d) => d.kimp_pct);
-  const minK = Math.min(...kimps, 0);
-  const maxK = Math.max(...kimps, 0);
-  const rangeK = maxK - minK || 1;
-  const syK = (v: number) => pad + innerH - ((v - minK) / rangeK) * innerH;
-
-  const zs = data.map((d) => d.zscore);
-  const finiteZ = zs.filter((z): z is number => z != null && Number.isFinite(z));
-  const absZ = finiteZ.length ? Math.max(2, ...finiteZ.map((z) => Math.abs(z))) : 2;
-  const syZ = (v: number) => pad + innerH - ((v + absZ) / (2 * absZ)) * innerH;
-
-  const kimpPath = buildLine(kimps, sx, syK);
-  const zPath = buildLine(zs, sx, syZ);
-  const zeroY = syK(0);
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-full"
-      style={{ height }}
-      preserveAspectRatio="none"
-    >
-      <line
-        x1={pad}
-        y1={zeroY}
-        x2={width - pad}
-        y2={zeroY}
-        stroke="#3f3f46"
-        strokeWidth={0.5}
-        strokeDasharray="3 3"
-      />
-      {zPath ? <path d={zPath} fill="none" stroke="#f59e0b" strokeWidth={1} opacity={0.85} /> : null}
-      {kimpPath ? <path d={kimpPath} fill="none" stroke="#38bdf8" strokeWidth={1.5} /> : null}
     </svg>
   );
 }

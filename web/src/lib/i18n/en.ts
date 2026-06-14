@@ -974,7 +974,7 @@ const en = {
         backtest: {
           title: "Backtest · Universe Ranking",
           subtitle:
-            "Reconstructs the delta-neutral strategy from futures candles + funding settlements. Inspect single-symbol equity curves and universe score rankings.",
+            "Tests a simple delta-neutral strategy: enter once on reverse kimp and close once when kimp reverts to the target.",
           tabs: {
             single: "Single symbol",
             universe: "Universe ranking",
@@ -983,8 +983,8 @@ const en = {
             symbol: "Symbol",
             days: "Days",
             grossCap: "Max book (KRW)",
-            fullBuildZ: "Full-build z",
-            flatZ: "Flat z",
+            fullBuildZ: "Entry kimp (%)",
+            flatZ: "Target kimp (%)",
             zWindow: "z window (bars)",
             leverage: "Leverage",
             hedgeMode: "Hedge mode",
@@ -1005,10 +1005,14 @@ const en = {
           metrics: {
             totalReturn: "Total return",
             netProfit: "Net profit",
+            kimpPnl: "Kimp PnL",
             funding: "Funding income",
+            eventUnit: " events",
             mdd: "Max drawdown",
             sharpe: "Sharpe",
-            rebalances: "Rebalances",
+            completedTrades: "Closed trades",
+            entriesExits: "Entries/exits",
+            rebalances: "Entries+exits",
             feeDrag: "Fees",
             timeInMarket: "Time in market",
             avgKimp: "Avg kimp",
@@ -1033,7 +1037,7 @@ const en = {
           ok: "OK",
           failed: "Failed",
           summary: "{ok}/{total} symbols succeeded",
-          scoreHint: "Score = funding-inclusive return risk-adjusted by drawdown + Sharpe bonus",
+          scoreHint: "Score = kimp+funding net return risk-adjusted by drawdown + Sharpe bonus",
         },
         bot: {
           title: "Delta-neutral bot",

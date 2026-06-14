@@ -828,12 +828,14 @@ class KimpBacktestRequest(BaseModel):
         default=True, description="숏 펀딩비 수익 반영(candles 모드 전용)"
     )
     gross_cap_krw: float = Field(default=10_000_000.0, gt=0)
-    full_build_z: float = -2.0
-    flat_z: float = 0.5
+    full_build_z: float = Field(
+        default=-2.0, description="진입 김프 기준(%). 음수면 역김프 구간"
+    )
+    flat_z: float = Field(default=0.5, description="목표 청산 김프(%). 예: 0.5 = +0.5%")
     hedge_mode: Literal["quantity", "delta"] = "quantity"
     leverage: float = Field(default=1.0, ge=1.0, le=10.0)
     z_window_points: int = Field(
-        default=1440, ge=10, le=43200, description="z-score rolling 윈도우(바 개수)"
+        default=1440, ge=10, le=43200, description="하위 호환용. 현 백테스트 거래 로직에는 미사용"
     )
     upbit_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
     binance_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
@@ -843,10 +845,15 @@ class KimpBacktestMetrics(BaseModel):
     n_bars: int
     total_return_pct: float  # 투입자본 대비 (gross_cap 기준)
     net_profit_krw: float
+    kimp_pnl_krw: float = 0.0  # 김프/스프레드 MTM 손익(수수료·펀딩 제외)
     funding_income_krw: float  # 누적 숏 펀딩 수익(스프레드 손익과 분리)
+    funding_event_count: int = 0
     max_drawdown_pct: float
     sharpe: float
-    n_rebalances: int
+    n_rebalances: int  # 하위 호환용: 진입+청산 액션 수
+    n_entries: int = 0
+    n_exits: int = 0
+    completed_trades: int = 0
     fee_drag_krw: float
     avg_kimp_pct: float
     time_in_market_pct: float

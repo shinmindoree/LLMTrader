@@ -311,7 +311,7 @@ async def _backtest_one(  # noqa: PLR0913 — keyword-only config knobs
                 n_bars=0, n_funding_events=0, error=f"데이터 조회 실패: {exc}",
             )
 
-    if len(data.bars) < max(min_bars, config.z_window):
+    if len(data.bars) < min_bars:
         return UniverseBacktestItem(
             symbol=symbol, score=float("-inf"), metrics=None,
             n_bars=len(data.bars), n_funding_events=data.n_funding_events,
@@ -360,4 +360,3 @@ async def run_universe_backtest(  # noqa: PLR0913 — keyword-only config knobs
     ]
     items = await asyncio.gather(*tasks)
     return sorted(items, key=lambda it: it.score, reverse=True)
-

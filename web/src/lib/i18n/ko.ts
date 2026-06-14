@@ -977,7 +977,7 @@ const ko: TranslationKeys = {
         backtest: {
           title: "백테스트 · 유니버스 랭킹",
           subtitle:
-            "선물 캔들 + 펀딩 정산으로 델타-중립 전략을 재구성합니다. 단일 종목 손익곡선과 유니버스 점수 랭킹을 확인하세요.",
+            "역김프에서 1회 진입하고 목표 김프 회귀 시 1회 청산하는 단순 델타-중립 전략을 검증합니다.",
           tabs: {
             single: "단일 종목",
             universe: "유니버스 랭킹",
@@ -986,8 +986,8 @@ const ko: TranslationKeys = {
             symbol: "심볼",
             days: "기간(일)",
             grossCap: "최대 북(KRW)",
-            fullBuildZ: "풀진입 z",
-            flatZ: "청산 z",
+            fullBuildZ: "진입 김프(%)",
+            flatZ: "목표 김프(%)",
             zWindow: "z 윈도우(바)",
             leverage: "레버리지",
             hedgeMode: "헷지 모드",
@@ -1008,10 +1008,14 @@ const ko: TranslationKeys = {
           metrics: {
             totalReturn: "총수익률",
             netProfit: "순이익",
+            kimpPnl: "김프 손익",
             funding: "펀딩 수익",
+            eventUnit: "회",
             mdd: "최대낙폭",
             sharpe: "샤프",
-            rebalances: "리밸런싱",
+            completedTrades: "완료 거래",
+            entriesExits: "진입/청산",
+            rebalances: "진입+청산",
             feeDrag: "수수료",
             timeInMarket: "시장 노출",
             avgKimp: "평균 김프",
@@ -1036,7 +1040,7 @@ const ko: TranslationKeys = {
           ok: "정상",
           failed: "실패",
           summary: "{ok}/{total} 종목 성공",
-          scoreHint: "점수 = 펀딩 포함 수익률을 낙폭으로 위험조정 + 샤프 가점",
+          scoreHint: "점수 = 김프+펀딩 순수익률을 낙폭으로 위험조정 + 샤프 가점",
         },
         bot: {
           title: "델타-중립 봇",

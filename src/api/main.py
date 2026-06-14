@@ -2660,12 +2660,12 @@ def create_app() -> FastAPI:
                 for r in rows
             ]
 
-        if len(bars) < req.z_window_points:
+        if len(bars) < 2:
             return KimpBacktestResponse(
                 success=False,
                 error=(
-                    f"데이터 부족: {len(bars)}개 < z_window {req.z_window_points}. "
-                    "기간(days)을 늘리거나 윈도우를 줄이세요."
+                    f"데이터 부족: {len(bars)}개 < 2개. "
+                    "기간(days)을 늘리거나 데이터 수집 상태를 확인하세요."
                 ),
                 symbol=sym,
                 as_of=now,
@@ -2701,10 +2701,15 @@ def create_app() -> FastAPI:
             n_bars=m.n_bars,
             total_return_pct=m.total_return_pct,
             net_profit_krw=m.net_profit_krw,
+            kimp_pnl_krw=m.kimp_pnl_krw,
             funding_income_krw=m.funding_income_krw,
+            funding_event_count=m.funding_event_count,
             max_drawdown_pct=m.max_drawdown_pct,
             sharpe=m.sharpe,
             n_rebalances=m.n_rebalances,
+            n_entries=m.n_entries,
+            n_exits=m.n_exits,
+            completed_trades=m.completed_trades,
             fee_drag_krw=m.fee_drag_krw,
             avg_kimp_pct=m.avg_kimp_pct,
             time_in_market_pct=m.time_in_market_pct,
@@ -2719,10 +2724,15 @@ def create_app() -> FastAPI:
             n_bars=m.n_bars,
             total_return_pct=m.total_return_pct,
             net_profit_krw=m.net_profit_krw,
+            kimp_pnl_krw=m.kimp_pnl_krw,
             funding_income_krw=m.funding_income_krw,
+            funding_event_count=m.funding_event_count,
             max_drawdown_pct=m.max_drawdown_pct,
             sharpe=m.sharpe,
             n_rebalances=m.n_rebalances,
+            n_entries=m.n_entries,
+            n_exits=m.n_exits,
+            completed_trades=m.completed_trades,
             fee_drag_krw=m.fee_drag_krw,
             avg_kimp_pct=m.avg_kimp_pct,
             time_in_market_pct=m.time_in_market_pct,
