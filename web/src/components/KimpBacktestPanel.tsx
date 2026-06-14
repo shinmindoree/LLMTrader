@@ -73,6 +73,7 @@ function signClass(v: number | null | undefined): string {
 export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
   const { t } = useI18n();
   const b = t.hubs.arbitrage.kimp.backtest;
+  const selectedSymbol = symbol.trim().toUpperCase() || "BTC";
 
   const [tab, setTab] = useState<"single" | "universe">("single");
   const [cfg, setCfg] = useState<SharedConfig>(DEFAULT_CONFIG);
@@ -96,7 +97,7 @@ export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
     setSingleErr(null);
     try {
       const res = await runKimpBacktest({
-        symbol: symbol.trim().toUpperCase() || "BTC",
+        symbol: selectedSymbol,
         days: cfg.days,
         price_source: "candles",
         rate_mode: "usdt",
@@ -250,6 +251,7 @@ export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
           err={singleErr}
           onRun={onRunSingle}
           labels={b}
+          symbol={selectedSymbol}
         />
       ) : (
         <UniversePanel
@@ -262,7 +264,7 @@ export default function KimpBacktestPanel({ symbol, onSelect }: Props) {
           onConcurrency={setConcurrency}
           onRun={onRunUniverse}
           onSelect={onSelect}
-          selected={symbol}
+          selected={selectedSymbol}
           labels={b}
         />
       )}
@@ -278,24 +280,32 @@ function SinglePanel({
   err,
   onRun,
   labels,
+  symbol,
 }: {
   busy: boolean;
   res: KimpBacktestResponse | null;
   err: string | null;
   onRun: () => void;
   labels: Labels;
+  symbol: string;
 }) {
   const m = res?.success ? res.metrics ?? null : null;
   return (
     <div className="border-t border-[#26272d] px-4 py-3">
-      <button
-        type="button"
-        onClick={onRun}
-        disabled={busy}
-        className="rounded-md border border-[#26272d] bg-[#1a1b22] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#22232b] disabled:opacity-50"
-      >
-        {busy ? labels.running : labels.run}
-      </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={busy}
+          className="rounded-md border border-[#26272d] bg-[#1a1b22] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#22232b] disabled:opacity-50"
+        >
+          {busy ? labels.running : labels.run}
+        </button>
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-[#868993]">
+          {labels.tabs.single}:{" "}
+          <span className="font-semibold text-emerald-400">{symbol}</span>
+        </div>
+      </div>
 
       {err ? (
         <div className="mt-3 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-400">
