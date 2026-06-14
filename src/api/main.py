@@ -4111,7 +4111,7 @@ def create_app() -> FastAPI:
         dimensions = [
             SweepDimensionResolved(
                 path=d.get("path"),
-                values=[float(v) for v in (d.get("values") or [])],
+                values=list(d.get("values") or []),
             )
             for d in (spec.get("dimensions") or [])
             if isinstance(d, dict) and d.get("path")
