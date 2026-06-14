@@ -62,8 +62,8 @@ _MEM_CACHE: dict[str, tuple[float, KimpCandleHistory]] = {}
 
 # Upbit 공개 시세 API는 IP당 초당 요청수를 제한한다(429). 페이지네이션이
 # 많은 큰 기간(7D/30D/ALL)에서 버스트로 막히지 않도록 전역 throttle + 재시도.
-_UPBIT_MIN_INTERVAL_SEC = 0.12
-_UPBIT_MAX_RETRIES = 4
+_UPBIT_MIN_INTERVAL_SEC = 0.20
+_UPBIT_MAX_RETRIES = 7
 _upbit_throttle_lock = asyncio.Lock()
 _upbit_last_call_ts = 0.0
 
@@ -223,7 +223,12 @@ async def _upbit_get(
         last_exc = httpx.HTTPStatusError(
             "429 Too Many Requests", request=resp.request, response=resp
         )
-        backoff = min(2.0, 0.4 * (2**attempt))
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            retry_after_sec = float(retry_after) if retry_after is not None else 0.0
+        except ValueError:
+            retry_after_sec = 0.0
+        backoff = max(retry_after_sec, min(8.0, 0.6 * (2**attempt)))
         await asyncio.sleep(backoff)
     if last_exc is not None:
         raise last_exc

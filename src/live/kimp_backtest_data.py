@@ -16,7 +16,10 @@ KRW 환산 기준(``rate_mode``):
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import math
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -39,12 +42,22 @@ from live.kimp_neutral_backtest import (
     run_kimp_backtest,
 )
 
+_log = logging.getLogger("llmtrader.kimp_backtest_data")
+
 __all__ = [
     "BacktestData",
     "load_backtest_bars",
     "UniverseBacktestItem",
     "run_universe_backtest",
 ]
+
+_BACKTEST_CACHE_TTL_SEC = 900
+_BACKTEST_MEM_CACHE: dict[str, tuple[float, "BacktestData"]] = {}
+
+_BINANCE_MIN_INTERVAL_SEC = 0.08
+_BINANCE_MAX_RETRIES = 7
+_binance_throttle_lock = asyncio.Lock()
+_binance_last_call_ts = 0.0
 
 
 @dataclass(frozen=True)
@@ -70,6 +83,138 @@ def _pick_granularity(days: int) -> _Granularity:
     return _Granularity(240, "4h")
 
 
+def _backtest_cache_key(
+    *,
+    symbol: str,
+    days: int,
+    mode: KimpRateMode,
+    include_funding: bool,
+    unit_min: int,
+    end_ms: int,
+) -> str:
+    return (
+        f"kimp:backtest:v2:{mode}:{symbol}:{days}:"
+        f"{int(include_funding)}:{unit_min}:{end_ms}"
+    )
+
+
+def _to_cache_payload(data: "BacktestData") -> dict[str, Any]:
+    return {
+        "n_funding_events": data.n_funding_events,
+        "interval_min": data.interval_min,
+        "bars": [
+            [
+                b.ts_ms,
+                b.upbit_krw,
+                b.binance_usdt,
+                b.usd_krw,
+                b.funding_rate,
+            ]
+            for b in data.bars
+        ],
+    }
+
+
+def _from_cache_payload(payload: dict[str, Any]) -> "BacktestData" | None:
+    try:
+        bars = [
+            KimpBar(
+                ts_ms=int(row[0]),
+                upbit_krw=float(row[1]),
+                binance_usdt=float(row[2]),
+                usd_krw=float(row[3]),
+                funding_rate=(float(row[4]) if row[4] is not None else None),
+            )
+            for row in payload.get("bars", [])
+            if isinstance(row, (list, tuple)) and len(row) == 5
+        ]
+        return BacktestData(
+            bars=bars,
+            n_funding_events=int(payload.get("n_funding_events") or 0),
+            interval_min=int(payload["interval_min"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+async def _get_cached_backtest_data(key: str) -> "BacktestData" | None:
+    now = time.time()
+    cached = _BACKTEST_MEM_CACHE.get(key)
+    if cached and (now - cached[0]) < _BACKTEST_CACHE_TTL_SEC:
+        return cached[1]
+
+    try:
+        from api.kline_cache import _get_redis
+
+        redis = await _get_redis()
+        if redis is None:
+            return None
+        packed = await redis.get(key)
+        if packed is None:
+            return None
+        if isinstance(packed, bytes):
+            packed = packed.decode("utf-8")
+        payload = json.loads(str(packed))
+        if not isinstance(payload, dict):
+            return None
+        data = _from_cache_payload(payload)
+        if data is not None:
+            _BACKTEST_MEM_CACHE[key] = (now, data)
+        return data
+    except Exception:
+        _log.debug("KIMP backtest cache read failed", exc_info=True)
+        return None
+
+
+async def _set_cached_backtest_data(key: str, data: "BacktestData") -> None:
+    _BACKTEST_MEM_CACHE[key] = (time.time(), data)
+    try:
+        from api.kline_cache import _get_redis
+
+        redis = await _get_redis()
+        if redis is None:
+            return
+        packed = json.dumps(_to_cache_payload(data), separators=(",", ":")).encode("utf-8")
+        await redis.set(key, packed, ex=_BACKTEST_CACHE_TTL_SEC)
+    except Exception:
+        _log.debug("KIMP backtest cache write failed", exc_info=True)
+
+
+async def _binance_get(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, Any],
+) -> httpx.Response:
+    """Throttle + 429/418 재시도가 적용된 Binance GET."""
+    global _binance_last_call_ts
+    last_exc: Exception | None = None
+    for attempt in range(_BINANCE_MAX_RETRIES):
+        async with _binance_throttle_lock:
+            wait = _BINANCE_MIN_INTERVAL_SEC - (time.monotonic() - _binance_last_call_ts)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            _binance_last_call_ts = time.monotonic()
+        resp = await client.get(url, params=params)
+        if resp.status_code not in (418, 429):
+            resp.raise_for_status()
+            return resp
+        last_exc = httpx.HTTPStatusError(
+            f"{resp.status_code} Too Many Requests",
+            request=resp.request,
+            response=resp,
+        )
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            retry_after_sec = float(retry_after) if retry_after is not None else 0.0
+        except ValueError:
+            retry_after_sec = 0.0
+        backoff = max(retry_after_sec, min(8.0, 0.6 * (2**attempt)))
+        await asyncio.sleep(backoff)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("binance request failed")
+
+
 async def _fetch_binance_futures_klines(  # noqa: PLR0913 — distinct pagination bounds
     client: httpx.AsyncClient,
     symbol: str,
@@ -85,9 +230,10 @@ async def _fetch_binance_futures_klines(  # noqa: PLR0913 — distinct paginatio
     max_pages = max(1, math.ceil(((end_ms - start_ms) / interval) / 1000) + 2)
 
     for _ in range(max_pages):
-        resp = await client.get(
+        resp = await _binance_get(
+            client,
             f"{BINANCE_FUTURES_BASE}/fapi/v1/klines",
-            params={
+            {
                 "symbol": symbol,
                 "interval": interval_name,
                 "startTime": cursor,
@@ -95,7 +241,6 @@ async def _fetch_binance_futures_klines(  # noqa: PLR0913 — distinct paginatio
                 "limit": 1000,
             },
         )
-        resp.raise_for_status()
         rows = resp.json()
         if not isinstance(rows, list) or not rows:
             break
@@ -132,16 +277,19 @@ async def _fetch_funding_history(
     cursor = max(0, start_ms)
     seen: set[int] = set()
     for _ in range(30):
-        resp = await client.get(
-            f"{BINANCE_FUTURES_BASE}/fapi/v1/fundingRate",
-            params={
-                "symbol": symbol,
-                "limit": 1000,
-                "startTime": cursor,
-                "endTime": end_ms,
-            },
-        )
-        if resp.status_code != 200:
+        try:
+            resp = await _binance_get(
+                client,
+                f"{BINANCE_FUTURES_BASE}/fapi/v1/fundingRate",
+                {
+                    "symbol": symbol,
+                    "limit": 1000,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                },
+            )
+        except httpx.HTTPStatusError:
+            _log.warning("Binance funding history fetch failed symbol=%s", symbol, exc_info=True)
             break
         rows = resp.json()
         if not isinstance(rows, list) or not rows:
@@ -218,6 +366,17 @@ async def load_backtest_bars(
     interval = _interval_ms(gran.unit_min)
     now_ms = _floor_ms(int(datetime.now(UTC).timestamp() * 1000), interval)
     start_ms = now_ms - days * 24 * 3600 * 1000
+    cache_key = _backtest_cache_key(
+        symbol=sym,
+        days=days,
+        mode=mode,
+        include_funding=include_funding,
+        unit_min=gran.unit_min,
+        end_ms=now_ms,
+    )
+    cached = await _get_cached_backtest_data(cache_key)
+    if cached is not None:
+        return cached
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         upbit_coin_task = _fetch_upbit_candles(
@@ -266,11 +425,13 @@ async def load_backtest_bars(
             )
         )
 
-    return BacktestData(
+    data = BacktestData(
         bars=bars,
         n_funding_events=len(rate_by_ts),
         interval_min=gran.unit_min,
     )
+    await _set_cached_backtest_data(cache_key, data)
+    return data
 
 
 async def _noop_funding() -> list[tuple[int, float]]:
