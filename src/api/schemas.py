@@ -811,14 +811,24 @@ class KimpArbitrageStatusResponse(BaseModel):
 
 class KimpBacktestRequest(BaseModel):
     symbol: str = "BTC"
-    days: int = Field(default=30, ge=1, le=365, description="kimp_snapshots 조회 기간(일)")
+    days: int = Field(default=30, ge=1, le=365, description="조회 기간(일)")
+    price_source: Literal["candles", "snapshots"] = Field(
+        default="candles",
+        description="candles=업비트/바이낸스 선물 캔들(정확), snapshots=저장된 kimp_snapshots",
+    )
+    rate_mode: Literal["usdt", "bank"] = Field(
+        default="usdt", description="KRW 환산 기준(candles 모드 전용)"
+    )
+    include_funding: bool = Field(
+        default=True, description="숏 펀딩비 수익 반영(candles 모드 전용)"
+    )
     gross_cap_krw: float = Field(default=10_000_000.0, gt=0)
     full_build_z: float = -2.0
     flat_z: float = 0.5
     hedge_mode: Literal["quantity", "delta"] = "quantity"
     leverage: float = Field(default=1.0, ge=1.0, le=10.0)
     z_window_points: int = Field(
-        default=1440, ge=10, le=43200, description="z-score rolling 윈도우(분 단위 표본 수)"
+        default=1440, ge=10, le=43200, description="z-score rolling 윈도우(바 개수)"
     )
     upbit_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
     binance_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
@@ -828,6 +838,7 @@ class KimpBacktestMetrics(BaseModel):
     n_bars: int
     total_return_pct: float  # 투입자본 대비 (gross_cap 기준)
     net_profit_krw: float
+    funding_income_krw: float  # 누적 숏 펀딩 수익(스프레드 손익과 분리)
     max_drawdown_pct: float
     sharpe: float
     n_rebalances: int

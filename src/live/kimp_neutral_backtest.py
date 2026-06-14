@@ -51,12 +51,19 @@ _MS_PER_YEAR = 365 * 24 * 3600 * 1000
 
 @dataclass(frozen=True)
 class KimpBar:
-    """한 시점의 업비트/바이낸스 가격 + 환율 + 타임스탬프."""
+    """한 시점의 업비트/바이낸스 가격 + 환율 + 타임스탬프.
+
+    ``funding_rate`` 는 **이 바에서 정산되는** 바이낸스 USDT-M 무기한 펀딩비
+    (소수, 예: 0.0001 = 0.01%). 정산 시점이 아닌 바는 ``None``. 숏 포지션은
+    펀딩비가 양수일 때 수취(롱→숏 지급)하므로 백테스트는 ``q_b·S_b·e·rate``
+    를 수익으로 가산한다.
+    """
 
     ts_ms: int
     upbit_krw: float
     binance_usdt: float
     usd_krw: float
+    funding_rate: float | None = None
 
     def quote(self, symbol: str = "?") -> KimpQuote:
         return KimpQuote(
@@ -114,6 +121,7 @@ class BacktestMetrics:
     n_bars: int
     total_return_pct: float
     net_profit_krw: float
+    funding_income_krw: float
     max_drawdown_pct: float
     sharpe: float
     n_rebalances: int
@@ -174,6 +182,7 @@ class _RunState:
     q_b: float = 0.0  # 바이낸스 숏 수량
     cum_pnl: float = 0.0
     fee_total: float = 0.0
+    funding_income: float = 0.0
     n_rebalances: int = 0
     bars_in_market: int = 0
     kimp_sum: float = 0.0
@@ -242,6 +251,13 @@ def run_kimp_backtest(bars: list[KimpBar], config: BacktestConfig) -> KimpBackte
             d_short = state.q_b * (prev.binance_usdt - bar.binance_usdt) * bar.usd_krw
             state.cum_pnl += d_long + d_short
 
+        # 1.5) 펀딩 정산: 정산 바에서, 직전부터 보유 중이던 숏 수량 기준.
+        #     펀딩비 양수 → 숏 수취(롱→숏 지급)이므로 +q_b·S_b·e·rate.
+        if bar.funding_rate is not None and state.q_b != 0.0:
+            funding = state.q_b * bar.binance_usdt * bar.usd_krw * bar.funding_rate
+            state.cum_pnl += funding
+            state.funding_income += funding
+
         # 2) z-score (현재값 포함 윈도우 기준) → 목표 북 → 대칭 리밸런스
         window.append(k)
         z = _rolling_z(window, k)
@@ -280,6 +296,7 @@ def _compute_metrics(
             n_bars=0,
             total_return_pct=0.0,
             net_profit_krw=0.0,
+            funding_income_krw=0.0,
             max_drawdown_pct=0.0,
             sharpe=0.0,
             n_rebalances=0,
@@ -306,6 +323,7 @@ def _compute_metrics(
         n_bars=n,
         total_return_pct=(state.cum_pnl / capital_base * 100.0) if capital_base > 0 else 0.0,
         net_profit_krw=state.cum_pnl,
+        funding_income_krw=state.funding_income,
         max_drawdown_pct=max_dd * 100.0,
         sharpe=sharpe,
         n_rebalances=state.n_rebalances,

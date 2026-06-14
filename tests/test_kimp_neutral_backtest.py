@@ -12,6 +12,7 @@ import pytest
 from live.kimp_neutral import HedgeMode
 from live.kimp_neutral_backtest import (
     BacktestConfig,
+    KimpBacktestResult,
     KimpBar,
     run_kimp_backtest,
 )
@@ -28,6 +29,16 @@ def _bar(i: int, kimp: float, s_b: float = S_B, e: float = E) -> KimpBar:
         upbit_krw=s_b * e * (1 + kimp),
         binance_usdt=s_b,
         usd_krw=e,
+    )
+
+
+def _bar_funding(i: int, kimp: float, rate: float | None) -> KimpBar:
+    return KimpBar(
+        ts_ms=i * _MINUTE,
+        upbit_krw=S_B * E * (1 + kimp),
+        binance_usdt=S_B,
+        usd_krw=E,
+        funding_rate=rate,
     )
 
 
@@ -181,6 +192,60 @@ class TestMetrics:
             kimps_to_bars([0.03] * 10), BacktestConfig(gross_cap_krw=5e7, z_window=5)
         )
         assert res.equity[0].equity_krw == pytest.approx(5e7)
+
+
+class TestFunding:
+    @staticmethod
+    def _build_and_hold_with_funding(rate: float | None, settle_at: int) -> KimpBacktestResult:
+        # 김프 0.06(무거래) → 0.00 급락 시 풀빌드 → 이후 0.00 고정으로 보유.
+        # settle_at 바에서 펀딩비 rate 정산. 가격/김프 고정이라 MTM/스프레드 손익은
+        # 0이고, 순손익은 펀딩 수익만 남는다(수수료 0).
+        kimps = [0.06] * 30 + [0.00] * 30
+        bars: list[KimpBar] = []
+        for i, k in enumerate(kimps):
+            r = rate if i == settle_at else None
+            bars.append(_bar_funding(i, k, r))
+        return run_kimp_backtest(
+            bars,
+            BacktestConfig(
+                z_window=33,
+                full_build_z=-1.0,
+                flat_z=0.5,
+                upbit_taker_fee=0.0,
+                binance_taker_fee=0.0,
+            ),
+        )
+
+    def test_positive_funding_credits_short(self) -> None:
+        # 펀딩비 양수 → 숏 수취 → funding_income > 0, 순손익에 반영.
+        res = self._build_and_hold_with_funding(0.0001, settle_at=50)
+        assert res.metrics.funding_income_krw > 0.0
+        assert res.metrics.net_profit_krw == pytest.approx(
+            res.metrics.funding_income_krw, rel=1e-6
+        )
+
+    def test_negative_funding_debits_short(self) -> None:
+        # 펀딩비 음수 → 숏 지급 → funding_income < 0.
+        res = self._build_and_hold_with_funding(-0.0001, settle_at=50)
+        assert res.metrics.funding_income_krw < 0.0
+
+    def test_no_funding_when_no_position(self) -> None:
+        # 포지션을 만들기 전(초반 무거래 구간)에 정산되면 펀딩 0.
+        res = self._build_and_hold_with_funding(0.0005, settle_at=5)
+        assert res.metrics.funding_income_krw == 0.0
+
+    def test_funding_magnitude_matches_short_notional(self) -> None:
+        # funding = q_b·S_b·e·rate. 정산은 정산 바 직전부터 보유한 숏 기준이므로
+        # 정산 직전 바(settle_at-1)의 보유 명목 × rate 와 일치해야 한다.
+        settle_at = 50
+        res = self._build_and_hold_with_funding(0.0002, settle_at=settle_at)
+        held_notional = res.equity[settle_at - 1].notional_krw
+        assert held_notional > 0
+        assert res.metrics.funding_income_krw == pytest.approx(held_notional * 0.0002, rel=1e-6)
+
+    def test_default_bar_has_no_funding(self) -> None:
+        res = run_kimp_backtest(kimps_to_bars([0.03] * 40), BacktestConfig(z_window=10))
+        assert res.metrics.funding_income_krw == 0.0
 
 
 if __name__ == "__main__":

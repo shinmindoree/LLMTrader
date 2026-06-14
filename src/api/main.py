@@ -2564,13 +2564,19 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(_db_session),
         _: AuthenticatedUser = Depends(require_auth),
     ) -> KimpBacktestResponse:
-        """저장된 ``kimp_snapshots`` 시계열로 김프 중립 전략을 백테스트한다."""
+        """김프 중립 전략 백테스트.
+
+        ``price_source="candles"`` (기본): 업비트 KRW 현물 캔들 + 바이낸스
+        USDT-M 선물 캔들로 시세를 구성하고 펀딩 정산 이력을 반영한다(정확).
+        ``price_source="snapshots"``: 저장된 ``kimp_snapshots`` 시계열을 사용한다.
+        """
         from datetime import datetime as _dt
         from datetime import timedelta as _td
 
         from sqlalchemy import select as _select
 
         from control.models import KimpSnapshot
+        from live.kimp_backtest_data import load_backtest_bars
         from live.kimp_neutral import HedgeMode
         from live.kimp_neutral_backtest import BacktestConfig, KimpBar, run_kimp_backtest
 
@@ -2581,33 +2587,52 @@ def create_app() -> FastAPI:
                 success=False, error="symbol is required", symbol=sym, as_of=now
             )
 
-        since = now - _td(days=req.days)
-        stmt = (
-            _select(KimpSnapshot)
-            .where(KimpSnapshot.symbol == sym, KimpSnapshot.ts >= since)
-            .order_by(KimpSnapshot.ts.asc())
-        )
-        rows = (await session.execute(stmt)).scalars().all()
-        if len(rows) < req.z_window_points:
+        if req.price_source == "candles":
+            try:
+                data = await load_backtest_bars(
+                    sym,
+                    days=req.days,
+                    rate_mode=req.rate_mode,
+                    include_funding=req.include_funding,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("kimp backtest candle load failed symbol=%s", sym, exc_info=True)
+                return KimpBacktestResponse(
+                    success=False,
+                    error=f"캔들 데이터 조회 실패: {exc}",
+                    symbol=sym,
+                    as_of=now,
+                )
+            bars = data.bars
+        else:
+            since = now - _td(days=req.days)
+            stmt = (
+                _select(KimpSnapshot)
+                .where(KimpSnapshot.symbol == sym, KimpSnapshot.ts >= since)
+                .order_by(KimpSnapshot.ts.asc())
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+            bars = [
+                KimpBar(
+                    ts_ms=int(r.ts.timestamp() * 1000),
+                    upbit_krw=float(r.upbit_krw_price),
+                    binance_usdt=float(r.binance_usdt_price),
+                    usd_krw=float(r.usd_krw_rate),
+                )
+                for r in rows
+            ]
+
+        if len(bars) < req.z_window_points:
             return KimpBacktestResponse(
                 success=False,
                 error=(
-                    f"데이터 부족: {len(rows)}개 < z_window {req.z_window_points}. "
+                    f"데이터 부족: {len(bars)}개 < z_window {req.z_window_points}. "
                     "기간(days)을 늘리거나 윈도우를 줄이세요."
                 ),
                 symbol=sym,
                 as_of=now,
             )
 
-        bars = [
-            KimpBar(
-                ts_ms=int(r.ts.timestamp() * 1000),
-                upbit_krw=float(r.upbit_krw_price),
-                binance_usdt=float(r.binance_usdt_price),
-                usd_krw=float(r.usd_krw_rate),
-            )
-            for r in rows
-        ]
         cfg = BacktestConfig(
             gross_cap_krw=req.gross_cap_krw,
             full_build_z=req.full_build_z,
@@ -2638,6 +2663,7 @@ def create_app() -> FastAPI:
             n_bars=m.n_bars,
             total_return_pct=m.total_return_pct,
             net_profit_krw=m.net_profit_krw,
+            funding_income_krw=m.funding_income_krw,
             max_drawdown_pct=m.max_drawdown_pct,
             sharpe=m.sharpe,
             n_rebalances=m.n_rebalances,
