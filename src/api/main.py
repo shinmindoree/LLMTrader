@@ -2626,6 +2626,7 @@ def create_app() -> FastAPI:
                 success=False, error="symbol is required", symbol=sym, as_of=now
             )
 
+        interval_used: int | None = None
         if req.price_source == "candles":
             try:
                 data = await load_backtest_bars(
@@ -2633,6 +2634,7 @@ def create_app() -> FastAPI:
                     days=req.days,
                     rate_mode=req.rate_mode,
                     include_funding=req.include_funding,
+                    interval_min=req.interval_min,
                 )
             except Exception as exc:  # noqa: BLE001
                 _log.warning("kimp backtest candle load failed symbol=%s", sym, exc_info=True)
@@ -2643,6 +2645,7 @@ def create_app() -> FastAPI:
                     as_of=now,
                 )
             bars = data.bars
+            interval_used = data.interval_min
         else:
             since = now - _td(days=req.days)
             stmt = (
@@ -2670,6 +2673,7 @@ def create_app() -> FastAPI:
                 ),
                 symbol=sym,
                 as_of=now,
+                interval_min=interval_used,
             )
 
         cfg = BacktestConfig(
@@ -2743,6 +2747,7 @@ def create_app() -> FastAPI:
             success=True,
             symbol=sym,
             as_of=now,
+            interval_min=interval_used,
             metrics=metrics,
             equity_curve=curve,
             trades=trades,

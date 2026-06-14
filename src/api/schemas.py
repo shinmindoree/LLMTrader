@@ -827,6 +827,13 @@ class KimpBacktestRequest(BaseModel):
     include_funding: bool = Field(
         default=True, description="숏 펀딩비 수익 반영(candles 모드 전용)"
     )
+    interval_min: int | None = Field(
+        default=None,
+        description=(
+            "캔들 간격(분). 미지정 시 기간 기반 자동 선택. "
+            "허용: 1, 3, 5, 15, 30, 60, 240"
+        ),
+    )
     gross_cap_krw: float = Field(default=10_000_000.0, gt=0)
     full_build_z: float = Field(
         default=-2.0, description="진입 김프 기준(%). 음수면 역김프 구간"
@@ -896,6 +903,7 @@ class KimpBacktestResponse(BaseModel):
     error: str | None = None
     symbol: str
     as_of: datetime
+    interval_min: int | None = None  # 실제 사용된 캔들 간격(분). 자동 선택 결과 확인용
     metrics: KimpBacktestMetrics | None = None
     equity_curve: list[KimpBacktestEquityPoint] = Field(default_factory=list)
     trades: list[KimpBacktestTrade] = Field(default_factory=list)

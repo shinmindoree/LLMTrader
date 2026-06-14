@@ -18,6 +18,8 @@ type Props = {
   availableSymbols?: string[];
 };
 
+type IntervalChoice = "auto" | 1 | 5 | 15 | 30 | 60 | 240;
+
 type SharedConfig = {
   days: number;
   grossCap: number;
@@ -25,6 +27,7 @@ type SharedConfig = {
   flatZ: number;
   hedgeMode: KimpHedgeMode;
   includeFunding: boolean;
+  intervalMin: IntervalChoice;
 };
 
 const DEFAULT_CONFIG: SharedConfig = {
@@ -34,7 +37,24 @@ const DEFAULT_CONFIG: SharedConfig = {
   flatZ: 0.5,
   hedgeMode: "quantity",
   includeFunding: true,
+  intervalMin: "auto",
 };
+
+const INTERVAL_CHOICES: IntervalChoice[] = ["auto", 1, 5, 15, 30, 60, 240];
+
+function intervalLabel(v: IntervalChoice): string {
+  if (v === "auto") return "Auto";
+  if (v === 60) return "1h";
+  if (v === 240) return "4h";
+  return `${v}m`;
+}
+
+function intervalFromMin(min: number | null | undefined): string {
+  if (min == null || !Number.isFinite(min)) return "—";
+  if (min === 60) return "1h";
+  if (min === 240) return "4h";
+  return `${min}m`;
+}
 
 function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -110,6 +130,7 @@ export default function KimpBacktestPanel({ symbol, onSelect, availableSymbols =
         price_source: "candles",
         rate_mode: "usdt",
         include_funding: cfg.includeFunding,
+        interval_min: cfg.intervalMin === "auto" ? null : cfg.intervalMin,
         gross_cap_krw: cfg.grossCap,
         full_build_z: cfg.fullBuildZ,
         flat_z: cfg.flatZ,
@@ -213,6 +234,25 @@ export default function KimpBacktestPanel({ symbol, onSelect, availableSymbols =
           >
             <option value="quantity">{b.hedgeModes.quantity}</option>
             <option value="delta">{b.hedgeModes.delta}</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-[#868993]">
+            {b.fields.interval}
+          </span>
+          <select
+            value={String(cfg.intervalMin)}
+            onChange={(e) => {
+              const raw = e.target.value;
+              patch("intervalMin", raw === "auto" ? "auto" : (Number(raw) as IntervalChoice));
+            }}
+            className="rounded-md border border-[#26272d] bg-[#0e0f14] px-2 py-1 text-xs text-[#c3c5cc] focus:border-[#3a3b44] focus:outline-none"
+          >
+            {INTERVAL_CHOICES.map((choice) => (
+              <option key={String(choice)} value={String(choice)}>
+                {choice === "auto" ? b.fields.intervalAuto : intervalLabel(choice)}
+              </option>
+            ))}
           </select>
         </label>
         <label className="flex flex-col gap-1">
@@ -353,6 +393,7 @@ function SinglePanel({
                 <Metric label={labels.metrics.avgKimp} value={fmtPct(m.avg_kimp_pct)} />
                 <Metric label={labels.metrics.finalKimp} value={fmtPct(m.final_kimp_pct)} />
                 <Metric label={labels.metrics.bars} value={String(m.n_bars)} />
+                <Metric label={labels.metrics.interval} value={intervalFromMin(res?.interval_min)} />
               </div>
               <div className="mt-3">
                 <KimpTradeChart

@@ -47,6 +47,7 @@ _log = logging.getLogger("llmtrader.kimp_backtest_data")
 __all__ = [
     "BacktestData",
     "load_backtest_bars",
+    "selectable_interval_minutes",
     "UniverseBacktestItem",
     "run_universe_backtest",
 ]
@@ -66,6 +67,37 @@ class _Granularity:
     binance_interval: str
 
 
+# 사용자가 직접 선택할 수 있는 캔들 간격(분 → 바이낸스 interval 코드).
+# 업비트 분봉(1/3/5/15/30/60/240)과 바이낸스 선물 모두 지원하는 값만 노출한다.
+_SELECTABLE_INTERVALS: dict[int, str] = {
+    1: "1m",
+    3: "3m",
+    5: "5m",
+    15: "15m",
+    30: "30m",
+    60: "1h",
+    240: "4h",
+}
+
+# 공개 API 페이지네이션/429 폭주를 막기 위한 바 개수 상한.
+# 현실적 조합(1분봉×7일≈1만, 5분봉×30일≈8.6천, 1시간봉×365일≈8.8천)은
+# 허용하되, 1분봉×30일(≈4.3만)처럼 과도한 조합만 거부한다.
+_MAX_BARS = 12000
+
+
+def selectable_interval_minutes() -> list[int]:
+    """UI에 노출할 선택 가능한 캔들 간격(분) 목록."""
+    return sorted(_SELECTABLE_INTERVALS)
+
+
+def _granularity_from_minutes(unit_min: int) -> _Granularity:
+    interval_name = _SELECTABLE_INTERVALS.get(unit_min)
+    if interval_name is None:
+        allowed = ", ".join(f"{m}m" for m in sorted(_SELECTABLE_INTERVALS))
+        raise ValueError(f"지원하지 않는 캔들 간격: {unit_min}분. 사용 가능: {allowed}")
+    return _Granularity(unit_min, interval_name)
+
+
 def _pick_granularity(days: int) -> _Granularity:
     """조회 기간(일)에 맞춰 공개 API 페이지 수를 적정 범위로 묶는 캔들 간격 선택.
 
@@ -81,6 +113,24 @@ def _pick_granularity(days: int) -> _Granularity:
     if days <= 120:
         return _Granularity(60, "1h")
     return _Granularity(240, "4h")
+
+
+def _resolve_granularity(days: int, interval_min: int | None) -> _Granularity:
+    """간격 미지정(None)이면 기간 기반 자동 선택, 지정되면 검증 후 사용.
+
+    선택된 간격이 ``days`` 기간에서 ``_MAX_BARS`` 를 초과하는 바를 만들면
+    공개 API 부하가 과도하므로 명확한 안내와 함께 거부한다.
+    """
+    if interval_min is None:
+        return _pick_granularity(days)
+    gran = _granularity_from_minutes(interval_min)
+    est_bars = math.ceil(days * 24 * 60 / gran.unit_min)
+    if est_bars > _MAX_BARS:
+        raise ValueError(
+            f"선택한 {interval_min}분봉 × {days}일은 약 {est_bars:,}개 바로 너무 많습니다"
+            f"(상한 {_MAX_BARS:,}). 간격을 늘리거나 기간을 줄이세요."
+        )
+    return gran
 
 
 def _backtest_cache_key(
@@ -353,16 +403,18 @@ async def load_backtest_bars(
     days: int,
     rate_mode: KimpRateMode = "usdt",
     include_funding: bool = True,
+    interval_min: int | None = None,
 ) -> BacktestData:
     """``symbol`` 의 백테스트 바 시계열을 공개 API에서 구성해 반환한다.
 
     가격: 업비트 ``KRW-{sym}`` 캔들(롱) + 바이낸스 ``{sym}USDT`` 선물 캔들(숏).
     KRW 환산: ``rate_mode`` 에 따라 업비트 ``KRW-USDT`` 캔들 또는 은행 환율 상수.
     펀딩: ``include_funding`` 이면 정산 이력을 각 정산 바에 부착.
+    캔들 간격: ``interval_min`` 미지정 시 기간 기반 자동, 지정 시 해당 분봉 사용.
     """
     sym = symbol.strip().upper()
     mode: KimpRateMode = "bank" if rate_mode == "bank" else "usdt"
-    gran = _pick_granularity(days)
+    gran = _resolve_granularity(days, interval_min)
     interval = _interval_ms(gran.unit_min)
     now_ms = _floor_ms(int(datetime.now(UTC).timestamp() * 1000), interval)
     start_ms = now_ms - days * 24 * 3600 * 1000

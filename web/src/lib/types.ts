@@ -948,6 +948,7 @@ export type KimpBacktestRequest = {
   price_source?: KimpPriceSource;
   rate_mode?: KimpRateMode;
   include_funding?: boolean;
+  interval_min?: number | null;
   gross_cap_krw?: number;
   full_build_z?: number;
   flat_z?: number;
@@ -984,6 +985,7 @@ export type KimpBacktestResponse = {
   error?: string | null;
   symbol: string;
   as_of: string;
+  interval_min?: number | null;
   metrics?: KimpBacktestMetrics | null;
   equity_curve: KimpBacktestEquityPoint[];
   trades?: KimpBacktestTrade[];
