@@ -899,6 +899,11 @@ const en = {
         title: "Kimchi Premium Arbitrage",
         subtitle: "Monitor the Kimchi Premium between Upbit and Binance and automate hedged entry/exit cycles.",
         comingSoonNote: "Monitoring dashboard and the auto-hedge engine will be rolled out in phases.",
+        tabs: {
+          screener: "Kimp Screener",
+          backtest: "Backtest",
+          bot: "Delta-neutral Bot",
+        },
         fxWidget: {
           title: "USDT/KRW (Upbit)",
           source: "Source",

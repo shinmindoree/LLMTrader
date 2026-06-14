@@ -902,6 +902,11 @@ const ko: TranslationKeys = {
         title: "김프 차익거래",
         subtitle: "Upbit와 Binance 간 김치 프리미엄을 모니터링하고 헷지 사이클로 진입/청산을 자동화합니다.",
         comingSoonNote: "모니터링 대시보드와 자동 헷지 엔진을 단계적으로 제공할 예정입니다.",
+        tabs: {
+          screener: "김프 스크리너",
+          backtest: "백테스트",
+          bot: "델타중립봇",
+        },
         fxWidget: {
           title: "USDT/KRW (Upbit)",
           source: "출처",
