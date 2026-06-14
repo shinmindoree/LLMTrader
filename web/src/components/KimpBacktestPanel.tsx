@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import type {
   KimpBacktestEquityPoint,
   KimpBacktestResponse,
+  KimpBacktestTrade,
   KimpHedgeMode,
   KimpUniverseBacktestItem,
   KimpUniverseBacktestResponse,
@@ -56,6 +57,13 @@ function fmtKrw(v: number | null | undefined): string {
 
 function fmtKrwWithCount(v: number | null | undefined, count: number | null | undefined, unit: string): string {
   return `${fmtKrw(v)} / ${count ?? 0}${unit}`;
+}
+
+function fmtTime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function fmtScore(v: number | null | undefined): string {
@@ -271,6 +279,8 @@ function SinglePanel({
   symbol: string;
 }) {
   const m = res?.success ? res.metrics ?? null : null;
+  const trades = res?.success ? res.trades ?? [] : [];
+  const [view, setView] = useState<"chart" | "trades">("chart");
   return (
     <div className="border-t border-[#26272d] px-4 py-3">
       <div className="flex flex-wrap items-center gap-3">
@@ -296,30 +306,53 @@ function SinglePanel({
 
       {m ? (
         <>
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-            <Metric label={labels.metrics.totalReturn} value={fmtPct(m.total_return_pct)} cls={signClass(m.total_return_pct)} />
-            <Metric label={labels.metrics.netProfit} value={fmtKrw(m.net_profit_krw)} cls={signClass(m.net_profit_krw)} />
-            <Metric label={labels.metrics.kimpPnl} value={fmtKrw(m.kimp_pnl_krw)} cls={signClass(m.kimp_pnl_krw)} />
-            <Metric
-              label={labels.metrics.funding}
-              value={fmtKrwWithCount(m.funding_income_krw, m.funding_event_count, labels.metrics.eventUnit)}
-              cls={signClass(m.funding_income_krw)}
-            />
-            <Metric label={labels.metrics.feeDrag} value={fmtKrw(m.fee_drag_krw)} cls="text-[#868993]" />
-            <Metric label={labels.metrics.completedTrades} value={String(m.completed_trades)} />
-            <Metric label={labels.metrics.entriesExits} value={`${m.n_entries}/${m.n_exits}`} />
-            <Metric label={labels.metrics.mdd} value={fmtPct(m.max_drawdown_pct)} cls="text-rose-400" />
-            <Metric label={labels.metrics.timeInMarket} value={fmtPct(m.time_in_market_pct)} />
-            <Metric label={labels.metrics.avgKimp} value={fmtPct(m.avg_kimp_pct)} />
-            <Metric label={labels.metrics.finalKimp} value={fmtPct(m.final_kimp_pct)} />
-            <Metric label={labels.metrics.bars} value={String(m.n_bars)} />
+          <div className="mt-3 inline-flex rounded-md border border-[#26272d] bg-[#0e0f14] p-0.5">
+            {(["chart", "trades"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={`rounded px-2.5 py-1 text-[11px] ${
+                  view === v
+                    ? "bg-[#22232b] text-white"
+                    : "text-[#868993] hover:text-[#c3c5cc]"
+                }`}
+              >
+                {v === "chart" ? labels.view.chart : `${labels.view.trades} (${trades.length})`}
+              </button>
+            ))}
           </div>
-          <div className="mt-3">
-            <div className="mb-1 text-[10px] uppercase tracking-wider text-[#868993]">
-              {labels.equityTitle}
-            </div>
-            <EquityCurve data={res?.equity_curve ?? []} />
-          </div>
+
+          {view === "chart" ? (
+            <>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                <Metric label={labels.metrics.totalReturn} value={fmtPct(m.total_return_pct)} cls={signClass(m.total_return_pct)} />
+                <Metric label={labels.metrics.netProfit} value={fmtKrw(m.net_profit_krw)} cls={signClass(m.net_profit_krw)} />
+                <Metric label={labels.metrics.kimpPnl} value={fmtKrw(m.kimp_pnl_krw)} cls={signClass(m.kimp_pnl_krw)} />
+                <Metric
+                  label={labels.metrics.funding}
+                  value={fmtKrwWithCount(m.funding_income_krw, m.funding_event_count, labels.metrics.eventUnit)}
+                  cls={signClass(m.funding_income_krw)}
+                />
+                <Metric label={labels.metrics.feeDrag} value={fmtKrw(m.fee_drag_krw)} cls="text-[#868993]" />
+                <Metric label={labels.metrics.completedTrades} value={String(m.completed_trades)} />
+                <Metric label={labels.metrics.entriesExits} value={`${m.n_entries}/${m.n_exits}`} />
+                <Metric label={labels.metrics.mdd} value={fmtPct(m.max_drawdown_pct)} cls="text-rose-400" />
+                <Metric label={labels.metrics.timeInMarket} value={fmtPct(m.time_in_market_pct)} />
+                <Metric label={labels.metrics.avgKimp} value={fmtPct(m.avg_kimp_pct)} />
+                <Metric label={labels.metrics.finalKimp} value={fmtPct(m.final_kimp_pct)} />
+                <Metric label={labels.metrics.bars} value={String(m.n_bars)} />
+              </div>
+              <div className="mt-3">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-[#868993]">
+                  {labels.equityTitle}
+                </div>
+                <EquityCurve data={res?.equity_curve ?? []} trades={trades} labels={labels} />
+              </div>
+            </>
+          ) : (
+            <TradesTable trades={trades} symbol={symbol} labels={labels} />
+          )}
         </>
       ) : !err ? (
         <div className="mt-3 text-xs text-[#868993]">{labels.empty}</div>
@@ -507,7 +540,15 @@ function NumField({
   );
 }
 
-function EquityCurve({ data }: { data: KimpBacktestEquityPoint[] }) {
+function EquityCurve({
+  data,
+  trades = [],
+  labels,
+}: {
+  data: KimpBacktestEquityPoint[];
+  trades?: KimpBacktestTrade[];
+  labels?: Labels;
+}) {
   if (data.length < 2) {
     return (
       <div className="flex h-[120px] items-center justify-center text-xs text-[#5b5d66]">—</div>
@@ -538,24 +579,209 @@ function EquityCurve({ data }: { data: KimpBacktestEquityPoint[] }) {
   const stroke = up ? "#22c55e" : "#ef4444";
   const fill = up ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)";
 
+  const nearestIdx = (tMs: number): number => {
+    let lo = 0;
+    let hi = data.length - 1;
+    let best = 0;
+    let bestDiff = Infinity;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const diff = data[mid].t - tMs;
+      if (Math.abs(diff) < bestDiff) {
+        bestDiff = Math.abs(diff);
+        best = mid;
+      }
+      if (diff < 0) lo = mid + 1;
+      else if (diff > 0) hi = mid - 1;
+      else return mid;
+    }
+    return best;
+  };
+
+  const markers = trades.flatMap((tr) => {
+    const ei = nearestIdx(tr.entry_t);
+    const xi = nearestIdx(tr.exit_t);
+    return [
+      { x: sx(ei), y: pts[ei].y, kind: "entry" as const },
+      { x: sx(xi), y: pts[xi].y, kind: "exit" as const },
+    ];
+  });
+
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-full"
-      style={{ height }}
-      preserveAspectRatio="none"
-    >
-      <line
-        x1={pad}
-        y1={baseY}
-        x2={width - pad}
-        y2={baseY}
-        stroke="#3f3f46"
-        strokeWidth={0.5}
-        strokeDasharray="3 3"
-      />
-      <path d={area} fill={fill} />
-      <path d={line} fill="none" stroke={stroke} strokeWidth={1.5} />
-    </svg>
+    <>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full"
+        style={{ height }}
+        preserveAspectRatio="none"
+      >
+        <line
+          x1={pad}
+          y1={baseY}
+          x2={width - pad}
+          y2={baseY}
+          stroke="#3f3f46"
+          strokeWidth={0.5}
+          strokeDasharray="3 3"
+        />
+        <path d={area} fill={fill} />
+        <path d={line} fill="none" stroke={stroke} strokeWidth={1.5} />
+        {markers.map((mk, i) => (
+          <circle
+            key={i}
+            cx={mk.x}
+            cy={mk.y}
+            r={2.4}
+            fill={mk.kind === "entry" ? "#22c55e" : "#ef4444"}
+            stroke="#0e0f14"
+            strokeWidth={0.6}
+          />
+        ))}
+      </svg>
+      {labels && trades.length > 0 ? (
+        <div className="mt-1 flex items-center gap-3 text-[10px] text-[#868993]">
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+            {labels.trades.entryMarker}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-rose-500" />
+            {labels.trades.exitMarker}
+          </span>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function TradesTable({
+  trades,
+  symbol,
+  labels,
+}: {
+  trades: KimpBacktestTrade[];
+  symbol: string;
+  labels: Labels;
+}) {
+  if (trades.length === 0) {
+    return <div className="mt-3 text-xs text-[#868993]">{labels.trades.empty}</div>;
+  }
+  const c = labels.trades.columns;
+  const wins = trades.filter((tr) => tr.net_pnl_krw > 0).length;
+  const winRate = (wins / trades.length) * 100;
+  const avgNet = trades.reduce((s, tr) => s + tr.net_pnl_krw, 0) / trades.length;
+
+  const reasonLabel = (r: string): string =>
+    r === "period_end" ? labels.trades.reasons.period_end : labels.trades.reasons.target;
+
+  function downloadCsv() {
+    const headers = [
+      "index", "entry_time", "exit_time", "entry_kimp_pct", "exit_kimp_pct",
+      "notional_krw", "kimp_pnl_krw", "funding_income_krw", "funding_events",
+      "fee_krw", "net_pnl_krw", "return_pct", "holding_bars", "exit_reason",
+    ];
+    const rows = trades.map((tr) => [
+      tr.index,
+      new Date(tr.entry_t).toISOString(),
+      new Date(tr.exit_t).toISOString(),
+      tr.entry_kimp_pct.toFixed(4),
+      tr.exit_kimp_pct.toFixed(4),
+      tr.notional_krw.toFixed(0),
+      tr.kimp_pnl_krw.toFixed(0),
+      tr.funding_income_krw.toFixed(0),
+      tr.funding_events,
+      tr.fee_krw.toFixed(0),
+      tr.net_pnl_krw.toFixed(0),
+      tr.return_pct.toFixed(4),
+      tr.holding_bars,
+      tr.exit_reason,
+    ]);
+    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `kimp_trades_${symbol}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="mt-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="rounded-md border border-[#26272d] bg-[#0e0f14] px-2.5 py-1 text-[11px] text-[#c3c5cc]">
+          {labels.trades.count.replace("{n}", String(trades.length))}
+        </span>
+        <span className="rounded-md border border-[#26272d] bg-[#0e0f14] px-2.5 py-1 text-[11px] text-[#868993]">
+          {labels.trades.winRate}:{" "}
+          <span className={winRate >= 50 ? "text-emerald-400" : "text-rose-400"}>
+            {fmtPct(winRate, 1)}
+          </span>{" "}
+          ({wins}/{trades.length})
+        </span>
+        <span className="rounded-md border border-[#26272d] bg-[#0e0f14] px-2.5 py-1 text-[11px] text-[#868993]">
+          {labels.trades.avgNet}: <span className={signClass(avgNet)}>{fmtKrw(avgNet)}</span>
+        </span>
+        <button
+          type="button"
+          onClick={downloadCsv}
+          className="ml-auto rounded-md border border-[#26272d] bg-[#1a1b22] px-2.5 py-1 text-[11px] text-[#c3c5cc] hover:bg-[#22232b]"
+        >
+          {labels.trades.csv}
+        </button>
+      </div>
+      <div className="max-h-[420px] overflow-auto rounded-md border border-[#26272d]">
+        <table className="w-full min-w-[920px] text-left text-xs">
+          <thead className="sticky top-0 bg-[#0e0f14] text-[10px] uppercase tracking-wider text-[#868993]">
+            <tr>
+              <th className="px-3 py-2">{c.idx}</th>
+              <th className="px-3 py-2">{c.entryTime}</th>
+              <th className="px-3 py-2">{c.exitTime}</th>
+              <th className="px-3 py-2 text-right">{c.entryKimp}</th>
+              <th className="px-3 py-2 text-right">{c.exitKimp}</th>
+              <th className="px-3 py-2 text-right">{c.notional}</th>
+              <th className="px-3 py-2 text-right">{c.kimpPnl}</th>
+              <th className="px-3 py-2 text-right">{c.funding}</th>
+              <th className="px-3 py-2 text-right">{c.fee}</th>
+              <th className="px-3 py-2 text-right">{c.netPnl}</th>
+              <th className="px-3 py-2 text-right">{c.returnPct}</th>
+              <th className="px-3 py-2 text-right">{c.holding}</th>
+              <th className="px-3 py-2">{c.reason}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.map((tr) => (
+              <tr key={tr.index} className="border-t border-[#1a1b22] tabular-nums hover:bg-[#1a1b22]">
+                <td className="px-3 py-2 text-[#868993]">{tr.index}</td>
+                <td className="px-3 py-2 text-[#c3c5cc]">{fmtTime(tr.entry_t)}</td>
+                <td className="px-3 py-2 text-[#c3c5cc]">{fmtTime(tr.exit_t)}</td>
+                <td className="px-3 py-2 text-right text-[#c3c5cc]">{fmtPct(tr.entry_kimp_pct)}</td>
+                <td className="px-3 py-2 text-right text-[#c3c5cc]">{fmtPct(tr.exit_kimp_pct)}</td>
+                <td className="px-3 py-2 text-right text-[#868993]">{fmtKrw(tr.notional_krw)}</td>
+                <td className={`px-3 py-2 text-right ${signClass(tr.kimp_pnl_krw)}`}>{fmtKrw(tr.kimp_pnl_krw)}</td>
+                <td className={`px-3 py-2 text-right ${signClass(tr.funding_income_krw)}`}>
+                  {fmtKrw(tr.funding_income_krw)} / {tr.funding_events}
+                </td>
+                <td className="px-3 py-2 text-right text-[#868993]">{fmtKrw(tr.fee_krw)}</td>
+                <td className={`px-3 py-2 text-right font-semibold ${signClass(tr.net_pnl_krw)}`}>{fmtKrw(tr.net_pnl_krw)}</td>
+                <td className={`px-3 py-2 text-right ${signClass(tr.return_pct)}`}>{fmtPct(tr.return_pct)}</td>
+                <td className="px-3 py-2 text-right text-[#868993]">{tr.holding_bars}</td>
+                <td className="px-3 py-2">
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] ${
+                      tr.exit_reason === "period_end"
+                        ? "bg-amber-500/15 text-amber-400"
+                        : "bg-emerald-500/15 text-emerald-400"
+                    }`}
+                  >
+                    {reasonLabel(tr.exit_reason)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

@@ -32,6 +32,7 @@ __all__ = [
     "KimpBar",
     "BacktestConfig",
     "EquityPoint",
+    "KimpTrade",
     "BacktestMetrics",
     "KimpBacktestResult",
     "run_kimp_backtest",
@@ -140,6 +141,35 @@ class EquityPoint:
 
 
 @dataclass(frozen=True)
+class KimpTrade:
+    """완결된 한 사이클의 진입/청산 기록.
+
+    백테스트와 실거래의 일치성 검증을 위해 한 사이클(역김프 진입 → 목표 김프
+    청산)의 시각·가격·김프·손익 분해를 모두 보존한다. ``net_pnl_krw`` 합계는
+    백테스트 전체 순손익과 일치한다.
+    """
+
+    index: int
+    entry_ts_ms: int
+    exit_ts_ms: int
+    entry_kimp_pct: float
+    exit_kimp_pct: float
+    entry_upbit_krw: float
+    exit_upbit_krw: float
+    qty_upbit: float
+    qty_binance: float
+    notional_krw: float
+    kimp_pnl_krw: float
+    funding_income_krw: float
+    funding_events: int
+    fee_krw: float
+    net_pnl_krw: float
+    return_pct: float
+    holding_bars: int
+    exit_reason: str  # "target" | "period_end"
+
+
+@dataclass(frozen=True)
 class BacktestMetrics:
     n_bars: int
     total_return_pct: float
@@ -163,6 +193,7 @@ class BacktestMetrics:
 class KimpBacktestResult:
     metrics: BacktestMetrics
     equity: list[EquityPoint] = field(default_factory=list)
+    trades: list[KimpTrade] = field(default_factory=list)
 
 
 def _median_dt_ms(bars: list[KimpBar]) -> float:
@@ -197,6 +228,18 @@ class _RunState:
     bars_in_market: int = 0
     kimp_sum: float = 0.0
     equity_series: list[float] = field(default_factory=list)
+    trades: list[KimpTrade] = field(default_factory=list)
+
+    # 현재 보유 중인 포지션의 진입 시점 정보/누적치 (청산 시 KimpTrade로 확정)
+    cur_entry_ts: int | None = None
+    cur_entry_upbit: float = 0.0
+    cur_entry_kimp: float = 0.0
+    cur_entry_fee: float = 0.0
+    cur_kimp_pnl: float = 0.0
+    cur_funding: float = 0.0
+    cur_funding_events: int = 0
+    cur_bars: int = 0
+    cur_notional: float = 0.0
 
     @property
     def in_market(self) -> bool:
@@ -266,17 +309,57 @@ def _open_position(
     state.q_u = q_u
     state.q_b = q_b
     state.n_entries += 1
+    # 현재 포지션 누적치 초기화
+    state.cur_entry_ts = bar.ts_ms
+    state.cur_entry_upbit = bar.upbit_krw
+    state.cur_entry_kimp = bar.kimp
+    state.cur_entry_fee = fee
+    state.cur_kimp_pnl = 0.0
+    state.cur_funding = 0.0
+    state.cur_funding_events = 0
+    state.cur_bars = 0
+    state.cur_notional = q_u * bar.upbit_krw
 
 
-def _close_position(state: _RunState, bar: KimpBar, sizing: SizingConfig) -> None:
+def _close_position(
+    state: _RunState, bar: KimpBar, sizing: SizingConfig, reason: str = "target"
+) -> None:
     if not state.in_market:
         return
     fee = _trade_fee(state.q_u, state.q_b, bar, sizing)
     state.cum_pnl -= fee
     state.fee_total += fee
+    total_fee = state.cur_entry_fee + fee
+    kimp_pnl = state.cur_kimp_pnl
+    funding = state.cur_funding
+    net = kimp_pnl + funding - total_fee
+    notional = state.cur_notional
+    state.trades.append(
+        KimpTrade(
+            index=len(state.trades) + 1,
+            entry_ts_ms=state.cur_entry_ts if state.cur_entry_ts is not None else bar.ts_ms,
+            exit_ts_ms=bar.ts_ms,
+            entry_kimp_pct=state.cur_entry_kimp * 100.0,
+            exit_kimp_pct=bar.kimp * 100.0,
+            entry_upbit_krw=state.cur_entry_upbit,
+            exit_upbit_krw=bar.upbit_krw,
+            qty_upbit=state.q_u,
+            qty_binance=state.q_b,
+            notional_krw=notional,
+            kimp_pnl_krw=kimp_pnl,
+            funding_income_krw=funding,
+            funding_events=state.cur_funding_events,
+            fee_krw=total_fee,
+            net_pnl_krw=net,
+            return_pct=(net / notional * 100.0) if notional > 0 else 0.0,
+            holding_bars=state.cur_bars + 1,
+            exit_reason=reason,
+        )
+    )
     state.q_u = 0.0
     state.q_b = 0.0
     state.n_exits += 1
+    state.cur_entry_ts = None
 
 
 def run_kimp_backtest(bars: list[KimpBar], config: BacktestConfig) -> KimpBacktestResult:
@@ -299,6 +382,7 @@ def run_kimp_backtest(bars: list[KimpBar], config: BacktestConfig) -> KimpBackte
             mtm = d_long + d_short
             state.cum_pnl += mtm
             state.kimp_pnl += mtm
+            state.cur_kimp_pnl += mtm
 
         # 2) 펀딩 정산: 정산 바에서, 직전부터 보유 중이던 숏 수량 기준.
         if bar.funding_rate is not None and state.in_market:
@@ -306,16 +390,19 @@ def run_kimp_backtest(bars: list[KimpBar], config: BacktestConfig) -> KimpBackte
             state.cum_pnl += funding
             state.funding_income += funding
             state.funding_event_count += 1
+            state.cur_funding += funding
+            state.cur_funding_events += 1
 
         # 3) 보유 중에는 목표 김프 청산만 수행하고, 미보유 때만 신규 진입한다.
         if state.in_market:
             if k >= config.exit_kimp:
-                _close_position(state, bar, sizing)
+                _close_position(state, bar, sizing, reason="target")
         elif _should_enter(bar, config, sizing):
             _open_position(state, bar, config, sizing)
 
         if state.in_market:
             state.bars_in_market += 1
+            state.cur_bars += 1
 
         equity = capital_base + state.cum_pnl
         state.equity_series.append(equity)
@@ -332,7 +419,7 @@ def run_kimp_backtest(bars: list[KimpBar], config: BacktestConfig) -> KimpBackte
 
     # 기간 종료 시 열려 있는 포지션은 결과 확정을 위해 마지막 바 가격으로 닫는다.
     if bars and state.in_market:
-        _close_position(state, bars[-1], sizing)
+        _close_position(state, bars[-1], sizing, reason="period_end")
         final_equity = capital_base + state.cum_pnl
         state.equity_series[-1] = final_equity
         last = equity_points[-1]
@@ -345,7 +432,7 @@ def run_kimp_backtest(bars: list[KimpBar], config: BacktestConfig) -> KimpBackte
         )
 
     metrics = _compute_metrics(bars=bars, capital_base=capital_base, state=state)
-    return KimpBacktestResult(metrics=metrics, equity=equity_points)
+    return KimpBacktestResult(metrics=metrics, equity=equity_points, trades=state.trades)
 
 
 def _compute_metrics(

@@ -15,6 +15,7 @@ from live.kimp_neutral_backtest import (
     BacktestMetrics,
     KimpBacktestResult,
     KimpBar,
+    KimpTrade,
     composite_score,
     run_kimp_backtest,
 )
@@ -105,6 +106,68 @@ class TestSimpleEntryExit:
 
         assert res.metrics.n_entries == 0
         assert res.metrics.net_profit_krw == 0.0
+
+
+class TestTradeRecords:
+    def test_single_cycle_records_one_trade(self) -> None:
+        bars = kimps_to_bars([-0.03, -0.02, 0.006])
+        res = run_kimp_backtest(bars, _zero_fee_config(full_build_z=-2.0, flat_z=0.5))
+
+        assert len(res.trades) == 1
+        tr = res.trades[0]
+        assert isinstance(tr, KimpTrade)
+        assert tr.index == 1
+        assert tr.entry_kimp_pct == pytest.approx(-3.0, abs=1e-6)
+        assert tr.exit_kimp_pct == pytest.approx(0.6, abs=1e-6)
+        assert tr.exit_reason == "target"
+        assert tr.kimp_pnl_krw > 0.0
+        assert tr.net_pnl_krw == pytest.approx(
+            tr.kimp_pnl_krw + tr.funding_income_krw - tr.fee_krw
+        )
+
+    def test_multiple_cycles_record_multiple_trades(self) -> None:
+        # 역김프 진입 → 목표 청산을 세 번 반복하는 합성 시계열
+        bars = kimps_to_bars([-0.03, 0.006, -0.03, 0.006, -0.03, 0.006])
+        res = run_kimp_backtest(bars, _zero_fee_config(full_build_z=-2.0, flat_z=0.5))
+
+        assert res.metrics.n_entries == 3
+        assert res.metrics.n_exits == 3
+        assert res.metrics.completed_trades == 3
+        assert len(res.trades) == 3
+        assert [t.index for t in res.trades] == [1, 2, 3]
+        assert all(t.exit_reason == "target" for t in res.trades)
+
+    def test_open_position_closed_at_period_end(self) -> None:
+        # 진입 후 목표 김프에 한 번도 도달하지 못함 → 기간 종료로 청산
+        bars = kimps_to_bars([-0.03, -0.031, -0.029, -0.03])
+        res = run_kimp_backtest(bars, _zero_fee_config(full_build_z=-2.0, flat_z=0.5))
+
+        assert len(res.trades) == 1
+        assert res.trades[0].exit_reason == "period_end"
+
+    def test_trade_nets_sum_to_total_profit(self) -> None:
+        kimps = [-0.03, 0.006, -0.03, 0.006, -0.03, -0.02, 0.006]
+        cfg = BacktestConfig(
+            full_build_z=-2.0,
+            flat_z=0.5,
+            upbit_taker_fee=0.0005,
+            binance_taker_fee=0.0005,
+        )
+        res = run_kimp_backtest(kimps_to_bars(kimps), cfg)
+        total = sum(t.net_pnl_krw for t in res.trades)
+        assert total == pytest.approx(res.metrics.net_profit_krw, rel=1e-9, abs=1e-6)
+
+    def test_funding_attributed_to_open_trade(self) -> None:
+        kimps = [-0.03] * 30
+        bars = [
+            _bar_funding(i, k, 0.0002 if i == 10 else None)
+            for i, k in enumerate(kimps)
+        ]
+        res = run_kimp_backtest(bars, _zero_fee_config(full_build_z=-2.0, flat_z=0.5))
+        assert len(res.trades) == 1
+        tr = res.trades[0]
+        assert tr.funding_events == 1
+        assert tr.funding_income_krw > 0.0
 
 
 class TestNeutrality:

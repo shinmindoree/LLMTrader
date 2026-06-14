@@ -958,6 +958,27 @@ export type KimpBacktestRequest = {
   binance_taker_fee?: number;
 };
 
+export type KimpBacktestTrade = {
+  index: number;
+  entry_t: number; // epoch ms
+  exit_t: number; // epoch ms
+  entry_kimp_pct: number;
+  exit_kimp_pct: number;
+  entry_upbit_krw: number;
+  exit_upbit_krw: number;
+  qty_upbit: number;
+  qty_binance: number;
+  notional_krw: number;
+  kimp_pnl_krw: number;
+  funding_income_krw: number;
+  funding_events: number;
+  fee_krw: number;
+  net_pnl_krw: number;
+  return_pct: number;
+  holding_bars: number;
+  exit_reason: string; // "target" | "period_end"
+};
+
 export type KimpBacktestResponse = {
   success: boolean;
   error?: string | null;
@@ -965,6 +986,7 @@ export type KimpBacktestResponse = {
   as_of: string;
   metrics?: KimpBacktestMetrics | null;
   equity_curve: KimpBacktestEquityPoint[];
+  trades?: KimpBacktestTrade[];
 };
 
 export type KimpUniverseBacktestRequest = {

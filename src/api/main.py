@@ -137,6 +137,7 @@ from api.schemas import (
     KimpBacktestMetrics,
     KimpBacktestRequest,
     KimpBacktestResponse,
+    KimpBacktestTrade,
     KimpFundingPoint,
     KimpFxRateResponse,
     KimpHistoryPoint,
@@ -2715,8 +2716,36 @@ def create_app() -> FastAPI:
             time_in_market_pct=m.time_in_market_pct,
             final_kimp_pct=m.final_kimp_pct,
         )
+        trades = [
+            KimpBacktestTrade(
+                index=tr.index,
+                entry_t=tr.entry_ts_ms,
+                exit_t=tr.exit_ts_ms,
+                entry_kimp_pct=tr.entry_kimp_pct,
+                exit_kimp_pct=tr.exit_kimp_pct,
+                entry_upbit_krw=tr.entry_upbit_krw,
+                exit_upbit_krw=tr.exit_upbit_krw,
+                qty_upbit=tr.qty_upbit,
+                qty_binance=tr.qty_binance,
+                notional_krw=tr.notional_krw,
+                kimp_pnl_krw=tr.kimp_pnl_krw,
+                funding_income_krw=tr.funding_income_krw,
+                funding_events=tr.funding_events,
+                fee_krw=tr.fee_krw,
+                net_pnl_krw=tr.net_pnl_krw,
+                return_pct=tr.return_pct,
+                holding_bars=tr.holding_bars,
+                exit_reason=tr.exit_reason,
+            )
+            for tr in result.trades
+        ]
         return KimpBacktestResponse(
-            success=True, symbol=sym, as_of=now, metrics=metrics, equity_curve=curve
+            success=True,
+            symbol=sym,
+            as_of=now,
+            metrics=metrics,
+            equity_curve=curve,
+            trades=trades,
         )
 
     def _to_universe_metrics(m: Any) -> KimpBacktestMetrics:

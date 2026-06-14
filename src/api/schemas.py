@@ -868,6 +868,29 @@ class KimpBacktestEquityPoint(BaseModel):
     notional_krw: float
 
 
+class KimpBacktestTrade(BaseModel):
+    """완결된 한 사이클의 진입/청산 기록(백테스트-실거래 일치성 검증용)."""
+
+    index: int
+    entry_t: int  # 진입 epoch ms (UTC)
+    exit_t: int  # 청산 epoch ms (UTC)
+    entry_kimp_pct: float
+    exit_kimp_pct: float
+    entry_upbit_krw: float
+    exit_upbit_krw: float
+    qty_upbit: float
+    qty_binance: float
+    notional_krw: float
+    kimp_pnl_krw: float
+    funding_income_krw: float
+    funding_events: int
+    fee_krw: float
+    net_pnl_krw: float
+    return_pct: float
+    holding_bars: int
+    exit_reason: str  # "target" | "period_end"
+
+
 class KimpBacktestResponse(BaseModel):
     success: bool
     error: str | None = None
@@ -875,6 +898,7 @@ class KimpBacktestResponse(BaseModel):
     as_of: datetime
     metrics: KimpBacktestMetrics | None = None
     equity_curve: list[KimpBacktestEquityPoint] = Field(default_factory=list)
+    trades: list[KimpBacktestTrade] = Field(default_factory=list)
 
 
 class KimpUniverseBacktestRequest(BaseModel):
