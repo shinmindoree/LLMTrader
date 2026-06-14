@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,59 @@ from control.enums import EventKind
 from runner.event_sink import DbEventSink
 from runner.strategy_loader import build_strategy, load_strategy_class, resolve_strategy_file
 from settings import get_settings
+
+# In-process kline cache. Sweeps run many backtests sequentially that fetch the
+# exact same (symbol, interval, window) candles from Binance, which can exhaust
+# the per-IP request budget and trigger HTTP 429. Caching the fetched klines for
+# a fixed historical window (deterministic by start/end ts) lets later runs in a
+# sweep reuse the data instead of re-hitting the API. Bounded by entry count and
+# a short TTL so a long-lived runner process does not retain large lists forever.
+_KLINES_CACHE_MAX_ENTRIES = 3
+_KLINES_CACHE_TTL_SEC = 900.0
+_klines_cache: OrderedDict[tuple[str, str, str, int, int], tuple[float, list[list[Any]]]] = (
+    OrderedDict()
+)
+_klines_cache_lock = asyncio.Lock()
+
+
+async def _fetch_klines_cached(  # noqa: PLR0913
+    *,
+    client: BinanceHTTPClient,
+    base_url: str,
+    symbol: str,
+    interval: str,
+    start_ts: int,
+    end_ts: int,
+    progress_callback: Any,
+) -> list[list[Any]]:
+    key = (base_url, symbol, interval, int(start_ts), int(end_ts))
+    now = time.monotonic()
+    async with _klines_cache_lock:
+        cached = _klines_cache.get(key)
+        if cached is not None:
+            ts, data = cached
+            if now - ts <= _KLINES_CACHE_TTL_SEC:
+                _klines_cache.move_to_end(key)
+                if progress_callback:
+                    progress_callback(100.0)
+                return data
+            del _klines_cache[key]
+
+    klines = await fetch_all_klines(
+        client=client,
+        symbol=symbol,
+        interval=interval,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        progress_callback=progress_callback,
+    )
+
+    async with _klines_cache_lock:
+        _klines_cache[key] = (time.monotonic(), klines)
+        _klines_cache.move_to_end(key)
+        while len(_klines_cache) > _KLINES_CACHE_MAX_ENTRIES:
+            _klines_cache.popitem(last=False)
+    return klines
 
 
 def _json_safe(value: Any) -> Any:
@@ -269,8 +324,9 @@ async def run_backtest(
     )
 
     try:
-        klines = await fetch_all_klines(
+        klines = await _fetch_klines_cached(
             client=client,
+            base_url=backtest_url,
             symbol=symbol,
             interval=interval,
             start_ts=start_ts,

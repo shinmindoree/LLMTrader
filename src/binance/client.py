@@ -12,6 +12,20 @@ import httpx
 from binance.protocols import BinanceMarketDataClient, BinanceTradingClient
 
 
+def _rate_limit_backoff_delay(retry_after: str | None, base_delay: float, attempt: int) -> float:
+    """Resolve the sleep delay for a 429/-1003 retry.
+
+    Honors the ``Retry-After`` header when present, otherwise falls back to an
+    exponential backoff. The result is capped by the caller.
+    """
+    if retry_after:
+        try:
+            return float(retry_after)
+        except (TypeError, ValueError):
+            pass
+    return base_delay * (2 ** attempt) * 2
+
+
 def normalize_binance_base_url(base_url: str | None, *, fallback: str = "https://fapi.binance.com") -> str:
     raw = (base_url or "").strip()
     if not raw:
@@ -100,7 +114,8 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
         if end_ts is not None:
             params["endTime"] = end_ts
 
-        max_retries = 3
+        max_retries = 5
+        base_delay = 1.0
         for attempt in range(max_retries):
             try:
                 response = await self._client.get("/fapi/v1/klines", params=params)
@@ -118,6 +133,19 @@ class BinanceHTTPClient(BinanceMarketDataClient, BinanceTradingClient):
                     ) from e
                 body = e.response.text.strip()
                 body_preview = body[:300] + ("..." if len(body) > 300 else "")
+                try:
+                    error_code = e.response.json().get("code")
+                except Exception:  # noqa: BLE001
+                    error_code = None
+                # Rate limit (429) / Binance -1003 "Too many requests": back off
+                # and retry instead of failing the whole backtest. Sweeps fire
+                # many kline fetches in quick succession, so without this a run
+                # that exhausts the per-IP minute budget fails immediately.
+                if (status_code == 429 or error_code == -1003) and attempt < max_retries - 1:
+                    retry_after = e.response.headers.get("Retry-After")
+                    delay = _rate_limit_backoff_delay(retry_after, base_delay, attempt)
+                    await asyncio.sleep(min(delay, 60.0))
+                    continue
                 raise ValueError(
                     "Binance API error: "
                     f"{status_code} GET /fapi/v1/klines | params={params} | body={body_preview}"
