@@ -1032,3 +1032,50 @@ export type KimpArbitrageStatusResponse = {
   params?: KimpArbitrageParams | null;
   last_error?: string | null;
 };
+
+export type KimpPaperPortfolioParams = {
+  top_n: number;
+  capital_per_slot_krw: number;
+  candidate_limit: number;
+  rerank_hours: number;
+  rank_days: number;
+  rank_z_window_points: number;
+  full_build_z: number;
+  flat_z: number;
+  hedge_mode: KimpHedgeMode;
+  leverage: number;
+  z_window_days: number;
+  upbit_taker_fee: number;
+  binance_taker_fee: number;
+};
+
+export type KimpPaperSlotStatus = {
+  symbol: string;
+  score?: number | null;
+  kimp_pct?: number | null;
+  zscore?: number | null;
+  target_notional_krw?: number | null;
+  current_notional_krw?: number | null;
+  upbit_long_qty?: number | null;
+  binance_short_qty?: number | null;
+  unrealized_pnl_krw?: number | null;
+  accumulated_fee_krw: number;
+  last_rebalance_ts?: string | null;
+  last_error?: string | null;
+};
+
+export type KimpPaperPortfolioStatus = {
+  running: boolean;
+  top_n: number;
+  capital_per_slot_krw: number;
+  n_slots: number;
+  total_notional_krw: number;
+  total_unrealized_pnl_krw: number;
+  total_fee_krw: number;
+  rerank_hours: number;
+  last_rank_ts?: string | null;
+  next_rank_ts?: string | null;
+  slots: KimpPaperSlotStatus[];
+  params?: KimpPaperPortfolioParams | null;
+  last_error?: string | null;
+};

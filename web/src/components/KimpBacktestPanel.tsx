@@ -324,6 +324,20 @@ function SinglePanel({
             </div>
             <EquityCurve data={res?.equity_curve ?? []} />
           </div>
+          <div className="mt-3">
+            <div className="mb-1 flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#868993]">
+              <span>{labels.overlayTitle}</span>
+              <span className="flex items-center gap-1 normal-case">
+                <span className="inline-block h-0.5 w-3 bg-[#38bdf8]" />
+                {labels.kimpLegend}
+              </span>
+              <span className="flex items-center gap-1 normal-case">
+                <span className="inline-block h-0.5 w-3 bg-[#f59e0b]" />
+                {labels.zLegend}
+              </span>
+            </div>
+            <KimpZOverlay data={res?.equity_curve ?? []} />
+          </div>
         </>
       ) : !err ? (
         <div className="mt-3 text-xs text-[#868993]">{labels.empty}</div>
@@ -556,6 +570,75 @@ function EquityCurve({ data }: { data: KimpBacktestEquityPoint[] }) {
       />
       <path d={area} fill={fill} />
       <path d={line} fill="none" stroke={stroke} strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+function buildLine(
+  values: (number | null)[],
+  sx: (i: number) => number,
+  sy: (v: number) => number,
+): string {
+  let path = "";
+  let started = false;
+  values.forEach((v, i) => {
+    if (v == null || !Number.isFinite(v)) {
+      started = false;
+      return;
+    }
+    const cmd = started ? "L" : "M";
+    path += `${cmd}${sx(i).toFixed(1)},${sy(v).toFixed(1)} `;
+    started = true;
+  });
+  return path.trim();
+}
+
+function KimpZOverlay({ data }: { data: KimpBacktestEquityPoint[] }) {
+  if (data.length < 2) {
+    return (
+      <div className="flex h-[120px] items-center justify-center text-xs text-[#5b5d66]">—</div>
+    );
+  }
+  const width = 640;
+  const height = 120;
+  const pad = 8;
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
+  const sx = (i: number) => pad + (i / (data.length - 1)) * innerW;
+
+  const kimps = data.map((d) => d.kimp_pct);
+  const minK = Math.min(...kimps, 0);
+  const maxK = Math.max(...kimps, 0);
+  const rangeK = maxK - minK || 1;
+  const syK = (v: number) => pad + innerH - ((v - minK) / rangeK) * innerH;
+
+  const zs = data.map((d) => d.zscore);
+  const finiteZ = zs.filter((z): z is number => z != null && Number.isFinite(z));
+  const absZ = finiteZ.length ? Math.max(2, ...finiteZ.map((z) => Math.abs(z))) : 2;
+  const syZ = (v: number) => pad + innerH - ((v + absZ) / (2 * absZ)) * innerH;
+
+  const kimpPath = buildLine(kimps, sx, syK);
+  const zPath = buildLine(zs, sx, syZ);
+  const zeroY = syK(0);
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="w-full"
+      style={{ height }}
+      preserveAspectRatio="none"
+    >
+      <line
+        x1={pad}
+        y1={zeroY}
+        x2={width - pad}
+        y2={zeroY}
+        stroke="#3f3f46"
+        strokeWidth={0.5}
+        strokeDasharray="3 3"
+      />
+      {zPath ? <path d={zPath} fill="none" stroke="#f59e0b" strokeWidth={1} opacity={0.85} /> : null}
+      {kimpPath ? <path d={kimpPath} fill="none" stroke="#38bdf8" strokeWidth={1.5} /> : null}
     </svg>
   );
 }

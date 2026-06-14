@@ -141,6 +141,8 @@ from api.schemas import (
     KimpFxRateResponse,
     KimpHistoryPoint,
     KimpHistoryResponse,
+    KimpPaperPortfolioParams,
+    KimpPaperPortfolioStatus,
     KimpScreenerItem,
     KimpScreenerResponse,
     KimpUniverseBacktestItem,
@@ -1585,6 +1587,21 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("Kimp-arb auto-restore failed to schedule: %s", exc)
 
+        # 김프 페이퍼 자동운용(포트폴리오) 복원: desired_running=true인 페이퍼
+        # 포트폴리오를 다시 띄운다. 페이퍼라 거래소 키 없이 안전하게 복원된다.
+        try:
+            from live.kimp_paper_portfolio import (
+                restore_portfolios_on_startup as _restore_kimp_paper_pf,
+            )
+
+            asyncio.create_task(
+                _restore_kimp_paper_pf(session_maker),
+                name="kimp_paper_pf_auto_restore",
+            )
+            _logger.info("Kimp paper-portfolio auto-restore task scheduled")
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Kimp paper-portfolio auto-restore failed to schedule: %s", exc)
+
         # 김프 스냅샷 1분 콜렉터: 백테스트/시계열 차트/30일 통계의 원천 데이터를
         # 적재한다. 외부 API/DB 실패는 콜렉터 내부에서 로깅만 하고 다음 사이클로
         # 넘어가므로 API startup 을 막지 않는다.
@@ -2785,6 +2802,65 @@ def create_app() -> FastAPI:
             n_ok=n_ok,
             items=items,
         )
+
+    @app.get(
+        "/api/kimp-arb/paper-portfolio/status",
+        response_model=KimpPaperPortfolioStatus,
+    )
+    async def kimp_paper_pf_status(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> KimpPaperPortfolioStatus:
+        from live.kimp_paper_portfolio import get_portfolio_status_persisted
+
+        return await get_portfolio_status_persisted(session, user.user_id)
+
+    @app.post(
+        "/api/kimp-arb/paper-portfolio/start",
+        response_model=KimpPaperPortfolioStatus,
+    )
+    async def kimp_paper_pf_start(
+        params: KimpPaperPortfolioParams,
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> KimpPaperPortfolioStatus:
+        """페이퍼 자동운용 시작 — 유니버스를 랭킹해 상위 N 종목을 페이퍼로 운용.
+
+        실주문/거래소 키가 필요 없다(모의체결). ``rerank_hours`` 마다 재랭킹해
+        슬롯을 교체한다.
+        """
+        from live.kimp_paper_portfolio import (
+            get_portfolio_status_persisted,
+            start_portfolio,
+        )
+
+        current = await get_portfolio_status_persisted(session, user.user_id)
+        if current.running:
+            raise HTTPException(
+                status_code=409, detail="페이퍼 자동운용이 이미 실행 중입니다. 먼저 정지하세요."
+            )
+
+        await start_portfolio(
+            user_id=user.user_id, params=params, session_maker=session_maker
+        )
+        return await get_portfolio_status_persisted(session, user.user_id)
+
+    @app.post(
+        "/api/kimp-arb/paper-portfolio/stop",
+        response_model=KimpPaperPortfolioStatus,
+    )
+    async def kimp_paper_pf_stop(
+        user: AuthenticatedUser = Depends(require_auth),
+        session: AsyncSession = Depends(_db_session),
+    ) -> KimpPaperPortfolioStatus:
+        """페이퍼 자동운용 정지 (모든 슬롯 청산)."""
+        from live.kimp_paper_portfolio import (
+            get_portfolio_status_persisted,
+            stop_portfolio,
+        )
+
+        await stop_portfolio(user.user_id, session_maker=session_maker)
+        return await get_portfolio_status_persisted(session, user.user_id)
 
     @app.get(
         "/api/binance/futures/symbols",

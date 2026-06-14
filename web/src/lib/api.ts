@@ -824,6 +824,27 @@ export async function stopKimpArb(): Promise<
   return json("/api/backend/api/kimp-arb/stop", { method: "POST" });
 }
 
+export async function getKimpPaperPortfolio(): Promise<
+  import("@/lib/types").KimpPaperPortfolioStatus
+> {
+  return json("/api/backend/api/kimp-arb/paper-portfolio/status");
+}
+
+export async function startKimpPaperPortfolio(
+  params: Partial<import("@/lib/types").KimpPaperPortfolioParams>,
+): Promise<import("@/lib/types").KimpPaperPortfolioStatus> {
+  return json("/api/backend/api/kimp-arb/paper-portfolio/start", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function stopKimpPaperPortfolio(): Promise<
+  import("@/lib/types").KimpPaperPortfolioStatus
+> {
+  return json("/api/backend/api/kimp-arb/paper-portfolio/stop", { method: "POST" });
+}
+
 export async function getJob(jobId: string): Promise<Job> {
   return json<Job>(`/api/backend/api/jobs/${jobId}`);
 }

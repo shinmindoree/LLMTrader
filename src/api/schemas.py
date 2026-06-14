@@ -909,6 +909,74 @@ class KimpUniverseBacktestResponse(BaseModel):
     items: list[KimpUniverseBacktestItem] = Field(default_factory=list)
 
 
+# ── Kimp Paper Auto-Pilot Portfolio (랭킹 상위 N 자동 페이퍼 운용) ──
+
+
+class KimpPaperPortfolioParams(BaseModel):
+    """페이퍼 자동운용 파라미터.
+
+    유니버스를 백테스트로 랭킹해 상위 ``top_n`` 종목을 각각 ``capital_per_slot_krw``
+    규모의 **페이퍼 중립북**으로 운용한다. ``rerank_hours`` 마다 재랭킹해 슬롯을
+    교체한다. 실주문/키가 없으므로 안전하게 다종목 전략을 검증한다.
+    """
+
+    top_n: int = Field(default=3, ge=1, le=10, description="동시 운용 슬롯 수")
+    capital_per_slot_krw: float = Field(
+        default=10_000_000.0, gt=0, description="슬롯당 최대 북(KRW)"
+    )
+    candidate_limit: int = Field(
+        default=30, ge=1, le=200, description="재랭킹 시 평가할 유니버스 상위 N"
+    )
+    rerank_hours: float = Field(
+        default=6.0, ge=0.5, le=168.0, description="재랭킹 주기(시간)"
+    )
+    rank_days: int = Field(default=30, ge=1, le=365, description="랭킹 백테스트 기간(일)")
+    rank_z_window_points: int = Field(default=720, ge=10, le=43200)
+    full_build_z: float = -2.0
+    flat_z: float = 0.5
+    hedge_mode: Literal["quantity", "delta"] = "quantity"
+    leverage: float = Field(default=1.0, ge=1.0, le=10.0)
+    z_window_days: int = Field(default=30, ge=1, le=90, description="페이퍼 틱 z 윈도우(일)")
+    upbit_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+    binance_taker_fee: float = Field(default=0.0005, ge=0, le=0.01)
+
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+        if self.flat_z <= self.full_build_z:
+            raise ValueError("flat_z 는 full_build_z 보다 커야 합니다")
+
+
+class KimpPaperSlotStatus(BaseModel):
+    symbol: str
+    score: float | None = None  # 마지막 랭킹 점수
+    kimp_pct: float | None = None
+    zscore: float | None = None
+    target_notional_krw: float | None = None
+    current_notional_krw: float | None = None
+    upbit_long_qty: float | None = None
+    binance_short_qty: float | None = None
+    unrealized_pnl_krw: float | None = None
+    accumulated_fee_krw: float = 0.0
+    last_rebalance_ts: datetime | None = None
+    last_error: str | None = None
+
+
+class KimpPaperPortfolioStatus(BaseModel):
+    running: bool
+    top_n: int = 0
+    capital_per_slot_krw: float = 0.0
+    n_slots: int = 0
+    total_notional_krw: float = 0.0
+    total_unrealized_pnl_krw: float = 0.0
+    total_fee_krw: float = 0.0
+    rerank_hours: float = 0.0
+    last_rank_ts: datetime | None = None
+    next_rank_ts: datetime | None = None
+    slots: list[KimpPaperSlotStatus] = Field(default_factory=list)
+    params: KimpPaperPortfolioParams | None = None
+    last_error: str | None = None
+
+
 # ── Quick Backtest ──────────────────────────────────────────
 
 
