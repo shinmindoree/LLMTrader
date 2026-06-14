@@ -785,6 +785,45 @@ export async function getKimpHistory(
   return json(`/api/backend/api/kimp-arb/history?${params.toString()}`);
 }
 
+export async function runKimpBacktest(
+  req: import("@/lib/types").KimpBacktestRequest,
+): Promise<import("@/lib/types").KimpBacktestResponse> {
+  return json("/api/backend/api/kimp-arb/backtest", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export async function runKimpUniverseBacktest(
+  req: import("@/lib/types").KimpUniverseBacktestRequest,
+): Promise<import("@/lib/types").KimpUniverseBacktestResponse> {
+  return json("/api/backend/api/kimp-arb/backtest/universe", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export async function getKimpArbStatus(): Promise<
+  import("@/lib/types").KimpArbitrageStatusResponse
+> {
+  return json("/api/backend/api/kimp-arb/status");
+}
+
+export async function startKimpArb(
+  params: Partial<import("@/lib/types").KimpArbitrageParams>,
+): Promise<import("@/lib/types").KimpArbitrageStatusResponse> {
+  return json("/api/backend/api/kimp-arb/start", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function stopKimpArb(): Promise<
+  import("@/lib/types").KimpArbitrageStatusResponse
+> {
+  return json("/api/backend/api/kimp-arb/stop", { method: "POST" });
+}
+
 export async function getJob(jobId: string): Promise<Job> {
   return json<Job>(`/api/backend/api/jobs/${jobId}`);
 }

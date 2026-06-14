@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 
+import KimpBacktestPanel from "@/components/KimpBacktestPanel";
+import KimpBotControl from "@/components/KimpBotControl";
 import KimpHistoryChart from "@/components/KimpHistoryChart";
 import KimpScreenerTable from "@/components/KimpScreenerTable";
 import { HubHeader } from "@/components/StrategyHub";
@@ -45,6 +47,8 @@ export default function ArbitrageKimpPage() {
           rateMode={rateMode}
           onRateModeChange={setRateMode}
         />
+        <KimpBacktestPanel symbol={symbol} onSelect={setSymbol} />
+        <KimpBotControl symbol={symbol} />
       </div>
     </div>
   );

@@ -907,3 +907,128 @@ export type KimpHistoryResponse = {
   series: KimpHistoryPoint[];
   funding_series: KimpFundingPoint[];
 };
+
+// ── Kimp delta-neutral backtest & bot ──────────────────────────
+
+export type KimpHedgeMode = "quantity" | "delta";
+export type KimpArbMode = "live" | "paper";
+export type KimpArbEnv = "mainnet" | "testnet";
+export type KimpPriceSource = "candles" | "snapshots";
+
+export type KimpBacktestMetrics = {
+  n_bars: number;
+  total_return_pct: number;
+  net_profit_krw: number;
+  funding_income_krw: number;
+  max_drawdown_pct: number;
+  sharpe: number;
+  n_rebalances: number;
+  fee_drag_krw: number;
+  avg_kimp_pct: number;
+  time_in_market_pct: number;
+  final_kimp_pct: number;
+};
+
+export type KimpBacktestEquityPoint = {
+  t: number; // epoch ms
+  equity_krw: number;
+  kimp_pct: number;
+  zscore: number | null;
+  notional_krw: number;
+};
+
+export type KimpBacktestRequest = {
+  symbol: string;
+  days?: number;
+  price_source?: KimpPriceSource;
+  rate_mode?: KimpRateMode;
+  include_funding?: boolean;
+  gross_cap_krw?: number;
+  full_build_z?: number;
+  flat_z?: number;
+  hedge_mode?: KimpHedgeMode;
+  leverage?: number;
+  z_window_points?: number;
+  upbit_taker_fee?: number;
+  binance_taker_fee?: number;
+};
+
+export type KimpBacktestResponse = {
+  success: boolean;
+  error?: string | null;
+  symbol: string;
+  as_of: string;
+  metrics?: KimpBacktestMetrics | null;
+  equity_curve: KimpBacktestEquityPoint[];
+};
+
+export type KimpUniverseBacktestRequest = {
+  symbols?: string[] | null;
+  limit?: number;
+  days?: number;
+  rate_mode?: KimpRateMode;
+  include_funding?: boolean;
+  gross_cap_krw?: number;
+  full_build_z?: number;
+  flat_z?: number;
+  hedge_mode?: KimpHedgeMode;
+  leverage?: number;
+  z_window_points?: number;
+  upbit_taker_fee?: number;
+  binance_taker_fee?: number;
+  concurrency?: number;
+};
+
+export type KimpUniverseBacktestItem = {
+  symbol: string;
+  score?: number | null;
+  error?: string | null;
+  n_bars: number;
+  n_funding_events: number;
+  metrics?: KimpBacktestMetrics | null;
+};
+
+export type KimpUniverseBacktestResponse = {
+  success: boolean;
+  error?: string | null;
+  as_of: string;
+  n_symbols: number;
+  n_ok: number;
+  items: KimpUniverseBacktestItem[];
+};
+
+export type KimpArbitrageParams = {
+  symbol: string;
+  env: KimpArbEnv;
+  mode: KimpArbMode;
+  gross_cap_krw: number;
+  full_build_z: number;
+  flat_z: number;
+  hedge_mode: KimpHedgeMode;
+  leverage: number;
+  z_window_days: number;
+  upbit_taker_fee: number;
+  binance_taker_fee: number;
+  margin_alert_ratio: number;
+};
+
+export type KimpArbitrageStatusResponse = {
+  running: boolean;
+  mode: KimpArbMode;
+  symbol?: string | null;
+  upbit_long_qty?: number | null;
+  binance_short_qty?: number | null;
+  kimp_pct?: number | null;
+  zscore?: number | null;
+  target_notional_krw?: number | null;
+  current_notional_krw?: number | null;
+  fx_hedge_usd?: number | null;
+  coin_delta_qty?: number | null;
+  price_delta_krw?: number | null;
+  unrealized_pnl_krw?: number | null;
+  accumulated_fee_krw: number;
+  binance_margin_ratio?: number | null;
+  last_rebalance_ts?: string | null;
+  params?: KimpArbitrageParams | null;
+  last_error?: string | null;
+};
