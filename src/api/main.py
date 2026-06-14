@@ -3730,7 +3730,7 @@ def create_app() -> FastAPI:
             blockers=blockers,
             warnings=warnings,
             dimensions=[
-                SweepDimensionResolved(path=d.path, values=[float(v) for v in d.values])
+                SweepDimensionResolved(path=d.path, values=list(d.values))
                 for d in dims
             ],
             preview=preview,
@@ -3789,14 +3789,38 @@ def create_app() -> FastAPI:
             "strategy_path": logical_path,
             "base_config": base,
             "dimensions": [
-                {"path": d.path, "values": [float(v) for v in d.values]} for d in dims
+                {"path": d.path, "values": list(d.values)} for d in dims
             ],
         }
+
+        # Cache resolved strategy code per raw path so a strategy_path sweep
+        # only resolves each distinct strategy once.
+        strategy_cache: dict[str, tuple[str, str, str]] = {
+            body.strategy_path: (strategy_name, strategy_code, logical_path)
+        }
+
+        async def _resolve_for_run(raw_path: str) -> tuple[str, str, str]:
+            cached = strategy_cache.get(raw_path)
+            if cached is not None:
+                return cached
+            try:
+                run_name, run_code = await _resolve_strategy_code_for_user(
+                    session=session,
+                    user=user,
+                    path=raw_path,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            resolved = (run_name, run_code, _logical_strategy_path(run_name))
+            strategy_cache[raw_path] = resolved
+            return resolved
 
         job_ids: list[uuid.UUID] = []
         for run_index, (varied, cfg) in enumerate(expanded):
             config_json = dict(cfg)
-            config_json["_strategy_code"] = strategy_code
+            run_raw_path = config_json.pop("strategy_path", body.strategy_path)
+            run_name, run_code, run_logical = await _resolve_for_run(run_raw_path)
+            config_json["_strategy_code"] = run_code
             config_json["_sweep"] = {
                 "sweep_id": sweep_id,
                 "index": run_index,
@@ -3808,7 +3832,7 @@ def create_app() -> FastAPI:
                 session,
                 user_id=user.user_id,
                 job_type=JobType.BACKTEST,
-                strategy_path=logical_path,
+                strategy_path=run_logical,
                 config_json=config_json,
             )
             await append_event(
@@ -3818,7 +3842,7 @@ def create_app() -> FastAPI:
                 message="JOB_CREATED",
                 payload_json={
                     "type": str(JobType.BACKTEST),
-                    "strategy_path": body.strategy_path,
+                    "strategy_path": run_raw_path,
                     "sweep_id": sweep_id,
                     "sweep_index": run_index,
                 },

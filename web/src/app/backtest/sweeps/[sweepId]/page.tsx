@@ -101,6 +101,13 @@ function formatNum(value: number | null, digits = 2): string {
 }
 
 function formatParamValue(path: string, value: unknown): string {
+  if (path === "strategy_path" && typeof value === "string") {
+    const parts = value.split(/[\\/]/);
+    return parts[parts.length - 1] || value;
+  }
+  if (path === "interval") {
+    return String(value ?? "-");
+  }
   const n = num(value);
   if (n === null) return String(value ?? "-");
   if (PCT_PATHS.has(path)) {

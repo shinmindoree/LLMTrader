@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from api.backtest_sweep import (
+    ALLOWED_INTERVALS,
     MAX_SWEEP_TOTAL_RUNS,
     MAX_VALUES_PER_DIM,
     SweepError,
@@ -134,3 +135,106 @@ def test_empty_specs_rejected():
 
 def test_total_runs_limit_constant_sane():
     assert MAX_SWEEP_TOTAL_RUNS >= 10
+
+
+def test_interval_categorical_values():
+    dims = build_dimensions(
+        [{"path": "interval", "mode": "values", "values": ["15m", "1h", "4h"]}]
+    )
+    assert dims[0].path == "interval"
+    assert dims[0].values == ["15m", "1h", "4h"]
+    assert all(isinstance(v, str) for v in dims[0].values)
+
+
+def test_interval_categorical_lowercases_and_dedups():
+    dims = build_dimensions(
+        [{"path": "interval", "mode": "values", "values": ["1H", "1h", "15M"]}]
+    )
+    assert dims[0].values == ["1h", "15m"]
+
+
+def test_interval_range_mode_rejected():
+    with pytest.raises(SweepError):
+        build_dimensions(
+            [{"path": "interval", "mode": "range", "start": 1, "end": 4, "step": 1}]
+        )
+
+
+def test_interval_invalid_value_rejected():
+    with pytest.raises(SweepError):
+        build_dimensions(
+            [{"path": "interval", "mode": "values", "values": ["15m", "7m"]}]
+        )
+
+
+def test_all_allowed_intervals_accepted():
+    dims = build_dimensions(
+        [{"path": "interval", "mode": "values", "values": sorted(ALLOWED_INTERVALS)}]
+    )
+    assert set(dims[0].values) == set(ALLOWED_INTERVALS)
+
+
+def test_strategy_path_categorical_values():
+    dims = build_dimensions(
+        [
+            {
+                "path": "strategy_path",
+                "mode": "values",
+                "values": [
+                    "scripts/strategies/a_strategy.py",
+                    "scripts/strategies/b_strategy.py",
+                ],
+            }
+        ]
+    )
+    assert dims[0].path == "strategy_path"
+    assert dims[0].values == [
+        "scripts/strategies/a_strategy.py",
+        "scripts/strategies/b_strategy.py",
+    ]
+
+
+def test_strategy_path_range_mode_rejected():
+    with pytest.raises(SweepError):
+        build_dimensions(
+            [{"path": "strategy_path", "mode": "range", "start": 1, "end": 3, "step": 1}]
+        )
+
+
+def test_categorical_expand_sets_config_values():
+    dims = build_dimensions(
+        [{"path": "interval", "mode": "values", "values": ["15m", "1h"]}]
+    )
+    expanded = expand({"symbol": "BTCUSDT", "interval": "5m"}, dims)
+    intervals = sorted(cfg["interval"] for _, cfg in expanded)
+    assert intervals == ["15m", "1h"]
+
+
+def test_categorical_and_scalar_cartesian():
+    dims = build_dimensions(
+        [
+            {"path": "interval", "mode": "values", "values": ["15m", "1h"]},
+            {"path": "leverage", "mode": "values", "values": [1, 2]},
+        ]
+    )
+    assert count_runs(dims) == 4
+    expanded = expand({"symbol": "BTCUSDT"}, dims)
+    combos = {(cfg["interval"], cfg["leverage"]) for _, cfg in expanded}
+    assert combos == {("15m", 1), ("15m", 2), ("1h", 1), ("1h", 2)}
+
+
+def test_strategy_path_swept_into_config():
+    dims = build_dimensions(
+        [
+            {
+                "path": "strategy_path",
+                "mode": "values",
+                "values": ["scripts/strategies/x.py", "scripts/strategies/y.py"],
+            }
+        ]
+    )
+    expanded = expand({"symbol": "BTCUSDT"}, dims)
+    paths = sorted(cfg["strategy_path"] for _, cfg in expanded)
+    assert paths == ["scripts/strategies/x.py", "scripts/strategies/y.py"]
+    varied = sorted(v["strategy_path"] for v, _ in expanded)
+    assert varied == ["scripts/strategies/x.py", "scripts/strategies/y.py"]

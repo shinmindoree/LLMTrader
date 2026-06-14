@@ -18,11 +18,14 @@ type SweepParamMeta = {
   path: string;
   factor: number;
   integer?: boolean;
+  categorical?: boolean;
 };
 
 // Parameters that can be swept. ``factor`` converts the value shown in the
 // form (display unit) into the config unit. ``stop_loss_pct`` / ``max_position``
 // are entered as % in the UI but stored as fractions in the config.
+// ``categorical`` params (interval, strategy_path) only support the values mode
+// and are passed through as strings without a factor.
 const SWEEP_PARAMS: SweepParamMeta[] = [
   { path: "leverage", factor: 1, integer: true },
   { path: "initial_balance", factor: 1 },
@@ -32,11 +35,38 @@ const SWEEP_PARAMS: SweepParamMeta[] = [
   { path: "max_position", factor: 0.01 },
   { path: "max_pyramid_entries", factor: 1, integer: true },
   { path: "fixed_notional", factor: 1 },
+  { path: "interval", factor: 1, categorical: true },
+  { path: "strategy_path", factor: 1, categorical: true },
 ];
 
 const SWEEP_PARAM_BY_PATH: Record<string, SweepParamMeta> = Object.fromEntries(
   SWEEP_PARAMS.map((p) => [p.path, p]),
 );
+
+function isCategoricalPath(path: string): boolean {
+  return Boolean(SWEEP_PARAM_BY_PATH[path]?.categorical);
+}
+
+function strategyBasename(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}
+
+function optionsForPath(
+  path: string,
+  strategies: StrategyInfo[],
+): { value: string; label: string }[] {
+  if (path === "interval") {
+    return BACKTEST_INTERVALS.map((v) => ({ value: v, label: v }));
+  }
+  if (path === "strategy_path") {
+    return strategies.map((s) => ({
+      value: s.path,
+      label: s.name || strategyBasename(s.path),
+    }));
+  }
+  return [];
+}
 
 type SweepDimDraft = {
   path: string;
@@ -49,9 +79,10 @@ type SweepDimDraft = {
 
 function emptyDimDraft(usedPaths: string[]): SweepDimDraft {
   const available = SWEEP_PARAMS.find((p) => !usedPaths.includes(p.path));
+  const path = available?.path ?? SWEEP_PARAMS[0].path;
   return {
-    path: available?.path ?? SWEEP_PARAMS[0].path,
-    mode: "range",
+    path,
+    mode: isCategoricalPath(path) ? "values" : "range",
     start: "",
     end: "",
     step: "",
@@ -68,7 +99,24 @@ function parseValuesList(raw: string): number[] {
     .filter((n) => Number.isFinite(n));
 }
 
+// Categorical values are kept as a comma-separated list of raw strings so that
+// strategy paths (which contain slashes) survive round-tripping intact.
+function parseStringList(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 function countDimRuns(dim: SweepDimDraft): number {
+  if (isCategoricalPath(dim.path)) {
+    return parseStringList(dim.values).length;
+  }
   if (dim.mode === "values") {
     return new Set(parseValuesList(dim.values)).size;
   }
@@ -82,6 +130,13 @@ function countDimRuns(dim: SweepDimDraft): number {
 }
 
 function buildDimensionSpec(dim: SweepDimDraft): SweepDimensionSpec {
+  if (isCategoricalPath(dim.path)) {
+    return {
+      path: dim.path,
+      mode: "values",
+      values: parseStringList(dim.values),
+    };
+  }
   const meta = SWEEP_PARAM_BY_PATH[dim.path] ?? { path: dim.path, factor: 1 };
   const f = meta.factor;
   if (dim.mode === "values") {
@@ -103,14 +158,24 @@ function buildDimensionSpec(dim: SweepDimDraft): SweepDimensionSpec {
 // Convert resolved sweep dimensions (config units) back into form drafts
 // (display units) so an existing sweep can be re-run with edits.
 function resolvedDimsToDrafts(
-  dims: { path: string; values: number[] }[],
+  dims: { path: string; values: (number | string)[] }[],
 ): SweepDimDraft[] {
   return dims
     .filter((d) => SWEEP_PARAM_BY_PATH[d.path] && d.values.length > 0)
     .map((d) => {
+      if (isCategoricalPath(d.path)) {
+        return {
+          path: d.path,
+          mode: "values" as const,
+          start: "",
+          end: "",
+          step: "",
+          values: d.values.map((v) => String(v)).join(", "),
+        };
+      }
       const meta = SWEEP_PARAM_BY_PATH[d.path];
       const displayValues = d.values.map((v) => {
-        const dv = v / meta.factor;
+        const dv = Number(v) / meta.factor;
         return meta.integer ? Math.round(dv) : Number(dv.toFixed(10));
       });
       return {
@@ -231,7 +296,7 @@ export function BacktestForm({
   onClose?: () => void;
   initialConfig?: BacktestInitialConfig;
   initialMode?: SweepMode;
-  initialSweepDimensions?: { path: string; values: number[] }[];
+  initialSweepDimensions?: { path: string; values: (number | string)[] }[];
 }) {
   const defaults = loadExecutionDefaults();
   const { t } = useI18n();
@@ -713,6 +778,11 @@ export function BacktestForm({
             {dims.map((dim, idx) => {
               const usedPaths = dims.filter((_, i) => i !== idx).map((d) => d.path);
               const runs = countDimRuns(dim);
+              const categorical = isCategoricalPath(dim.path);
+              const categoricalOptions = categorical
+                ? optionsForPath(dim.path, strategies)
+                : [];
+              const selectedValues = categorical ? parseStringList(dim.values) : [];
               return (
                 <div
                   key={idx}
@@ -726,7 +796,23 @@ export function BacktestForm({
                       onChange={(e) => {
                         const path = e.target.value;
                         setDims((prev) =>
-                          prev.map((d, i) => (i === idx ? { ...d, path } : d)),
+                          prev.map((d, i) => {
+                            if (i !== idx) return d;
+                            const wasCategorical = isCategoricalPath(d.path);
+                            const nowCategorical = isCategoricalPath(path);
+                            if (wasCategorical !== nowCategorical) {
+                              return {
+                                ...d,
+                                path,
+                                mode: nowCategorical ? "values" : "range",
+                                start: "",
+                                end: "",
+                                step: "",
+                                values: "",
+                              };
+                            }
+                            return { ...d, path };
+                          }),
                         );
                       }}
                     >
@@ -742,24 +828,65 @@ export function BacktestForm({
                       ))}
                     </select>
                   </label>
-                  <label className="text-xs">
-                    <div className="mb-1 text-[#868993]">{t.sweep.mode}</div>
-                    <select
-                      className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
-                      value={dim.mode}
-                      onChange={(e) => {
-                        const m = e.target.value as "range" | "values";
-                        setDims((prev) =>
-                          prev.map((d, i) => (i === idx ? { ...d, mode: m } : d)),
-                        );
-                      }}
-                    >
-                      <option value="range" className="bg-[#131722]">{t.sweep.modeRange}</option>
-                      <option value="values" className="bg-[#131722]">{t.sweep.modeValues}</option>
-                    </select>
-                  </label>
+                  {!categorical && (
+                    <label className="text-xs">
+                      <div className="mb-1 text-[#868993]">{t.sweep.mode}</div>
+                      <select
+                        className="rounded border border-[#2a2e39] bg-[#131722] px-2 py-1.5 text-sm text-[#d1d4dc] focus:border-[#2962ff] focus:outline-none"
+                        value={dim.mode}
+                        onChange={(e) => {
+                          const m = e.target.value as "range" | "values";
+                          setDims((prev) =>
+                            prev.map((d, i) => (i === idx ? { ...d, mode: m } : d)),
+                          );
+                        }}
+                      >
+                        <option value="range" className="bg-[#131722]">{t.sweep.modeRange}</option>
+                        <option value="values" className="bg-[#131722]">{t.sweep.modeValues}</option>
+                      </select>
+                    </label>
+                  )}
 
-                  {dim.mode === "range" ? (
+                  {categorical ? (
+                    <div className="flex-1 text-xs">
+                      <div className="mb-1 text-[#868993]">{t.sweep.options}</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {categoricalOptions.length === 0 ? (
+                          <span className="text-[10px] text-[#868993]">
+                            {t.sweep.noOptions}
+                          </span>
+                        ) : (
+                          categoricalOptions.map((opt) => {
+                            const selected = selectedValues.includes(opt.value);
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                title={opt.value}
+                                className={`rounded border px-2 py-1 text-xs transition-colors ${
+                                  selected
+                                    ? "border-[#2962ff] bg-[#2962ff]/15 text-[#2962ff]"
+                                    : "border-[#2a2e39] bg-[#131722] text-[#868993] hover:border-[#2962ff]/50"
+                                }`}
+                                onClick={() => {
+                                  const next = selected
+                                    ? selectedValues.filter((v) => v !== opt.value)
+                                    : [...selectedValues, opt.value];
+                                  setDims((prev) =>
+                                    prev.map((d, i) =>
+                                      i === idx ? { ...d, values: next.join(", ") } : d,
+                                    ),
+                                  );
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  ) : dim.mode === "range" ? (
                     <>
                       <label className="text-xs">
                         <div className="mb-1 text-[#868993]">{t.sweep.start}</div>

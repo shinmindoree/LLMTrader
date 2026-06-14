@@ -513,6 +513,8 @@ const ko: TranslationKeys = {
     step: "간격",
     values: "값 목록",
     valuesHint: "쉼표로 구분 (예: 1, 3, 5)",
+    options: "선택 항목",
+    noOptions: "선택 가능한 항목이 없습니다",
     totalRuns: "총 실행 수",
     maxRuns: "최대",
     runsExceeded: "총 실행 수가 최대치를 초과했습니다. 범위를 줄여주세요.",
@@ -553,6 +555,8 @@ const ko: TranslationKeys = {
       max_position: "최대 포지션(%)",
       max_pyramid_entries: "피라미딩 횟수",
       fixed_notional: "고정 명목금액",
+      interval: "캔들 주기",
+      strategy_path: "전략 파일",
     },
   },
   result: {

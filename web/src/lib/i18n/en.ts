@@ -510,6 +510,8 @@ const en = {
     step: "Step",
     values: "Values",
     valuesHint: "Comma-separated (e.g. 1, 3, 5)",
+    options: "Options",
+    noOptions: "No options available",
     totalRuns: "Total Runs",
     maxRuns: "max",
     runsExceeded: "Total runs exceed the maximum. Please narrow the range.",
@@ -550,6 +552,8 @@ const en = {
       max_position: "Max Position (%)",
       max_pyramid_entries: "Pyramid Entries",
       fixed_notional: "Fixed Notional",
+      interval: "Candle Interval",
+      strategy_path: "Strategy File",
     },
   },
   result: {

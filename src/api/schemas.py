@@ -226,7 +226,7 @@ class SweepDimensionSpec(BaseModel):
     start: float | None = None
     end: float | None = None
     step: float | None = None
-    values: list[float] | None = None
+    values: list[float | str] | None = None
 
 
 class SweepPreflightRequest(BaseModel):
@@ -242,7 +242,7 @@ class SweepCreateRequest(BaseModel):
 
 class SweepDimensionResolved(BaseModel):
     path: str
-    values: list[float]
+    values: list[float | str]
 
 
 class SweepRunPreview(BaseModel):

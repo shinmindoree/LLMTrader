@@ -236,17 +236,17 @@ export type SweepDimensionSpec = {
   start?: number | null;
   end?: number | null;
   step?: number | null;
-  values?: number[] | null;
+  values?: (number | string)[] | null;
 };
 
 export type SweepDimensionResolved = {
   path: string;
-  values: number[];
+  values: (number | string)[];
 };
 
 export type SweepRunPreview = {
   index: number;
-  params: Record<string, number>;
+  params: Record<string, number | string>;
 };
 
 export type SweepPreflightRequest = {
@@ -279,7 +279,7 @@ export type SweepCreateResponse = {
 export type SweepRunResult = {
   job_id: string;
   index: number;
-  params: Record<string, number>;
+  params: Record<string, number | string>;
   status: JobStatus;
   error: string | null;
   result_summary: Record<string, unknown> | null;
